@@ -171,9 +171,10 @@ lambda coordinate and runs the precalculation for the ligand in solution only. I
 every stage of every leg is treated as one such coordinate, with its own candidates, overlap
 matrix and bad sections; at most one window is added per stage and iteration. Flare's
 absolute FEP likewise holds separate numbers of windows for restrain (bound), discharge
-(bound and free) and vanish (bound and free). The start is 3 windows for restrain, 5 for
-discharge and 9 for vanish; since windows are never removed, this is also the smallest
-schedule.
+(bound and free) and vanish (bound and free). The start (`initial_windows`) is 3 windows
+for restrain, 5 for discharge and 13 for vanish in the complex leg, and 9 for discharge and
+13 for vanish in the solvent leg; since windows are never removed, this is also the smallest
+schedule. The next section gives the reasons for these numbers.
 
 Points the paper does not specify, and cuFEP's rule for each:
 
@@ -191,6 +192,55 @@ The windows, the threshold and one record per iteration (windows, overlaps, the 
 section, the new lambda values) are written to `schedule.yaml` in the leg directory. The
 last configuration of each window is the start of its replica; replica exchange then runs
 its own equilibration before the production.
+
+### Initial windows and threshold: what was measured
+
+The paper's values (9 initial windows, threshold 0.04, 50 ps per window) were set for
+relative transformations of a ligand in solution, run without replica exchange. For absolute
+binding they were checked on TYK2 with ligand ejm_31 and on T4 lysozyme L99A with toluene
+(5 ns of production per window, replica exchange). "Exchange" below is the fraction of
+iterations in which a replica moved between the two windows.
+
+*What the precalculation cannot see.* In the vanish stage of the TYK2 complex leg, between
+lambda 0.62 and 0.88, side chains of the pocket (VAL981, ILE960) change rotamer once the
+ligand is mostly decoupled, within nanoseconds. Eight precalculations of 50 to 200 ps per
+window gave overlaps between 0.04 and 0.18 for the pairs 0.62-0.75 and 0.75-0.88,
+differently each time; the production gave 0.084 and 0.022 in one run and 0.116 and 0.055
+in another, with exchange of 0.1-4 %. A precalculation of 1 ns per window read 0.105 and
+0.015 and took as long as several more windows of production. So a short precalculation
+does not reliably find this region, whatever the threshold.
+
+*Why the threshold stays at 0.04.* An element of the overlap matrix is shared among all
+windows that overlap. Windows that are close to each other therefore have superdiagonal
+elements near 1 / (number of such windows), however close they are: eleven discharge
+windows of toluene, which has almost no charge, read 0.065 each. Above that level a
+threshold cannot be met and each added window lowers the overlaps further. With a
+threshold of 0.20 the TYK2 complex leg grew to `max_windows`; with 0.15 it ended at 18
+windows, all pairs above 0.13 with at least 12 % exchange, but which windows it added
+depended on the noise of the precalculation, and with 0.10 one precalculation added nothing
+in the region above. 0.04 is far below the level that windows reach when they are close,
+so the rule cannot run away, and it still adds windows where a stage truly lacks them (for
+toluene in T4 lysozyme it added four windows at the start of the restrain stage).
+
+*Why the vanish stage starts with 13 windows and the solvent discharge stage with 9.*
+
+| TYK2 ejm_31, complex leg | windows | lowest overlap in production | lowest exchange |
+|---|---|---|---|
+| start 3 / 5 / 9, threshold 0.04 (two runs) | 15 | 0.022 and 0.055 | 0.1 % and 0.6 % |
+| start 3 / 5 / 13, threshold 0.04 | 19 | 0.092 | 2.4 % |
+| start 3 / 5 / 9, threshold 0.15 | 18 | 0.135 | 12 % |
+| fixed windows (three runs) | 30 | 0.119-0.127 | 13-15 % |
+
+With 13 initial windows the vanish stage is above the warning level of 0.03
+(`analysis.min_overlap`) by a factor of three without relying on the precalculation to find
+the slow region, at two thirds of the windows of the fixed schedule.
+
+In the solvent leg the first pair of the discharge stage (lambda 0 to 0.25 with 5 windows)
+had overlaps of 0.06-0.13 and exchange of 1-5 %, and its free energy came out between 9.6
+and 10.7 kcal/mol in six runs, while the rest of the leg agreed within 0.1 kcal/mol. The
+precalculation reads 0.10-0.13 for this pair, above the threshold. The solvent leg is a
+small part of the cost, so it starts with 9 discharge windows and 13 vanish windows (with 9
+vanish windows its production overlaps were 0.04-0.05).
 
 ## Long-range dispersion
 

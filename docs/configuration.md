@@ -85,9 +85,13 @@ lambda_schedule:
     overlap_threshold: 0.04
     candidates: 101
     initial_windows:
-      restrain: 3
-      discharge: 5
-      vanish: 9
+      complex:
+        restrain: 3
+        discharge: 5
+        vanish: 13
+      solvent:
+        discharge: 9
+        vanish: 13
     window_ps: 50.0
     equilibration_ps: 0.0
     sample_interval_ps: 0.5
@@ -164,8 +168,8 @@ the schedule in fixed mode.
 | `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol. `force_constants: auto` takes kT / sigma^2 of each restrained coordinate in the pre-equilibration instead, as A3FE and SOMD2 do; which of the two becomes the default is decided by the validation runs |
 | `restraints.pose_rmsd_warning_nm` | 0.3 nm | cuFEP's own choice: 2 A is the usual limit for calling two poses the same, and thermal motion adds to it. OpenFE reports the ligand RMSD without a limit; like OpenFE, cuFEP does not stop |
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
-| `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. A lower threshold (0.03) gives fewer windows, a higher one (0.05) more |
-| `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer. cuFEP's own choice |
+| `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. The threshold has to stay low: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. On the TYK2 complex leg a threshold of 0.20 added windows until `max_windows` (see protocol.md) |
+| `lambda_schedule.adaptive.initial_windows` | complex: restrain 3, discharge 5, vanish 13; solvent: discharge 9, vanish 13 | cuFEP's own choice, from measurements on TYK2 and T4 lysozyme (protocol.md, "Initial windows"). The paper starts a relative transformation in solution with 9 windows; with 9 the vanish stage of a complex leg ended with production overlaps of 0.02-0.06 that the precalculation had not seen |
 | `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
 | `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015; the warning level of Flare and of the alchemical best-practice guide |
 | `analysis.lrc` | reweight | see protocol.md, long-range dispersion |

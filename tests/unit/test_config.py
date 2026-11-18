@@ -73,19 +73,21 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert len(ls.windows.solvent.vanish) == 10
     a = ls.adaptive
     assert (a.overlap_threshold, a.candidates, a.window_ps) == (0.04, 101, 50.0)
-    assert a.initial_windows.model_dump() == {"restrain": 3, "discharge": 5, "vanish": 9}
+    assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 13}
+    assert a.initial_windows.for_leg("solvent") == {"discharge": 9, "vanish": 13}
     assert (a.max_windows.complex, a.max_windows.solvent) == (48, 32)
     cfg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {
         "mode": "fixed",
         "windows": {"complex": {"restrain": 4, "vanish": 20}, "solvent": {"vanish": [0.0, 0.5, 0.8, 1.0]}},
-        "adaptive": {"overlap_threshold": 0.03, "initial_windows": {"vanish": 5}}}}))
+        "adaptive": {"overlap_threshold": 0.03, "initial_windows": {"solvent": {"vanish": 5}}}}}))
     w = cfg.lambda_schedule.windows
     assert cfg.lambda_schedule.mode == "fixed" and w.complex.restrain == 4 and w.complex.vanish == 20
     assert w.complex.discharge == 11 and w.solvent.vanish == [0.0, 0.5, 0.8, 1.0] and w.solvent.discharge == 5
     assert w.for_leg("solvent") == {"discharge": 5, "vanish": [0.0, 0.5, 0.8, 1.0]}
     assert list(w.for_leg("complex")) == ["restrain", "discharge", "vanish"]
     assert cfg.lambda_schedule.adaptive.overlap_threshold == 0.03
-    assert cfg.lambda_schedule.adaptive.initial_windows.model_dump() == {"restrain": 3, "discharge": 5, "vanish": 5}
+    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("solvent") == {"discharge": 9, "vanish": 5}
+    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 13}
 
 
 @pytest.mark.parametrize("bad", [1, 0, [0.0], [0.1, 1.0], [0.0, 0.9], [0.0, 0.6, 0.5, 1.0], [0.0, 0.5, 0.5, 1.0]])
@@ -95,7 +97,8 @@ def test_bad_lambda_windows_are_rejected(tmp_path, bad):
 
 
 @pytest.mark.parametrize("section", [{"adaptive": {"overlap_threshold": 0.0}}, {"adaptive": {"candidates": 2}},
-                                     {"adaptive": {"initial_windows": {"vanish": 1}}}, {"mode": "automatic"},
+                                     {"adaptive": {"initial_windows": {"complex": {"vanish": 1}}}},
+                                     {"adaptive": {"initial_windows": {"vanish": 9}}}, {"mode": "automatic"},
                                      {"preset": "fast"}])
 def test_bad_schedule_settings_are_rejected(tmp_path, section):
     with pytest.raises(Exception):

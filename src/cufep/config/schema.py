@@ -166,10 +166,26 @@ class WindowsConfig(_Section):
         return {name: getattr(section, name) for name in type(section).model_fields}
 
 
-class InitialWindows(_Section):
+class ComplexInitialWindows(_Section):
     restrain: int = Field(default=3, ge=2)
     discharge: int = Field(default=5, ge=2)
-    vanish: int = Field(default=9, ge=2)
+    vanish: int = Field(default=13, ge=2)
+
+
+class SolventInitialWindows(_Section):
+    discharge: int = Field(default=9, ge=2)
+    vanish: int = Field(default=13, ge=2)
+
+
+class InitialWindows(_Section):
+    """Equally spaced windows per leg and stage with which adaptive lambda scheduling starts."""
+
+    complex: ComplexInitialWindows = Field(default_factory=ComplexInitialWindows)
+    solvent: SolventInitialWindows = Field(default_factory=SolventInitialWindows)
+
+    def for_leg(self, leg: str) -> dict[str, int]:
+        section = self.complex if leg == "complex" else self.solvent
+        return {name: getattr(section, name) for name in type(section).model_fields}
 
 
 class WindowLimits(_Section):
@@ -184,7 +200,7 @@ class AdaptiveConfig(_Section):
     overlap_threshold: float = Field(default=0.04, gt=0.0, lt=0.5)
     #: number of equally spaced candidate lambda values per stage
     candidates: int = Field(default=101, ge=3)
-    #: windows per stage in the first iteration (the schedule never gets smaller than this)
+    #: windows per leg and stage in the first iteration (the schedule never gets smaller than this)
     initial_windows: InitialWindows = Field(default_factory=InitialWindows)
     #: MD per new window in the precalculation during which energies are recorded
     window_ps: float = Field(default=50.0, gt=0.0)

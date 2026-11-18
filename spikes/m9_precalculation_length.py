@@ -37,7 +37,10 @@ from cufep.sampling.states import R_GAS, set_state, stage_state
 from cufep.workflow import load_prepared
 
 run_dir = Path(args.run_dir)
-cfg = Config.model_validate(yaml.safe_load((run_dir / "resolved_config.yaml").read_text()))
+raw = yaml.safe_load((run_dir / "resolved_config.yaml").read_text())
+# runs made before initial_windows became a per-leg setting; this script does not use it
+raw.get("lambda_schedule", {}).get("adaptive", {}).pop("initial_windows", None)
+cfg = Config.model_validate(raw)
 lig_dir = run_dir / args.ligand
 leg_dir = lig_dir / f"repeat_{args.repeat}" / args.leg
 prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())

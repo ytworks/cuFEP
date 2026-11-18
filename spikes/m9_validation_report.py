@@ -4,7 +4,7 @@ For every repeat: free energies of the legs and of binding, lambda windows per s
 lowest overlap and exchange acceptance between neighbouring windows, and how far replicas
 travelled. Timings are printed only with --timing (they are for internal use).
 
-    spikes/run.sh spikes/m9_validation_report.py runs/val_tyk2_adaptive runs/val_tyk2_fixed [--timing]
+    spikes/run.sh spikes/m9_validation_report.py runs/val_tyk2_adaptive runs/val_tyk2_fixed [--timing] [--pairs]
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import numpy as np
 KJ = 4.184
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 timing = "--timing" in sys.argv
+pairs = "--pairs" in sys.argv          # overlap and exchange of every pair of neighbouring windows
 
 for run in map(Path, args):
     print(f"\n===== {run}")
@@ -49,6 +50,14 @@ for run in map(Path, args):
                       f"forward/reverse gap {a['forward_reverse_gap'] / KJ:.2f}")
                 for note in r.get("notes", []):
                     print(f"        note: {note}")
+                if pairs:
+                    k = 0
+                    for name, vals in windows.items():
+                        n = len(vals) - 1
+                        print(f"        {name:9s} lambda   " + " ".join(f"{v:5.2f}" for v in vals))
+                        print(f"        {'':9s} overlap     " + " ".join(f"{v:5.3f}" for v in a["overlap_neighbour"][k:k + n]))
+                        print(f"        {'':9s} exchange    " + " ".join(f"{v:5.3f}" for v in acc[k:k + n]))
+                        k += n
                 if timing and (rep / leg / "timing.json").exists():
                     t = json.loads((rep / leg / "timing.json").read_text())
                     smp = t.get("sampling", {})

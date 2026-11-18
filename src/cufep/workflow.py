@@ -549,7 +549,7 @@ def run_leg(job: LegJob) -> dict:
             else:
                 a_ = ls.adaptive
                 als = AlsSettings(overlap_threshold=a_.overlap_threshold, candidates=a_.candidates,
-                                  initial_windows=a_.initial_windows.model_dump(), window_ps=a_.window_ps,
+                                  initial_windows=a_.initial_windows.for_leg(job.leg), window_ps=a_.window_ps,
                                   equilibration_ps=a_.equilibration_ps, sample_interval_ps=a_.sample_interval_ps,
                                   walk_ps=a_.walk_ps,
                                   max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent)
