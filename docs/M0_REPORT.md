@@ -53,9 +53,12 @@ licence of the cuPotential runtime restricts publishing performance results.
 
 ## Open observations
 
-- The POPC patch settles at about 61 A^2 per lipid with a 0.9 nm cutoff, on both backends;
-  experiment is about 64 A^2. A run with a 1.0 nm cutoff, the value Lipid21 was validated
-  with, is in progress to decide the default cutoff for membrane systems.
+- The POPC patch settles at about 61 A^2 per lipid on both backends; experiment is about
+  64 A^2. It is not caused by the plugin, the Ewald accuracy or the cutoff: stock OpenMM with
+  a 1e-5 Ewald tolerance gives 60.8 ± 0.3 A^2 (two 40 ns runs) and the plugin with a 1.0 nm
+  cutoff 60.2 A^2 (one 40 ns run). The remaining suspects are the 4 fs time step with
+  hydrogen mass repartitioning and the length of the runs; a 2 fs run without
+  repartitioning is the next check. Until then the membrane defaults stay as they are.
 - Three independent orientation methods (hydrophobic slab, transfer-energy model, memembed)
   agree with each other within about 7 degrees for the A2A receptor but differ from OPM by
   12-16 degrees. For the other OPM structures tried, the transfer-energy model is within
