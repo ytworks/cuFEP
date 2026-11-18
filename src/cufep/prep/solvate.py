@@ -31,13 +31,20 @@ def combine(protein: tuple[app.Topology, unit.Quantity] | None, ligand: Ligand |
 
 
 def solvate(modeller: app.Modeller, forcefield: app.ForceField, spec: SolvationSpec) -> None:
-    """Add water and ions in place."""
+    """Add water and ions in place.
+
+    OpenMM sizes the box as ``width = max(2 * radius + padding, 2 * padding)`` where
+    ``radius`` is the radius of the sphere enclosing the solute. ``min_edge_nm`` raises the
+    padding so that the shortest box height (the edge of a cube, 1/sqrt(2) of the edge of a
+    rhombic dodecahedron) is at least that long.
+    """
     pos = np.asarray(modeller.positions.value_in_unit(unit.nanometer))
-    extent = float((pos.max(axis=0) - pos.min(axis=0)).max()) if len(pos) else 0.0
     padding = spec.padding_nm
-    if spec.min_edge_nm > 0:
-        # Guarantee the minimum box edge even for a tiny solute (ligand-only leg).
-        padding = max(padding, 0.5 * (spec.min_edge_nm - extent) + 0.05)
+    if spec.min_edge_nm > 0 and len(pos):
+        centre = 0.5 * (pos.min(axis=0) + pos.max(axis=0))
+        radius = float(np.linalg.norm(pos - centre, axis=1).max())
+        min_width = spec.min_edge_nm * (2.0 ** 0.5 if spec.box_shape == "dodecahedron" else 1.0)
+        padding = max(padding, min_width - 2.0 * radius, 0.5 * min_width)
     modeller.addSolvent(
         forcefield, model=spec.water_model, padding=padding * unit.nanometer,
         boxShape=spec.box_shape, ionicStrength=spec.ionic_strength_M * unit.molar, neutralize=True)

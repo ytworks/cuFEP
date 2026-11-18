@@ -35,19 +35,20 @@ P = 1.0 * u.bar
 N_LIPIDS_PER_LEAFLET = 64
 
 
-def build():
+def build(ewald_tolerance: float = 5e-4):
     path = os.path.join(os.path.dirname(app.__file__), "data", "POPC.pdb")
     pdb = app.PDBFile(path)
     ff = app.ForceField("amber19/lipid21.xml", "amber14/tip3p.xml")
     system = ff.createSystem(pdb.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,
-                             constraints=app.HBonds, rigidWater=True, ewaldErrorTolerance=5e-4,
+                             constraints=app.HBonds, rigidWater=True, ewaldErrorTolerance=ewald_tolerance,
                              hydrogenMass=3 * u.amu)
     return pdb.topology, pdb.positions, system
 
 
 def run(mode: str, seed: int, ns: float, device: int) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    top, pos, system = build()
+    tight = mode == "stock-tight"          # stock reference with a 1e-5 Ewald tolerance
+    top, pos, system = build(1e-5 if tight else 5e-4)
     stock = get_backend("openmm")
     # common start: minimise and warm up on stock with the membrane barostat
     prepared = stock.prepare_system(system)
@@ -62,7 +63,7 @@ def run(mode: str, seed: int, ns: float, device: int) -> None:
     start = (st.getPositions(asNumpy=True), st.getVelocities(asNumpy=True), st.getPeriodicBoxVectors())
     del ctx
 
-    backend = {"stock": stock,
+    backend = {"stock": stock, "stock-tight": stock,
                "cupo-nv": get_backend("cupotential", integrator="nv", box_safety=1.3),
                "cupo-stock": get_backend("cupotential", integrator="stock", box_safety=1.3)}[mode]
     prepared = backend.prepare_system(system)
@@ -136,7 +137,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
-    r.add_argument("--mode", required=True, choices=["stock", "cupo-nv", "cupo-stock"])
+    r.add_argument("--mode", required=True, choices=["stock", "stock-tight", "cupo-nv", "cupo-stock"])
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--ns", type=float, default=20.0)
     r.add_argument("--device", type=int, default=0)

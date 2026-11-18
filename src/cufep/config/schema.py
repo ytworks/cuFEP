@@ -180,7 +180,7 @@ def load_config(path: str | Path) -> Config:
     base = path.resolve().parent
 
     def resolve(p: Path) -> Path:
-        return p if p.is_absolute() else (base / p)
+        return p if p.is_absolute() else (base / p).resolve()
 
     cfg.system.protein = resolve(cfg.system.protein)
     cfg.system.ligand = resolve(cfg.system.ligand)

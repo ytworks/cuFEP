@@ -4,7 +4,7 @@
 # Environment: GPUS (docker --gpus value, default "all"), IMAGE (default cufep:dev)
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-exec docker run --rm -i --gpus "${GPUS:-all}" --shm-size="${SHM_SIZE:-16g}" \
+exec docker run --rm -i --gpus "${GPUS:-all}" --shm-size="${SHM_SIZE:-16g}" --ulimit core=0 \
   -u "$(id -u):$(id -g)" \
   -v "$repo":/work -w /work \
   -e PYTHONPATH=/work/src \
