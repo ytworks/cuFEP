@@ -442,7 +442,13 @@ def run_leg(job: LegJob) -> dict:
         if job.reschedule and not (hrex_dir / "samples.h5").exists():
             sched_file.unlink(missing_ok=True)
         if cfg.lambda_schedule.mode == "fixed" and cfg.lambda_schedule.file is not None and not sched_file.exists():
-            shutil.copy(cfg.lambda_schedule.file, sched_file)
+            # one file for every leg, or a directory of frozen schedules: <ligand>/<leg>_r<repeat>.yaml
+            src = Path(cfg.lambda_schedule.file)
+            if src.is_dir():
+                src = src / safe_name(job.ligand) / f"{job.leg}_r{job.repeat}.yaml"
+            if not src.exists():
+                raise WorkflowError(f"lambda_schedule.mode is 'fixed' but there is no schedule at {src}")
+            shutil.copy(src, sched_file)
         if sched_file.exists() and start_file.exists():
             schedule = Schedule.load(sched_file)
             start = np.load(start_file)
