@@ -4,12 +4,14 @@
 # benchmark calculation was run.
 tyk2:
   title: TYK2 kinase (PDB 4GIH), Schrödinger public benchmark jacs_set/tyk2
+  membrane: false
   protein: benchmarks/tyk2/inputs/tyk2_protein.pdb
   ligands: benchmarks/tyk2/ligands.sdf
   reference: benchmarks/tyk2/ligands.csv
   subset: [jmc_23, jmc_30, ejm_45, ejm_48, ejm_44]
 a2a:
   title: Adenosine A2A receptor (PDB 5OLZ) in a POPC bilayer, Schrödinger public benchmark gpcrs/a2a_hip278
+  membrane: true
   protein: benchmarks/a2a/inputs/a2a_hip278_protein.pdb
   ligands: benchmarks/a2a/ligands.sdf
   reference: benchmarks/a2a/ligands.csv

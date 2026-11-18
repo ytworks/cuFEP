@@ -60,6 +60,8 @@ licence of the cuPotential runtime restricts publishing performance results.
   hydrogen mass repartitioning and the length of the runs; a 2 fs run without
   repartitioning is the next check. Until then the membrane defaults stay as they are.
 - Three independent orientation methods (hydrophobic slab, transfer-energy model, memembed)
-  agree with each other within about 7 degrees for the A2A receptor but differ from OPM by
-  12-16 degrees. For the other OPM structures tried, the transfer-energy model is within
-  2 degrees of OPM. The membrane milestone uses a consensus of the three methods.
+  agree with each other within about 8 degrees for the A2A receptor but differ from OPM by
+  12-16 degrees. On 250 transmembrane structures from OPM, two methods agree for 84 % of
+  them; for those the consensus is within 10 degrees of OPM in 89 % and within 3 A in depth
+  in 96 % of cases (median tilt 3 degrees). When no two methods agree, the run stops and
+  asks for an oriented structure.

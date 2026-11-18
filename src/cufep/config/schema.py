@@ -29,9 +29,11 @@ class SystemConfig(_Section):
 
 
 class MembraneConfig(_Section):
-    enabled: bool | Auto = "auto"
-    #: auto = consensus of the built-in methods; input = the PDB is already oriented
-    #: (normal along z, membrane centre at z = 0); or force one method
+    #: build a lipid bilayer around the protein? The user decides; cuFEP does not guess.
+    enabled: bool = False
+    #: how the membrane plane is found when enabled: auto = at least two of the built-in
+    #: methods must agree; input = the PDB is already oriented (membrane normal along z,
+    #: membrane centre at z = 0); or one method by name
     orientation: Literal["auto", "input", "transfer", "slab", "memembed"] = "auto"
     lipid: str = "POPC"
     padding_nm: float = 1.5

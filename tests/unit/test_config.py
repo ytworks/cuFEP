@@ -15,7 +15,7 @@ def test_minimal_config_only_needs_protein_and_ligand(tmp_path):
     assert cfg.system.protein == (tmp_path / "p.pdb").resolve()
     assert cfg.backend.name == "cupotential" and cfg.backend.fallback == "openmm"
     assert cfg.lambda_schedule.mode == "adaptive"
-    assert cfg.membrane.enabled == "auto"
+    assert cfg.membrane.enabled is False and cfg.membrane.orientation == "auto"
     assert cfg.resources.gpus == "auto"
     assert cfg.sampling.repeats == 3 and cfg.sampling.production_ns == [5.0, 10.0]
     assert cfg.forcefield.ligand_charges == "am1bcc"
@@ -27,6 +27,13 @@ def test_unknown_keys_are_rejected(tmp_path):
         load_config(write(tmp_path, {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "sampling": {"repeat": 2}}))
     with pytest.raises(Exception):
         load_config(write(tmp_path, {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "typo": 1}))
+
+
+def test_membrane_is_an_explicit_switch(tmp_path):
+    base = {"system": {"protein": "p.pdb", "ligand": "l.sdf"}}
+    assert load_config(write(tmp_path, {**base, "membrane": {"enabled": True}})).membrane.enabled is True
+    with pytest.raises(Exception):
+        load_config(write(tmp_path, {**base, "membrane": {"enabled": "auto"}}))
 
 
 def test_missing_inputs_are_rejected(tmp_path):

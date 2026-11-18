@@ -34,11 +34,14 @@ covalent contact, and a metal ion within 3 A of the ligand.
 | ensemble | 298.15 K, 1 bar (isotropic; semi-isotropic with zero surface tension for bilayers) |
 | solvent | 0.15 M NaCl; complex in a rhombic dodecahedron with 1.0 nm padding |
 
-Membrane proteins are detected from the structure (a slab of exposed hydrophobic
-residues crossed by helices or a barrel). The complex is oriented by a consensus of three
-methods, embedded in a POPC bilayer with `Modeller.addMembrane`, and cavities inside the
-protein at the depth of the bilayer are filled with water, because the builder adds bulk
-water only above and below the lipids.
+A lipid bilayer is built only when the configuration says `membrane: {enabled: true}`;
+the default is a system in water. With the membrane on, the membrane plane is taken from
+the structure if at least two of three methods agree on it (a transfer-energy model, a
+hydrophobic-slab search and `memembed`); otherwise the run stops and asks for an oriented
+structure (`membrane.orientation: input`). The complex is embedded in a POPC bilayer with
+`Modeller.addMembrane`, the bilayer is cut to the smallest sufficient box, and cavities
+inside the protein at the depth of the bilayer are filled with water, because the builder
+adds bulk water only above and below the lipids.
 
 ## Thermodynamic cycle
 
@@ -114,7 +117,7 @@ around the ligand in the protein and in water.
 | standard-state correction | analytical | numerical, analytical as a check |
 | ligand-environment dispersion tail | isotropic | explicit, by reweighting the coupled state |
 | production length | fixed (10 ns per state) | 5 ns, extended to 10 ns if the stated criteria are not met |
-| membranes | prepared by the user | detected, oriented, built and hydrated automatically |
+| membranes | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |
 
 ## Limits of version 0.1
 

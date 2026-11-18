@@ -37,23 +37,7 @@ def resolve(cfg: Config, protein=None) -> tuple[Config, AutoReport]:
     out = cfg.model_copy(deep=True)
     report = AutoReport()
 
-    # ---- membrane ---------------------------------------------------------------------
-    if out.membrane.enabled == "auto":
-        if protein is None:
-            out.membrane.enabled = False
-            report.add("membrane.enabled", False, "no protein given to the resolver")
-        else:
-            from cufep.prep.orient import detect_membrane
-            verdict = detect_membrane(protein.topology, protein.positions_nm())
-            if verdict.confident:
-                out.membrane.enabled = verdict.is_membrane
-                report.add("membrane.enabled", verdict.is_membrane, verdict.reason)
-            else:
-                raise ValueError(
-                    "cuFEP could not decide with confidence whether this is a membrane protein "
-                    f"({verdict.reason}). Set `membrane.enabled: true` or `false` in the configuration.")
-    else:
-        report.add("membrane.enabled", out.membrane.enabled, "set by the user")
+    # The membrane is not an automatic setting: it is built only if the configuration says so.
     membrane = bool(out.membrane.enabled)
 
     # ---- box --------------------------------------------------------------------------

@@ -25,6 +25,6 @@ For a first look that finishes in minutes, shorten the sampling on the command l
 cufep run examples/kinase_tyk2/config.yaml --repeats 1 --production-ns 0.2 -o runs/tyk2_try
 ```
 
-The A2A example needs no membrane settings: cuFEP recognises the receptor as a membrane
-protein, orients it, builds the bilayer and hydrates the pocket. `auto_report.md` in the
-output directory lists these decisions.
+The A2A configuration switches the membrane on with `membrane: {enabled: true}`. cuFEP then
+orients the complex, builds a POPC bilayer around it and hydrates the pocket. Without that
+line a system is always simulated in water.

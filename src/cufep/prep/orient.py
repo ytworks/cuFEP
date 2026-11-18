@@ -1,11 +1,17 @@
-"""Membrane protein detection and orientation from a bare structure.
+"""Orientation of a membrane protein for bilayer building.
 
-A hydrophobic-slab search in the spirit of TMDET / ANVIL: among all slab orientations,
-positions and thicknesses, find the one that best separates solvent-exposed hydrophobic
-residues (inside) from exposed polar residues (outside), and count the helices or strands
-that cross it. A protein is called a membrane protein only if a good slab exists *and*
-secondary-structure elements span it. Buried residues are ignored: protein cores are
-hydrophobic in soluble proteins too.
+Whether a system gets a membrane is the user's choice (``membrane.enabled`` in the
+configuration). This module only answers the next question: given a protein that is to be
+embedded, where is the membrane plane? The coordinates in a PDB file are arbitrary, so the
+membrane normal and centre are estimated from the structure by three independent methods,
+and the estimate is used only if at least two of them agree:
+
+* a transfer-energy model (a simplified PPM-like water-to-membrane transfer energy),
+* a hydrophobic-slab search (exposed hydrophobic residues inside, exposed polar outside),
+* ``memembed`` from AmberTools, when it is installed.
+
+``membrane.orientation: input`` skips all of this for structures that are already
+oriented (membrane normal along z, membrane centre at z = 0, e.g. from the OPM database).
 
 The up/down sense of the normal is arbitrary; cuFEP builds symmetric bilayers.
 """
@@ -24,176 +30,10 @@ _CANON = {"HID": "HIS", "HIE": "HIS", "HIP": "HIS", "CYX": "CYS", "CYM": "CYS", 
           "LYN": "LYS"}
 EXPOSED_FRACTION = 0.20
 THICKNESSES_NM = (2.4, 2.8, 3.2, 3.6)
-# Decision thresholds, chosen on 250 transmembrane (OPM) and 250 soluble structures and
-# checked on a held-out set (docs/membrane_validation.md):
-SCORE_MEMBRANE = 0.25           # slab score that supports "membrane" when helices/strands span the slab
-SCORE_SOLUBLE = 0.47            # a soluble call needs a slab score below this ...
-TRANSFER_SOLUBLE = 20.0         # ... and a transfer energy above this (kcal/mol)
+MAX_TILT_DIFFERENCE_DEG = 15.0
+MAX_DEPTH_DIFFERENCE_NM = 0.5
 
 
-@dataclass
-class MembraneVerdict:
-    is_membrane: bool
-    confident: bool
-    reason: str
-    score: float = 0.0
-    n_crossing_helices: int = 0
-    n_crossing_strands: int = 0
-    normal: np.ndarray | None = None
-    centre_nm: np.ndarray | None = None
-    thickness_nm: float = 0.0
-    #: result of the transfer-energy model (an ``Orientation``), reused by the consensus
-    transfer: object | None = None
-    transfer_energy: float = 0.0
-
-
-def _sphere_points(n: int) -> np.ndarray:
-    """Roughly uniform directions on a hemisphere (Fibonacci lattice)."""
-    i = np.arange(n) + 0.5
-    z = 1.0 - i / n                         # 1 .. 0
-    phi = np.pi * (1.0 + 5.0 ** 0.5) * i
-    r = np.sqrt(np.maximum(0.0, 1.0 - z * z))
-    return np.stack([r * np.cos(phi), r * np.sin(phi), z], axis=1)
-
-
-def _residue_table(topology, positions_nm: np.ndarray):
-    """Per-residue arrays for protein residues: CA position, hydrophobic flag, exposed flag, DSSP."""
-    import mdtraj as md
-
-    from cufep.prep.protein import AMINO_ACIDS
-
-    atoms = [a for a in topology.atoms() if a.residue.name in AMINO_ACIDS]
-    idx = np.array([a.index for a in atoms], dtype=int)
-    sub = md.Topology.from_openmm(topology).subset(idx)
-    traj = md.Trajectory(positions_nm[idx][None, :, :], sub)
-    sasa = md.shrake_rupley(traj, mode="residue")[0] * 100.0                 # A^2
-    dssp = md.compute_dssp(traj, simplified=True)[0]
-    ca, names, chain = [], [], []
-    for res in sub.residues:
-        a = next((x for x in res.atoms if x.name == "CA"), None)
-        ca.append(traj.xyz[0, a.index] if a is not None else np.full(3, np.nan))
-        names.append(_CANON.get(res.name, res.name))
-        chain.append(res.chain.index)
-    ca = np.asarray(ca, dtype=float)
-    rel = np.array([s / MAX_SASA.get(n, 200.0) for s, n in zip(sasa, names)])
-    ok = np.isfinite(ca[:, 0])
-    return (ca[ok], np.array([n in HYDROPHOBIC for n in names])[ok], (rel > EXPOSED_FRACTION)[ok],
-            np.asarray(dssp)[ok], np.asarray(chain)[ok])
-
-
-def _segments(dssp: np.ndarray, chain: np.ndarray, code: str, min_len: int) -> list[tuple[int, int]]:
-    out, i, n = [], 0, len(dssp)
-    while i < n:
-        if dssp[i] != code:
-            i += 1
-            continue
-        j = i
-        while j < n and dssp[j] == code and chain[j] == chain[i]:
-            j += 1
-        if j - i >= min_len:
-            out.append((i, j - 1))
-        i = j
-    return out
-
-
-def detect_membrane(topology, positions_nm: np.ndarray, n_directions: int = 1200) -> MembraneVerdict:
-    """Decide whether the protein is a transmembrane protein and find its slab."""
-    ca, hydrophobic, exposed, dssp, chain = _residue_table(topology, np.asarray(positions_nm, dtype=float))
-    n_res = len(ca)
-    if n_res < 40:
-        return MembraneVerdict(False, True, f"only {n_res} residues: treated as soluble")
-    helices = _segments(dssp, chain, "H", 14)
-    strands = _segments(dssp, chain, "E", 6)
-    if not helices and len(strands) < 8:
-        return MembraneVerdict(False, True, "no helix or beta-barrel long enough to span a bilayer")
-
-    centre = ca.mean(axis=0)
-    x = ca - centre
-    pho = exposed & hydrophobic
-    phi = exposed & ~hydrophobic
-    n_pho, n_phi = int(pho.sum()), int(phi.sum())
-    if n_pho < 5 or n_phi < 5:
-        return MembraneVerdict(False, False, "too few exposed residues to judge")
-    best = (-2.0, None, 0.0, 0.0)
-    for normal in _sphere_points(n_directions):
-        z = x @ normal
-        zp, zh = np.sort(z[pho]), np.sort(z[phi])
-        centres = np.arange(z.min(), z.max() + 1e-9, 0.1)
-        for d in THICKNESSES_NM:
-            lo, hi = centres - 0.5 * d, centres + 0.5 * d
-            tp = np.searchsorted(zp, hi) - np.searchsorted(zp, lo)          # hydrophobic inside
-            fp = np.searchsorted(zh, hi) - np.searchsorted(zh, lo)          # polar inside
-            fn, tn = n_pho - tp, n_phi - fp
-            denom = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)).astype(float)
-            mcc = np.where(denom > 0, (tp * tn - fp * fn) / np.maximum(denom, 1e-9), -1.0)
-            k = int(np.argmax(mcc))
-            if mcc[k] > best[0]:
-                best = (float(mcc[k]), normal, float(centres[k]), d)
-    score, normal, c, d = best
-    z = x @ normal
-
-    def crossing(segs) -> int:
-        count = 0
-        for a, b in segs:
-            za, zb = z[a], z[b]
-            lo, hi = min(za, zb), max(za, zb)
-            if lo < c - 0.35 * d and hi > c + 0.35 * d:
-                count += 1
-        return count
-
-    n_h, n_s = crossing(helices), crossing(strands)
-    slab_centre = centre + c * normal
-
-    # Second, independent slab from the transfer-energy model. It places helical proteins
-    # more accurately; the slab search above is better for beta-barrels. Elements are
-    # counted against both and the larger count is used.
-    transfer = transfer_energy_orientation(topology, np.asarray(positions_nm, dtype=float))
-    zt = (ca - transfer.centre_nm) @ (transfer.normal / np.linalg.norm(transfer.normal))
-    half = 0.5 * transfer.thickness_nm
-    h_t = sum(1 for a, b in helices if min(zt[a], zt[b]) < -0.7 * half and max(zt[a], zt[b]) > 0.7 * half)
-    s_t = sum(1 for a, b in _segments(dssp, chain, "E", 5)
-              if min(zt[a], zt[b]) < -0.5 * half and max(zt[a], zt[b]) > 0.5 * half)
-    n_helix, n_strand = max(n_h, h_t), max(n_s, s_t)
-    kw = dict(score=score, n_crossing_helices=n_helix, n_crossing_strands=n_strand, normal=normal,
-              centre_nm=slab_centre, thickness_nm=d, transfer=transfer, transfer_energy=float(transfer.score))
-    summary = (f"{n_helix} helices and {n_strand} strands span the hydrophobic slab; slab score {score:.2f}, "
-               f"transfer energy {transfer.score:+.0f} kcal/mol")
-    spanning = n_helix >= 3 or n_strand >= 8
-    if spanning and (transfer.score < 0.0 or score >= SCORE_MEMBRANE):
-        return MembraneVerdict(True, True, f"membrane protein: {summary}", **kw)
-    if n_helix < 2 and n_strand < 6 and transfer.score > TRANSFER_SOLUBLE and score < SCORE_SOLUBLE:
-        return MembraneVerdict(False, True, f"soluble: {summary}", **kw)
-    return MembraneVerdict(spanning or (n_helix >= 1 and transfer.score < 0.0), False, f"ambiguous: {summary}", **kw)
-
-
-def orientation_matrix(normal: np.ndarray) -> np.ndarray:
-    """Rotation that maps ``normal`` onto +z (rows are the new x, y, z axes)."""
-    n = np.asarray(normal, dtype=float)
-    n = n / np.linalg.norm(n)
-    helper = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    a = np.cross(n, helper)
-    a /= np.linalg.norm(a)
-    b = np.cross(n, a)
-    return np.stack([a, b, n])
-
-
-def orient_positions(positions_nm: np.ndarray, verdict: MembraneVerdict) -> np.ndarray:
-    """Coordinates with the membrane normal along z and the slab centre at the origin."""
-    rot = orientation_matrix(verdict.normal)
-    return (np.asarray(positions_nm, dtype=float) - verdict.centre_nm) @ rot.T
-
-
-def tilt_and_shift(verdict: MembraneVerdict, ref_normal: np.ndarray, ref_centre_nm: np.ndarray) -> tuple[float, float]:
-    """Angle (deg) between normals, ignoring sense, and distance (nm) of the slab centre
-    from the reference membrane plane."""
-    n = verdict.normal / np.linalg.norm(verdict.normal)
-    r = np.asarray(ref_normal, dtype=float) / np.linalg.norm(ref_normal)
-    angle = float(np.degrees(np.arccos(min(1.0, abs(float(n @ r))))))
-    shift = float(abs((verdict.centre_nm - np.asarray(ref_centre_nm, dtype=float)) @ r))
-    return angle, shift
-
-
-# ============================================================================ orientation
 class OrientationError(RuntimeError):
     """The membrane orientation could not be determined reliably."""
 
@@ -214,6 +54,71 @@ class Orientation:
         return tilt, float(abs((self.centre_nm - other.centre_nm) @ b))
 
 
+def _sphere_points(n: int) -> np.ndarray:
+    """Roughly uniform directions on a hemisphere (Fibonacci lattice)."""
+    i = np.arange(n) + 0.5
+    z = 1.0 - i / n                         # 1 .. 0
+    phi = np.pi * (1.0 + 5.0 ** 0.5) * i
+    r = np.sqrt(np.maximum(0.0, 1.0 - z * z))
+    return np.stack([r * np.cos(phi), r * np.sin(phi), z], axis=1)
+
+
+# ============================================================================ slab search
+def _exposed_residues(topology, positions_nm: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """C-alpha positions, hydrophobic flags and solvent-exposed flags of the protein residues."""
+    import mdtraj as md
+
+    from cufep.prep.protein import AMINO_ACIDS
+
+    idx = np.array([a.index for a in topology.atoms() if a.residue.name in AMINO_ACIDS], dtype=int)
+    sub = md.Topology.from_openmm(topology).subset(idx)
+    traj = md.Trajectory(positions_nm[idx][None, :, :], sub)
+    sasa = md.shrake_rupley(traj, mode="residue")[0] * 100.0                 # A^2
+    ca, names = [], []
+    for res in sub.residues:
+        a = next((x for x in res.atoms if x.name == "CA"), None)
+        ca.append(traj.xyz[0, a.index] if a is not None else np.full(3, np.nan))
+        names.append(_CANON.get(res.name, res.name))
+    ca = np.asarray(ca, dtype=float)
+    rel = np.array([s / MAX_SASA.get(n, 200.0) for s, n in zip(sasa, names)])
+    ok = np.isfinite(ca[:, 0])
+    return ca[ok], np.array([n in HYDROPHOBIC for n in names])[ok], (rel > EXPOSED_FRACTION)[ok]
+
+
+def slab_orientation(topology, positions_nm: np.ndarray, n_directions: int = 1200) -> Orientation:
+    """Slab that best separates exposed hydrophobic residues (inside) from exposed polar ones.
+
+    Buried residues are ignored: protein cores are hydrophobic everywhere. The score is the
+    Matthews correlation between "inside the slab" and "hydrophobic".
+    """
+    ca, hydrophobic, exposed = _exposed_residues(topology, np.asarray(positions_nm, dtype=float))
+    centre = ca.mean(axis=0)
+    x = ca - centre
+    pho = exposed & hydrophobic
+    phi = exposed & ~hydrophobic
+    n_pho, n_phi = int(pho.sum()), int(phi.sum())
+    if n_pho < 5 or n_phi < 5:
+        raise OrientationError("too few solvent-exposed residues for the hydrophobic-slab search")
+    best = (-2.0, None, 0.0, 0.0)
+    for normal in _sphere_points(n_directions):
+        z = x @ normal
+        zp, zh = np.sort(z[pho]), np.sort(z[phi])
+        centres = np.arange(z.min(), z.max() + 1e-9, 0.1)
+        for d in THICKNESSES_NM:
+            lo, hi = centres - 0.5 * d, centres + 0.5 * d
+            tp = np.searchsorted(zp, hi) - np.searchsorted(zp, lo)          # hydrophobic inside
+            fp = np.searchsorted(zh, hi) - np.searchsorted(zh, lo)          # polar inside
+            fn, tn = n_pho - tp, n_phi - fp
+            denom = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)).astype(float)
+            mcc = np.where(denom > 0, (tp * tn - fp * fn) / np.maximum(denom, 1e-9), -1.0)
+            k = int(np.argmax(mcc))
+            if mcc[k] > best[0]:
+                best = (float(mcc[k]), normal, float(centres[k]), d)
+    score, normal, c, d = best
+    return Orientation("slab", normal, centre + c * normal, d, score=score)
+
+
+# ============================================================================ transfer energy
 #: atomic solvation parameters for water -> hydrocarbon transfer, kcal/mol/A^2
 _SIGMA = {"C": -0.022, "S": -0.010, "N": 0.053, "O": 0.057}
 _CHARGED = {("LYS", "NZ"): 0.25, ("ARG", "NH1"): 0.25, ("ARG", "NH2"): 0.25, ("ARG", "NE"): 0.15,
@@ -254,6 +159,8 @@ def _transfer_search(xyz, w, normals, half_grid, step):
             if e[k] < best[0]:
                 best = (float(e[k]), n, float(centres[k]), float(h))
     e, n, c, h = best
+    if n is None:
+        raise OrientationError("the protein is too small for the transfer-energy search")
     return e, n, origin + c * n, 2.0 * h
 
 
@@ -270,6 +177,7 @@ def transfer_energy_orientation(topology, positions_nm: np.ndarray) -> Orientati
     return Orientation("transfer", n, c, d, score=e)
 
 
+# ============================================================================ memembed
 def memembed_orientation(topology, positions_nm: np.ndarray, timeout: float = 900.0) -> Orientation | None:
     """Orientation from the ``memembed`` program (AmberTools), or None if it is unavailable or fails."""
     import shutil
@@ -323,25 +231,21 @@ def memembed_orientation(topology, positions_nm: np.ndarray, timeout: float = 90
     return Orientation("memembed", np.array([0.0, 0.0, 1.0]) @ rot, ci - co @ rot, 0.0)
 
 
-MAX_TILT_DIFFERENCE_DEG = 15.0
-MAX_DEPTH_DIFFERENCE_NM = 0.5
-
-
-def consensus_orientation(topology, positions_nm: np.ndarray, verdict: MembraneVerdict | None = None,
-                          use_memembed: bool = True, log=print) -> Orientation:
+# ============================================================================ consensus
+def consensus_orientation(topology, positions_nm: np.ndarray, use_memembed: bool = True, log=print) -> Orientation:
     """Membrane orientation supported by at least two independent methods.
 
-    Methods: the transfer-energy model, the hydrophobic-slab search and (if installed)
-    memembed. Two orientations agree if their normals differ by less than 15 degrees and
-    their centres by less than 5 A along the normal. The transfer-energy result is
-    preferred when it is part of an agreeing pair.
+    Two orientations agree if their normals differ by less than 15 degrees and their centres
+    by less than 5 A along the normal. The transfer-energy result is preferred when it is part
+    of an agreeing pair. Raises :class:`OrientationError` when no two methods agree.
     """
     positions_nm = np.asarray(positions_nm, dtype=float)
-    verdict = verdict or detect_membrane(topology, positions_nm)
-    found: list[Orientation] = [verdict.transfer if verdict.transfer is not None
-                                else transfer_energy_orientation(topology, positions_nm)]
-    if verdict.normal is not None:
-        found.append(Orientation("slab", verdict.normal, verdict.centre_nm, verdict.thickness_nm, verdict.score))
+    found: list[Orientation] = []
+    for method in (transfer_energy_orientation, slab_orientation):
+        try:
+            found.append(method(topology, positions_nm))
+        except OrientationError as exc:
+            log(f"orientation: {method.__name__} failed ({exc})")
     if use_memembed:
         m = memembed_orientation(topology, positions_nm)
         if m is not None:
@@ -359,9 +263,28 @@ def consensus_orientation(topology, positions_nm: np.ndarray, verdict: MembraneV
         raise OrientationError(
             "the membrane orientation methods (" + ", ".join(o.method for o in found) + ") do not agree. "
             "Supply a structure that is already oriented (membrane normal along z, membrane centre at z = 0, "
-            "e.g. from the OPM database) and set `membrane.orientation: input`, or pick one method explicitly.")
+            "e.g. from the OPM database) and set `membrane.orientation: input`, or pick one method with "
+            "`membrane.orientation: transfer | slab | memembed`.")
     members = {k for pair in agreeing for k in pair}
-    chosen = found[0] if 0 in members else found[min(members)]
+    transfer = next((k for k in members if found[k].method == "transfer"), None)
+    chosen = found[transfer if transfer is not None else min(members)]
     if chosen.thickness_nm <= 0:
-        chosen.thickness_nm = found[0].thickness_nm
+        chosen.thickness_nm = next((o.thickness_nm for o in found if o.thickness_nm > 0), 3.0)
     return chosen
+
+
+def orientation_matrix(normal: np.ndarray) -> np.ndarray:
+    """Rotation that maps ``normal`` onto +z (rows are the new x, y, z axes)."""
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    helper = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    a = np.cross(n, helper)
+    a /= np.linalg.norm(a)
+    b = np.cross(n, a)
+    return np.stack([a, b, n])
+
+
+def orient_positions(positions_nm: np.ndarray, orientation: Orientation) -> np.ndarray:
+    """Coordinates with the membrane normal along z and the membrane centre at the origin."""
+    rot = orientation_matrix(orientation.normal)
+    return (np.asarray(positions_nm, dtype=float) - orientation.centre_nm) @ rot.T

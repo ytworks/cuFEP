@@ -126,6 +126,23 @@ def analyze(directory: str) -> None:
     click.echo(json.dumps({k: v for k, v in res.to_dict().items() if k not in ("f_k", "df_k")}, indent=1))
 
 
+@main.command()
+@click.argument("config", type=click.Path(exists=True, dir_okay=False))
+@click.option("--ligand", help="Ligand name (default: the first one in the SDF).")
+@click.option("--device", type=int, default=0, show_default=True)
+@click.option("-o", "--output", help="Override output.dir.")
+def validate(config: str, ligand, device: int, output) -> None:
+    """Compare the two backends' alchemical energies for the system in CONFIG."""
+    from cufep.validate import validate as run_validation
+
+    cfg = _apply_overrides(_load(config), None, None, None, output, None)
+    try:
+        ok = run_validation(cfg, ligand, device, click.echo)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    sys.exit(0 if ok else 1)
+
+
 @main.group()
 def benchmark() -> None:
     """Built-in benchmarks against experiment and FEP+ (TYK2 kinase, A2A receptor in a bilayer)."""

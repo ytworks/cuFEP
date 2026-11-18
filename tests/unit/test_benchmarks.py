@@ -64,9 +64,11 @@ def test_benchmark_tiers(tmp_path):
     assert smoke.sampling.production_ns == [0.1]
     subset = benchmark_config("a2a", "subset", tmp_path / "x")
     assert subset.system.ligand_names == load_registry()["a2a"]["subset"]
-    assert subset.sampling.repeats == 3 and subset.membrane.enabled == "auto"
+    assert subset.sampling.repeats == 3 and subset.membrane.enabled is True
     full = benchmark_config("tyk2", "full")
     assert full.system.ligand_names is None and full.sampling.production_ns == [5.0, 10.0]
+    assert full.membrane.enabled is False and smoke.membrane.enabled is False
+    assert benchmark_config("a2a", "smoke").membrane.enabled is True
     with pytest.raises(KeyError):
         benchmark_config("nope", "full")
     with pytest.raises(KeyError):

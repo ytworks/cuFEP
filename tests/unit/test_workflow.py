@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from cufep.prep.ligand import LigandError, load_ligands
-from cufep.prep.orient import detect_membrane, orient_positions
+from cufep.prep.orient import consensus_orientation, orient_positions, slab_orientation, transfer_energy_orientation
 from cufep.prep.protein import prepare_protein
 from cufep.scheduler import assign_gpu_counts
 from cufep.workflow import LegJob, check_ligand, combine_ligand
@@ -57,15 +57,25 @@ def test_ligand_without_hydrogens_stops(tmp_path):
         load_ligands(tmp_path / "noh.sdf")
 
 
-def test_membrane_detection(repo, tyk2):
-    v = detect_membrane(tyk2.topology, tyk2.positions_nm())
-    assert v.confident and not v.is_membrane
+def test_membrane_orientation_methods_agree_for_a_gpcr(repo):
     a2a = prepare_protein(repo / "benchmarks/a2a/inputs/a2a_hip278_protein.pdb")
-    v = detect_membrane(a2a.topology, a2a.positions_nm())
-    assert v.confident and v.is_membrane and v.n_crossing_helices >= 5
-    assert 2.0 <= v.thickness_nm <= 4.0
-    z = orient_positions(a2a.positions_nm(), v)[:, 2]
-    assert z.min() < -1.5 and z.max() > 1.5                      # the protein spans the slab along z
+    pos = a2a.positions_nm()
+    transfer, slab = transfer_energy_orientation(a2a.topology, pos), slab_orientation(a2a.topology, pos)
+    tilt, depth = transfer.difference(slab)
+    assert tilt < 15.0 and depth < 0.5
+    assert transfer.score < 0 and 2.0 <= transfer.thickness_nm <= 4.0
+    messages = []
+    chosen = consensus_orientation(a2a.topology, pos, use_memembed=False, log=messages.append)
+    assert chosen.method == "transfer" and any("(agree)" in m for m in messages)
+    z = orient_positions(pos, chosen)[:, 2]
+    assert z.min() < -1.5 and z.max() > 1.5                      # the protein spans the membrane along z
+    # rotating the input must not change the result: the answer is a property of the structure
+    q, _ = np.linalg.qr(np.random.default_rng(0).normal(size=(3, 3)))
+    if np.linalg.det(q) < 0:
+        q[:, 0] *= -1
+    rotated = transfer_energy_orientation(a2a.topology, pos @ q.T + 1.0)
+    back = rotated.normal @ q
+    assert abs(float(back @ transfer.normal)) > np.cos(np.radians(8.0))
 
 
 def _job(leg):

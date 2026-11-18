@@ -48,12 +48,13 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
         raise KeyError(f"unknown tier '{tier}' (available: {', '.join(TIERS)})")
     entry, root = registry[name], data_root()
     data: dict = {"system": {"protein": str(root / entry["protein"]), "ligand": str(root / entry["ligands"])},
+                  "membrane": {"enabled": bool(entry.get("membrane", False))},
                   "output": {"dir": str(out_dir or Path("runs") / f"benchmark_{name}_{tier}")}}
     if tier == "smoke":
         data["system"]["ligand_names"] = entry["subset"][:1]
         data["sampling"] = dict(SMOKE_SAMPLING)
         data["lambda_schedule"] = {"pilot_ps_per_window": 10}
-        data["membrane"] = {"equilibration_ns": 0.5, "max_equilibration_ns": 0.5}
+        data["membrane"].update(equilibration_ns=0.5, max_equilibration_ns=0.5)
     elif tier == "subset":
         data["system"]["ligand_names"] = list(entry["subset"])
     return Config.model_validate(data)

@@ -8,6 +8,7 @@ exec docker run --rm -i --gpus "${GPUS:-all}" --shm-size="${SHM_SIZE:-16g}" --ul
   -u "$(id -u):$(id -g)" \
   -v "$repo":/work -w /work \
   -e PYTHONPATH=/work/src \
+  -e CUFEP_DATA=/work \
   -e CUDA_MPS_PIPE_DIRECTORY=/tmp/cufep-no-mps \
   -e OPENMM_CPU_THREADS="${OPENMM_CPU_THREADS:-4}" \
   --entrypoint python "${IMAGE:-cufep:dev}" "$@"

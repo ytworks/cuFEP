@@ -18,8 +18,8 @@ import openmm.unit as unit
 from openmm.app import element as elem
 
 from cufep.prep.ligand import LIGAND_RESNAME
-from cufep.prep.orient import (Orientation, OrientationError, consensus_orientation, detect_membrane,
-                               memembed_orientation, orientation_matrix, transfer_energy_orientation)
+from cufep.prep.orient import (Orientation, OrientationError, consensus_orientation, memembed_orientation,
+                               orientation_matrix, slab_orientation, transfer_energy_orientation)
 from cufep.prep.protein import AMINO_ACIDS, CAPS, WATER
 
 WATER_SPACING_NM = 0.29
@@ -45,10 +45,7 @@ def choose_orientation(modeller, method: str, log=print) -> Orientation | None:
     if method == "transfer":
         return transfer_energy_orientation(top, pos)
     if method == "slab":
-        v = detect_membrane(top, pos)
-        if v.normal is None:
-            raise OrientationError(f"the hydrophobic-slab search found no slab ({v.reason})")
-        return Orientation("slab", v.normal, v.centre_nm, v.thickness_nm, v.score)
+        return slab_orientation(top, pos)
     if method == "memembed":
         o = memembed_orientation(top, pos)
         if o is None:

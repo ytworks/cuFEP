@@ -7,8 +7,8 @@ stock OpenMM as a second backend that is always available.
 You give cuFEP a protein PDB and a ligand SDF with the ligand placed in the pocket.
 Everything else has a default or is chosen automatically, and can be set in YAML.
 
-- Soluble and membrane proteins. Membrane proteins are detected, oriented and embedded
-  in a lipid bilayer automatically.
+- Soluble and membrane proteins. With `membrane: {enabled: true}` the complex is oriented
+  and embedded in a lipid bilayer.
 - Double decoupling with automatically chosen Boresch restraints, Hamiltonian replica
   exchange and MBAR; the protocol follows OpenFE's ABFE protocol
   ([docs/protocol.md](docs/protocol.md) lists the differences).
@@ -67,7 +67,7 @@ system:
 `cufep init --full` writes every setting with its default. The ones most often changed:
 
 ```yaml
-membrane: {enabled: auto}            # auto | true | false
+membrane: {enabled: false}           # true builds a POPC bilayer around the protein
 backend: {name: cupotential}         # or openmm (stock); falls back to openmm automatically
 sampling: {repeats: 3, production_ns: [5, 10]}
 lambda_schedule: {mode: adaptive}    # or fixed, with file: schedule.yaml from an earlier run
@@ -80,7 +80,7 @@ output: {dir: runs/my_ligand}
 | directory | system |
 |---|---|
 | [examples/kinase_tyk2](examples/kinase_tyk2) | TYK2 kinase with ligand ejm_31 (soluble) |
-| [examples/membrane_a2a](examples/membrane_a2a) | adenosine A2A receptor with compound 4e, in a POPC bilayer built by cuFEP |
+| [examples/membrane_a2a](examples/membrane_a2a) | adenosine A2A receptor with compound 4e, in a POPC bilayer (`membrane: {enabled: true}`) |
 
 ```bash
 cufep run examples/kinase_tyk2/config.yaml
