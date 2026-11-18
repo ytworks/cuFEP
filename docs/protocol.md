@@ -227,20 +227,28 @@ toluene in T4 lysozyme it added four windows at the start of the restrain stage)
 | TYK2 ejm_31, complex leg | windows | lowest overlap in production | lowest exchange |
 |---|---|---|---|
 | start 3 / 5 / 9, threshold 0.04 (two runs) | 15 | 0.022 and 0.055 | 0.1 % and 0.6 % |
-| start 3 / 5 / 13, threshold 0.04 | 19 | 0.092 | 2.4 % |
+| start 3 / 5 / 13, threshold 0.04 (four runs) | 19 | 0.092-0.145 | 2.4-7 % |
 | start 3 / 5 / 9, threshold 0.15 | 18 | 0.135 | 12 % |
 | fixed windows (three runs) | 30 | 0.119-0.127 | 13-15 % |
 
-With 13 initial windows the vanish stage is above the warning level of 0.03
-(`analysis.min_overlap`) by a factor of three without relying on the precalculation to find
-the slow region, at two thirds of the windows of the fixed schedule.
+With 13 initial windows the vanish stage stays above the warning level of 0.03
+(`analysis.min_overlap`) by a factor of three or more without relying on the precalculation
+to find the slow region, at two thirds of the windows of the fixed schedule.
 
-In the solvent leg the first pair of the discharge stage (lambda 0 to 0.25 with 5 windows)
-had overlaps of 0.06-0.13 and exchange of 1-5 %, and its free energy came out between 9.6
-and 10.7 kcal/mol in six runs, while the rest of the leg agreed within 0.1 kcal/mol. The
-precalculation reads 0.10-0.13 for this pair, above the threshold. The solvent leg is a
-small part of the cost, so it starts with 9 discharge windows and 13 vanish windows (with 9
-vanish windows its production overlaps were 0.04-0.05).
+In the solvent leg, with the start of 5 discharge and 9 vanish windows, the first pair of
+the discharge stage (lambda 0 to 0.25) had production overlaps of 0.06-0.13 with exchange of
+1-5 %, and the vanish stage 0.04-0.05; the precalculation read values just above the
+threshold for both. The solvent leg is a small part of the cost, so it starts with 9
+discharge and 13 vanish windows; three runs then had overlaps of at least 0.13 and exchange
+of at least 5 % everywhere.
+
+*What more windows do not cure.* The repeats of TYK2 ejm_31 still differ, by the same amount
+with 13 to 34 windows per leg. In the solvent leg the free energy follows the orientation of
+the ligand's acetamide group relative to its pyridine ring, which turns over only once in a
+few nanoseconds: about 20.0 kcal/mol in runs where it stays as in the bound pose, about 20.9
+where it has turned (13 runs, correlation 0.8). In the complex leg it follows the rotamers
+of ILE960 and VAL981. These are limits of the sampling, not of the lambda windows; see
+"Limits of version 0.1".
 
 ## Long-range dispersion
 
@@ -319,6 +327,8 @@ values are not public.
 
 Neutral ligands only. No cofactors yet. No symmetry correction (the ligand's graph
 symmetry number is reported). Symmetric POPC-type bilayers only. No enhanced sampling of the
-binding site (REST2) and no grand canonical water sampling: slow rearrangements of the
-pocket, such as a side-chain rotamer that differs with and without the ligand, are sampled
-only as far as replica exchange carries them.
+binding site or of the ligand (REST2) and no grand canonical water sampling: slow
+rearrangements, such as a pocket side-chain rotamer that differs with and without the ligand
+or a ligand torsion that turns over once in a few nanoseconds in water, are sampled only as
+far as replica exchange between lambda windows carries them. Where they matter, repeats of a
+calculation differ by more than the reported MBAR uncertainty; `sampling.repeats` shows it.
