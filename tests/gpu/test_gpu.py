@@ -107,3 +107,30 @@ def test_replica_exchange_with_worker_processes(tmp_path, big_water_leg, backend
 def _gpu_count() -> int:
     from cufep.scheduler import detect_gpus
     return len(detect_gpus(max_utilization=101))
+
+
+@needs_cuda
+def test_killed_worker_is_restarted_and_the_iteration_repeated(tmp_path, big_water_leg):
+    """Kill one worker between iterations: the next iteration must still complete for all replicas."""
+    alch, schedule, pos, box, ligand = big_water_leg
+    devices = [0, 1] if _gpu_count() >= 2 else [0, 0]
+    spec = LegSpec(name="kill-test", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=alch.system.getNumParticles(),
+                   backend="openmm", temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=4.0,
+                   steps_per_iteration=50, seed=3)
+    messages = []
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=devices, log=messages.append) as s:
+        s.initialize(pos, box)
+        s.run(3, checkpoint_stride=0)
+        before = s.arrays.pos[s.cur].copy()
+        s.workers[1].proc.kill()
+        s.workers[1].proc.join(10)
+        s.run(3, checkpoint_stride=0)
+        assert s.iteration == 6 and s.restarts == 1
+        assert np.all(np.isfinite(s.arrays.pos[s.cur])) and not np.allclose(before, s.arrays.pos[s.cur])
+    data = read_samples(tmp_path / "hrex")
+    k = len(schedule.states)
+    assert data["u"].shape == (6, k, k)
+    own = data["u"][np.arange(6)[:, None], np.arange(k), data["states"]]
+    assert np.all(np.isfinite(own))
+    assert any("restarted" in m for m in messages)

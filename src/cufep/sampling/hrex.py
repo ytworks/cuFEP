@@ -78,9 +78,15 @@ class _Process:
         return msg[1]
 
     def submit(self, *args) -> None:
-        self.parent.send(("run", *args))
+        try:
+            self.parent.send(("run", *args))
+            self._dead = False
+        except (BrokenPipeError, OSError):
+            self._dead = True                 # reported by result(), which the controller handles
 
     def result(self, timeout: float) -> dict:
+        if getattr(self, "_dead", False):
+            raise SamplerError(f"worker {self.worker_id} (device {self.device}) is not running")
         if not self.parent.poll(timeout):
             raise SamplerError(f"worker {self.worker_id} (device {self.device}) gave no answer in {timeout:.0f} s")
         try:
@@ -152,6 +158,7 @@ class ReplicaExchangeSampler:
         self.workers: list = []
         self._iter_seconds: float | None = None
         self.accepted = self.attempted = 0
+        self.restarts = 0
 
     # -- life cycle -------------------------------------------------------------------
     def start(self) -> None:
@@ -228,13 +235,52 @@ class ReplicaExchangeSampler:
     def _timeout(self) -> float:
         return 900.0 if self._iter_seconds is None else max(300.0, 30.0 * self._iter_seconds)
 
-    def _advance(self, record: bool, steps: int | None) -> list[dict]:
+    def _assignments(self, w: int) -> list[tuple[int, int]]:
         n = len(self.workers)
+        return [(r, int(self.state_of_replica[r])) for r in range(self.k) if r % n == w]
+
+    def _restart_worker(self, w: int) -> None:
+        old = self.workers[w]
+        try:
+            old.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        ctx = mp.get_context("spawn")
+        self.workers[w] = _Process(ctx, self.spec, self.devices[w], self.arrays.names, w)
+        self.log(f"[{self.spec.name}] worker {w} restarted: {self.workers[w].wait_ready(600.0)}")
+
+    def _advance(self, record: bool, steps: int | None) -> list[dict]:
+        """One iteration on every worker.
+
+        Workers read buffer ``cur`` and write the other one, so a worker that dies or hangs
+        leaves the iteration's input intact. Its replicas are then run again once on a fresh
+        worker process. A second failure from the same configurations is not a hardware
+        hiccup, so it is raised (the leg is then repeated on the fallback backend).
+        """
         for w, worker in enumerate(self.workers):
-            assignments = [(r, int(self.state_of_replica[r])) for r in range(self.k) if r % n == w]
-            worker.submit(self.cur, assignments, self.iteration, record, steps)
+            worker.submit(self.cur, self._assignments(w), self.iteration, record, steps)
         timeout = self._timeout()
-        return [worker.result(timeout) for worker in self.workers]
+        results: list[dict | None] = [None] * len(self.workers)
+        failed: list[tuple[int, SamplerError]] = []
+        for w, worker in enumerate(self.workers):
+            try:
+                results[w] = worker.result(timeout)
+            except SamplerError as exc:
+                failed.append((w, exc))
+        for w, exc in failed:
+            if self.inline:
+                raise exc
+            self.log(f"[{self.spec.name}] iteration {self.iteration}: {str(exc).splitlines()[0][:200]}; "
+                     f"restarting worker {w} and repeating its replicas")
+            self.restarts += 1
+            self._restart_worker(w)
+            self.workers[w].submit(self.cur, self._assignments(w), self.iteration, record, steps)
+            try:
+                results[w] = self.workers[w].result(timeout)
+            except SamplerError as again:
+                raise SamplerError(f"worker {w} failed twice from the same configurations at iteration "
+                                   f"{self.iteration}: {again}") from again
+        return results
 
     def run(self, n_iterations: int, record_stride: int = 4, checkpoint_stride: int = 100,
             store: bool = True, steps: int | None = None, progress_every: int = 0) -> list[IterationStats]:
