@@ -4,7 +4,7 @@ import openmm.app as app
 import openmm.unit as u
 import pytest
 
-from cufep.alchemy.restraints import RestraintError, find_boresch_restraint
+from cufep.alchemy.restraints import RestraintSearchSettings, find_boresch_restraint, heavy_atom_symmetries
 from cufep.prep.ligand import load_ligands
 from cufep.prep.protein import prepare_protein
 from cufep.prep.solvate import combine, ligand_atom_indices
@@ -60,17 +60,43 @@ def test_search_picks_rigid_ring_atoms_and_nearby_backbone(tyk2_complex):
     assert all(rdmol.GetAtomWithIdx(lig.index(i)).GetIsAromatic() for i in again.restraint.guest_atoms)
 
 
-def test_search_stops_when_the_ligand_leaves(tyk2_complex):
+def test_a_ligand_that_moves_is_reported_and_the_search_goes_on(tyk2_complex):
+    """OpenFE has no stop for a pose that changes; cuFEP reports it with the result."""
     top, pos, lig, rdmol = tyk2_complex
 
-    def leave(fr):
-        n = fr.shape[0]
-        fr[:, lig, :] += np.linspace(0, 1.5, n)[:, None, None] * np.array([1.0, 0.0, 0.0])
+    def shift(fr):
+        fr[fr.shape[0] // 4:, lig, :] += np.array([0.25, 0.25, 0.0])        # 3.5 A, and it stays there
         return fr
 
-    frames = _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=leave)
-    with pytest.raises(RestraintError, match="not stable"):
-        find_boresch_restraint(top, frames, lig, rdmol, 298.15)
+    found = find_boresch_restraint(top, _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=shift),
+                                   lig, rdmol, 298.15)
+    assert found.ligand_rmsd_nm == pytest.approx(0.354, abs=0.02)
+    assert any("moved away from its starting pose" in n and "pose_rmsd_warning_nm" in n for n in found.notes)
+    quiet = find_boresch_restraint(top, _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=shift),
+                                   lig, rdmol, 298.15, RestraintSearchSettings(pose_rmsd_warning_nm=0.5))
+    assert not any("moved away" in n for n in quiet.notes)
+
+
+def test_pose_rmsd_ignores_swaps_of_symmetry_equivalent_atoms(tyk2_complex):
+    top, pos, lig, rdmol = tyk2_complex
+    perms = heavy_atom_symmetries(rdmol)
+    assert len(perms) == 2 and perms[0].tolist() == list(range(len(perms[0])))
+    heavy_local = [i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]
+    lig_heavy = np.array(lig)[heavy_local]
+
+    def flip(fr):                                    # the symmetric ring turns over half way
+        half = fr.shape[0] // 2
+        fr[half:, lig_heavy, :] = fr[half:, lig_heavy[perms[1]], :]
+        return fr
+
+    frames = _trajectory(pos, lig, np.random.default_rng(4), ligand_motion=flip)
+    found = find_boresch_restraint(top, frames, lig, rdmol, 298.15)
+    assert found.ligand_rmsd_nm < 0.05 and not any("moved away" in n for n in found.notes)
+    moved = np.linalg.norm(pos[lig_heavy] - pos[lig_heavy[perms[1]]], axis=1)
+    assert np.sqrt((moved ** 2).mean()) > 0.1         # without the correction this is a large RMSD
+    # the atoms that changed places are not used as anchors
+    swapped = {int(lig_heavy[i]) for i in np.nonzero(moved > 0.05)[0]}
+    assert not swapped & set(found.restraint.guest_atoms)
 
 
 def test_force_constants_from_fluctuations():

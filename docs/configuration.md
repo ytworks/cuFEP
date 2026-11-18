@@ -68,6 +68,7 @@ restraints:
   host_min_distance_nm: 0.5
   host_max_distance_nm: 1.5
   dssp_filter: true
+  pose_rmsd_warning_nm: 0.3       # warn when the ligand ends up further than this from its starting pose
 alchemy:
   softcore_alpha: 0.5
 lambda_schedule:
@@ -161,6 +162,7 @@ the schedule in fixed mode.
 | `sampling.production_ns` | 5 ns per lambda window | default of Schrödinger's absolute binding FEP+; also used by A3FE and Boltz-ABFE. OpenFE uses 10 ns |
 | `sampling.repeats` | 1 | FEP+ and Flare run a calculation once. OpenFE's default is 3; more than one repeat makes the reported uncertainty the standard deviation over repeats |
 | `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol. `force_constants: auto` takes kT / sigma^2 of each restrained coordinate in the pre-equilibration instead, as A3FE and SOMD2 do; which of the two becomes the default is decided by the validation runs |
+| `restraints.pose_rmsd_warning_nm` | 0.3 nm | cuFEP's own choice: 2 A is the usual limit for calling two poses the same, and thermal motion adds to it. OpenFE reports the ligand RMSD without a limit; like OpenFE, cuFEP does not stop |
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
 | `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. A lower threshold (0.03) gives fewer windows, a higher one (0.05) more |
 | `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer. cuFEP's own choice |

@@ -431,7 +431,9 @@ def run_leg(job: LegJob) -> dict:
         symmetry = ligand_symmetry_number(rdmol)
         rfile = leg_dir / "restraint.json"
         if rfile.exists():
-            restraint = BoreschRestraint.from_dict(json.loads(rfile.read_text())["restraint"])
+            stored = json.loads(rfile.read_text())
+            restraint = BoreschRestraint.from_dict(stored["restraint"])
+            notes.extend(stored.get("info", {}).get("notes", []))
         else:
             rc = cfg.restraints
             k_r, k_a = rc.k_r_kcal_per_A2 * KCAL * 100.0, rc.k_angle_kcal_per_rad2 * KCAL
@@ -450,11 +452,13 @@ def run_leg(job: LegJob) -> dict:
                 settings = RestraintSearchSettings(k_r=k_r, k_angle=k_a, rmsf_cutoff_nm=rc.rmsf_cutoff_nm,
                                                    host_min_distance_nm=rc.host_min_distance_nm,
                                                    host_max_distance_nm=rc.host_max_distance_nm,
-                                                   dssp_filter=rc.dssp_filter)
+                                                   dssp_filter=rc.dssp_filter,
+                                                   pose_rmsd_warning_nm=rc.pose_rmsd_warning_nm)
                 found = find_boresch_restraint(prep["topology"], full, prep["ligand"], rdmol, T, settings)
                 restraint = found.restraint
                 if rc.force_constants == "auto":
                     restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)
+                notes.extend(found.notes)
                 info = {"selection": "auto", "force_constants": rc.force_constants, "score": found.score,
                         "fluctuations": found.fluctuations,
                         "ligand_rmsd_A": 10 * found.ligand_rmsd_nm, "candidates_tested": found.n_candidates,
@@ -715,7 +719,8 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
     if a["min_overlap"] < cfg.analysis.min_overlap:
         k = int(np.argmin(a["overlap_neighbour"]))
         out.append(f"the overlap between lambda windows {k} and {k + 1} is {a['min_overlap']:.3f}, below "
-                   f"{cfg.analysis.min_overlap:g}; add windows there or lower lambda_schedule.adaptive.overlap_threshold")
+                   f"{cfg.analysis.min_overlap:g}; add lambda windows there (lambda_schedule.windows with mode: fixed, "
+                   f"or more lambda_schedule.adaptive.initial_windows)")
     return out
 
 

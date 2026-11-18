@@ -200,7 +200,7 @@ class RestraintSearchSettings:
     min_equilibrium_angle_deg: float = 30.0
     max_guest_anchors: int = 8
     max_host_candidates: int = 60
-    pose_rmsd_limit_nm: float = 0.3
+    pose_rmsd_warning_nm: float = 0.3
 
 
 @dataclass
@@ -327,14 +327,20 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     lig_self = kabsch_align(lig_self, lig_self.mean(axis=0), np.array(heavy_local))
     lig_rmsf = np.sqrt(((lig_self - lig_self.mean(axis=0)) ** 2).sum(axis=2).mean(axis=0))
 
-    # ligand pose stability in the frame of the binding site
-    disp = aligned[:, lig_heavy, :] - aligned[0, lig_heavy, :]
-    rmsd = np.sqrt((disp ** 2).sum(axis=2).mean(axis=1))
+    # How far the ligand moved from the input pose, in the frame of the binding site. Atoms that
+    # the symmetry of the molecule interchanges may swap places (OpenFE reports the same
+    # symmetry-corrected RMSD). The run goes on in any case, as in OpenFE; a large value is
+    # reported with the result.
+    reference = aligned[0, lig_heavy, :]
+    rmsd = None
+    for perm in heavy_atom_symmetries(rdmol):
+        d = np.sqrt(((aligned[:, lig_heavy[perm], :] - reference) ** 2).sum(axis=2).mean(axis=1))
+        rmsd = d if rmsd is None else np.minimum(rmsd, d)
     tail = float(rmsd[len(rmsd) // 2:].mean())
-    if tail > s.pose_rmsd_limit_nm:
-        raise RestraintError(
-            f"the ligand pose is not stable in the pre-equilibration MD (heavy-atom RMSD {10 * tail:.1f} A "
-            f"relative to the start). A restraint cannot be chosen reliably; check the input pose.")
+    if tail > s.pose_rmsd_warning_nm:
+        notes.append(f"the ligand moved away from its starting pose in the pre-equilibration MD (heavy-atom RMSD "
+                     f"{10 * tail:.1f} A over the second half, above restraints.pose_rmsd_warning_nm = "
+                     f"{10 * s.pose_rmsd_warning_nm:g} A); the result is for the pose it moved to")
 
     guests = _guest_anchor_candidates(rdmol, list(lig), lig_rmsf, s.rmsf_cutoff_nm, s.max_guest_anchors)
     if not guests:
@@ -433,3 +439,19 @@ def ligand_symmetry_number(rdmol) -> int:
 
     heavy = Chem.RemoveHs(rdmol)
     return max(1, len(heavy.GetSubstructMatches(heavy, uniquify=False, maxMatches=10000)))
+
+
+def heavy_atom_symmetries(rdmol, limit: int = 512) -> list[np.ndarray]:
+    """Permutations of the heavy atoms (in their own numbering) that map the molecule onto itself.
+
+    The identity comes first. At most ``limit`` permutations are returned.
+    """
+    from rdkit import Chem
+
+    n_heavy = sum(1 for a in rdmol.GetAtoms() if a.GetAtomicNum() > 1)
+    identity = np.arange(n_heavy)
+    heavy = Chem.RemoveHs(rdmol)
+    if heavy.GetNumAtoms() != n_heavy:                 # hydrogens RDKit keeps; no correction then
+        return [identity]
+    perms = [np.asarray(m, dtype=int) for m in heavy.GetSubstructMatches(heavy, uniquify=False, maxMatches=limit)]
+    return [identity] + [m for m in perms if not np.array_equal(m, identity)]

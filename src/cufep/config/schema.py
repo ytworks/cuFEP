@@ -126,6 +126,9 @@ class RestraintConfig(_Section):
     host_min_distance_nm: float = 0.5
     host_max_distance_nm: float = 1.5
     dssp_filter: bool = True
+    #: the result carries a warning when the ligand's heavy atoms are on average further than
+    #: this from the input pose over the second half of the pre-equilibration MD
+    pose_rmsd_warning_nm: float = Field(0.3, gt=0)
 
 
 class AlchemyConfig(_Section):

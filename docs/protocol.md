@@ -97,8 +97,10 @@ the decoupled ligand is the same in both legs and no vacuum leg is needed.
    three bonded backbone atoms in stable secondary structure, RMSF below 0.1 nm, 0.5-1.5 nm
    from the ligand anchor. Candidates with a restrained angle near 0 or 180 degrees are
    rejected and the one with the smallest fluctuations is taken. Force constants:
-   10 kcal/mol/A^2 and 80 kcal/mol/rad^2. If the ligand pose is not stable in this
-   trajectory the run stops.
+   10 kcal/mol/A^2 and 80 kcal/mol/rad^2. If the ligand moves away from its starting pose in
+   this trajectory (symmetry-corrected heavy-atom RMSD above `restraints.pose_rmsd_warning_nm`
+   over the second half), the run goes on, as in OpenFE, and the result carries a warning: it
+   is then the free energy of the pose the ligand moved to.
 3. Lambda windows: adaptive lambda scheduling, or the windows given in the configuration.
 4. Hamiltonian replica exchange, one replica per lambda window, 2.5 ps per iteration: 1 ns
    equilibration and 5 ns production per window.
