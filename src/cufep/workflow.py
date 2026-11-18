@@ -189,9 +189,11 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     n_removed = _remove_clashing_waters(modeller, ligand.positions_nm()[ligand.heavy_atom_indices()])
     if n_removed:
         warnings.append(f"{n_removed} water(s) overlapping the ligand were removed")
+    membrane_info: dict = {}
     if membrane:
         from cufep.prep.membrane import add_membrane
-        add_membrane(modeller, forcefield, cfg, log)
+        membrane_info = add_membrane(modeller, forcefield, cfg, log)
+        warnings += [f"membrane: {w}" for w in membrane_info.pop("warnings", [])]
         barostat = "membrane"
     else:
         solvate(modeller, forcefield, SolvationSpec(padding_nm=cfg.solvation.padding_complex_nm, box_shape=box_shape,
@@ -211,7 +213,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     (prep_dir / "ligand.json").write_text(ligand.offmol.to_json())
     info = {"ligand": ligand.name, "n_atoms_complex": n_complex, "n_atoms_solvent": system.getNumParticles(),
             "complex_barostat": barostat, "membrane": membrane, "box_shape": box_shape,
-            "solvent_box_shape": solvent_shape, "warnings": warnings}
+            "solvent_box_shape": solvent_shape, "membrane_info": membrane_info, "warnings": warnings}
     done.write_text(json.dumps(info, indent=1))
     log(f"{ligand.name}: complex {n_complex} atoms, solvent leg {system.getNumParticles()} atoms"
         + (f"; warnings: {'; '.join(warnings)}" if warnings else ""))
@@ -305,19 +307,37 @@ def run_leg(job: LegJob) -> dict:
     equil_file = leg_dir / "equil.npz"
     if not equil_file.exists():
         s = cfg.sampling
+        in_membrane = is_complex and barostat == "membrane"
+        production = s.pre_equilibration_ns if is_complex else s.solvent_pre_equilibration_ns
+        restrained: list[int] = []
+        if in_membrane:
+            # A freshly built bilayer needs longer: hold the protein and ligand heavy atoms while the
+            # lipids and water settle (NVT, NPT), then run unrestrained for membrane.equilibration_ns.
+            production = max(production, cfg.membrane.equilibration_ns)
+            atoms = list(prep["topology"].atoms())
+            restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
         settings = EquilibrationSettings(
             temperature_K=T, pressure_bar=cfg.thermodynamics.pressure_bar, friction_per_ps=cfg.dynamics.friction_per_ps,
             timestep_fs=timestep_cfg, nvt_ns=s.nvt_ns if is_complex else s.solvent_nvt_ns,
-            npt_ns=s.npt_ns if is_complex else s.solvent_npt_ns,
-            production_ns=s.pre_equilibration_ns if is_complex else s.solvent_pre_equilibration_ns,
-            barostat=barostat, platform=cfg.backend.platform,
-            precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed)
+            npt_ns=(2.0 * s.npt_ns if in_membrane else s.npt_ns) if is_complex else s.solvent_npt_ns,
+            production_ns=production, barostat=barostat, platform=cfg.backend.platform,
+            precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
+            restrained_atoms=restrained,
+            max_production_ns=max(production, cfg.membrane.max_equilibration_ns) if in_membrane else None,
+            ligand_atoms=prep["ligand"] if in_membrane else [],
+            water_oxygens=[a.index for a in prep["topology"].atoms()
+                           if a.residue.name == "HOH" and a.element is not None and a.element.symbol == "O"]
+            if in_membrane else [])
         t0 = time.perf_counter()
         eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device0, log)
         tmp = leg_dir / "equil.tmp.npz"
-        np.savez(tmp, positions=eq.positions, velocities=eq.velocities, box=eq.box, frames=eq.frames,
-                 frame_boxes=eq.frame_boxes, frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs,
-                 notes=json.dumps(eq.notes))
+        # the restraint search uses the last pre_equilibration_ns of the trajectory
+        n_keep = max(2, int(round((s.pre_equilibration_ns if is_complex else s.solvent_pre_equilibration_ns)
+                                  * 1000.0 / settings.frame_interval_ps)))
+        np.savez(tmp, positions=eq.positions, velocities=eq.velocities, box=eq.box, frames=eq.frames[-n_keep:],
+                 frame_boxes=eq.frame_boxes[-n_keep:], frame_atoms=np.array(eq.frame_atoms),
+                 timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes), simulated_ns=eq.simulated_ns,
+                 pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2)
         tmp.replace(equil_file)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)

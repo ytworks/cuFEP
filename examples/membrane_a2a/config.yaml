@@ -1,0 +1,8 @@
+# Adenosine A2A receptor (GPCR, PDB 5OLZ) with compound 4e from the Schrödinger public benchmark.
+# Experimental binding free energy: -12.07 kcal/mol.
+# cuFEP detects that this is a membrane protein, orients it and builds a POPC bilayer.
+system:
+  protein: protein.pdb
+  ligand: ligand.sdf
+output:
+  dir: runs/a2a_4e

@@ -41,6 +41,13 @@ class EquilibrationSettings:
     #: heavy atoms held by harmonic position restraints during NVT/NPT (released for production)
     restrained_atoms: list[int] = field(default_factory=list)
     restraint_k: float = 1000.0            # kJ/mol/nm^2
+    #: membranes: keep extending the production run in 5 ns blocks until the box area and the
+    #: number of waters around the ligand stop drifting, up to this total length
+    max_production_ns: float | None = None
+    area_tolerance: float = 0.01           # relative change of the XY area between the last two quarters
+    water_tolerance: float = 1.5           # change of the mean pocket water count between them
+    ligand_atoms: list[int] = field(default_factory=list)
+    water_oxygens: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -55,6 +62,9 @@ class EquilibrationResult:
     notes: list[str]
     mean_volume_nm3: float = 0.0
     mean_box: np.ndarray | None = None
+    simulated_ns: float = 0.0
+    area_nm2: np.ndarray | None = None     # XY area per frame
+    pocket_waters: np.ndarray | None = None  # waters within 0.6 nm of the ligand per frame
 
 
 def _context(system: mm.System, backend, settings: EquilibrationSettings, dt_fs: float, device, barostat: bool,
@@ -124,27 +134,60 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
     # ---- production (no position restraints), frames for the restraint search -----------
     ctx, integ = _context(system, backend, settings, dt_fs, device, True, None, settings.seed + 200)
     _load(ctx, pos, bx, vel)
-    n_frames = max(1, int(round(settings.production_ns * 1000.0 / settings.frame_interval_ps)))
-    per_frame = max(1, steps(settings.production_ns) // n_frames)
-    frames = np.zeros((n_frames, len(frame_atoms), 3), dtype=np.float32)
-    boxes = np.zeros((n_frames, 3, 3), dtype=np.float32)
-    volumes = np.zeros(n_frames)
-    for f in range(n_frames):
-        integ.step(per_frame)
-        st = ctx.getState(getPositions=True, getEnergy=True)
-        p = st.getPositions(asNumpy=True).value_in_unit(u.nanometer)
-        if not np.isfinite(st.getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)):
-            raise EquilibrationError("energy became non-finite during the pre-equilibration MD")
-        frames[f] = np.asarray(p)[frame_atoms]
-        boxes[f] = st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer)
-        volumes[f] = st.getPeriodicBoxVolume().value_in_unit(u.nanometer ** 3)
+    per_frame = max(1, int(round(settings.frame_interval_ps * 1000.0 / dt_fs)))
+    lig = np.asarray(settings.ligand_atoms, dtype=int)
+    wat = np.asarray(settings.water_oxygens, dtype=int)
+    frames, boxes, volumes, areas, waters = [], [], [], [], []
+
+    def advance(ns: float) -> None:
+        for _ in range(max(1, int(round(ns * 1000.0 / settings.frame_interval_ps)))):
+            integ.step(per_frame)
+            st = ctx.getState(getPositions=True, getEnergy=True)
+            p = np.asarray(st.getPositions(asNumpy=True).value_in_unit(u.nanometer))
+            if not np.isfinite(st.getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)):
+                raise EquilibrationError("energy became non-finite during the pre-equilibration MD")
+            bx_f = np.asarray(st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer))
+            frames.append(p[frame_atoms].astype(np.float32))
+            boxes.append(bx_f.astype(np.float32))
+            volumes.append(st.getPeriodicBoxVolume().value_in_unit(u.nanometer ** 3))
+            areas.append(float(bx_f[0, 0] * bx_f[1, 1]))
+            if len(lig) and len(wat):
+                d = p[wat][:, None, :] - p[lig][None, :, :]
+                d -= np.round(d / np.diag(bx_f)) * np.diag(bx_f)       # rectangular membrane box
+                waters.append(float(np.sum(np.min(np.einsum("ijk,ijk->ij", d, d), axis=1) < 0.36)))
+
+    def settled() -> bool:
+        q = len(areas) // 4
+        if q < 5:
+            return True
+        a3, a4 = np.mean(areas[2 * q:3 * q]), np.mean(areas[3 * q:])
+        ok = abs(a4 - a3) / a3 <= settings.area_tolerance
+        if waters:
+            ok = ok and abs(np.mean(waters[3 * q:]) - np.mean(waters[2 * q:3 * q])) <= settings.water_tolerance
+        return bool(ok)
+
+    advance(settings.production_ns)
+    total = settings.production_ns
+    notes: list[str] = []
+    if settings.max_production_ns is not None:
+        while not settled() and total + 5.0 <= settings.max_production_ns + 1e-9:
+            log(f"bilayer area or pocket hydration still drifting after {total:g} ns; extending by 5 ns")
+            advance(5.0)
+            total += 5.0
+        if not settled():
+            notes.append(f"the bilayer area or the pocket hydration had not settled after {total:g} ns of "
+                         "equilibration")
+        elif total > settings.production_ns:
+            notes.append(f"membrane equilibration extended to {total:g} ns")
     pos, vel, bx = _state_arrays(ctx)
     del ctx, integ
-    half = n_frames // 2
-    return EquilibrationResult(positions=pos, velocities=vel, box=bx, frames=frames, frame_boxes=boxes,
-                               frame_atoms=list(frame_atoms), timestep_fs=dt_fs, notes=[],
-                               mean_volume_nm3=float(volumes[half:].mean()),
-                               mean_box=boxes[half:].mean(axis=0).astype(float))
+    half = len(frames) // 2
+    boxes_arr = np.asarray(boxes)
+    return EquilibrationResult(positions=pos, velocities=vel, box=bx, frames=np.asarray(frames), frame_boxes=boxes_arr,
+                               frame_atoms=list(frame_atoms), timestep_fs=dt_fs, notes=notes,
+                               mean_volume_nm3=float(np.mean(volumes[half:])),
+                               mean_box=boxes_arr[half:].mean(axis=0).astype(float), simulated_ns=float(total),
+                               area_nm2=np.asarray(areas), pocket_waters=np.asarray(waters))
 
 
 def pre_equilibrate(system: mm.System, positions, box, frame_atoms: list[int],

@@ -35,20 +35,21 @@ P = 1.0 * u.bar
 N_LIPIDS_PER_LEAFLET = 64
 
 
-def build(ewald_tolerance: float = 5e-4):
+def build(ewald_tolerance: float = 5e-4, cutoff_nm: float = 0.9):
     path = os.path.join(os.path.dirname(app.__file__), "data", "POPC.pdb")
     pdb = app.PDBFile(path)
     ff = app.ForceField("amber19/lipid21.xml", "amber14/tip3p.xml")
-    system = ff.createSystem(pdb.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,
+    system = ff.createSystem(pdb.topology, nonbondedMethod=app.PME, nonbondedCutoff=cutoff_nm * u.nanometer,
                              constraints=app.HBonds, rigidWater=True, ewaldErrorTolerance=ewald_tolerance,
                              hydrogenMass=3 * u.amu)
     return pdb.topology, pdb.positions, system
 
 
-def run(mode: str, seed: int, ns: float, device: int) -> None:
+def run(mode: str, seed: int, ns: float, device: int, cutoff_nm: float = 0.9) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     tight = mode == "stock-tight"          # stock reference with a 1e-5 Ewald tolerance
-    top, pos, system = build(1e-5 if tight else 5e-4)
+    top, pos, system = build(1e-5 if tight else 5e-4, cutoff_nm)
+    tag = "" if cutoff_nm == 0.9 else f"-rc{cutoff_nm:g}"
     stock = get_backend("openmm")
     # common start: minimise and warm up on stock with the membrane barostat
     prepared = stock.prepare_system(system)
@@ -84,7 +85,7 @@ def run(mode: str, seed: int, ns: float, device: int) -> None:
         if not np.isfinite(rec[i]).all():
             raise RuntimeError(f"non-finite state at record {i}")
     final = ctx.getState(getPositions=True)
-    np.savez(OUT / f"{mode}_seed{seed}.npz", rec=rec, mode=mode, seed=seed,
+    np.savez(OUT / f"{mode}{tag}_seed{seed}.npz", rec=rec, mode=mode + tag, seed=seed,
              positions=final.getPositions(asNumpy=True).value_in_unit(u.nanometer),
              box=final.getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer))
     print(f"{mode} seed {seed}: {ns} ns done in {time.perf_counter() - t0:.0f} s; "
@@ -141,11 +142,12 @@ def main() -> int:
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--ns", type=float, default=20.0)
     r.add_argument("--device", type=int, default=0)
+    r.add_argument("--cutoff", type=float, default=0.9)
     a = sub.add_parser("analyze")
     a.add_argument("--skip-ns", type=float, default=4.0)
     args = ap.parse_args()
     if args.cmd == "run":
-        run(args.mode, args.seed, args.ns, args.device)
+        run(args.mode, args.seed, args.ns, args.device, args.cutoff)
         return 0
     return analyze(args.skip_ns)
 
