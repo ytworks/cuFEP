@@ -48,7 +48,7 @@ worker processes in memory, and Docker's default of 64 MB is too small. Without 
 falls back to files in the output directory and says so.
 
 `cufep run` prints one line per ligand, for example
-`RESULT ejm_31: dG_bind = ... kcal/mol (1 repeat(s))`, and writes:
+`RESULT ejm_31: dG_bind = ... ± ... kcal/mol (MBAR uncertainty, 1 repeat)`, and writes:
 
 | file | content |
 |---|---|

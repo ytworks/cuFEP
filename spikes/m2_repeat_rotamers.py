@@ -2,13 +2,15 @@
 
 Used to explain why repeats of the TYK2 ejm_31 complex leg differ (ILE960 chi1).
 
-    spikes/run.sh spikes/m2_repeat_rotamers.py
+    spikes/run.sh spikes/m2_repeat_rotamers.py [run_dir [ligand [input_protein.pdb]]]
 """
 import sys
 from pathlib import Path
 import h5py, mdtraj as md, numpy as np, yaml
 
-lig_dir = Path("runs/tyk2_ejm_31/ejm_31")
+run_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "runs/tyk2_ejm_31")
+lig_dir = run_dir / (sys.argv[2] if len(sys.argv) > 2 else "ejm_31")
+input_pdb = sys.argv[3] if len(sys.argv) > 3 else "examples/kinase_tyk2/protein.pdb"
 top_all = md.load(str(lig_dir / "prep/complex.pdb")).topology
 WATCH = [("ILE", 960), ("GLU", 979), ("VAL", 981), ("LEU", 1030), ("ARG", 1027)]
 
@@ -26,12 +28,15 @@ def code(deg):
     return np.where((deg >= -120) & (deg < 0), "-", np.where((deg >= 0) & (deg < 120), "+", "t"))
 
 # input structure
-inp = md.load("examples/kinase_tyk2/protein.pdb")
+inp = md.load(input_pdb)
 print("input PDB:", {k: f"{v[0]:.0f}" for k, v in chi_table(inp).items()})
 prep = md.load(str(lig_dir / "prep/complex.pdb"))
 print("prepared :", {k: f"{v[0]:.0f}" for k, v in chi_table(prep).items()})
-for r in range(3):
-    leg = lig_dir / f"repeat_{r}/complex"
+for rep_dir in sorted(lig_dir.glob("repeat_*")):
+    r = int(rep_dir.name.split("_")[1])
+    leg = rep_dir / "complex"
+    if not (leg / "hrex" / "checkpoint.npz").exists():
+        continue
     eq = np.load(leg / "equil.npz")
     top = top_all.subset(eq["frame_atoms"])
     t = md.Trajectory(eq["frames"], top)

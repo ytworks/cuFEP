@@ -98,8 +98,12 @@ def run(cfg: Config, reschedule: bool = False, log=None) -> list[dict]:
     write_summary(out_dir, summary, ligands)
     for s in summary:
         if "dg_bind" in s:
-            sd = f" ± {s['dg_bind_std']:.2f}" if s.get("dg_bind_std") is not None else ""
-            log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{sd} kcal/mol ({s['n_repeats']} repeat(s))")
+            if s.get("dg_bind_std") is not None:
+                err = f" ± {s['dg_bind_std']:.2f} kcal/mol (standard deviation over {s['n_repeats']} repeats)"
+            else:
+                err = f" ± {s['dg_bind_mbar_error']:.2f} kcal/mol (MBAR uncertainty, 1 repeat)"
+            log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}"
+                + (f"; {len(s['warnings'])} warning(s), see summary.json" if s.get("warnings") else ""))
         else:
             log(f"RESULT {s['ligand']}: no complete repeat")
     return summary
