@@ -1,0 +1,6 @@
+.git
+runs
+**/__pycache__
+**/*.pyc
+spikes/out
+*.egg-info
