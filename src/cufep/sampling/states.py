@@ -146,6 +146,13 @@ class StateEnergyEvaluator:
 
     def reduced_potentials(self, restore: AlchemicalState | None = None) -> tuple[np.ndarray, float]:
         """Return ``(u_k, volume)``; ``restore`` re-applies a state afterwards."""
+        if self.has_sterics:
+            # OpenMM rebuilds the neighbour list of an interaction-group CustomNonbondedForce (the
+            # soft-core force) only in a computation that also runs the standard nonbonded kernel.
+            # Evaluating the soft-core group on its own after the positions changed would use a
+            # stale list (errors of several kT). One evaluation of all groups brings both lists
+            # up to date for the current positions; the per-group evaluations below then agree.
+            self.context.getState(getEnergy=True)
         energy = self.main_group() + self.softcore_group()
         if self.has_restraint:
             energy = energy + self._lr * self.restraint_energy()

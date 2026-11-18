@@ -80,6 +80,43 @@ def test_backends_agree_at_every_state(big_water_leg):
 
 @needs_cuda
 @pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_state_energies_are_right_straight_after_loading_a_configuration(big_water_leg, backend):
+    """Energies evaluated without dynamics after setPositions must equal those after the dynamics.
+
+    OpenMM rebuilds the neighbour list of an interaction-group CustomNonbondedForce (the
+    soft-core force) only in a computation that also runs the standard nonbonded kernel. If
+    the soft-core force group is evaluated on its own after the positions were replaced, the
+    list is stale and the energies are wrong by several kT (docs/M0_REPORT.md).
+    """
+    import openmm.unit as u
+
+    from cufep.sampling.states import set_state
+
+    alch, schedule, pos, box, _ = big_water_leg
+    be = get_backend(backend)
+    integ = be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=3)
+    ctx = be.make_context(be.prepare_system(alch.system), integ, 0)
+    ev = StateEnergyEvaluator(ctx, schedule.states, 300.0, None)
+    k = next(i for i, s in enumerate(schedule.states) if s.lambda_electrostatics == 0.0 and s.lambda_sterics == 1.0)
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300 * u.kelvin, 5)
+    set_state(ctx, schedule.states[k])
+    integ.step(500)
+    st = ctx.getState(getPositions=True)
+    early_pos, early_box = st.getPositions(asNumpy=True), st.getPeriodicBoxVectors()
+    after_md = ev.reduced_potentials(restore=schedule.states[k])[0]
+    integ.step(10000)                                  # 20 ps: the ligand's neighbours have changed
+    ctx.setPeriodicBoxVectors(*early_box)
+    ctx.setPositions(early_pos)
+    loaded = ev.reduced_potentials()[0]
+    usable = np.abs(after_md - after_md[k]) < 60.0
+    error = ((loaded - loaded[k]) - (after_md - after_md[k]))[usable]
+    assert np.max(np.abs(error)) < 0.01, error         # kT
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
 def test_replica_exchange_with_worker_processes(tmp_path, big_water_leg, backend):
     alch, schedule, pos, box, ligand = big_water_leg
     n_gpus = mm.Platform.getPlatformByName("CUDA").getPropertyDefaultValue("DeviceIndex")

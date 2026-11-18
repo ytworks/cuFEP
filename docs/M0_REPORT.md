@@ -51,6 +51,26 @@ licence of the cuPotential runtime restricts publishing performance results.
   forward estimate alone, one interval near the decoupled end had an MBAR overlap of only
   0.04; with the reverse check the overlaps are uniform (0.14-0.30) at about 30 states.
 
+## Energies straight after `setPositions`
+
+OpenMM rebuilds the neighbour list of a `CustomNonbondedForce` with interaction groups
+(cuFEP's soft-core force) only in a computation that also runs the standard nonbonded
+kernel: the list uses the rebuild flag of the standard neighbour list
+(`CommonCalcCustomNonbondedForceKernel::execute`, OpenMM 8.4). cuFEP evaluates the soft-core
+force group on its own to get the energies at all lambda windows cheaply. If that is done
+directly after the positions were replaced, without dynamics in between, the list is stale.
+
+| flow | error of energy differences between windows |
+|---|---|
+| load a configuration, run dynamics, evaluate (what a replica-exchange worker does) | at most 0.001 kT against a fresh double-precision Context, stock and cuPotential |
+| load a configuration and evaluate, no dynamics, before the fix | up to 8 kT, in double precision too |
+| the same after the fix | at most 0.001 kT |
+
+During dynamics both lists are rebuilt together, and the soft-core energy and forces after
+30 ps agree with a fresh double-precision Context on both backends. The fix is one
+evaluation of all force groups before the per-group evaluations
+(`StateEnergyEvaluator.reduced_potentials`); `tests/gpu` has a regression test.
+
 ## Open observations
 
 - The POPC patch settles at about 61 A^2 per lipid on both backends; experiment is about
