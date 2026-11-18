@@ -4,3 +4,5 @@ __pycache__/
 runs/
 spikes/out/
 .pytest_cache/
+core
+core.*
