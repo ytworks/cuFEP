@@ -1,4 +1,4 @@
-"""Replica workers: one process per GPU, one OpenMM Context per worker.
+"""Replica workers: processes with one OpenMM Context each, one or several per GPU.
 
 A worker time-slices the replicas assigned to it through its single Context. Replica
 coordinates, velocities and boxes live in shared memory owned by the controller and are
@@ -44,6 +44,8 @@ class LegSpec:
     seed: int = 0
     cpu_threads: int = 2
     box_safety: float | None = None
+    #: CUDA_MPS_ACTIVE_THREAD_PERCENTAGE of the worker processes when several share a GPU under MPS
+    mps_thread_percentage: int | None = None
     #: long-range dispersion bookkeeping for the coupled state (see alchemy/lrc.py)
     lrc: dict | None = None
     #: atoms whose positions are saved for structural analysis (coupled-state replica)
@@ -228,8 +230,10 @@ def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker
     os.environ["OPENMM_CPU_THREADS"] = str(spec.cpu_threads)
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
         os.environ[var] = str(spec.cpu_threads)
-    # Never attach to someone else's MPS daemon.
+    # Use cuFEP's own MPS daemon if the run started one (cufep.mps); never somebody else's.
     os.environ.setdefault("CUDA_MPS_PIPE_DIRECTORY", "/tmp/cufep-no-mps")
+    if spec.mps_thread_percentage:
+        os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(int(spec.mps_thread_percentage))
     arrays = None
     worker = None
     try:

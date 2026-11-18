@@ -50,20 +50,30 @@ class AlchemicalState:
         return asdict(self)
 
 
-STAGES_COMPLEX = ("restraints", "electrostatics", "sterics")
-STAGES_SOLVENT = ("electrostatics", "sterics")
+#: Stages of a leg, in the order in which they are passed. The names are those of Cresset Flare
+#: and A3FE: restrain (restraint off -> on), discharge (charges on -> off), vanish (LJ on -> off).
+STAGES_COMPLEX = ("restrain", "discharge", "vanish")
+STAGES_SOLVENT = ("discharge", "vanish")
+#: names used by earlier versions (still accepted when reading files)
+STAGE_ALIASES = {"restraints": "restrain", "electrostatics": "discharge", "sterics": "vanish"}
 
 
-def stage_state(stage: str, t: float) -> AlchemicalState:
-    """State at progress ``t`` in [0, 1] along one stage."""
-    t = float(min(1.0, max(0.0, t)))
-    if stage == "restraints":
-        return AlchemicalState(t, 1.0, 1.0)
-    if stage == "electrostatics":
-        return AlchemicalState(1.0, 1.0 - t, 1.0)
-    if stage == "sterics":
-        return AlchemicalState(1.0, 0.0, 1.0 - t)
-    raise ValueError(f"unknown stage '{stage}'")
+def canonical_stage(name: str) -> str:
+    name = STAGE_ALIASES.get(name, name)
+    if name not in STAGES_COMPLEX:
+        raise ValueError(f"unknown stage '{name}'")
+    return name
+
+
+def stage_state(stage: str, lam: float) -> AlchemicalState:
+    """State at lambda ``lam`` of one stage (0 = start of the stage, 1 = its end)."""
+    lam = float(min(1.0, max(0.0, lam)))
+    stage = canonical_stage(stage)
+    if stage == "restrain":
+        return AlchemicalState(lam, 1.0, 1.0)
+    if stage == "discharge":
+        return AlchemicalState(1.0, 1.0 - lam, 1.0)
+    return AlchemicalState(1.0, 0.0, 1.0 - lam)
 
 
 def validate_states(states: list[AlchemicalState]) -> None:

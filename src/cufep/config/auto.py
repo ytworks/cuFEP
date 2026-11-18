@@ -2,8 +2,8 @@
 
 Static choices are made here (before any simulation). Dynamic ones are made later by the
 step that has the necessary data and are recorded in the leg directories:
-restraint atoms (``restraint.json``), the lambda schedule (``schedule.yaml``), the time
-step fallback and the production length (``result.json``).
+restraint atoms (``restraint.json``), the lambda windows (``schedule.yaml``) and any
+fallback that was needed (``result.json``).
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class AutoReport:
         if self.warnings:
             lines += ["", "## Warnings", ""] + [f"- {w}" for w in self.warnings]
         lines += ["", "Decided during the run and recorded per leg: restraint atoms (`restraint.json`), "
-                  "lambda schedule (`schedule.yaml`), time-step fallback and production length (`result.json`)."]
+                  "lambda windows (`schedule.yaml`), fallbacks that were needed (`result.json`)."]
         return "\n".join(lines) + "\n"
 
 
@@ -46,15 +46,6 @@ def resolve(cfg: Config, protein=None) -> tuple[Config, AutoReport]:
         report.add("solvation.box_shape", out.solvation.box_shape,
                    "bilayers need a rectangular box" if membrane else
                    "fewest atoms for a soluble system (OpenFE's default)")
-
-    # ---- dynamics -----------------------------------------------------------------------
-    if out.dynamics.constraints == "auto":
-        out.dynamics.constraints = "hbonds"
-        report.add("dynamics.constraints", "hbonds", "bonds to hydrogen constrained, rigid water")
-    if out.dynamics.timestep_fs == "auto":
-        report.add("dynamics.timestep_fs", "4 (2 on instability)",
-                   f"hydrogen mass {out.dynamics.hmr_mass_amu:g} amu; lowered automatically if the "
-                   "pre-equilibration of the bound state is unstable")
 
     # ---- backend --------------------------------------------------------------------------
     if out.backend.name == "cupotential":

@@ -77,6 +77,15 @@ def solve_mbar(u: np.ndarray, states: np.ndarray):
     return np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0]), np.asarray(overlap)
 
 
+def overlap_matrix(u_kn: np.ndarray, n_k: np.ndarray) -> np.ndarray:
+    """MBAR overlap matrix for reduced energies ``u_kn[state, sample]`` (samples grouped by state)."""
+    pymbar, _ = _pymbar()
+    u_kn = np.minimum(np.asarray(u_kn, dtype=float) - np.min(u_kn), 1.0e6)
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        mbar = pymbar.MBAR(u_kn, np.asarray(n_k), solver_protocol="robust")
+        return np.asarray(mbar.compute_overlap()["matrix"])
+
+
 def statistical_inefficiency(u: np.ndarray, states: np.ndarray) -> float:
     """g of the replica-summed reduced potential at the sampled states (in iterations)."""
     _, timeseries = _pymbar()
@@ -117,7 +126,7 @@ def neighbour_swap_fraction(states: np.ndarray) -> list[float]:
 
 
 def stage_boundaries(state_dicts: list[dict]) -> dict[str, tuple[int, int]]:
-    """Index ranges (first, last state) of the restraint, electrostatics and sterics stages."""
+    """Index ranges (first, last window) of the restrain, discharge and vanish stages."""
     lr = [s.get("lambda_restraints", 1.0) for s in state_dicts]
     le = [s.get("lambda_electrostatics", 1.0) for s in state_dicts]
     ls = [s.get("lambda_sterics", 1.0) for s in state_dicts]
@@ -126,11 +135,11 @@ def stage_boundaries(state_dicts: list[dict]) -> dict[str, tuple[int, int]]:
     i_r = max((i for i in range(n) if le[i] == 1.0 and ls[i] == 1.0), default=0)
     i_e = max((i for i in range(n) if ls[i] == 1.0), default=i_r)
     if i_r > 0 and lr[0] < 1.0:
-        out["restraints"] = (0, i_r)
+        out["restrain"] = (0, i_r)
     if i_e > i_r:
-        out["electrostatics"] = (i_r if "restraints" in out else 0, i_e)
+        out["discharge"] = (i_r if "restrain" in out else 0, i_e)
     if n - 1 > i_e:
-        out["sterics"] = (i_e, n - 1)
+        out["vanish"] = (i_e, n - 1)
     return out
 
 

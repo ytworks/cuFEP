@@ -12,9 +12,9 @@ from cufep.benchmarks.stats import bootstrap, metrics
 from cufep.config.schema import Config
 
 TIERS = ("smoke", "subset", "full")
-SMOKE_SAMPLING = {"nvt_ns": 0.02, "npt_ns": 0.02, "pre_equilibration_ns": 0.3, "solvent_nvt_ns": 0.01,
-                  "solvent_npt_ns": 0.02, "solvent_pre_equilibration_ns": 0.05, "equilibration_ns": 0.05,
-                  "production_ns": [0.1], "repeats": 1}
+SMOKE_SAMPLING = {"pre_equilibration": {"complex": {"nvt_ns": 0.02, "npt_ns": 0.02, "md_ns": 0.3},
+                                        "solvent": {"nvt_ns": 0.01, "npt_ns": 0.02, "md_ns": 0.05}},
+                  "equilibration_ns": 0.05, "production_ns": 0.1, "repeats": 1}
 
 
 def data_root() -> Path:
@@ -53,8 +53,8 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
     if tier == "smoke":
         data["system"]["ligand_names"] = entry["subset"][:1]
         data["sampling"] = dict(SMOKE_SAMPLING)
-        data["lambda_schedule"] = {"pilot_ps_per_window": 10}
-        data["membrane"].update(equilibration_ns=0.5, max_equilibration_ns=0.5)
+        data["lambda_schedule"] = {"adaptive": {"window_ps": 10}}
+        data["membrane"].update(equilibration_ns=0.5)
     elif tier == "subset":
         data["system"]["ligand_names"] = list(entry["subset"])
     return Config.model_validate(data)

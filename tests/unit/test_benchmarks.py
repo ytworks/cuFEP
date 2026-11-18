@@ -61,12 +61,12 @@ def test_compound_names():
 def test_benchmark_tiers(tmp_path):
     smoke = benchmark_config("tyk2", "smoke", tmp_path / "s")
     assert smoke.system.ligand_names == ["jmc_23"] and smoke.sampling.repeats == 1
-    assert smoke.sampling.production_ns == [0.1]
+    assert smoke.sampling.production_ns == 0.1 and smoke.lambda_schedule.adaptive.window_ps == 10
     subset = benchmark_config("a2a", "subset", tmp_path / "x")
     assert subset.system.ligand_names == load_registry()["a2a"]["subset"]
-    assert subset.sampling.repeats == 3 and subset.membrane.enabled is True
+    assert subset.sampling.repeats == 1 and subset.membrane.enabled is True     # one run per ligand, as FEP+
     full = benchmark_config("tyk2", "full")
-    assert full.system.ligand_names is None and full.sampling.production_ns == [5.0, 10.0]
+    assert full.system.ligand_names is None and full.sampling.production_ns == 5.0
     assert full.membrane.enabled is False and smoke.membrane.enabled is False
     assert benchmark_config("a2a", "smoke").membrane.enabled is True
     with pytest.raises(KeyError):

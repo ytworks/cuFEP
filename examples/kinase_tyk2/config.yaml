@@ -1,6 +1,6 @@
 # TYK2 kinase (PDB 4GIH) with ligand ejm_31 from the Schrödinger public benchmark.
 # Experimental binding free energy: -9.54 kcal/mol.
-# Everything not listed here uses its default or is chosen automatically.
+# Every setting not listed here uses its recommended default (docs/configuration.md).
 system:
   protein: protein.pdb
   ligand: ligand.sdf

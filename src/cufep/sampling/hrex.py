@@ -1,7 +1,8 @@
 """Hamiltonian replica exchange controller.
 
 One controller per leg. It owns the shared replica state, starts one worker process per
-GPU, and treats every iteration as a transaction: workers read buffer ``cur`` and write
+entry of its device list (a GPU listed n times gets n workers, which run concurrently under
+NVIDIA MPS), and treats every iteration as a transaction: workers read buffer ``cur`` and write
 buffer ``1 - cur``; only when all of them report does the controller flip the buffer,
 mix the states, append the energies and (periodically) write a checkpoint.
 
@@ -163,7 +164,12 @@ class ReplicaExchangeSampler:
             tail = TailEnergy.from_dict(spec.lrc)
             self.storage.set_meta(lrc_s6=tail._s6, lrc_s12=tail._s12, lrc_cutoff_nm=tail.cutoff_nm)  # noqa: SLF001
         self.workers: list = []
+        self._next_worker_id = 0
         self._iter_seconds: float | None = None
+        #: seconds the workers were busy, summed, and (iteration, devices) whenever the workers changed
+        self.busy_seconds = 0.0
+        self.worker_seconds_available = 0.0
+        self.device_history: list[tuple[int, list]] = []
         self.accepted = self.attempted = 0
         self.restarts = 0
 
@@ -172,16 +178,72 @@ class ReplicaExchangeSampler:
         if self.workers:
             return
         n = min(len(self.devices), self.k)
+        self.devices = self.devices[:n]
         if self.inline:
             self.workers = [_Inline(self.spec, self.devices[w], self.arrays, w) for w in range(n)]
         else:
             ctx = mp.get_context("spawn")
             self.workers = [_Process(ctx, self.spec, self.devices[w], self.arrays.names, w) for w in range(n)]
+        self._next_worker_id = n
         for w in self.workers:
-            self.log(f"[{self.spec.name}] worker {w.worker_id}: {w.wait_ready(600.0)}")
+            described = w.wait_ready(600.0)
+        self.log(f"[{self.spec.name}] {n} worker(s) on {self._device_summary()}: {described.split(' (index')[0]}")
+        self.device_history.append((self.iteration, list(self.devices)))
         if not self.arrays.location.startswith("/dev/shm"):
             self.log(f"[{self.spec.name}] note: replica arrays are on disk ({self.arrays.location}) because "
                      "/dev/shm is too small; start the container with --shm-size=16g or --ipc=host to avoid this")
+
+    def _device_summary(self) -> str:
+        devs = [d for d in self.devices if d is not None]
+        if not devs:
+            return "the CPU"
+        return "GPU " + ", ".join(f"{g}x{devs.count(g)}" if devs.count(g) > 1 else str(g) for g in sorted(set(devs)))
+
+    def set_devices(self, devices: list) -> bool:
+        """Change the workers between two iterations: one worker per entry of ``devices``.
+
+        Workers that are still wanted keep running; the others are stopped and new ones are
+        started. Replica coordinates are in shared memory, so nothing has to be moved.
+        Returns whether anything changed.
+        """
+        target = list(devices)[: self.k]
+        if not target or self.inline:
+            return False
+        if not self.workers:
+            changed = target != self.devices
+            self.devices = target
+            return changed
+        if sorted(target) == sorted(self.devices):
+            return False
+        wanted: dict = {}
+        for d in target:
+            wanted[d] = wanted.get(d, 0) + 1
+        keep, stop = [], []
+        for w in self.workers:
+            if wanted.get(w.device, 0) > 0:
+                wanted[w.device] -= 1
+                keep.append(w)
+            else:
+                stop.append(w)
+        for w in stop:
+            try:
+                w.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        ctx = mp.get_context("spawn")
+        new = []
+        for d, n in wanted.items():
+            for _ in range(n):
+                new.append(_Process(ctx, self.spec, d, self.arrays.names, self._next_worker_id))
+                self._next_worker_id += 1
+        for w in new:
+            w.wait_ready(600.0)
+        self.workers = keep + new
+        self.devices = [w.device for w in self.workers]
+        self.log(f"[{self.spec.name}] iteration {self.iteration}: now {len(self.workers)} worker(s) on "
+                 f"{self._device_summary()}")
+        self.device_history.append((self.iteration, list(self.devices)))
+        return True
 
     def close(self) -> None:
         for w in self.workers:
@@ -253,8 +315,8 @@ class ReplicaExchangeSampler:
         except Exception:  # noqa: BLE001
             pass
         ctx = mp.get_context("spawn")
-        self.workers[w] = _Process(ctx, self.spec, self.devices[w], self.arrays.names, w)
-        self.log(f"[{self.spec.name}] worker {w} restarted: {self.workers[w].wait_ready(600.0)}")
+        self.workers[w] = _Process(ctx, self.spec, old.device, self.arrays.names, old.worker_id)
+        self.log(f"[{self.spec.name}] worker {old.worker_id} restarted: {self.workers[w].wait_ready(600.0)}")
 
     def _advance(self, record: bool, steps: int | None) -> list[dict]:
         """One iteration on every worker.
@@ -290,8 +352,13 @@ class ReplicaExchangeSampler:
         return results
 
     def run(self, n_iterations: int, record_stride: int = 4, checkpoint_stride: int = 100,
-            store: bool = True, steps: int | None = None, progress_every: int = 0) -> list[IterationStats]:
-        """Run ``n_iterations`` more iterations."""
+            store: bool = True, steps: int | None = None, progress_every: int = 0,
+            on_iteration=None) -> list[IterationStats]:
+        """Run ``n_iterations`` more iterations.
+
+        ``on_iteration(sampler, stats)`` is called after every iteration; it may call
+        :meth:`set_devices`.
+        """
         self.start()
         stats: list[IterationStats] = []
         for _ in range(int(n_iterations)):
@@ -323,6 +390,10 @@ class ReplicaExchangeSampler:
             worker_seconds = [float(res.get("seconds", 0.0)) for res in results if res]
             stats.append(IterationStats(self.iteration, dt, frac, max(worker_seconds, default=0.0),
                                         float(sum(worker_seconds))))
+            self.busy_seconds += float(sum(worker_seconds))
+            self.worker_seconds_available += dt * len(self.workers)
+            if on_iteration is not None:
+                on_iteration(self, stats[-1])
             if progress_every and self.iteration % progress_every == 0:
                 self.log(f"[{self.spec.name}] iteration {self.iteration}: {self._iter_seconds:.2f} s/iteration, "
                          f"{100 * frac:.0f}% of replicas changed state")

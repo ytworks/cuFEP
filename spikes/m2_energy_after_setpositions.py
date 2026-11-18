@@ -21,7 +21,7 @@ DEVICE = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 prec = sys.argv[2] if len(sys.argv) > 2 else "double"
 xml = open("spikes/out/tyk2_ejm_31_cube_alch_system.xml").read()
 data = np.load("spikes/out/tyk2_ejm_31_cube_equil.npz")
-schedule = fixed_schedule(list(STAGES_SOLVENT), {"electrostatics": 4, "sterics": 6})
+schedule = fixed_schedule(list(STAGES_SOLVENT), {"discharge": 4, "vanish": 6})
 
 system = mm.XmlSerializer.deserialize(xml)
 be = get_backend("openmm", precision=prec)

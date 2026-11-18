@@ -55,7 +55,7 @@ def big_water_leg():
     del ctx
     ligand = [a.index for a in list(mod.topology.residues())[20].atoms()]
     alch = make_alchemical_system(system, ligand)
-    schedule = fixed_schedule(["electrostatics", "sterics"], {"electrostatics": 3, "sterics": 4})
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 3, "vanish": 4})
     return alch, schedule, pos, box, ligand
 
 
@@ -147,13 +147,42 @@ def _gpu_count() -> int:
 
 
 @needs_cuda
-def test_killed_worker_is_restarted_and_the_iteration_repeated(tmp_path, big_water_leg):
+def test_workers_can_be_added_and_removed_between_iterations(tmp_path, big_water_leg):
+    """The scheduler hands GPUs to a running job and takes them back; no data may be lost."""
+    alch, schedule, pos, box, ligand = big_water_leg
+    spec = LegSpec(name="elastic", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=alch.system.getNumParticles(),
+                   backend="openmm", temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=4.0,
+                   steps_per_iteration=50, seed=3)
+    k = len(schedule.states)
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[0], log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(2, checkpoint_stride=0)
+        assert len(s.workers) == 1 and not s.set_devices([0])            # nothing to change
+        assert s.set_devices([0, 0, 0]) and len(s.workers) == 3          # three workers share GPU 0
+        s.run(2, checkpoint_stride=0)
+        assert s.set_devices([0]) and len(s.workers) == 1
+        s.run(2, checkpoint_stride=0)
+        assert s.set_devices([0] * 50) and len(s.workers) == k           # never more workers than replicas
+        s.run(2, checkpoint_stride=0)
+        assert s.iteration == 8 and s.restarts == 0
+        assert [it for it, _ in s.device_history] == [0, 2, 4, 6]
+        assert 0.0 < s.busy_seconds <= s.worker_seconds_available * 1.05
+    data = read_samples(tmp_path / "hrex")
+    assert data["u"].shape == (8, k, k)
+    assert all(sorted(row.tolist()) == list(range(k)) for row in data["states"])
+    assert np.all(np.isfinite(data["u"][np.arange(8)[:, None], np.arange(k), data["states"]]))
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_killed_worker_is_restarted_and_the_iteration_repeated(tmp_path, big_water_leg, backend):
     """Kill one worker between iterations: the next iteration must still complete for all replicas."""
     alch, schedule, pos, box, ligand = big_water_leg
     devices = [0, 1] if _gpu_count() >= 2 else [0, 0]
     spec = LegSpec(name="kill-test", system_xml=mm.XmlSerializer.serialize(alch.system),
                    states=[s.to_dict() for s in schedule.states], n_atoms=alch.system.getNumParticles(),
-                   backend="openmm", temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=4.0,
+                   backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=4.0,
                    steps_per_iteration=50, seed=3)
     messages = []
     with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=devices, log=messages.append) as s:

@@ -79,12 +79,11 @@ def test_mbar_recovers_harmonic_free_energies():
 
 
 def test_stage_boundaries():
-    s = fixed_schedule(["restraints", "electrostatics", "sterics"],
-                       {"restraints": 2, "electrostatics": 3, "sterics": 4})
+    s = fixed_schedule(["restrain", "discharge", "vanish"], {"restrain": 2, "discharge": 3, "vanish": 4})
     b = stage_boundaries([x.to_dict() for x in s.states])
-    assert b == {"restraints": (0, 2), "electrostatics": (2, 5), "sterics": (5, 9)}
-    s = fixed_schedule(["electrostatics", "sterics"], {"electrostatics": 3, "sterics": 4})
-    assert stage_boundaries([x.to_dict() for x in s.states]) == {"electrostatics": (0, 3), "sterics": (3, 7)}
+    assert b == {"restrain": (0, 2), "discharge": (2, 5), "vanish": (5, 9)}
+    s = fixed_schedule(["discharge", "vanish"], {"discharge": 3, "vanish": 4})
+    assert stage_boundaries([x.to_dict() for x in s.states]) == {"discharge": (0, 3), "vanish": (3, 7)}
 
 
 def test_storage_append_truncate_and_checkpoint(tmp_path):
@@ -112,7 +111,7 @@ def test_storage_append_truncate_and_checkpoint(tmp_path):
 def tiny_leg(water_ligand_system):
     system, pos, box, ligand = water_ligand_system
     alch = make_alchemical_system(system, ligand)
-    schedule = fixed_schedule(["electrostatics", "sterics"], {"electrostatics": 1, "sterics": 2})
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 2})
     spec = LegSpec(name="tiny", system_xml=mm.XmlSerializer.serialize(alch.system),
                    states=[s.to_dict() for s in schedule.states], n_atoms=system.getNumParticles(),
                    backend="openmm", platform="CPU", precision="mixed", temperature_K=300.0, pressure_bar=1.0,
@@ -139,6 +138,6 @@ def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
     assert data["frames"].shape[1:] == (3, 3) and len(data["frame_iter"]) >= 4
     res = analyze_leg(data, 300.0)
     assert res.n_states == 4 and res.n_iterations_used == 10
-    assert np.isfinite(res.delta_g) and set(res.stage_delta_g) == {"electrostatics", "sterics"}
+    assert np.isfinite(res.delta_g) and set(res.stage_delta_g) == {"discharge", "vanish"}
     # decoupling a water molecule from water costs free energy (hydration free energy ~ -6 kcal/mol)
     assert res.delta_g > 0

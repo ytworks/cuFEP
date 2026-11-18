@@ -5,15 +5,18 @@ Absolute binding free energies (ABFE) on OpenMM, with NVIDIA
 stock OpenMM as a second backend that is always available.
 
 You give cuFEP a protein PDB and a ligand SDF with the ligand placed in the pocket.
-Everything else has a default or is chosen automatically, and can be set in YAML.
+Every other setting has a recommended default and can be changed in YAML
+([docs/configuration.md](docs/configuration.md)).
 
 - Soluble and membrane proteins. With `membrane: {enabled: true}` the complex is oriented
   and embedded in a lipid bilayer.
 - Double decoupling with automatically chosen Boresch restraints, Hamiltonian replica
-  exchange and MBAR; the protocol follows OpenFE's ABFE protocol
-  ([docs/protocol.md](docs/protocol.md) lists the differences).
-- Adaptive lambda windows by default.
-- One GPU or many: all free GPUs are used by default.
+  exchange and MBAR. Defaults and terms follow established FEP software;
+  [docs/protocol.md](docs/protocol.md) compares cuFEP with FEP+, Flare and OpenFE.
+- Lambda windows: adaptive lambda scheduling by default (the method of Cresset Flare), or a
+  fixed number or list of lambda values per leg and stage.
+- One GPU or many: the replicas of a calculation are spread over all free GPUs, several per
+  GPU through NVIDIA MPS.
 - Benchmarks against experiment and FEP+ for a kinase (TYK2) and a GPCR in a bilayer (A2A).
 
 **Status:** work in progress. The plan and its milestones are in [docs/PLAN.md](docs/PLAN.md),
@@ -45,14 +48,18 @@ worker processes in memory, and Docker's default of 64 MB is too small. Without 
 falls back to files in the output directory and says so.
 
 `cufep run` prints one line per ligand, for example
-`RESULT ejm_31: dG_bind = ... ± ... kcal/mol (3 repeat(s))`, and writes:
+`RESULT ejm_31: dG_bind = ... kcal/mol (1 repeat(s))`, and writes:
 
 | file | content |
 |---|---|
-| `resolved_config.yaml`, `auto_report.md` | every setting that was used, and why the automatic ones were chosen |
+| `resolved_config.yaml`, `auto_report.md` | every setting that was used, and why the computed ones were chosen |
 | `protein_prepared.pdb` | the protein as simulated |
-| `summary.csv`, `summary.json` | binding free energies, spread over repeats, warnings |
-| `<ligand>/repeat_<n>/<leg>/` | restraint, lambda schedule, samples, per-leg result and log |
+| `summary.csv`, `summary.json` | binding free energies, uncertainties, warnings |
+| `timing.json` | time per phase and job, GPU utilization |
+| `<ligand>/repeat_<n>/<leg>/` | restraint, lambda windows (`schedule.yaml`), samples, per-leg result and log |
+
+One calculation per ligand is run by default, as in FEP+ and Flare. `sampling.repeats`
+runs it several times independently and reports the spread.
 
 ## Configuration
 
@@ -64,16 +71,27 @@ system:
   ligand: ligand.sdf        # several molecules in the SDF = one calculation each
 ```
 
-`cufep init --full` writes every setting with its default. The ones most often changed:
+`cufep init --full` writes every setting with its default, and
+[docs/configuration.md](docs/configuration.md) explains them. The ones most often changed:
 
 ```yaml
 membrane: {enabled: false}           # true builds a POPC bilayer around the protein
-backend: {name: cupotential}         # or openmm (stock); falls back to openmm automatically
-sampling: {repeats: 3, production_ns: [5, 10]}
-lambda_schedule: {mode: adaptive}    # or fixed, with file: schedule.yaml from an earlier run
-resources: {gpus: auto}              # or a list of device indices, e.g. [0, 1]
+backend: {name: cupotential}         # or openmm (stock); falls back to openmm if needed
+sampling:
+  production_ns: 5                   # per lambda window; or {complex: 10, solvent: 5}
+  repeats: 1                         # independent repeats of the whole calculation
+lambda_schedule:
+  mode: adaptive                     # adaptive lambda scheduling; or fixed:
+  windows:                           # a number of windows or the lambda values, per stage
+    complex: {restrain: 6, discharge: 11, vanish: 15}
+    solvent: {discharge: 5, vanish: [0.0, 0.12, 0.24, 0.36, 0.48, 0.6, 0.7, 0.77, 0.85, 1.0]}
+resources:
+  gpus: auto                         # or a list of device indices, e.g. [0, 1]
+  oversubscription_factor: auto      # workers that share a GPU at the same time (NVIDIA MPS)
 output: {dir: runs/my_ligand}
 ```
+
+`cufep plan config.yaml` prints the lambda windows that a run would use.
 
 ## Examples
 
@@ -92,13 +110,13 @@ cufep run examples/membrane_a2a/config.yaml
 ```bash
 cufep benchmark list
 cufep benchmark run tyk2 --tier smoke     # one ligand, minutes: checks the pipeline
-cufep benchmark run tyk2 --tier subset    # five ligands, three repeats
-cufep benchmark run a2a --tier full       # every ligand, three repeats
+cufep benchmark run tyk2 --tier subset    # five ligands
+cufep benchmark run a2a --tier full       # every ligand
 cufep benchmark report tyk2 runs/benchmark_tyk2_subset
 ```
 
-The report compares cuFEP with experiment and with the FEP+ values of the Schrödinger
-public benchmark. FEP+ values come from relative calculations shifted to the experimental
+One calculation per ligand is run, as FEP+ does; `--repeats` runs more. The report compares
+cuFEP with experiment and with the FEP+ values of the Schrödinger public benchmark. FEP+ values come from relative calculations shifted to the experimental
 mean, so the report separates raw errors (cuFEP only) from the like-for-like statistics.
 
 ## Development

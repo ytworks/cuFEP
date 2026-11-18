@@ -1,0 +1,169 @@
+# Configuration reference
+
+A run is described by one YAML file. The principles:
+
+- every setting can be changed in the YAML;
+- every setting has a default, and the default is the recommended value (the basis of each
+  one is given below);
+- `auto` is used only where the value has to be computed from the input: restraint atoms,
+  GPUs, box shape, membrane orientation and the oversubscription factor. Everything else is
+  a plain value.
+
+Only `system.protein` and `system.ligand` are required. `cufep init --full` writes a file
+with every setting, `cufep plan config.yaml` shows what a run would use, including the
+lambda windows, and every run writes the settings it used to `resolved_config.yaml`.
+
+## All settings and their defaults
+
+A unit test keeps this block identical to the defaults in the code.
+
+```yaml
+version: 1
+system:
+  protein: protein.pdb            # required
+  ligand: ligand.sdf              # required; several molecules = one calculation each
+  cofactors: []
+  ligand_names: null              # run only these records of the SDF
+membrane:
+  enabled: false                  # true builds a lipid bilayer; cuFEP never decides this itself
+  orientation: auto               # auto | input | transfer | slab | memembed
+  lipid: POPC
+  padding_nm: 1.5
+  equilibration_ns: 10.0
+forcefield:
+  protein: amber14/protein.ff14SB.xml
+  water: amber14/tip3p.xml
+  lipid: amber19/lipid21.xml
+  ligand: openff-2.2.1
+  ligand_charges: am1bcc          # am1bcc | am1bcc-nagl
+backend:
+  name: cupotential               # cupotential | openmm
+  fallback: openmm                # openmm | none
+  precision: mixed                # mixed | single | double
+  platform: CUDA
+thermodynamics:
+  temperature_K: 298.15
+  pressure_bar: 1.0
+  ionic_strength_M: 0.15
+  ph: 7.4
+dynamics:
+  timestep_fs: 4.0
+  constraints: hbonds             # hbonds | none
+  hmr_mass_amu: 3.0
+  friction_per_ps: 1.0
+  cutoff_nm: 0.9
+solvation:
+  box_shape: auto                 # auto | cube | dodecahedron
+  padding_complex_nm: 1.0
+  padding_solvent_nm: 1.5
+restraints:
+  type: boresch
+  selection: auto                 # auto | manual (give host_atoms and guest_atoms)
+  force_constants: openfe         # openfe (the two values below) | custom
+  k_r_kcal_per_A2: 10.0
+  k_angle_kcal_per_rad2: 80.0
+  host_atoms: null
+  guest_atoms: null
+  rmsf_cutoff_nm: 0.1
+  host_min_distance_nm: 0.5
+  host_max_distance_nm: 1.5
+  dssp_filter: true
+alchemy:
+  softcore_alpha: 0.5
+lambda_schedule:
+  mode: adaptive                  # adaptive | fixed
+  windows:                        # per stage: a number of lambda windows, or the lambda values
+    complex:
+      restrain: 6
+      discharge: 11
+      vanish: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+    solvent:
+      discharge: 5
+      vanish: [0.0, 0.12, 0.24, 0.36, 0.48, 0.6, 0.7, 0.77, 0.85, 1.0]
+  adaptive:
+    overlap_threshold: 0.04
+    candidates: 101
+    initial_windows:
+      restrain: 3
+      discharge: 5
+      vanish: 9
+    window_ps: 50.0
+    sample_interval_ps: 0.5
+    max_windows:
+      complex: 48
+      solvent: 32
+  file: null                      # a schedule.yaml of an earlier run, used as it is
+sampling:
+  pre_equilibration:
+    complex: {nvt_ns: 0.25, npt_ns: 0.5, md_ns: 5.0}
+    solvent: {nvt_ns: 0.1, npt_ns: 0.2, md_ns: 0.5}
+  exchange: hrex                  # hrex | none
+  time_per_iteration_ps: 2.5
+  equilibration_ns: 1.0           # a number, or {complex: ..., solvent: ...}
+  production_ns: 5.0              # a number, or {complex: ..., solvent: ...}
+  repeats: 1
+  seed: 20261118
+  checkpoint_interval_ps: 250.0
+analysis:
+  estimator: mbar
+  lrc: reweight                   # reweight | isotropic | none
+  lrc_cutoff_nm: 2.0
+  min_overlap: 0.03
+resources:
+  gpus: auto                      # auto | a list of device indices
+  oversubscription_factor: auto   # auto | 1 | 2 | 4 | ...
+  cpu_threads_per_worker: 2
+output:
+  dir: runs/cufep
+```
+
+## Lambda windows
+
+A leg passes through stages: the complex leg through `restrain`, `discharge` and `vanish`,
+the solvent leg through `discharge` and `vanish`. Within a stage lambda runs from 0 at its
+start to 1 at its end, as OpenFE's `lambda_restraints`, `lambda_elec` and `lambda_vdw`:
+
+| stage | lambda 0 | lambda 1 |
+|---|---|---|
+| restrain | no Boresch restraint | full restraint |
+| discharge | ligand charges on | ligand charges off |
+| vanish | ligand Lennard-Jones on | ligand Lennard-Jones off (soft-core) |
+
+The window at the end of a stage is the window at the start of the next one.
+
+`lambda_schedule.mode: fixed` uses `lambda_schedule.windows`. Each stage is given either as
+the lambda values, an increasing list from 0.0 to 1.0, or as a number of windows. A number
+re-samples the recommended values of that stage, so the relative spacing is kept: evenly
+spaced stages stay evenly spaced, and the vanish stage stays denser towards its end.
+
+```yaml
+lambda_schedule:
+  mode: fixed
+  windows:
+    complex: {restrain: 4, discharge: 8, vanish: 20}
+    solvent: {discharge: 5, vanish: [0.0, 0.2, 0.4, 0.6, 0.75, 0.9, 1.0]}
+```
+
+`lambda_schedule.mode: adaptive`, the default, lets a short precalculation decide the
+windows; `lambda_schedule.adaptive` holds its parameters. The rule is described in
+[protocol.md](protocol.md#adaptive-lambda-scheduling). The windows it chooses are written to
+`schedule.yaml` in the leg directory; copying them into `lambda_schedule.windows` reproduces
+the schedule in fixed mode.
+
+## Basis of the recommended values
+
+| settings | recommended value | basis |
+|---|---|---|
+| force fields, AM1-BCC charges, 4 fs with hydrogen mass repartitioning, 0.9 nm cutoff, 298.15 K, 1 bar, 0.15 M | as listed | defaults of OpenFE's ABFE protocol |
+| `sampling.pre_equilibration`, `equilibration_ns`, `time_per_iteration_ps`, `exchange` | 0.25 + 0.5 + 5 ns; 1 ns; 2.5 ps; replica exchange | defaults of OpenFE's ABFE protocol |
+| `sampling.production_ns` | 5 ns per lambda window | default of Schrödinger's absolute binding FEP+; also used by A3FE and Boltz-ABFE. OpenFE uses 10 ns |
+| `sampling.repeats` | 1 | FEP+ and Flare run a calculation once. OpenFE's default is 3; more than one repeat makes the reported uncertainty the standard deviation over repeats |
+| `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol |
+| `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
+| `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. A lower threshold (0.03) gives fewer windows, a higher one (0.05) more |
+| `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer. cuFEP's own choice |
+| `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
+| `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015; the warning level of Flare and of the alchemical best-practice guide |
+| `analysis.lrc` | reweight | see protocol.md, long-range dispersion |
+| `resources.oversubscription_factor` | from the size of the system: 16 up to 10,000 atoms, 8 up to 60,000, 4 up to 200,000, else 2 | measured total throughput per GPU under NVIDIA MPS |
+| `membrane.equilibration_ns` | 10 ns | cuFEP's own choice for a freshly built bilayer |

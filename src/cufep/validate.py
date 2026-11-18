@@ -36,7 +36,7 @@ def validate(cfg, ligand_name: str | None = None, device: int = 0, echo=print) -
     prepare_ligand(resolved, ligand, protein, lig_dir, bool(resolved.membrane.enabled), resolved.solvation.box_shape, echo)
     info = json.loads((lig_dir / "prep" / "prep.json").read_text())
     T = resolved.thermodynamics.temperature_K
-    schedule = fixed_schedule(list(STAGES_SOLVENT), {"electrostatics": 4, "sterics": 6})
+    schedule = fixed_schedule(list(STAGES_SOLVENT), {"discharge": 4, "vanish": 6})
     all_ok = True
     for leg in ("complex", "solvent"):
         prep = load_prepared(lig_dir / "prep", leg)

@@ -13,8 +13,8 @@ licence, see `benchmarks/THIRD_PARTY/`).
 ```bash
 cufep() { docker run --rm --gpus all --shm-size=16g -u "$(id -u):$(id -g)" -v "$PWD":/work cufep:latest "$@"; }
 
-cufep plan examples/kinase_tyk2/config.yaml     # show the automatic decisions
-cufep run  examples/kinase_tyk2/config.yaml     # three repeats, default sampling
+cufep plan examples/kinase_tyk2/config.yaml     # settings and lambda windows of the run
+cufep run  examples/kinase_tyk2/config.yaml     # default settings
 cufep run  examples/membrane_a2a/config.yaml
 ```
 
@@ -22,7 +22,7 @@ For a first look that finishes in minutes, shorten the sampling on the command l
 (the result is then not converged):
 
 ```bash
-cufep run examples/kinase_tyk2/config.yaml --repeats 1 --production-ns 0.2 -o runs/tyk2_try
+cufep run examples/kinase_tyk2/config.yaml --production-ns 0.2 -o runs/tyk2_try
 ```
 
 The A2A configuration switches the membrane on with `membrane: {enabled: true}`. cuFEP then

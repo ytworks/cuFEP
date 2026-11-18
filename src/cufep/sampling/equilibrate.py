@@ -8,7 +8,7 @@ run, which is the long part and cannot be spread over GPUs, runs on the backend 
 OpenMM and the fact is recorded.
 
 Time step: 4 fs with hydrogen mass repartitioning by default. If the run blows up it is
-repeated from the minimised structure at 2 fs ("auto" fallback) and the choice is recorded.
+repeated once from the minimised structure at 2 fs and the fact is recorded.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class EquilibrationSettings:
     temperature_K: float = 298.15
     pressure_bar: float = 1.0
     friction_per_ps: float = 1.0
-    timestep_fs: float | None = None       # None = auto (4 fs, fall back to 2 fs)
+    timestep_fs: float = 4.0               # an unstable run is repeated once at 2 fs
     minimize_iterations: int = 5000
     nvt_ns: float = 0.25
     npt_ns: float = 0.5
@@ -45,8 +45,8 @@ class EquilibrationSettings:
     #: heavy atoms held by harmonic position restraints during NVT/NPT (released for production)
     restrained_atoms: list[int] = field(default_factory=list)
     restraint_k: float = 1000.0            # kJ/mol/nm^2
-    #: membranes: keep extending the production run in 5 ns blocks until the box area and the
-    #: number of waters around the ligand stop drifting, up to this total length
+    #: if set, the production run is extended in 5 ns blocks up to this length while the box area
+    #: or the number of waters around the ligand still drifts (off by default)
     max_production_ns: float | None = None
     area_tolerance: float = 0.01           # relative change of the XY area between the last two quarters
     water_tolerance: float = 1.5           # change of the mean pocket water count between them
@@ -240,7 +240,8 @@ def pre_equilibrate(system: mm.System, positions, box, frame_atoms: list[int],
                     log=print) -> EquilibrationResult:
     """Minimise and equilibrate the fully interacting system (see the module docstring)."""
     settings = settings or EquilibrationSettings()
-    attempts = [settings.timestep_fs] if settings.timestep_fs else [4.0, 2.0]
+    first = float(settings.timestep_fs or 4.0)
+    attempts = [first] + ([2.0] if first > 2.0 else [])
     last: Exception | None = None
     for i, dt in enumerate(attempts):
         try:

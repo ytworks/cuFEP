@@ -1,8 +1,15 @@
 """Configuration schema (YAML -> validated settings).
 
-Only ``system.protein`` and ``system.ligand`` are required. Every other key has a
-default; keys set to ``auto`` are resolved by :mod:`cufep.config.auto` and the resolved
-configuration is written next to the results.
+Principles (docs/configuration.md lists every key with the basis of its default):
+
+* every setting can be changed in the YAML;
+* every setting has a default, and the default is the recommended value;
+* ``auto`` is used only where the value has to be computed from the input (restraint
+  atoms, GPUs, box shape, membrane orientation); everything else is a plain value.
+
+Only ``system.protein`` and ``system.ligand`` are required. Keys set to ``auto`` are
+resolved by :mod:`cufep.config.auto`; the resolved configuration is written next to the
+results.
 """
 from __future__ import annotations
 
@@ -13,6 +20,30 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Auto = Literal["auto"]
+
+#: Recommended lambda values of the vanish stage (0 = Lennard-Jones on, 1 = off). These and the
+#: evenly spaced restrain and discharge stages are the defaults of OpenFE's ABFE protocol, which
+#: uses the same soft-core form and replica exchange: 30 windows for the complex leg and 14 for
+#: the solvent leg (windows at stage boundaries are shared).
+RECOMMENDED_VANISH_COMPLEX = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+RECOMMENDED_VANISH_SOLVENT = [0.0, 0.12, 0.24, 0.36, 0.48, 0.6, 0.7, 0.77, 0.85, 1.0]
+
+#: A stage is given either as a number of lambda windows or as the lambda values themselves.
+StageWindows = int | list[float]
+
+
+def _check_stage(value):
+    if isinstance(value, bool):
+        raise ValueError("give a number of lambda windows or a list of lambda values")
+    if isinstance(value, int):
+        if value < 2:
+            raise ValueError("a stage needs at least two lambda windows (its start and its end)")
+        return value
+    values = [float(x) for x in value]
+    if len(values) < 2 or abs(values[0]) > 1e-9 or abs(values[-1] - 1.0) > 1e-9 \
+            or any(b <= a for a, b in zip(values, values[1:])):
+        raise ValueError("the lambda values of a stage must increase from 0.0 (start of the stage) to 1.0 (its end)")
+    return values
 
 
 class _Section(BaseModel):
@@ -37,8 +68,8 @@ class MembraneConfig(_Section):
     orientation: Literal["auto", "input", "transfer", "slab", "memembed"] = "auto"
     lipid: str = "POPC"
     padding_nm: float = 1.5
+    #: unrestrained MD of the bilayer before the alchemical run (replaces pre_equilibration md_ns)
     equilibration_ns: float = 10.0
-    max_equilibration_ns: float = 30.0
 
 
 class ForceFieldConfig(_Section):
@@ -65,8 +96,10 @@ class ThermodynamicsConfig(_Section):
 
 
 class DynamicsConfig(_Section):
-    timestep_fs: float | Auto = "auto"
-    constraints: Literal["auto", "hbonds", "none"] = "auto"
+    #: used together with hydrogen mass repartitioning; if the plain MD before the alchemical
+    #: run is unstable it is repeated at 2 fs and the fact is recorded
+    timestep_fs: float = 4.0
+    constraints: Literal["hbonds", "none"] = "hbonds"
     hmr_mass_amu: float = 3.0
     friction_per_ps: float = 1.0
     cutoff_nm: float = 0.9
@@ -97,47 +130,122 @@ class AlchemyConfig(_Section):
     softcore_alpha: float = 0.5
 
 
+class ComplexWindows(_Section):
+    restrain: StageWindows = 6
+    discharge: StageWindows = 11
+    vanish: StageWindows = Field(default_factory=lambda: list(RECOMMENDED_VANISH_COMPLEX))
+
+    _check = field_validator("restrain", "discharge", "vanish")(_check_stage)
+
+
+class SolventWindows(_Section):
+    discharge: StageWindows = 5
+    vanish: StageWindows = Field(default_factory=lambda: list(RECOMMENDED_VANISH_SOLVENT))
+
+    _check = field_validator("discharge", "vanish")(_check_stage)
+
+
+class WindowsConfig(_Section):
+    """Lambda windows per leg and stage: a number of windows or the lambda values.
+
+    Lambda runs from 0 at the start of a stage to 1 at its end (restrain: restraint off to
+    on; discharge: charges on to off; vanish: Lennard-Jones on to off), as OpenFE's
+    ``lambda_restraints``, ``lambda_elec`` and ``lambda_vdw``.
+    """
+
+    complex: ComplexWindows = Field(default_factory=ComplexWindows)
+    solvent: SolventWindows = Field(default_factory=SolventWindows)
+
+    def for_leg(self, leg: str) -> dict[str, StageWindows]:
+        section = self.complex if leg == "complex" else self.solvent
+        return {name: getattr(section, name) for name in type(section).model_fields}
+
+
+class InitialWindows(_Section):
+    restrain: int = Field(default=3, ge=2)
+    discharge: int = Field(default=5, ge=2)
+    vanish: int = Field(default=9, ge=2)
+
+
 class WindowLimits(_Section):
     complex: int = 48
     solvent: int = 32
 
 
-class LambdaScheduleConfig(_Section):
-    mode: Literal["adaptive", "fixed"] = "adaptive"
-    target_std_kT: float = 1.0
-    min_overlap: float = 0.03
+class AdaptiveConfig(_Section):
+    """Adaptive lambda scheduling (Midgley et al., J. Chem. Inf. Model. 2025, 65, 512)."""
+
+    #: a pair of neighbouring windows is deficient if its overlap is at or below this value
+    overlap_threshold: float = Field(default=0.04, gt=0.0, lt=0.5)
+    #: number of equally spaced candidate lambda values per stage
+    candidates: int = Field(default=101, ge=3)
+    #: windows per stage in the first iteration (the schedule never gets smaller than this)
+    initial_windows: InitialWindows = Field(default_factory=InitialWindows)
+    #: MD per new window in the precalculation
+    window_ps: float = Field(default=50.0, gt=0.0)
+    #: interval at which energies are recorded during that MD
+    sample_interval_ps: float = Field(default=0.5, gt=0.0)
+    #: largest number of windows per leg; reaching it ends the precalculation with a warning
     max_windows: WindowLimits = Field(default_factory=WindowLimits)
-    pilot_ps_per_window: float = 40.0
-    #: for mode "fixed": path to a schedule.yaml written by an earlier run
+
+
+class LambdaScheduleConfig(_Section):
+    #: adaptive: the precalculation decides the number and the values of the lambda windows;
+    #: fixed: the windows below are used as they are
+    mode: Literal["adaptive", "fixed"] = "adaptive"
+    windows: WindowsConfig = Field(default_factory=WindowsConfig)
+    adaptive: AdaptiveConfig = Field(default_factory=AdaptiveConfig)
+    #: a schedule.yaml written by an earlier run (or a directory of them, as written by
+    #: `cufep benchmark freeze`); if given it is used as it is, whatever the mode
     file: Path | None = None
 
 
+class PreEquilibrationLeg(_Section):
+    nvt_ns: float
+    npt_ns: float
+    md_ns: float
+
+
+class PreEquilibrationConfig(_Section):
+    """Plain MD of the fully interacting system before the alchemical run (OpenFE's defaults)."""
+
+    complex: PreEquilibrationLeg = Field(default_factory=lambda: PreEquilibrationLeg(nvt_ns=0.25, npt_ns=0.5, md_ns=5.0))
+    solvent: PreEquilibrationLeg = Field(default_factory=lambda: PreEquilibrationLeg(nvt_ns=0.1, npt_ns=0.2, md_ns=0.5))
+
+
+class LegLengths(_Section):
+    complex: float = Field(gt=0.0)
+    solvent: float = Field(gt=0.0)
+
+
 class SamplingConfig(_Section):
-    #: plain MD of the fully interacting system before the alchemical run (OpenFE: 0.25 + 0.5 + 5 ns)
-    nvt_ns: float = 0.25
-    npt_ns: float = 0.5
-    pre_equilibration_ns: float = 5.0
-    solvent_nvt_ns: float = 0.1
-    solvent_npt_ns: float = 0.2
-    solvent_pre_equilibration_ns: float = 0.5
-    #: replica exchange
-    iteration_ps: float = 2.5
-    equilibration_ns: float = 1.0
-    #: production length per state; checked only at these lengths (ns), the last one is the cap
-    production_ns: list[float] = Field(default_factory=lambda: [5.0, 10.0])
-    min_effective_samples: int = 50
-    min_round_trips: int = 2
+    pre_equilibration: PreEquilibrationConfig = Field(default_factory=PreEquilibrationConfig)
+    #: hrex = Hamiltonian replica exchange between the lambda windows; none = independent windows
     exchange: Literal["hrex", "none"] = "hrex"
-    repeats: int = 3
+    time_per_iteration_ps: float = Field(default=2.5, gt=0.0)
+    #: per lambda window, discarded; one number or {complex: ..., solvent: ...}
+    equilibration_ns: float | LegLengths = 1.0
+    #: per lambda window, used for the estimate; one number or {complex: ..., solvent: ...}
+    production_ns: float | LegLengths = 5.0
+    #: number of completely independent repeats of the whole calculation (as OpenFE's protocol_repeats)
+    repeats: int = Field(default=1, ge=1)
     seed: int = 20261118
     checkpoint_interval_ps: float = 250.0
 
-    @field_validator("production_ns")
+    @field_validator("equilibration_ns", "production_ns")
     @classmethod
-    def _increasing(cls, v: list[float]) -> list[float]:
-        if not v or any(b <= a for a, b in zip(v, v[1:])) or v[0] <= 0:
-            raise ValueError("production_ns must be a non-empty, strictly increasing list of positive numbers")
+    def _positive(cls, v):
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v <= 0:
+            raise ValueError("the length must be positive")
         return v
+
+    def equilibration(self, leg: str) -> float:
+        v = self.equilibration_ns
+        return float(getattr(v, leg)) if isinstance(v, LegLengths) else float(v)
+
+    def production(self, leg: str) -> float:
+        v = self.production_ns
+        return float(getattr(v, leg)) if isinstance(v, LegLengths) else float(v)
 
 
 class AnalysisConfig(_Section):
@@ -147,12 +255,24 @@ class AnalysisConfig(_Section):
     #: OpenMM's long-range correction and OpenFE; none = truncated interaction
     lrc: Literal["reweight", "isotropic", "none"] = "reweight"
     lrc_cutoff_nm: float = 2.0
+    #: warn if the overlap between two neighbouring lambda windows in the production is below this
+    min_overlap: float = 0.03
 
 
 class ResourcesConfig(_Section):
     #: "auto" = every visible GPU that is not busy; or an explicit list of device indices
     gpus: Auto | list[int] = "auto"
+    #: worker processes that share one GPU at the same time (needs NVIDIA MPS, which cuFEP starts
+    #: itself); "auto" = from the size of the system, 1 if MPS is not available
+    oversubscription_factor: Auto | int = "auto"
     cpu_threads_per_worker: int = 2
+
+    @field_validator("oversubscription_factor")
+    @classmethod
+    def _factor(cls, v):
+        if v != "auto" and int(v) < 1:
+            raise ValueError("oversubscription_factor must be 'auto' or at least 1")
+        return v
 
 
 class OutputConfig(_Section):

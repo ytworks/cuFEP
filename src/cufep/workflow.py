@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cufep.config.schema import Config
+from cufep.config.schema import Config, WindowsConfig
 
 KCAL = 4.184
 R_GAS = 8.31446261815324e-3
@@ -221,6 +221,46 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
 
 
 # =============================================================================== one leg
+class JobControl:
+    """A job's end of the pipe to the scheduler (cufep.scheduler.run_jobs)."""
+
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    def _send(self, message: dict) -> None:
+        try:
+            self.conn.send(message)
+        except (BrokenPipeError, OSError):
+            pass
+
+    def request_devices(self, replicas: int, work: float, timeout: float = 300.0) -> list | None:
+        """Tell the scheduler that sampling starts; returns the GPU of every worker to use."""
+        self._send({"event": "sampling", "replicas": int(replicas), "work": float(work)})
+        try:
+            if self.conn.poll(timeout):
+                return list(self.conn.recv()["devices"])
+        except (EOFError, OSError, KeyError):
+            pass
+        return None
+
+    def poll_devices(self) -> list | None:
+        """A new device list, if the scheduler has sent one since the last call."""
+        latest = None
+        try:
+            while self.conn.poll():
+                latest = self.conn.recv().get("devices", latest)
+        except (EOFError, OSError):
+            pass
+        return list(latest) if latest else None
+
+    def progress(self, work: float) -> None:
+        self._send({"event": "progress", "work": float(work)})
+
+    def serial(self) -> None:
+        """Sampling is over: the job needs a single worker at most from now on."""
+        self._send({"event": "serial"})
+
+
 @dataclass
 class LegJob:
     ligand: str
@@ -232,6 +272,11 @@ class LegJob:
     production_ns: float
     reschedule: bool = False
     inline: bool = False
+    #: size of the system, and how many workers of this job one GPU runs at the same time
+    n_atoms: int = 0
+    oversubscription: int = 1
+    #: set in the job's own process when a scheduler is in charge of the GPUs
+    control: JobControl | None = None
 
     @property
     def leg_dir(self) -> Path:
@@ -240,6 +285,16 @@ class LegJob:
     @property
     def tag(self) -> str:
         return f"{self.ligand}/r{self.repeat}/{self.leg}"
+
+
+def read_result(job: LegJob) -> dict:
+    """The result of a finished job, or its error."""
+    for name in ("result.json", "error.json"):
+        f = job.leg_dir / name
+        if f.exists():
+            return json.loads(f.read_text())
+    return {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat,
+            "error": "the job process ended without writing a result (killed?)"}
 
 
 def _choose_backend(cfg: Config, system, log) -> tuple[str, list[str]]:
@@ -278,10 +333,11 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.lrc import TailEnergy
     from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, find_boresch_restraint,
                                           ligand_symmetry_number)
-    from cufep.alchemy.schedule import Schedule, ScheduleSettings, refine, trailblaze
+    from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
     from cufep.analysis.mbar import analyze_leg
     from cufep.analysis.structure import structural_analysis
     from cufep.backends import get_backend
+    from cufep.mps import thread_percentage
     from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
     from cufep.sampling.hrex import ReplicaExchangeSampler, SamplerError
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT
@@ -302,14 +358,19 @@ def run_leg(job: LegJob) -> dict:
     device0 = job.devices[0] if job.devices else None
     barostat = prep_info["complex_barostat"] if is_complex else "isotropic"
     notes: list[str] = []
-    timestep_cfg = None if cfg.dynamics.timestep_fs == "auto" else float(cfg.dynamics.timestep_fs)
+    timing: dict = {"phases": {}, "started": time.time()}
 
-    # ---- 1. pre-equilibration of the fully interacting system (stock OpenMM) -------------
+    def timed(name: str, t_start: float) -> None:
+        timing["phases"][name] = timing["phases"].get(name, 0.0) + (time.perf_counter() - t_start)
+
+    timestep_cfg = float(cfg.dynamics.timestep_fs)
+    pre = cfg.sampling.pre_equilibration.complex if is_complex else cfg.sampling.pre_equilibration.solvent
+
+    # ---- 1. pre-equilibration: plain MD of the fully interacting system -------------------
     equil_file = leg_dir / "equil.npz"
     if not equil_file.exists():
-        s = cfg.sampling
         in_membrane = is_complex and barostat == "membrane"
-        production = s.pre_equilibration_ns if is_complex else s.solvent_pre_equilibration_ns
+        production = pre.md_ns
         restrained: list[int] = []
         wall_atoms: list[int] = []
         wall_half = 0.0
@@ -334,12 +395,11 @@ def run_leg(job: LegJob) -> dict:
             restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
         settings = EquilibrationSettings(
             temperature_K=T, pressure_bar=cfg.thermodynamics.pressure_bar, friction_per_ps=cfg.dynamics.friction_per_ps,
-            timestep_fs=timestep_cfg, nvt_ns=s.nvt_ns if is_complex else s.solvent_nvt_ns,
-            npt_ns=(2.0 * s.npt_ns if in_membrane else s.npt_ns) if is_complex else s.solvent_npt_ns,
+            timestep_fs=timestep_cfg, nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns,
             production_ns=production, barostat=barostat, platform=cfg.backend.platform,
             precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
+            md_backend=cfg.backend.name,
             restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half, wall_centre_nm=0.0,
-            max_production_ns=max(production, cfg.membrane.max_equilibration_ns) if in_membrane else None,
             ligand_atoms=prep["ligand"] if in_membrane else [],
             water_oxygens=[a.index for a in prep["topology"].atoms()
                            if a.residue.name == "HOH" and a.element is not None and a.element.symbol == "O"]
@@ -347,20 +407,21 @@ def run_leg(job: LegJob) -> dict:
         t0 = time.perf_counter()
         eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device0, log)
         tmp = leg_dir / "equil.tmp.npz"
-        # the restraint search uses the last pre_equilibration_ns of the trajectory
-        n_keep = max(2, int(round((s.pre_equilibration_ns if is_complex else s.solvent_pre_equilibration_ns)
-                                  * 1000.0 / settings.frame_interval_ps)))
+        # the restraint search uses the last pre_equilibration md_ns of the trajectory
+        n_keep = max(2, int(round(pre.md_ns * 1000.0 / settings.frame_interval_ps)))
         np.savez(tmp, positions=eq.positions, velocities=eq.velocities, box=eq.box, frames=eq.frames[-n_keep:],
                  frame_boxes=eq.frame_boxes[-n_keep:], frame_atoms=np.array(eq.frame_atoms),
                  timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes), simulated_ns=eq.simulated_ns,
                  pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2)
         tmp.replace(equil_file)
+        timed("pre_equilibration", t0)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)
     timestep_fs = float(eq["timestep_fs"])
     notes += json.loads(str(eq["notes"]))
 
     # ---- 2. restraint (complex only) --------------------------------------------------------
+    t_restraint = time.perf_counter()
     restraint = None
     release_dg = release_dg_analytical = 0.0
     symmetry = 1
@@ -407,6 +468,8 @@ def run_leg(job: LegJob) -> dict:
         if symmetry > 1:
             notes.append(f"the ligand has {symmetry} heavy-atom graph symmetries; no symmetry correction is applied")
 
+    timed("restraint", t_restraint)
+
     # ---- 3. alchemical System ------------------------------------------------------------------
     system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])      # the equilibrated box
     alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha)
@@ -420,12 +483,12 @@ def run_leg(job: LegJob) -> dict:
     backend_name, bnotes = _choose_backend(cfg, alch.system, log)
     notes += bnotes
     stages = list(STAGES_COMPLEX if is_complex else STAGES_SOLVENT)
-    max_windows = cfg.lambda_schedule.max_windows.complex if is_complex else cfg.lambda_schedule.max_windows.solvent
     pressure = cfg.thermodynamics.pressure_bar
-    steps_per_iteration = max(1, int(round(cfg.sampling.iteration_ps * 1000.0 / timestep_fs)))
-    n_equil = max(1, int(round(cfg.sampling.equilibration_ns * 1000.0 / cfg.sampling.iteration_ps)))
-    n_prod = max(4, int(round(job.production_ns * 1000.0 / cfg.sampling.iteration_ps)))
-    ckpt_stride = max(1, int(round(cfg.sampling.checkpoint_interval_ps / cfg.sampling.iteration_ps)))
+    iteration_ps = cfg.sampling.time_per_iteration_ps
+    steps_per_iteration = max(1, int(round(iteration_ps * 1000.0 / timestep_fs)))
+    n_equil = max(1, int(round(cfg.sampling.equilibration(job.leg) * 1000.0 / iteration_ps)))
+    n_prod = max(4, int(round(job.production_ns * 1000.0 / iteration_ps)))
+    ckpt_stride = max(1, int(round(cfg.sampling.checkpoint_interval_ps / iteration_ps)))
 
     frame_atoms = prep["solute"] if is_complex else prep["ligand"]
     where = {a: i for i, a in enumerate(frame_atoms)}
@@ -439,15 +502,16 @@ def run_leg(job: LegJob) -> dict:
         sched_file = leg_dir / "schedule.yaml"
         start_file = leg_dir / "start_configs.npz"
         # ---- 4. lambda schedule ----------------------------------------------------------------
+        ls = cfg.lambda_schedule
         if job.reschedule and not (hrex_dir / "samples.h5").exists():
             sched_file.unlink(missing_ok=True)
-        if cfg.lambda_schedule.mode == "fixed" and cfg.lambda_schedule.file is not None and not sched_file.exists():
+        if ls.file is not None and not sched_file.exists():
             # one file for every leg, or a directory of frozen schedules: <ligand>/<leg>_r<repeat>.yaml
-            src = Path(cfg.lambda_schedule.file)
+            src = Path(ls.file)
             if src.is_dir():
                 src = src / safe_name(job.ligand) / f"{job.leg}_r{job.repeat}.yaml"
             if not src.exists():
-                raise WorkflowError(f"lambda_schedule.mode is 'fixed' but there is no schedule at {src}")
+                raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
             shutil.copy(src, sched_file)
         if sched_file.exists() and start_file.exists():
             schedule = Schedule.load(sched_file)
@@ -467,68 +531,90 @@ def run_leg(job: LegJob) -> dict:
             ctx.setPositions(eq["positions"])
             ctx.setVelocities(eq["velocities"])
             t0 = time.perf_counter()
-            if sched_file.exists():                        # fixed schedule: only make start configurations
-                schedule = Schedule.load(sched_file)
-                cfgs = _walk_schedule(ctx, integ, schedule, cfg.lambda_schedule.pilot_ps_per_window, timestep_fs)
+            if sched_file.exists() or ls.mode == "fixed":
+                # the windows are given: only make a start configuration for each of them
+                if sched_file.exists():
+                    schedule = Schedule.load(sched_file)
+                else:
+                    schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
+                                                     WindowsConfig().for_leg(job.leg))
+                cfgs = _walk_schedule(ctx, integ, schedule, ls.adaptive.window_ps, timestep_fs)
             else:
-                schedule, cfgs = trailblaze(
+                a_ = ls.adaptive
+                schedule, cfgs = adaptive_schedule(
                     ctx, integ, stages, T, timestep_fs,
-                    ScheduleSettings(target_std_kT=cfg.lambda_schedule.target_std_kT, max_windows=max_windows,
-                                     pilot_ps=cfg.lambda_schedule.pilot_ps_per_window, seed=seed), log)
-                schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
-                              backend=backend_name)
+                    AlsSettings(overlap_threshold=a_.overlap_threshold, candidates=a_.candidates,
+                                initial_windows=a_.initial_windows.model_dump(), window_ps=a_.window_ps,
+                                sample_interval_ps=a_.sample_interval_ps,
+                                max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent), log)
+            schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
+                          backend=backend_name)
             del ctx, integ
             configs = (np.array([c[0] for c in cfgs]), np.array([c[1] for c in cfgs]), np.array([c[2] for c in cfgs]))
             np.savez(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2])
-            log(f"lambda schedule: {len(schedule.states)} states in {time.perf_counter() - t0:.0f} s")
+            timed("lambda_schedule", t0)
+            log(f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows in {time.perf_counter() - t0:.0f} s: "
+                + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items()))
 
         # ---- 5. replica exchange -----------------------------------------------------------------
-        for attempt in range(3):
-            spec = LegSpec(
-                name=job.tag, system_xml=alch_xml, states=[s.to_dict() for s in schedule.states],
-                n_atoms=alch.system.getNumParticles(), backend=backend_name,
-                precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
-                pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
-                timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 17,
-                cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail,
-                frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
-                box_safety=1.3 if barostat == "membrane" else None)
-            changed = None
-            with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline,
-                                        exchange=cfg.sampling.exchange == "hrex", log=log) as sampler:
-                if not sampler.restore():
-                    sampler.initialize(*configs)
-                else:
-                    log(f"resumed at iteration {sampler.iteration}")
-                progress = max(1, (n_equil + n_prod) // 20)
-                if sampler.iteration < n_equil:
-                    sampler.run(n_equil - sampler.iteration, checkpoint_stride=ckpt_stride, progress_every=progress)
-                    sampler.storage.set_meta(n_equilibration_iterations=n_equil)
-                    if cfg.lambda_schedule.mode == "adaptive" and attempt < 2:
-                        eq_samples = read_samples(hrex_dir)
-                        try:
-                            a = analyze_leg(eq_samples, T, n_equilibration=n_equil // 2, n_fractions=1)
-                            changed = refine(schedule, a.overlap_neighbour, cfg.lambda_schedule.min_overlap, max_windows)
-                        except Exception as exc:  # noqa: BLE001 - refinement is best effort
-                            log(f"overlap check after equilibration skipped: {exc}")
-                    if changed is not None:
-                        pos, box, state_of = sampler.current_configurations()
-                        vel = sampler.arrays.vel[sampler.cur].copy()
-                        replica_of_state = np.argsort(state_of)
-                if changed is None:
-                    remaining = n_equil + n_prod - sampler.iteration
-                    if remaining > 0:
-                        sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=progress)
-                    sampler.storage.set_meta(n_equilibration_iterations=n_equil)
-            if changed is None:
-                break
-            schedule, picks = changed
-            order = replica_of_state[np.array(picks)]
-            configs = (pos[order], box[order], vel[order])
-            shutil.rmtree(hrex_dir, ignore_errors=True)
-            schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed, backend=backend_name)
-            np.savez(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2])
-            log(f"lambda schedule refined to {len(schedule.states)} states; equilibrating again")
+        spec = LegSpec(
+            name=job.tag, system_xml=alch_xml, states=[s.to_dict() for s in schedule.states],
+            n_atoms=alch.system.getNumParticles(), backend=backend_name,
+            precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
+            pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
+            timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 17,
+            cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail,
+            frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
+            box_safety=1.3 if barostat == "membrane" else None,
+            mps_thread_percentage=thread_percentage(job.oversubscription))
+        n_windows, total = len(schedule.states), n_equil + n_prod
+        control = job.control
+        # seconds one replica needs per iteration: a guess until the first iterations were timed
+        replica_seconds = [0.05 * (1.0 + alch.system.getNumParticles() / 50000.0)]
+
+        def remaining_work(done: int) -> float:
+            return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)
+
+        t_sampling = time.perf_counter()
+        with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline,
+                                    exchange=cfg.sampling.exchange == "hrex", log=log) as sampler:
+            if not sampler.restore():
+                sampler.initialize(*configs)
+            else:
+                log(f"resumed at iteration {sampler.iteration}")
+            if control is not None and total > sampler.iteration:
+                devices = control.request_devices(n_windows, remaining_work(sampler.iteration))
+                if devices:
+                    sampler.set_devices(devices)
+
+            def on_iteration(smp, stats) -> None:
+                if control is None:
+                    return
+                per_worker = stats.all_workers / max(1, len(smp.workers))
+                per_replica = per_worker / max(1.0, n_windows / max(1, len(smp.workers)))
+                replica_seconds[0] = 0.8 * replica_seconds[0] + 0.2 * per_replica if smp.iteration > 3 else per_replica
+                devices = control.poll_devices()
+                if devices:
+                    smp.set_devices(devices)
+                if smp.iteration % 25 == 0:
+                    control.progress(remaining_work(smp.iteration))
+
+            remaining = total - sampler.iteration
+            first = sampler.iteration
+            if remaining > 0:
+                sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20),
+                            on_iteration=on_iteration)
+            sampler.storage.set_meta(n_equilibration_iterations=n_equil)
+            timing["sampling"] = {
+                "lambda_windows": n_windows, "iterations": sampler.iteration - first,
+                "seconds_per_iteration": (time.perf_counter() - t_sampling) / max(1, sampler.iteration - first),
+                "worker_busy_fraction": sampler.busy_seconds / sampler.worker_seconds_available
+                if sampler.worker_seconds_available > 0 else None,
+                "workers": [[it, list(devs)] for it, devs in sampler.device_history],
+                "oversubscription_factor": job.oversubscription}
+        if control is not None:
+            control.serial()
+        timed("sampling", t_sampling)
         return read_samples(hrex_dir), schedule
 
     try:
@@ -549,6 +635,7 @@ def run_leg(job: LegJob) -> dict:
         samples, schedule = run_with(backend_name)
 
     # ---- 6. analysis ------------------------------------------------------------------------------
+    t_analysis = time.perf_counter()
     analysis = analyze_leg(samples, T)
     correction = {"reweight": analysis.lrc_delta_g, "isotropic": analysis.lrc_isotropic, "none": 0.0}[cfg.analysis.lrc]
     total = analysis.delta_g - correction                  # decoupling with the full LJ range
@@ -558,16 +645,19 @@ def run_leg(job: LegJob) -> dict:
     result = {
         "ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "backend": backend_name,
         "temperature_K": T, "timestep_fs": timestep_fs, "n_states": analysis.n_states,
-        "production_ns": float(analysis.n_iterations_used * cfg.sampling.iteration_ps / 1000.0),
+        "production_ns": float(analysis.n_iterations_used * iteration_ps / 1000.0),
         "delta_g_decouple": total, "delta_g_mbar": analysis.delta_g, "delta_g_mbar_error": analysis.delta_g_error,
         "lrc": correction, "lrc_method": cfg.analysis.lrc, "lrc_reweight": analysis.lrc_delta_g,
         "lrc_isotropic": analysis.lrc_isotropic, "lrc_error": analysis.lrc_error, "structure": structure,
         "restraint_release": release_dg, "restraint_release_analytical": release_dg_analytical,
         "ligand_symmetry_number": symmetry, "analysis": analysis.to_dict(), "notes": notes, "units": "kJ/mol",
     }
-    ok, reasons = sampling_sufficient(result, cfg)
-    result["sampling_sufficient"] = ok
-    result["sampling_reasons"] = reasons
+    result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
+    result["lambda_windows"] = schedule.windows()
+    timed("analysis", t_analysis)
+    timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
+                  ligand=job.ligand, leg=job.leg, repeat=job.repeat)
+    (leg_dir / "timing.json").write_text(json.dumps(timing, indent=1))
     (leg_dir / "result.json").write_text(json.dumps(result, indent=1))
     log(f"dG(decouple) = {total / KCAL:.2f} kcal/mol (MBAR {analysis.delta_g / KCAL:.2f} ± "
         f"{analysis.delta_g_error / KCAL:.2f}, tail {-correction / KCAL:+.2f}); "
@@ -576,13 +666,13 @@ def run_leg(job: LegJob) -> dict:
     return result
 
 
-def _walk_schedule(context, integrator, schedule, pilot_ps: float, timestep_fs: float) -> list:
-    """Start configurations for a given schedule: a short run in each state, in order."""
+def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs: float) -> list:
+    """Start configurations for given windows: a short run in each window, in order."""
     import openmm.unit as u
 
     from cufep.sampling.states import set_state
 
-    steps = max(1, int(round(pilot_ps * 1000.0 / timestep_fs)))
+    steps = max(1, int(round(window_ps * 1000.0 / timestep_fs)))
     out = []
     for state in schedule.states:
         set_state(context, state)
@@ -594,18 +684,15 @@ def _walk_schedule(context, integrator, schedule, pilot_ps: float, timestep_fs: 
     return out
 
 
-def sampling_sufficient(result: dict, cfg: Config) -> tuple[bool, list[str]]:
-    """Criteria for stopping at a pre-declared length. None of them looks at the estimate."""
+def quality_warnings(result: dict, cfg: Config) -> list[str]:
+    """Warnings about the sampling of a finished leg. None of them changes what is run."""
     a = result["analysis"]
-    reasons = []
-    if a["effective_samples_per_state"] < cfg.sampling.min_effective_samples:
-        reasons.append(f"effective samples per state {a['effective_samples_per_state']:.0f} "
-                       f"< {cfg.sampling.min_effective_samples}")
-    if cfg.sampling.exchange == "hrex" and a["round_trips"] < cfg.sampling.min_round_trips:
-        reasons.append(f"replica round trips {a['round_trips']} < {cfg.sampling.min_round_trips}")
-    if a["min_overlap"] < cfg.lambda_schedule.min_overlap:
-        reasons.append(f"minimum neighbour overlap {a['min_overlap']:.3f} < {cfg.lambda_schedule.min_overlap}")
-    return (not reasons), reasons
+    out = []
+    if a["min_overlap"] < cfg.analysis.min_overlap:
+        k = int(np.argmin(a["overlap_neighbour"]))
+        out.append(f"the overlap between lambda windows {k} and {k + 1} is {a['min_overlap']:.3f}, below "
+                   f"{cfg.analysis.min_overlap:g}; add windows there or lower lambda_schedule.adaptive.overlap_threshold")
+    return out
 
 
 def run_leg_safe(job: LegJob) -> dict:
@@ -640,12 +727,10 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             "lrc_complex": c["lrc"], "lrc_solvent": s["lrc"], "backend_complex": c["backend"],
             "backend_solvent": s["backend"], "stage_complex": c["analysis"]["stage_delta_g"],
             "stage_solvent": s["analysis"]["stage_delta_g"],
-            "sampling_sufficient": bool(c["sampling_sufficient"] and s["sampling_sufficient"]),
+            "lambda_windows": {"complex": c["n_states"], "solvent": s["n_states"]},
             "production_ns": {"complex": c["production_ns"], "solvent": s["production_ns"]}})
         for leg_result in (c, s):
             warnings += [f"repeat {r} {leg_result['leg']}: {n}" for n in leg_result.get("notes", [])]
-            if not leg_result["sampling_sufficient"]:
-                warnings.append(f"repeat {r} {leg_result['leg']}: " + "; ".join(leg_result["sampling_reasons"]))
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings}
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL

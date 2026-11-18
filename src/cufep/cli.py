@@ -61,8 +61,8 @@ def _load(config: str):
 def _apply_overrides(cfg, repeats, production_ns, gpus, output, backend):
     if repeats is not None:
         cfg.sampling.repeats = repeats
-    if production_ns:
-        cfg.sampling.production_ns = sorted(float(x) for x in production_ns.split(","))
+    if production_ns is not None:
+        cfg.sampling.production_ns = float(production_ns)
     if gpus:
         cfg.resources.gpus = "auto" if gpus == "auto" else [int(x) for x in gpus.split(",")]
     if output:
@@ -70,6 +70,36 @@ def _apply_overrides(cfg, repeats, production_ns, gpus, output, backend):
     if backend:
         cfg.backend.name = backend
     return cfg
+
+
+def lambda_window_table(cfg) -> str:
+    """The lambda windows a run with this configuration uses, per leg and stage."""
+    from cufep.alchemy.schedule import stage_values
+    from cufep.config.schema import WindowsConfig
+
+    ls = cfg.lambda_schedule
+    lines = ["# lambda windows"]
+    if ls.file is not None:
+        return "\n".join(lines + [f"taken from {ls.file}"])
+    if ls.mode == "adaptive":
+        a = ls.adaptive
+        lines += ["mode adaptive: adaptive lambda scheduling decides the windows in a precalculation.",
+                  f"  a window is added where the overlap of neighbouring windows is at or below {a.overlap_threshold:g};",
+                  f"  {a.candidates} candidate lambda values per stage, {a.window_ps:g} ps of MD per new window;",
+                  "  start: " + ", ".join(f"{k} {v}" for k, v in a.initial_windows.model_dump().items())
+                  + f"; at most {a.max_windows.complex} (complex) / {a.max_windows.solvent} (solvent) windows.",
+                  "The windows of mode fixed, for reference:"]
+    else:
+        lines.append("mode fixed: the windows below are used.")
+    recommended = WindowsConfig()
+    for leg in ("complex", "solvent"):
+        total = 0
+        for stage, spec in ls.windows.for_leg(leg).items():
+            values = stage_values(spec, recommended.for_leg(leg)[stage])
+            total += len(values)
+            lines.append(f"  {leg:8s} {stage:10s} {len(values):2d}: " + " ".join(f"{v:g}" for v in values))
+        lines.append(f"  {leg:8s} {'total':10s} {total - (len(ls.windows.for_leg(leg)) - 1):2d} (stage boundaries are shared)")
+    return "\n".join(lines)
 
 
 @main.command()
@@ -87,17 +117,18 @@ def plan(config: str) -> None:
     click.echo("")
     click.echo(report.to_markdown())
     click.echo(f"ligands ({len(ligands)}): " + ", ".join(f"{lig.name} [{lig.formal_charge:+d}]" for lig in ligands))
+    click.echo("\n" + lambda_window_table(resolved))
     click.echo("\n# resolved configuration\n" + dump_config(resolved))
 
 
 @main.command()
 @click.argument("config", type=click.Path(exists=True, dir_okay=False))
 @click.option("--repeats", type=int, help="Override sampling.repeats.")
-@click.option("--production-ns", help="Override sampling.production_ns, e.g. '5,10'.")
+@click.option("--production-ns", type=float, help="Override sampling.production_ns (both legs).")
 @click.option("--gpus", help="Override resources.gpus: 'auto' or a comma separated list of device indices.")
 @click.option("--backend", type=click.Choice(["cupotential", "openmm"]), help="Override backend.name.")
 @click.option("-o", "--output", help="Override output.dir.")
-@click.option("--reschedule", is_flag=True, help="Search the lambda schedule again instead of reusing schedule.yaml.")
+@click.option("--reschedule", is_flag=True, help="Determine the lambda windows again instead of reusing schedule.yaml.")
 def run(config: str, repeats, production_ns, gpus, backend, output, reschedule: bool) -> None:
     """Run (or resume) the calculation described by CONFIG."""
     from cufep import run as driver
@@ -159,7 +190,7 @@ def benchmark_list() -> None:
 @benchmark.command("run")
 @click.argument("name")
 @click.option("--tier", type=click.Choice(["smoke", "subset", "full"]), default="smoke", show_default=True,
-              help="smoke: one ligand, very short; subset: five ligands; full: every ligand (both with 3 repeats).")
+              help="smoke: one ligand, very short; subset: five ligands; full: every ligand.")
 @click.option("-o", "--output", help="Output directory (default: runs/benchmark_<name>_<tier>).")
 @click.option("--gpus", help="'auto' or a comma separated list of device indices.")
 @click.option("--repeats", type=int, help="Override the number of repeats.")
