@@ -48,6 +48,12 @@ class EquilibrationSettings:
     water_tolerance: float = 1.5           # change of the mean pocket water count between them
     ligand_atoms: list[int] = field(default_factory=list)
     water_oxygens: list[int] = field(default_factory=list)
+    #: bilayers, restrained phases only: keep these water oxygens out of the hydrophobic core
+    #: (|z - wall_centre_nm| < wall_half_width_nm) while a freshly built membrane closes up
+    wall_atoms: list[int] = field(default_factory=list)
+    wall_centre_nm: float = 0.0
+    wall_half_width_nm: float = 0.0
+    wall_k: float = 500.0                  # kJ/mol/nm^2
 
 
 @dataclass
@@ -85,6 +91,15 @@ def _context(system: mm.System, backend, settings: EquilibrationSettings, dt_fs:
         for i in settings.restrained_atoms:
             force.addParticle(int(i), [float(v) for v in restraint_reference[i]])
         prepared.addForce(force)
+    if restraint_reference is not None and settings.wall_atoms and settings.wall_half_width_nm > 0:
+        wall = mm.CustomExternalForce(
+            "k_wall*step(wall_d-dz)*(wall_d-dz)^2; dz=periodicdistance(x,y,z,x,y,wall_z)")
+        wall.addGlobalParameter("k_wall", settings.wall_k)
+        wall.addGlobalParameter("wall_d", settings.wall_half_width_nm)
+        wall.addGlobalParameter("wall_z", settings.wall_centre_nm)
+        for i in settings.wall_atoms:
+            wall.addParticle(int(i), [])
+        prepared.addForce(wall)
     integrator = backend.make_integrator(temperature, settings.friction_per_ps / u.picosecond,
                                          dt_fs * u.femtoseconds, seed=seed)
     return backend.make_context(prepared, integrator, device), integrator

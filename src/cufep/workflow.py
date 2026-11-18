@@ -310,7 +310,22 @@ def run_leg(job: LegJob) -> dict:
         in_membrane = is_complex and barostat == "membrane"
         production = s.pre_equilibration_ns if is_complex else s.solvent_pre_equilibration_ns
         restrained: list[int] = []
+        wall_atoms: list[int] = []
+        wall_half = 0.0
         if in_membrane:
+            # While the trimmed bilayer closes up, bulk water is kept out of the hydrophobic core.
+            plane = float(prep_info.get("membrane_info", {}).get("phosphate_plane_nm", 0.0))
+            wall_half = max(0.0, plane - 0.6)
+            if wall_half > 0:
+                from scipy.spatial import cKDTree
+                heavy_solute = [i for i in prep["solute"]
+                                if (el := list(prep["topology"].atoms())[i].element) is not None and el.symbol != "H"]
+                tree = cKDTree(prep["positions"][heavy_solute])
+                for a_ in prep["topology"].atoms():
+                    if a_.residue.name == "HOH" and a_.element is not None and a_.element.symbol == "O":
+                        xyz = prep["positions"][a_.index]
+                        if abs(xyz[2]) > wall_half and tree.query(xyz)[0] > 0.6:
+                            wall_atoms.append(a_.index)
             # A freshly built bilayer needs longer: hold the protein and ligand heavy atoms while the
             # lipids and water settle (NVT, NPT), then run unrestrained for membrane.equilibration_ns.
             production = max(production, cfg.membrane.equilibration_ns)
@@ -322,7 +337,7 @@ def run_leg(job: LegJob) -> dict:
             npt_ns=(2.0 * s.npt_ns if in_membrane else s.npt_ns) if is_complex else s.solvent_npt_ns,
             production_ns=production, barostat=barostat, platform=cfg.backend.platform,
             precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
-            restrained_atoms=restrained,
+            restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half, wall_centre_nm=0.0,
             max_production_ns=max(production, cfg.membrane.max_equilibration_ns) if in_membrane else None,
             ligand_atoms=prep["ligand"] if in_membrane else [],
             water_oxygens=[a.index for a in prep["topology"].atoms()

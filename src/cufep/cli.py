@@ -126,6 +126,48 @@ def analyze(directory: str) -> None:
     click.echo(json.dumps({k: v for k, v in res.to_dict().items() if k not in ("f_k", "df_k")}, indent=1))
 
 
+@main.group()
+def benchmark() -> None:
+    """Built-in benchmarks against experiment and FEP+ (TYK2 kinase, A2A receptor in a bilayer)."""
+
+
+@benchmark.command("list")
+def benchmark_list() -> None:
+    """Show the benchmark sets."""
+    from cufep.benchmarks.runner import load_registry, read_reference
+    for name, entry in load_registry().items():
+        click.echo(f"{name}: {entry['title']} ({len(read_reference(name))} ligands; subset: {', '.join(entry['subset'])})")
+
+
+@benchmark.command("run")
+@click.argument("name")
+@click.option("--tier", type=click.Choice(["smoke", "subset", "full"]), default="smoke", show_default=True,
+              help="smoke: one ligand, very short; subset: five ligands; full: every ligand (both with 3 repeats).")
+@click.option("-o", "--output", help="Output directory (default: runs/benchmark_<name>_<tier>).")
+@click.option("--gpus", help="'auto' or a comma separated list of device indices.")
+@click.option("--repeats", type=int, help="Override the number of repeats.")
+def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
+    """Run benchmark NAME (resumable)."""
+    from cufep import run as driver
+    from cufep.benchmarks.runner import benchmark_config, report
+
+    try:
+        cfg = _apply_overrides(benchmark_config(name, tier, output), repeats, None, gpus, None, None)
+        driver.run(cfg)
+        click.echo(report(name, cfg.output.dir))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+
+
+@benchmark.command("report")
+@click.argument("name")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False))
+def benchmark_report(name: str, directory: str) -> None:
+    """Compare a benchmark run in DIRECTORY with experiment and FEP+."""
+    from cufep.benchmarks.runner import report
+    click.echo(report(name, directory))
+
+
 @main.command("check-env")
 @click.option("--device", type=int, default=0, show_default=True)
 def check_env(device: int) -> None:

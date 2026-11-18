@@ -161,6 +161,248 @@ def membrane_quality(modeller) -> dict:
             "n_atoms": top.getNumAtoms()}
 
 
+def _molecules(topology) -> list[list[int]]:
+    """Atom indices of every molecule (connected component of the bond graph)."""
+    parent = list(range(topology.getNumAtoms()))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for b in topology.bonds():
+        ra, rb = find(b[0].index), find(b[1].index)
+        if ra != rb:
+            parent[ra] = rb
+    groups: dict[int, list[int]] = {}
+    for i in range(len(parent)):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
+def _kind(residue) -> str:
+    if residue.name in AMINO_ACIDS or residue.name in CAPS:
+        return "protein"
+    if residue.name == LIGAND_RESNAME:
+        return "ligand"
+    if residue.name in WATER:
+        return "water"
+    if len(list(residue.atoms())) == 1:
+        return "ion"
+    return "lipid"
+
+
+CLASH_NM = 0.24
+
+
+def trim_membrane(modeller, padding_nm: float, log=print) -> dict:
+    """Cut the bilayer and solvent down to a square box just large enough for the protein.
+
+    ``Modeller.addMembrane`` only tiles whole copies of its 6.4 x 6.7 nm lipid patch, so a
+    protein that needs 7 nm gets a 12.7 x 13.4 nm membrane and almost three times the atoms.
+
+    Lipids are kept or removed whole, by the position of their phosphorus atom. A kept
+    lipid may reach across the new periodic boundary and overlap a lipid on the far side;
+    such overlaps are resolved by removing the lipid with the most clashes until none is
+    left, and waters overlapping a lipid across the boundary are removed too. The leaflets
+    end with equal numbers of lipids. The small area deficit that remains closes under
+    semi-isotropic NPT.
+    """
+    import openmm as mm
+    from scipy.spatial import cKDTree
+
+    top, pos = modeller.topology, _positions(modeller)
+    atoms = list(top.atoms())
+    kinds = np.array([_kind(a.residue) for a in atoms])
+    heavy = np.array([a.element is not None and a.element != elem.hydrogen for a in atoms])
+    solute = np.isin(kinds, ("protein", "ligand"))
+    centre = 0.5 * (pos[solute, :2].min(axis=0) + pos[solute, :2].max(axis=0))
+    radius = float(np.linalg.norm(pos[solute, :2] - centre, axis=1).max())
+    target = 2.0 * radius + 2.0 * padding_nm
+    box = top.getPeriodicBoxVectors().value_in_unit(unit.nanometer)
+    old = (float(box[0][0]), float(box[1][1]), float(box[2][2]))
+    if target > min(old[0], old[1]) - 0.4:
+        return {"trimmed": False, "box_nm": list(old)}
+    rel = pos[:, :2] - centre
+    molecules = _molecules(top)
+    area_per_lipid = 0.64                      # nm^2 after relaxation; only used to choose the cut size
+    built_apl = 0.666                          # nm^2 in OpenMM's pre-equilibrated patches
+
+    # Removing overlapping lipids leaves fewer lipids than the area needs, and the box then
+    # shrinks under NPT. Cut a little larger so that the relaxed box still has the padding.
+    edge, plan = target, None
+    while True:
+        plan = _select_for_box(edge, old, rel, pos, atoms, kinds, heavy, molecules)
+        n_leaflet = len(plan["upper"])
+        protein_area = max(0.0, edge * edge - plan["n_inside_per_leaflet"] * built_apl)
+        relaxed = float(np.sqrt(protein_area + n_leaflet * area_per_lipid))
+        if relaxed >= target - 0.1 or edge + 0.2 > min(old[0], old[1]) - 0.4:
+            break
+        edge += 0.2
+    doomed, upper, lower = plan["doomed"], plan["upper"], plan["lower"]
+    # The box will shrink laterally from `edge` to about `relaxed` and grow along z by the same
+    # volume. Remove the water that would only make the relaxed box taller than the built one,
+    # but keep at least 0.8 nm of water above and below the solute for the start.
+    z_lo, z_hi = float(pos[:, 2].min()), float(pos[:, 2].max())
+    z_mid = 0.5 * (z_lo + z_hi)
+    solute_z = pos[solute, 2]
+    new_z = max(old[2] * (relaxed / edge) ** 2, float(solute_z.max() - solute_z.min()) + 1.6,
+                2.0 * float(np.abs(solute_z - z_mid).max()) + 1.6)
+    new_z = min(new_z, old[2])
+    removed_z = 0
+    if new_z < old[2] - 0.05:
+        for mol in molecules:
+            if kinds[mol[0]] in ("water", "ion") and mol[0] not in doomed and abs(pos[mol[0], 2] - z_mid) > 0.5 * new_z:
+                doomed.update(mol)
+                removed_z += 1
+        new_z += 0.15                           # a thin gap instead of overlaps at the z boundary
+    modeller.delete([atoms[i] for i in sorted(doomed)])
+    modeller.topology.setPeriodicBoxVectors(
+        [mm.Vec3(edge, 0, 0), mm.Vec3(0, edge, 0), mm.Vec3(0, 0, new_z)] * unit.nanometer)
+    old_z, old = old[2], (old[0], old[1], new_z)
+    log(f"membrane: trimmed from {old[0]:.2f} x {old[1]:.2f} nm to {edge:.2f} x {edge:.2f} nm; "
+        f"{len(upper)} + {len(lower)} lipids kept, {plan['removed_lipids']} lipid(s) and "
+        f"{plan['removed_waters']} water(s) removed for overlapping across the new boundary; "
+        f"box height {old_z:.2f} -> {new_z:.2f} nm; expected box after relaxation about "
+        f"{relaxed:.2f} x {relaxed:.2f} x {new_z * (edge / relaxed) ** 2:.2f} nm")
+    return {"trimmed": True, "box_nm": [edge, edge, new_z], "built_box_nm": [old[0], old[1], old_z],
+            "lipids_removed_for_overlap": plan["removed_lipids"], "expected_relaxed_edge_nm": relaxed}
+
+
+def _select_for_box(edge, old, rel, pos, atoms, kinds, heavy, molecules) -> dict:
+    """Atoms to delete for a square box of the given edge (see :func:`trim_membrane`)."""
+    from scipy.spatial import cKDTree
+
+    half = 0.5 * edge
+    inside = np.all(np.abs(rel) <= half, axis=1)
+    doomed: set[int] = set()
+    lipids: dict[int, dict] = {}               # molecule id -> atoms, leaflet
+    mol_of = np.full(len(atoms), -1, dtype=int)
+    for m, mol in enumerate(molecules):
+        kind = kinds[mol[0]]
+        if kind in ("protein", "ligand"):
+            continue
+        if kind == "lipid":
+            anchor = [i for i in mol if atoms[i].element == elem.phosphorus] or mol
+            if not inside[anchor].all():
+                doomed.update(mol)
+            else:
+                lipids[m] = {"atoms": mol, "upper": float(pos[anchor, 2].mean()) > 0}
+                mol_of[mol] = m
+        elif not inside[mol[0]]:               # water or ion: decided by its first atom
+            doomed.update(mol)
+
+    n_inside_per_leaflet = len(lipids) / 2.0
+    # ---- overlaps across the new periodic boundary ---------------------------------------
+    wrapped = np.empty_like(pos)
+    wrapped[:, :2] = (rel + half) % edge
+    wrapped[:, 2] = (pos[:, 2] - pos[:, 2].min()) % old[2]
+    lip_heavy = np.array([i for m in lipids for i in lipids[m]["atoms"] if heavy[i]], dtype=int)
+    removed_lipids = 0
+    if len(lip_heavy):
+        tree = cKDTree(wrapped[lip_heavy], boxsize=[edge, edge, old[2]])
+        clashes: dict[int, dict[int, int]] = {}
+        for a, b in tree.query_pairs(CLASH_NM):
+            ma, mb = mol_of[lip_heavy[a]], mol_of[lip_heavy[b]]
+            if ma != mb:
+                clashes.setdefault(ma, {}).setdefault(mb, 0)
+                clashes.setdefault(mb, {}).setdefault(ma, 0)
+                clashes[ma][mb] += 1
+                clashes[mb][ma] += 1
+        while clashes:
+            worst = max(clashes, key=lambda m: sum(clashes[m].values()))
+            for other in list(clashes[worst]):
+                del clashes[other][worst]
+                if not clashes[other]:
+                    del clashes[other]
+            del clashes[worst]
+            doomed.update(lipids.pop(worst)["atoms"])
+            removed_lipids += 1
+    upper = [m for m in lipids if lipids[m]["upper"]]
+    lower = [m for m in lipids if not lipids[m]["upper"]]
+
+    def distance_to_edge(m: int) -> float:
+        return float((half - np.abs(rel[lipids[m]["atoms"]])).min())
+
+    for group, other in ((upper, lower), (lower, upper)):
+        group.sort(key=distance_to_edge)
+        while len(group) > len(other):
+            doomed.update(lipids.pop(group.pop(0))["atoms"])
+    # ---- waters overlapping a kept lipid across the boundary -------------------------------
+    lip_heavy = np.array([i for m in lipids for i in lipids[m]["atoms"] if heavy[i]], dtype=int)
+    water_o = np.array([a.index for a in atoms if kinds[a.index] == "water" and a.element == elem.oxygen
+                        and a.index not in doomed], dtype=int)
+    removed_waters = 0
+    if len(lip_heavy) and len(water_o):
+        tree = cKDTree(wrapped[lip_heavy], boxsize=[edge, edge, old[2]])
+        close = tree.query(wrapped[water_o], k=1)[0] < CLASH_NM
+        for o in water_o[close]:
+            doomed.update(a.index for a in atoms[o].residue.atoms())
+            removed_waters += 1
+    return {"doomed": doomed, "upper": upper, "lower": lower, "removed_lipids": removed_lipids,
+            "removed_waters": removed_waters, "n_inside_per_leaflet": n_inside_per_leaflet}
+
+
+def add_ions(modeller, forcefield, ionic_strength_M: float, exclusion_z_nm: float, seed: int = 0, log=print) -> dict:
+    """Neutralise the system and add salt by replacing bulk water molecules with Na+ / Cl-.
+
+    Only waters outside the bilayer (``|z| > exclusion_z_nm``) and at least 0.5 nm from the
+    protein and ligand are replaced.
+    """
+    import openmm as mm
+    from scipy.spatial import cKDTree
+
+    top = modeller.topology
+    system = forcefield.createSystem(top, nonbondedMethod=app.NoCutoff, constraints=None, rigidWater=False)
+    nb = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
+    charge = sum(nb.getParticleParameters(i)[0].value_in_unit(unit.elementary_charge)
+                 for i in range(system.getNumParticles()))
+    total = int(round(charge))
+    if abs(charge - total) > 0.01:
+        raise MembraneError(f"the system has a non-integer net charge ({charge:.3f})")
+    pos = _positions(modeller)
+    atoms = list(top.atoms())
+    solute = np.array([a.index for a in atoms if _kind(a.residue) in ("protein", "ligand")
+                       and a.element is not None and a.element != elem.hydrogen], dtype=int)
+    waters = [r for r in top.residues() if r.name in WATER]
+    n_pairs = int(np.floor((len(waters) - abs(total)) * ionic_strength_M / 55.4 + 0.5))
+    n_pos, n_neg = n_pairs + max(0, -total), n_pairs + max(0, total)
+    oxygen = {r.index: next(a.index for a in r.atoms() if a.element == elem.oxygen) for r in waters}
+    tree = cKDTree(pos[solute])
+    candidates = [r for r in waters if abs(pos[oxygen[r.index], 2]) > exclusion_z_nm
+                  and tree.query(pos[oxygen[r.index]])[0] > 0.5]
+    if len(candidates) < n_pos + n_neg:
+        raise MembraneError("not enough bulk water to place the ions")
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(candidates))
+    picked: list = []
+    for k in order:
+        r = candidates[k]
+        here = pos[oxygen[r.index]]
+        if all(np.linalg.norm(here - pos[oxygen[q.index]]) > 0.5 for q in picked):
+            picked.append(r)
+        if len(picked) == n_pos + n_neg:
+            break
+    if len(picked) < n_pos + n_neg:
+        raise MembraneError("could not place the ions with 0.5 nm spacing")
+    ion_top = app.Topology()
+    chain = ion_top.addChain("I")
+    ion_pos = []
+    for k, r in enumerate(picked):
+        positive = k < n_pos
+        res = ion_top.addResidue("NA" if positive else "CL", chain, id=str(k + 1))
+        ion_top.addAtom("NA" if positive else "CL", elem.sodium if positive else elem.chlorine, res)
+        ion_pos.append(pos[oxygen[r.index]])
+    box = top.getPeriodicBoxVectors()
+    modeller.delete(picked)
+    if ion_pos:
+        modeller.add(ion_top, np.asarray(ion_pos) * unit.nanometer)
+    modeller.topology.setPeriodicBoxVectors(box)
+    log(f"membrane: net charge {total:+d}; added {n_pos} Na+ and {n_neg} Cl-")
+    return {"net_charge_before_ions": total, "n_sodium": n_pos, "n_chloride": n_neg}
+
+
 def add_membrane(modeller, forcefield, cfg, log=print) -> dict:
     """Orient the complex, build the bilayer and solvent in place, hydrate and check it."""
     import openmm as mm
@@ -181,12 +423,15 @@ def add_membrane(modeller, forcefield, cfg, log=print) -> dict:
                             "With `membrane.orientation: input` the PDB must have the membrane normal along z "
                             "and the membrane centre at z = 0.")
     n_before = modeller.topology.getNumAtoms()
+    # Ions are added afterwards: the bilayer is trimmed first, which would unbalance them.
     modeller.addMembrane(forcefield, lipidType=cfg.membrane.lipid, membraneCenterZ=0.0 * unit.nanometer,
                          minimumPadding=cfg.membrane.padding_nm * unit.nanometer,
-                         ionicStrength=cfg.thermodynamics.ionic_strength_M * unit.molar, neutralize=True)
+                         ionicStrength=0.0 * unit.molar, neutralize=False)
+    info.update(trim_membrane(modeller, cfg.membrane.padding_nm, log))
     quality = membrane_quality(modeller)
     z_limit = quality["phosphate_plane_nm"] + 0.3 if quality["phosphate_plane_nm"] > 0 else 2.0
     info["internal_waters_added"] = hydrate_protein_interior(modeller, z_limit, log=log)
+    info.update(add_ions(modeller, forcefield, cfg.thermodynamics.ionic_strength_M, z_limit + 0.2, log=log))
     quality = membrane_quality(modeller)
     info.update(quality)
     up, low = quality["lipids_upper"], quality["lipids_lower"]
