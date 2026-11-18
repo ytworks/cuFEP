@@ -13,7 +13,11 @@ KCAL = 4.184
 
 
 def _pymbar():
-    # pymbar pulls in JAX when present; keep it on the CPU and quiet.
+    # pymbar solves with JAX when JAX is installed. A job process once stopped for good inside
+    # that solver (a deadlock in JAX's array conversion) after the sampling had finished, so
+    # pymbar is told to use NumPy; the variable is read when pymbar is first imported.
+    # PYMBAR_DISABLE_JAX=0 in the environment brings JAX back.
+    os.environ.setdefault("PYMBAR_DISABLE_JAX", "1")
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -63,26 +67,47 @@ def assemble(u: np.ndarray, states: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     return np.ascontiguousarray(u_kn), n_k
 
 
-def solve_mbar(u: np.ndarray, states: np.ndarray):
-    """Return (f_k, df_k relative to state 0, overlap matrix) in kT."""
+def _mbar(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None):
+    """A solved ``pymbar.MBAR``.
+
+    Solving from zeros takes the adaptive solver more than a hundred iterations for a leg of
+    thirty windows. It starts from the given free energies instead, or from BAR between
+    neighbouring windows, which leaves a few iterations; the solution is the same.
+    """
     pymbar, _ = _pymbar()
-    u_kn, n_k = assemble(u, states)
     # Overlapping-atom configurations give astronomically large energies in coupled states;
     # cap them so the solver stays finite (their weight is zero either way).
-    u_kn = np.minimum(u_kn - u_kn.min(), 1.0e6)
+    u_kn = np.minimum(np.asarray(u_kn, dtype=float) - np.min(u_kn), 1.0e6)
+    n_k = np.asarray(n_k)
+    if initial_f_k is not None:
+        start = {"initial_f_k": np.asarray(initial_f_k, dtype=float)}
+    elif np.all(n_k > 0):
+        start = {"initialize": "BAR"}
+    else:
+        start = {}
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        mbar = pymbar.MBAR(u_kn, n_k, solver_protocol="robust")
+        if start:
+            try:
+                return pymbar.MBAR(u_kn, n_k, solver_protocol="robust", **start)
+            except Exception:  # noqa: BLE001  the starting point failed; solve from zeros
+                pass
+        return pymbar.MBAR(u_kn, n_k, solver_protocol="robust")
+
+
+def solve_mbar(u: np.ndarray, states: np.ndarray, initial_f_k=None, overlap: bool = True):
+    """Return (f_k, df_k relative to state 0, overlap matrix or None) in kT."""
+    u_kn, n_k = assemble(u, states)
+    mbar = _mbar(u_kn, n_k, initial_f_k)
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         res = mbar.compute_free_energy_differences()
-        overlap = mbar.compute_overlap()["matrix"]
-    return np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0]), np.asarray(overlap)
+        matrix = np.asarray(mbar.compute_overlap()["matrix"]) if overlap else None
+    return np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0]), matrix
 
 
 def overlap_matrix(u_kn: np.ndarray, n_k: np.ndarray) -> np.ndarray:
     """MBAR overlap matrix for reduced energies ``u_kn[state, sample]`` (samples grouped by state)."""
-    pymbar, _ = _pymbar()
-    u_kn = np.minimum(np.asarray(u_kn, dtype=float) - np.min(u_kn), 1.0e6)
+    mbar = _mbar(u_kn, n_k)
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        mbar = pymbar.MBAR(u_kn, np.asarray(n_k), solver_protocol="robust")
         return np.asarray(mbar.compute_overlap()["matrix"])
 
 
@@ -164,7 +189,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
 
     def partial(sl):
         try:
-            f, df, _ = solve_mbar(u[sl][::stride], states[sl][::stride])
+            f, df, _ = solve_mbar(u[sl][::stride], states[sl][::stride], initial_f_k=f_k, overlap=False)
             return float(f[-1] * kt), float(df[-1] * kt)
         except Exception:  # noqa: BLE001
             return float("nan"), float("nan")

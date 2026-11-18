@@ -78,6 +78,31 @@ def test_mbar_recovers_harmonic_free_energies():
     assert count_round_trips(states) > 5
 
 
+def test_mbar_start_does_not_change_the_solution_and_jax_is_off():
+    """The solve starts from BAR or from given free energies; the answer is that from zeros."""
+    import pymbar
+
+    from cufep.analysis.mbar import _pymbar
+    _pymbar()
+    assert pymbar.mbar_solvers.use_jit is False                       # NumPy solver, see _pymbar
+    rng = np.random.default_rng(5)
+    k_spring = np.array([1.0, 1.6, 2.6, 4.2, 6.7, 10.7])
+    u, states, _ = harmonic_samples(1500, k_spring, np.linspace(0.0, 1.0, 6), rng)
+    u_kn, n_k = assemble(u, states)
+    zeros = pymbar.MBAR(u_kn - u_kn.min(), n_k, solver_protocol="robust").compute_free_energy_differences()
+    f, df, overlap = solve_mbar(u, states)                             # BAR start
+    assert np.allclose(f, zeros["Delta_f"][0], atol=1e-8) and np.allclose(df, zeros["dDelta_f"][0], atol=1e-8)
+    f2, df2, none = solve_mbar(u, states, initial_f_k=f + 0.3, overlap=False)
+    assert none is None and np.allclose(f2, f, atol=1e-8) and np.allclose(df2, df, atol=1e-8)
+    # a window without samples cannot start from BAR; the solve still works
+    keep = states != 2
+    u_kn2 = u.reshape(-1, 6)[keep.reshape(-1)].T
+    order = np.argsort(states.reshape(-1)[keep.reshape(-1)], kind="stable")
+    from cufep.analysis.mbar import overlap_matrix
+    o = overlap_matrix(u_kn2[:, order], np.array([1500, 1500, 0, 1500, 1500, 1500]))
+    assert o.shape == (6, 6) and np.all(np.isfinite(o))
+
+
 def test_stage_boundaries():
     s = fixed_schedule(["restrain", "discharge", "vanish"], {"restrain": 2, "discharge": 3, "vanish": 4})
     b = stage_boundaries([x.to_dict() for x in s.states])
