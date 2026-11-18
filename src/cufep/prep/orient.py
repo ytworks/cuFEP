@@ -24,8 +24,11 @@ _CANON = {"HID": "HIS", "HIE": "HIS", "HIP": "HIS", "CYX": "CYS", "CYM": "CYS", 
           "LYN": "LYS"}
 EXPOSED_FRACTION = 0.20
 THICKNESSES_NM = (2.4, 2.8, 3.2, 3.6)
-SCORE_MEMBRANE = 0.25
-SCORE_SOLUBLE = 0.12
+# Decision thresholds, chosen on 250 transmembrane (OPM) and 250 soluble structures and
+# checked on a held-out set (docs/membrane_validation.md):
+SCORE_MEMBRANE = 0.25           # slab score that supports "membrane" when helices/strands span the slab
+SCORE_SOLUBLE = 0.47            # a soluble call needs a slab score below this ...
+TRANSFER_SOLUBLE = 20.0         # ... and a transfer energy above this (kcal/mol)
 
 
 @dataclass
@@ -39,6 +42,9 @@ class MembraneVerdict:
     normal: np.ndarray | None = None
     centre_nm: np.ndarray | None = None
     thickness_nm: float = 0.0
+    #: result of the transfer-energy model (an ``Orientation``), reused by the consensus
+    transfer: object | None = None
+    transfer_energy: float = 0.0
 
 
 def _sphere_points(n: int) -> np.ndarray:
@@ -137,16 +143,27 @@ def detect_membrane(topology, positions_nm: np.ndarray, n_directions: int = 1200
 
     n_h, n_s = crossing(helices), crossing(strands)
     slab_centre = centre + c * normal
-    kw = dict(score=score, n_crossing_helices=n_h, n_crossing_strands=n_s, normal=normal,
-              centre_nm=slab_centre, thickness_nm=d)
-    summary = (f"hydrophobic slab score {score:.2f}, {n_h} helices and {n_s} strands crossing a "
-               f"{10 * d:.0f} A slab")
-    spanning = n_h + (n_s if n_s >= 8 else 0)
-    if spanning == 0 or score < SCORE_SOLUBLE:
-        return MembraneVerdict(False, True, f"soluble: {summary}", **kw)
-    if (n_h >= 3 or n_s >= 8) and score >= SCORE_MEMBRANE:
+
+    # Second, independent slab from the transfer-energy model. It places helical proteins
+    # more accurately; the slab search above is better for beta-barrels. Elements are
+    # counted against both and the larger count is used.
+    transfer = transfer_energy_orientation(topology, np.asarray(positions_nm, dtype=float))
+    zt = (ca - transfer.centre_nm) @ (transfer.normal / np.linalg.norm(transfer.normal))
+    half = 0.5 * transfer.thickness_nm
+    h_t = sum(1 for a, b in helices if min(zt[a], zt[b]) < -0.7 * half and max(zt[a], zt[b]) > 0.7 * half)
+    s_t = sum(1 for a, b in _segments(dssp, chain, "E", 5)
+              if min(zt[a], zt[b]) < -0.5 * half and max(zt[a], zt[b]) > 0.5 * half)
+    n_helix, n_strand = max(n_h, h_t), max(n_s, s_t)
+    kw = dict(score=score, n_crossing_helices=n_helix, n_crossing_strands=n_strand, normal=normal,
+              centre_nm=slab_centre, thickness_nm=d, transfer=transfer, transfer_energy=float(transfer.score))
+    summary = (f"{n_helix} helices and {n_strand} strands span the hydrophobic slab; slab score {score:.2f}, "
+               f"transfer energy {transfer.score:+.0f} kcal/mol")
+    spanning = n_helix >= 3 or n_strand >= 8
+    if spanning and (transfer.score < 0.0 or score >= SCORE_MEMBRANE):
         return MembraneVerdict(True, True, f"membrane protein: {summary}", **kw)
-    return MembraneVerdict(spanning >= 2 and score >= SCORE_MEMBRANE, False, f"ambiguous: {summary}", **kw)
+    if n_helix < 2 and n_strand < 6 and transfer.score > TRANSFER_SOLUBLE and score < SCORE_SOLUBLE:
+        return MembraneVerdict(False, True, f"soluble: {summary}", **kw)
+    return MembraneVerdict(spanning or (n_helix >= 1 and transfer.score < 0.0), False, f"ambiguous: {summary}", **kw)
 
 
 def orientation_matrix(normal: np.ndarray) -> np.ndarray:
@@ -321,7 +338,8 @@ def consensus_orientation(topology, positions_nm: np.ndarray, verdict: MembraneV
     """
     positions_nm = np.asarray(positions_nm, dtype=float)
     verdict = verdict or detect_membrane(topology, positions_nm)
-    found: list[Orientation] = [transfer_energy_orientation(topology, positions_nm)]
+    found: list[Orientation] = [verdict.transfer if verdict.transfer is not None
+                                else transfer_energy_orientation(topology, positions_nm)]
     if verdict.normal is not None:
         found.append(Orientation("slab", verdict.normal, verdict.centre_nm, verdict.thickness_nm, verdict.score))
     if use_memembed:

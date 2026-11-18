@@ -35,21 +35,22 @@ P = 1.0 * u.bar
 N_LIPIDS_PER_LEAFLET = 64
 
 
-def build(ewald_tolerance: float = 5e-4, cutoff_nm: float = 0.9):
+def build(ewald_tolerance: float = 5e-4, cutoff_nm: float = 0.9, hmr: bool = True):
     path = os.path.join(os.path.dirname(app.__file__), "data", "POPC.pdb")
     pdb = app.PDBFile(path)
     ff = app.ForceField("amber19/lipid21.xml", "amber14/tip3p.xml")
     system = ff.createSystem(pdb.topology, nonbondedMethod=app.PME, nonbondedCutoff=cutoff_nm * u.nanometer,
                              constraints=app.HBonds, rigidWater=True, ewaldErrorTolerance=ewald_tolerance,
-                             hydrogenMass=3 * u.amu)
+                             **({"hydrogenMass": 3 * u.amu} if hmr else {}))
     return pdb.topology, pdb.positions, system
 
 
-def run(mode: str, seed: int, ns: float, device: int, cutoff_nm: float = 0.9) -> None:
+def run(mode: str, seed: int, ns: float, device: int, cutoff_nm: float = 0.9, hmr: bool = True) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     tight = mode == "stock-tight"          # stock reference with a 1e-5 Ewald tolerance
-    top, pos, system = build(1e-5 if tight else 5e-4, cutoff_nm)
-    tag = "" if cutoff_nm == 0.9 else f"-rc{cutoff_nm:g}"
+    top, pos, system = build(1e-5 if tight else 5e-4, cutoff_nm, hmr)
+    tag = ("" if cutoff_nm == 0.9 else f"-rc{cutoff_nm:g}") + ("" if hmr else "-2fs")
+    dt_fs = 4.0 if hmr else 2.0
     stock = get_backend("openmm")
     # common start: minimise and warm up on stock with the membrane barostat
     prepared = stock.prepare_system(system)
@@ -69,7 +70,7 @@ def run(mode: str, seed: int, ns: float, device: int, cutoff_nm: float = 0.9) ->
                "cupo-stock": get_backend("cupotential", integrator="stock", box_safety=1.3)}[mode]
     prepared = backend.prepare_system(system)
     prepared.addForce(backend.make_membrane_barostat(P, T, 25, seed=seed + 1000))
-    integ = backend.make_integrator(T, 1 / u.picosecond, 4 * u.femtoseconds, seed=seed + 2000)
+    integ = backend.make_integrator(T, 1 / u.picosecond, dt_fs * u.femtoseconds, seed=seed + 2000)
     ctx = backend.make_context(prepared, integ, device)
     ctx.setPeriodicBoxVectors(*start[2]); ctx.setPositions(start[0]); ctx.setVelocities(start[1])
 
@@ -77,7 +78,7 @@ def run(mode: str, seed: int, ns: float, device: int, cutoff_nm: float = 0.9) ->
     rec = np.zeros((n_rec, 5))
     t0 = time.perf_counter()
     for i in range(n_rec):
-        integ.step(2500)
+        integ.step(int(round(10000.0 / dt_fs)))
         s = ctx.getState(getEnergy=True)
         bv = s.getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer)
         rec[i] = (bv[0][0], bv[1][1], bv[2][2], s.getPotentialEnergy().value_in_unit(u.kilojoule_per_mole),
@@ -143,11 +144,12 @@ def main() -> int:
     r.add_argument("--ns", type=float, default=20.0)
     r.add_argument("--device", type=int, default=0)
     r.add_argument("--cutoff", type=float, default=0.9)
+    r.add_argument("--no-hmr", action="store_true", help="no hydrogen mass repartitioning, 2 fs")
     a = sub.add_parser("analyze")
     a.add_argument("--skip-ns", type=float, default=4.0)
     args = ap.parse_args()
     if args.cmd == "run":
-        run(args.mode, args.seed, args.ns, args.device, args.cutoff)
+        run(args.mode, args.seed, args.ns, args.device, args.cutoff, not args.no_hmr)
         return 0
     return analyze(args.skip_ns)
 

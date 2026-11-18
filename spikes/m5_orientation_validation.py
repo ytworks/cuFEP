@@ -98,7 +98,8 @@ def analyse(task):
                    n_residues=pdb.topology.getNumResidues())
         if kind == "membrane":
             ref = Orientation("opm", np.array([0.0, 0.0, 1.0]), np.zeros(3), 0.0)
-            methods = {"transfer": transfer_energy_orientation(pdb.topology, pos)}
+            methods = {"transfer": v.transfer if v.transfer is not None
+                       else transfer_energy_orientation(pdb.topology, pos)}
             if v.normal is not None:
                 methods["slab"] = Orientation("slab", v.normal, v.centre_nm, v.thickness_nm)
             if use_memembed:
@@ -156,6 +157,8 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=250)
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--no-memembed", action="store_true")
+    ap.add_argument("--holdout", action="store_true",
+                    help="use the structures of the id lists that the main run did not use")
     args = ap.parse_args()
     (OUT / "membrane").mkdir(parents=True, exist_ok=True); (OUT / "soluble").mkdir(parents=True, exist_ok=True)
     ids_file = OUT / "ids.json"
@@ -166,17 +169,26 @@ def main() -> int:
         ids = {"membrane": mem, "soluble": sol}
         ids_file.write_text(json.dumps(ids))
     tasks = []
+    used_file = OUT / "used_ids.json"
+    used = json.loads(used_file.read_text()) if used_file.exists() else {}
+    if not used:                       # main run before this option existed: everything on disk was used
+        used = {k: sorted(p.stem for p in (OUT / k).glob("*.pdb")) for k in ("membrane", "soluble")}
+        used_file.write_text(json.dumps(used))
     for kind, url in (("membrane", "https://opm-assets.storage.googleapis.com/pdb/{}.pdb"),
                       ("soluble", "https://files.rcsb.org/download/{}.pdb")):
         got = 0
         for pdb_id in ids[kind]:
             if got >= args.n:
                 break
-            path = OUT / kind / f"{pdb_id}.pdb"
+            if args.holdout == (pdb_id in used[kind]):
+                continue
+            folder = OUT / (f"holdout_{kind}" if args.holdout else kind)
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"{pdb_id}.pdb"
             if fetch(url.format(pdb_id), path):
                 tasks.append((kind, pdb_id, str(path), not args.no_memembed))
                 got += 1
-        print(f"{kind}: {got} structures downloaded", flush=True)
+        print(f"{kind}: {got} structures", flush=True)
     t0 = time.time()
     with mp.get_context("spawn").Pool(args.workers) as pool:
         records = []
@@ -184,8 +196,11 @@ def main() -> int:
             records.append(rec)
             if (i + 1) % 50 == 0:
                 print(f"  {i + 1}/{len(tasks)} done ({time.time() - t0:.0f} s)", flush=True)
-    (OUT / "records.json").write_text(json.dumps(records, indent=1))
-    print(summarise(records, OUT))
+    name = "holdout" if args.holdout else "main"
+    (OUT / f"records_{name}.json").write_text(json.dumps(records, indent=1))
+    text = summarise(records, OUT)
+    (OUT / f"summary_{name}.md").write_text(text)
+    print(text)
     return 0
 
 

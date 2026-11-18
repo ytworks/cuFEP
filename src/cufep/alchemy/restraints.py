@@ -303,13 +303,30 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
         raise RestraintError("too few protein C-alpha atoms for a restraint search")
     notes: list[str] = []
 
-    aligned = kabsch_align(frames_nm, frames_nm[0], ca)
+    heavy_local = [i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]
+    lig_heavy = lig[heavy_local]
+
+    # Frame of the binding site: superpose on the backbone atoms around the ligand, so that
+    # domain motions elsewhere do not count as flexibility of the site (OpenFE's "local" RMSF).
+    backbone_all = np.array([a.index for a in atoms if a.residue.name in AMINO_ACIDS and a.name in ("N", "CA", "C")],
+                            dtype=int)
+    centroid = frames_nm[0, lig_heavy, :].mean(axis=0)
+    near = backbone_all[np.linalg.norm(frames_nm[0, backbone_all, :] - centroid, axis=1) < s.host_max_distance_nm + 0.5]
+    site = near if len(near) >= 12 else ca
+    aligned = kabsch_align(frames_nm, frames_nm[0], site)
+    aligned = kabsch_align(aligned, aligned.mean(axis=0), site)
     mean = aligned.mean(axis=0)
     rmsf = np.sqrt(((aligned - mean) ** 2).sum(axis=2).mean(axis=0))
 
-    # ligand pose stability in the protein frame
-    heavy_local = [i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]
-    lig_heavy = lig[heavy_local]
+    # Internal flexibility of the ligand: superpose the ligand on itself. A small ligand that
+    # rattles or flips in its pocket is still rigid; whether its pose is stable relative to
+    # the protein is judged separately, by the pose RMSD and by the restraint coordinates.
+    lig_frames = frames_nm[:, lig, :]
+    lig_self = kabsch_align(lig_frames, lig_frames[0], np.array(heavy_local))
+    lig_self = kabsch_align(lig_self, lig_self.mean(axis=0), np.array(heavy_local))
+    lig_rmsf = np.sqrt(((lig_self - lig_self.mean(axis=0)) ** 2).sum(axis=2).mean(axis=0))
+
+    # ligand pose stability in the frame of the binding site
     disp = aligned[:, lig_heavy, :] - aligned[0, lig_heavy, :]
     rmsd = np.sqrt((disp ** 2).sum(axis=2).mean(axis=1))
     tail = float(rmsd[len(rmsd) // 2:].mean())
@@ -318,7 +335,7 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
             f"the ligand pose is not stable in the pre-equilibration MD (heavy-atom RMSD {10 * tail:.1f} A "
             f"relative to the start). A restraint cannot be chosen reliably; check the input pose.")
 
-    guests = _guest_anchor_candidates(rdmol, list(lig), rmsf[lig], s.rmsf_cutoff_nm, s.max_guest_anchors)
+    guests = _guest_anchor_candidates(rdmol, list(lig), lig_rmsf, s.rmsf_cutoff_nm, s.max_guest_anchors)
     if not guests:
         raise RestraintError("no suitable ligand atoms for the restraint (ligand too flexible or too small)")
 
