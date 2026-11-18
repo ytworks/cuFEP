@@ -227,16 +227,22 @@ class LambdaScheduleConfig(_Section):
 
 
 class PreEquilibrationLeg(_Section):
-    nvt_ns: float
-    npt_ns: float
-    md_ns: float
+    nvt_ns: float = Field(default=0.25, ge=0.0)
+    npt_ns: float = Field(default=0.5, ge=0.0)
+    md_ns: float = Field(default=5.0, gt=0.0)
+
+
+class SolventPreEquilibration(PreEquilibrationLeg):
+    nvt_ns: float = Field(default=0.1, ge=0.0)
+    npt_ns: float = Field(default=0.2, ge=0.0)
+    md_ns: float = Field(default=0.5, gt=0.0)
 
 
 class PreEquilibrationConfig(_Section):
     """Plain MD of the fully interacting system before the alchemical run (OpenFE's defaults)."""
 
-    complex: PreEquilibrationLeg = Field(default_factory=lambda: PreEquilibrationLeg(nvt_ns=0.25, npt_ns=0.5, md_ns=5.0))
-    solvent: PreEquilibrationLeg = Field(default_factory=lambda: PreEquilibrationLeg(nvt_ns=0.1, npt_ns=0.2, md_ns=0.5))
+    complex: PreEquilibrationLeg = Field(default_factory=PreEquilibrationLeg)
+    solvent: SolventPreEquilibration = Field(default_factory=SolventPreEquilibration)
 
 
 class LegLengths(_Section):

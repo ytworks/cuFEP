@@ -90,6 +90,14 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 13}
 
 
+def test_one_value_of_a_section_can_be_set_and_the_rest_keep_their_defaults(tmp_path):
+    cfg = load_config(write(tmp_path, {**BASE, "sampling": {"pre_equilibration": {"complex": {"md_ns": 1.0},
+                                                                                 "solvent": {"nvt_ns": 0.05}}}}))
+    pe = cfg.sampling.pre_equilibration
+    assert (pe.complex.nvt_ns, pe.complex.npt_ns, pe.complex.md_ns) == (0.25, 0.5, 1.0)
+    assert (pe.solvent.nvt_ns, pe.solvent.npt_ns, pe.solvent.md_ns) == (0.05, 0.2, 0.5)
+
+
 @pytest.mark.parametrize("bad", [1, 0, [0.0], [0.1, 1.0], [0.0, 0.9], [0.0, 0.6, 0.5, 1.0], [0.0, 0.5, 0.5, 1.0]])
 def test_bad_lambda_windows_are_rejected(tmp_path, bad):
     with pytest.raises(Exception):
