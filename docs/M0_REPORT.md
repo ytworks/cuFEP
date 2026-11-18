@@ -18,7 +18,7 @@ licence of the cuPotential runtime restricts publishing performance results.
 | 3 | Is the fully decoupled state stable on the plugin? | Yes, 1 ns NPT without incident. |
 | 4 | Live charge offsets, plugin integrator with a stock restraint force, one Context time-sliced over replicas? | All work. |
 | 5 | Cost of parameter updates and energy evaluation | Measured. Led to the force-group scheme below. |
-| 6 | Several worker processes on several GPUs in one container; dodecahedral box | Eight workers ran concurrently on eight GPUs with both backends, next to another project's MPS daemon. The dodecahedral box passes the equivalence test. |
+| 6 | Several worker processes on several GPUs in one container; dodecahedral box | Eight workers ran concurrently on eight GPUs with both backends, next to another project's MPS daemon. The dodecahedral box passes the equivalence test. Later check: several workers also share one GPU concurrently under a private MPS daemon started inside the container, with both backends; killing one of them leaves the others running. |
 | 7 | Semi-isotropic pressure coupling for bilayers | The stock `MonteCarloMembraneBarostat` runs with the plugin force and either integrator. Over five runs of 20-40 ns each on a 128-lipid POPC patch, area per lipid is 61.0 ± 0.5 A^2 with the plugin (force and integrator) against 60.9 ± 0.3 A^2 on stock OpenMM (standard error over runs); volume and potential energy agree within the same statistics. |
 
 ## Decisions taken from the spikes
@@ -30,7 +30,7 @@ licence of the cuPotential runtime restricts publishing performance results.
   quadratic in `lambda_electrostatics`, so three evaluations give it for every state
   (interpolation error 1e-4 kT on the plugin); the soft-core group is evaluated once per
   distinct `lambda_sterics`; the restraint is linear. This removes most parameter updates,
-  which are the expensive path on the plugin, and makes the lambda search nearly free.
+  which are the expensive path on the plugin, and keeps the lambda precalculation cheap.
   The full energy matrix is evaluated every 2.5 ps iteration, as in OpenFE.
 - **Membrane pressure coupling: rung 1 of the plan's ladder** (stock membrane barostat,
   plugin force, plugin integrator).
@@ -47,9 +47,9 @@ licence of the cuPotential runtime restricts publishing performance results.
 - The ligand-only leg uses a cubic box when the plugin is the backend. The plugin needs
   every box height to be at least three cutoffs, and for a small solute a cube is then the
   smallest valid box. The complex keeps the dodecahedron.
-- The lambda search checks the width of each interval in both directions. With the
-  forward estimate alone, one interval near the decoupled end had an MBAR overlap of only
-  0.04; with the reverse check the overlaps are uniform (0.14-0.30) at about 30 states.
+- The first lambda search (windows placed at equal energy-difference width, about 30 per
+  leg with overlaps of 0.14-0.30) has been replaced by adaptive lambda scheduling, which
+  adds windows only where neighbouring windows overlap too little (docs/protocol.md).
 
 ## Energies straight after `setPositions`
 
