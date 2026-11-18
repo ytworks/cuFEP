@@ -44,7 +44,8 @@ def solvate(modeller: app.Modeller, forcefield: app.ForceField, spec: SolvationS
         centre = 0.5 * (pos.min(axis=0) + pos.max(axis=0))
         radius = float(np.linalg.norm(pos - centre, axis=1).max())
         min_width = spec.min_edge_nm * (2.0 ** 0.5 if spec.box_shape == "dodecahedron" else 1.0)
-        padding = max(padding, min_width - 2.0 * radius, 0.5 * min_width)
+        # width >= min_width needs either 2r + padding >= min_width or 2 * padding >= min_width
+        padding = max(padding, min(min_width - 2.0 * radius, 0.5 * min_width))
     modeller.addSolvent(
         forcefield, model=spec.water_model, padding=padding * unit.nanometer,
         boxShape=spec.box_shape, ionicStrength=spec.ionic_strength_M * unit.molar, neutralize=True)

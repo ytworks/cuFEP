@@ -100,3 +100,32 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
     assert out["repeats"][0]["dg_bind"] == pytest.approx((80.0 - 160.0 + 40.0) / 4.184)
     assert out["dg_bind"] == pytest.approx((-40.0 - 44.184) / 2 / 4.184)
     assert out["dg_bind_std"] == pytest.approx(np.std([-40.0, -44.184], ddof=1) / 4.184)
+
+
+@pytest.mark.parametrize("shape,ratio", [("cube", 1.0), ("dodecahedron", 2 ** -0.5)])
+def test_solvation_box_meets_the_minimum_height(shape, ratio):
+    import openmm.app as app
+    import openmm.unit as u
+
+    from cufep.prep.solvate import SolvationSpec, solvate
+
+    ff = app.ForceField("amber14/tip3p.xml")
+
+    def box_for(points_nm, min_edge):
+        seed = app.Modeller(app.Topology(), [])
+        seed.addSolvent(ff, boxSize=(2.0, 2.0, 2.0) * u.nanometer)
+        waters = list(seed.topology.residues())
+        keep = app.Modeller(seed.topology, seed.positions)
+        keep.delete(waters[1:])                                   # one water molecule as the "solute"
+        pos = np.asarray(keep.positions.value_in_unit(u.nanometer))
+        shift = np.asarray(points_nm) - pos.mean(axis=0)
+        keep.positions = (pos + shift) * u.nanometer
+        solvate(keep, ff, SolvationSpec(padding_nm=1.0, box_shape=shape, ionic_strength_M=0.0, min_edge_nm=min_edge))
+        vec = keep.topology.getPeriodicBoxVectors().value_in_unit(u.nanometer)
+        return float(vec[0][0]), float(vec[2][2])
+
+    width, height = box_for([0.0, 0.0, 0.0], 2.9)
+    assert height >= 2.9 - 1e-6 and height == pytest.approx(width * ratio, rel=1e-6)
+    assert width < 2.9 / ratio + 0.2                               # no larger than needed
+    width_free, _ = box_for([0.0, 0.0, 0.0], 0.0)
+    assert width_free < width                                      # the rule, not the padding, set the size
