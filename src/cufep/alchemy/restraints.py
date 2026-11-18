@@ -17,6 +17,7 @@ measured in units of the restraint width, is taken. Force constants are OpenFE's
 from __future__ import annotations
 
 import math
+import dataclasses
 from dataclasses import asdict, dataclass
 
 import numpy as np
@@ -402,6 +403,28 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     return RestraintSearchResult(restraint=restraint, score=float(score),
                                  fluctuations=dict(zip(labels, stds)), ligand_rmsd_nm=tail,
                                  n_candidates=n_tested, notes=notes)
+
+
+def with_force_constants_from_fluctuations(restraint: BoreschRestraint, fluctuations: dict[str, float],
+                                           temperature_K: float, limits: tuple[float, float] = (0.25, 4.0)
+                                           ) -> BoreschRestraint:
+    """The same restraint with force constants kT / sigma^2 from the observed fluctuations.
+
+    A harmonic restraint with this force constant has the width the coordinate shows in the
+    plain MD of the bound state, so it holds the ligand where it is without squeezing it. A3FE
+    and SOMD2 derive Boresch force constants this way (Flare: "constraint strengths"). Each
+    value is kept within ``limits`` times the fixed default (10 kcal/mol/A^2, 80 kcal/mol/rad^2).
+    """
+    kt = R_GAS * temperature_K
+    names = {"k_r": "r", "k_theta_a": "theta_A", "k_theta_b": "theta_B", "k_phi_a": "phi_A", "k_phi_b": "phi_B",
+             "k_phi_c": "phi_C"}
+    values = {}
+    for field_name, label in names.items():
+        default = K_R_DEFAULT if field_name == "k_r" else K_ANGLE_DEFAULT
+        sigma = float(fluctuations[label])
+        k = kt / (sigma * sigma) if sigma > 0 else default * limits[1]
+        values[field_name] = float(min(default * limits[1], max(default * limits[0], k)))
+    return dataclasses.replace(restraint, **values)
 
 
 def ligand_symmetry_number(rdmol) -> int:

@@ -59,7 +59,7 @@ solvation:
 restraints:
   type: boresch
   selection: auto                 # auto | manual (give host_atoms and guest_atoms)
-  force_constants: openfe         # openfe (the two values below) | custom
+  force_constants: openfe         # openfe (the two values below) | auto (from the fluctuations) | custom
   k_r_kcal_per_A2: 10.0
   k_angle_kcal_per_rad2: 80.0
   host_atoms: null
@@ -158,7 +158,7 @@ the schedule in fixed mode.
 | `sampling.pre_equilibration`, `equilibration_ns`, `time_per_iteration_ps`, `exchange` | 0.25 + 0.5 + 5 ns; 1 ns; 2.5 ps; replica exchange | defaults of OpenFE's ABFE protocol |
 | `sampling.production_ns` | 5 ns per lambda window | default of Schrödinger's absolute binding FEP+; also used by A3FE and Boltz-ABFE. OpenFE uses 10 ns |
 | `sampling.repeats` | 1 | FEP+ and Flare run a calculation once. OpenFE's default is 3; more than one repeat makes the reported uncertainty the standard deviation over repeats |
-| `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol |
+| `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol. `force_constants: auto` takes kT / sigma^2 of each restrained coordinate in the pre-equilibration instead, as A3FE and SOMD2 do; which of the two becomes the default is decided by the validation runs |
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
 | `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. A lower threshold (0.03) gives fewer windows, a higher one (0.05) more |
 | `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer. cuFEP's own choice |

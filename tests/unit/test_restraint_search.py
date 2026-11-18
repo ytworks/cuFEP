@@ -71,3 +71,19 @@ def test_search_stops_when_the_ligand_leaves(tyk2_complex):
     frames = _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=leave)
     with pytest.raises(RestraintError, match="not stable"):
         find_boresch_restraint(top, frames, lig, rdmol, 298.15)
+
+
+def test_force_constants_from_fluctuations():
+    from cufep.alchemy.restraints import (K_ANGLE_DEFAULT, K_R_DEFAULT, BoreschRestraint,
+                                          with_force_constants_from_fluctuations)
+
+    kt = 8.31446261815324e-3 * 298.15
+    base = BoreschRestraint((0, 1, 2), (3, 4, 5), 0.8, 1.6, 1.6, 0.0, 2.0, 1.0)
+    fluct = {"r": 0.025, "theta_A": 0.08, "theta_B": 0.10, "phi_A": 0.08, "phi_B": 0.5, "phi_C": 0.001}
+    r = with_force_constants_from_fluctuations(base, fluct, 298.15)
+    assert r.k_r == pytest.approx(kt / 0.025 ** 2) and r.k_theta_a == pytest.approx(kt / 0.08 ** 2)
+    assert r.k_phi_b == pytest.approx(0.25 * K_ANGLE_DEFAULT)          # very floppy: lower limit
+    assert r.k_phi_c == pytest.approx(4.0 * K_ANGLE_DEFAULT)           # very stiff: upper limit
+    assert 0.25 * K_R_DEFAULT <= r.k_r <= 4.0 * K_R_DEFAULT
+    assert (r.r0, r.host_atoms, r.guest_atoms) == (base.r0, base.host_atoms, base.guest_atoms)
+    assert np.isfinite(r.release_free_energy(298.15)) and base.k_r == K_R_DEFAULT

@@ -332,7 +332,7 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.factory import make_alchemical_system
     from cufep.alchemy.lrc import TailEnergy
     from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, find_boresch_restraint,
-                                          ligand_symmetry_number)
+                                          ligand_symmetry_number, with_force_constants_from_fluctuations)
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
     from cufep.analysis.mbar import analyze_leg
     from cufep.analysis.structure import structural_analysis
@@ -453,7 +453,10 @@ def run_leg(job: LegJob) -> dict:
                                                    dssp_filter=rc.dssp_filter)
                 found = find_boresch_restraint(prep["topology"], full, prep["ligand"], rdmol, T, settings)
                 restraint = found.restraint
-                info = {"selection": "auto", "score": found.score, "fluctuations": found.fluctuations,
+                if rc.force_constants == "auto":
+                    restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)
+                info = {"selection": "auto", "force_constants": rc.force_constants, "score": found.score,
+                        "fluctuations": found.fluctuations,
                         "ligand_rmsd_A": 10 * found.ligand_rmsd_nm, "candidates_tested": found.n_candidates,
                         "notes": found.notes}
                 atoms = list(prep["topology"].atoms())

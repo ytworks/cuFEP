@@ -114,7 +114,9 @@ class SolvationConfig(_Section):
 class RestraintConfig(_Section):
     type: Literal["boresch"] = "boresch"
     selection: Literal["auto", "manual"] = "auto"
-    force_constants: Literal["openfe", "custom"] = "openfe"
+    #: openfe or custom: the two values below; auto: kT / sigma^2 of each restrained coordinate in
+    #: the pre-equilibration, kept within 0.25-4 times the two values' defaults
+    force_constants: Literal["openfe", "auto", "custom"] = "openfe"
     k_r_kcal_per_A2: float = 10.0
     k_angle_kcal_per_rad2: float = 80.0
     #: manual selection: atom indices in the prepared complex (H0,H1,H2 / G0,G1,G2)
