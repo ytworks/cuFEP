@@ -50,7 +50,8 @@ from cufep.sampling.states import (R_GAS, STAGE_ALIASES, AlchemicalState, canoni
                                    validate_states)
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
-           "bad_sections", "choose_section", "redistribute", "als_step", "adaptive_schedule", "STAGE_ALIASES"]
+           "bad_sections", "choose_section", "redistribute", "als_step", "adaptive_schedule", "run_window",
+           "STAGE_ALIASES"]
 
 
 # ============================================================================ the schedule
@@ -238,7 +239,12 @@ class AlsSettings:
     candidates: int = 101
     initial_windows: dict = field(default_factory=lambda: {"restrain": 3, "discharge": 5, "vanish": 9})
     window_ps: float = 50.0
+    #: MD in a new window before its energies are recorded
+    equilibration_ps: float = 0.0
     sample_interval_ps: float = 0.5
+    #: when the windows are run at the same time by a pool of workers: MD per window of the walk
+    #: through the initial windows that gives each of them a start configuration
+    walk_ps: float = 5.0
     max_windows: int = 48
 
 
@@ -289,9 +295,58 @@ def stage_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
     return np.array([o[i, i + 1] for i in range(len(windows) - 1)])
 
 
+def _snapshot(context):
+    import openmm.unit as unit
+    st = context.getState(getPositions=True, getVelocities=True)
+    return (st.getPositions(asNumpy=True).value_in_unit(unit.nanometer),
+            st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer),
+            st.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond))
+
+
+def _load(context, config) -> None:
+    import openmm as mm
+    pos, box, vel = config
+    context.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(box)])
+    context.setPositions(pos)
+    context.setVelocities(vel)
+
+
+def run_window(context, integrator, task: dict) -> dict:
+    """One window of the precalculation in an existing Context (this process or a pool worker).
+
+    ``task``: ``state`` (lambda parameters), ``config`` (positions, box, velocities) to start
+    from, ``stages`` whose candidate energies are recorded, ``candidates``, ``temperature_K``,
+    ``equilibration_steps``, ``n_samples`` and ``steps_per_sample``.
+    Returns the energies per stage, shape (samples, candidates), and the last configuration.
+    """
+    beta = 1.0 / (R_GAS * task["temperature_K"])
+    grid = np.linspace(0.0, 1.0, int(task["candidates"]))
+    state = AlchemicalState(**task["state"])
+    has_softcore = LAMBDA_STERICS in context.getParameters()
+    _load(context, task["config"])
+    set_state(context, state)
+    if task["equilibration_steps"] > 0:
+        integrator.step(int(task["equilibration_steps"]))
+    energies = {name: np.empty((int(task["n_samples"]), len(grid))) for name in task["stages"]}
+    for i in range(int(task["n_samples"])):
+        integrator.step(int(task["steps_per_sample"]))
+        if has_softcore:
+            context.getState(getEnergy=True)              # see StateEnergyEvaluator.reduced_potentials
+        for name in task["stages"]:
+            energies[name][i] = candidate_energies(context, name, grid, beta)
+            set_state(context, state)                     # the evaluation moved the stage's lambda
+    return {"energies": energies, "config": _snapshot(context)}
+
+
 def adaptive_schedule(context, integrator, stages: list[str], temperature_K: float, timestep_fs: float,
-                      settings: AlsSettings | None = None, log=print):
+                      settings: AlsSettings | None = None, log=print, pool=None):
     """Adaptive lambda scheduling for one leg, starting from the Context's current configuration.
+
+    Without ``pool`` the windows are run one after another in ``context``, each starting from
+    the end of the nearest window that has been run. With ``pool`` (an object whose
+    ``run(tasks)`` executes :func:`run_window` tasks concurrently, e.g. on several GPUs) the
+    new windows of an iteration run at the same time; for the first iteration a short walk
+    through the windows in ``context`` provides their start configurations.
 
     Returns ``(schedule, configurations)`` with one ``(positions_nm, box_nm, velocities)``
     tuple per window: the last configuration of that window's precalculation run.
@@ -311,6 +366,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     grid = np.linspace(0.0, 1.0, s.candidates)
     steps_per_sample = max(1, int(round(s.sample_interval_ps * 1000.0 / timestep_fs)))
     n_samples = max(2, int(round(s.window_ps / s.sample_interval_ps)))
+    equilibration_steps = int(round(s.equilibration_ps * 1000.0 / timestep_fs))
 
     def node(k: int, idx: int) -> tuple[int, int]:
         """The window at the end of a stage is the window at the start of the next one."""
@@ -324,32 +380,33 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
 
     windows = {k: initial_indices(int(s.initial_windows.get(name, 3)), s.candidates) for k, name in enumerate(stages)}
     runs: dict[tuple[int, int], dict] = {}
+    start = _snapshot(context)
 
-    def snapshot():
-        st = context.getState(getPositions=True, getVelocities=True)
-        return (st.getPositions(asNumpy=True).value_in_unit(unit.nanometer),
-                st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer),
-                st.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond))
+    def task_for(nd: tuple[int, int], config) -> dict:
+        member = [stages[k] for k in range(len(stages)) if nd in (node(k, 0), node(k, top)) or nd[0] == k]
+        return {"state": state_of(nd).to_dict(), "config": config, "stages": member, "candidates": s.candidates,
+                "temperature_K": temperature_K, "equilibration_steps": equilibration_steps, "n_samples": n_samples,
+                "steps_per_sample": steps_per_sample}
 
-    start = snapshot()
+    def nearest(nd: tuple[int, int]):
+        return runs[min(runs, key=lambda other: abs(path(other) - path(nd)))]["config"] if runs else start
 
-    def run(nd: tuple[int, int]) -> None:
-        pos, box, vel = runs[min(runs, key=lambda other: abs(path(other) - path(nd)))]["config"] if runs else start
-        context.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])
-        context.setPositions(pos)
-        context.setVelocities(vel)
-        state = state_of(nd)
-        member = [k for k in range(len(stages)) if nd in (node(k, 0), node(k, top)) or nd[0] == k]
-        energies = {k: np.empty((n_samples, s.candidates)) for k in member}
-        set_state(context, state)
-        for i in range(n_samples):
-            integrator.step(steps_per_sample)
-            if has_softcore:
-                context.getState(getEnergy=True)          # see StateEnergyEvaluator.reduced_potentials
-            for k in member:
-                energies[k][i] = candidate_energies(context, stages[k], grid, beta)
-                set_state(context, state)                 # the evaluation moved the stage's lambda
-        runs[nd] = {"energies": energies, "config": snapshot()}
+    def run_all(todo: list[tuple[int, int]]) -> None:
+        if pool is None:
+            for nd in todo:                               # one after another, each from its neighbour
+                runs[nd] = run_window(context, integrator, task_for(nd, nearest(nd)))
+            return
+        if runs:
+            starts = [nearest(nd) for nd in todo]
+        else:                                             # first iteration: a short walk gives the starts
+            starts, walk_steps = [], max(1, int(round(s.walk_ps * 1000.0 / timestep_fs)))
+            _load(context, start)
+            for nd in todo:
+                set_state(context, state_of(nd))
+                integrator.step(walk_steps)
+                starts.append(_snapshot(context))
+        for nd, result in zip(todo, pool.run([task_for(nd, cfg) for nd, cfg in zip(todo, starts)])):
+            runs[nd] = result
 
     def total_windows() -> int:
         return len({node(k, i) for k in windows for i in windows[k]})
@@ -358,14 +415,12 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     iteration = 0
     while True:
         iteration += 1
-        todo = sorted({node(k, i) for k in windows for i in windows[k]} - set(runs), key=path)
-        for nd in todo:
-            run(nd)
+        run_all(sorted({node(k, i) for k in windows for i in windows[k]} - set(runs), key=path))
         changed = False
         for k, name in enumerate(stages):
             if status[k] != "running":
                 continue
-            sup = stage_overlap([runs[node(k, i)]["energies"][k] for i in windows[k]], windows[k])
+            sup = stage_overlap([runs[node(k, i)]["energies"][name] for i in windows[k]], windows[k])
             new, rec = als_step(windows[k], sup, s.overlap_threshold, room=s.max_windows - total_windows())
             rec = {"iteration": iteration, "stage": name,
                    "lambda": [round(i / top, 6) for i in rec.pop("windows")],
@@ -398,7 +453,9 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     schedule = _assemble(stages, values, "adaptive", notes=notes,
                          provenance={"method": "adaptive lambda scheduling", "overlap_threshold": s.overlap_threshold,
                                      "candidates": s.candidates, "window_ps": s.window_ps,
+                                     "equilibration_ps": s.equilibration_ps,
                                      "sample_interval_ps": s.sample_interval_ps,
+                                     "windows_run_concurrently": pool is not None,
                                      "initial_windows": {n: int(s.initial_windows.get(n, 3)) for n in stages},
                                      "windows_simulated": len(runs), "iterations": records})
     configs = []

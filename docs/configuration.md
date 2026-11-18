@@ -88,7 +88,9 @@ lambda_schedule:
       discharge: 5
       vanish: 9
     window_ps: 50.0
+    equilibration_ps: 0.0
     sample_interval_ps: 0.5
+    walk_ps: 5.0
     max_windows:
       complex: 48
       solvent: 32

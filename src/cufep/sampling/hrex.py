@@ -117,6 +117,61 @@ class _Process:
         self.parent.close()
 
 
+class WindowPool:
+    """Worker processes that each run single lambda windows (the adaptive precalculation).
+
+    One worker per entry of ``devices``; a GPU listed n times gets n workers, which run at the
+    same time under NVIDIA MPS. ``run`` hands the tasks to the workers as they become free.
+    """
+
+    def __init__(self, spec: LegSpec, devices: list, log=print) -> None:
+        ctx = mp.get_context("spawn")
+        self.spec, self.log = spec, log
+        self.workers = [_Process(ctx, spec, d, None, w) for w, d in enumerate(devices)]
+        for w in self.workers:
+            w.wait_ready(600.0)
+
+    def run(self, tasks: list[dict], timeout: float = 3600.0) -> list[dict]:
+        results: list = [None] * len(tasks)
+        pending = list(range(len(tasks)))
+        busy: dict[int, int] = {}                          # worker position -> task index
+        deadline = time.time() + timeout
+        while pending or busy:
+            for pos, worker in enumerate(self.workers):
+                if pos not in busy and pending:
+                    i = pending.pop(0)
+                    worker.parent.send(("window", tasks[i]))
+                    busy[pos] = i
+            for pos in list(busy):
+                worker = self.workers[pos]
+                try:
+                    if not worker.parent.poll(0.02):
+                        continue
+                    msg = worker.parent.recv()
+                except (EOFError, OSError) as exc:
+                    raise SamplerError(f"a worker of the lambda precalculation died (device {worker.device})") from exc
+                if msg[0] != "done":
+                    raise SamplerError(f"lambda precalculation on device {worker.device}: {msg[1]}")
+                results[busy.pop(pos)] = msg[1]
+            if time.time() > deadline:
+                raise SamplerError("the lambda precalculation did not finish in time")
+        return results
+
+    def close(self) -> None:
+        for w in self.workers:
+            try:
+                w.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        self.workers = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
 class _Inline:
     """A worker in the controller's own process (tests, CPU platforms)."""
 

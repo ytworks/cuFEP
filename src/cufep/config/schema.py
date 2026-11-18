@@ -183,10 +183,15 @@ class AdaptiveConfig(_Section):
     candidates: int = Field(default=101, ge=3)
     #: windows per stage in the first iteration (the schedule never gets smaller than this)
     initial_windows: InitialWindows = Field(default_factory=InitialWindows)
-    #: MD per new window in the precalculation
+    #: MD per new window in the precalculation during which energies are recorded
     window_ps: float = Field(default=50.0, gt=0.0)
+    #: MD in a new window before that, not recorded
+    equilibration_ps: float = Field(default=0.0, ge=0.0)
     #: interval at which energies are recorded during that MD
     sample_interval_ps: float = Field(default=0.5, gt=0.0)
+    #: the windows of an iteration run at the same time on the available GPUs; before the first
+    #: iteration a walk through the windows with this much MD each gives them start configurations
+    walk_ps: float = Field(default=5.0, gt=0.0)
     #: largest number of windows per leg; reaching it ends the precalculation with a warning
     max_windows: WindowLimits = Field(default_factory=WindowLimits)
 

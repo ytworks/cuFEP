@@ -10,7 +10,7 @@ import yaml
 
 from cufep.alchemy.factory import make_alchemical_system
 from cufep.alchemy.schedule import (AlsSettings, Schedule, adaptive_schedule, als_step, bad_sections, choose_section,
-                                    fixed_schedule, initial_indices, redistribute, schedule_from_windows,
+                                    fixed_schedule, initial_indices, redistribute, run_window, schedule_from_windows,
                                     stage_overlap, stage_values)
 from cufep.config.schema import RECOMMENDED_VANISH_COMPLEX, RECOMMENDED_VANISH_SOLVENT, WindowsConfig
 from cufep.sampling.states import AlchemicalState
@@ -213,3 +213,42 @@ def test_precalculation_on_a_small_system(water_ligand_system):
     for p, b, v in configs:
         assert np.all(np.isfinite(p)) and np.all(np.isfinite(v)) and b.shape == (3, 3)
     assert any("lambda schedule" in m for m in messages)
+
+
+def test_precalculation_with_the_windows_of_an_iteration_run_by_a_pool(water_ligand_system):
+    """With a pool, all new windows of an iteration are handed over together."""
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+
+    def make(seed):
+        integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+        integ.setRandomNumberSeed(seed)
+        ctx = mm.Context(alch.system, integ, mm.Platform.getPlatformByName("CPU"))
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        ctx.setVelocitiesToTemperature(300.0, seed)
+        return ctx, integ
+
+    ctx, integ = make(21)
+    helper = make(22)
+
+    class Pool:
+        calls: list = []
+
+        def run(self, tasks):
+            self.calls.append([t["state"] for t in tasks])
+            assert all(t["equilibration_steps"] == 10 and t["n_samples"] == 10 for t in tasks)
+            return [run_window(*helper, t) for t in tasks]
+
+    pool = Pool()
+    settings = AlsSettings(overlap_threshold=0.04, candidates=21, initial_windows={"discharge": 2, "vanish": 3},
+                           window_ps=0.2, equilibration_ps=0.02, sample_interval_ps=0.02, walk_ps=0.02, max_windows=6)
+    schedule, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings, lambda m: None,
+                                          pool=pool)
+    assert len(pool.calls[0]) == 4                                      # 2 + 3 windows, one shared
+    assert pool.calls[0][0] == AlchemicalState(1.0, 1.0, 1.0).to_dict()
+    assert pool.calls[0][-1] == AlchemicalState(1.0, 0.0, 0.0).to_dict()
+    assert sum(len(c) for c in pool.calls) == schedule.provenance["windows_simulated"]
+    assert schedule.provenance["windows_run_concurrently"] is True and schedule.provenance["equilibration_ps"] == 0.02
+    assert len(configs) == len(schedule.states) <= 6
+    assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(1.0, 0.0, 0.0)

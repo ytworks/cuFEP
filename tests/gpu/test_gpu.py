@@ -200,3 +200,41 @@ def test_killed_worker_is_restarted_and_the_iteration_repeated(tmp_path, big_wat
     own = data["u"][np.arange(6)[:, None], np.arange(k), data["states"]]
     assert np.all(np.isfinite(own))
     assert any("restarted" in m for m in messages)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend):
+    """Adaptive lambda scheduling with the windows of an iteration running in worker processes."""
+    import openmm.unit as u
+
+    from cufep.alchemy.schedule import AlsSettings, adaptive_schedule
+    from cufep.sampling.hrex import WindowPool
+    from cufep.sampling.states import AlchemicalState
+
+    alch, schedule, pos, box, _ = big_water_leg
+    be = get_backend(backend)
+    system = be.prepare_system(alch.system)
+    system.addForce(be.make_isotropic_barostat(1.0 * u.bar, 300 * u.kelvin, 25, seed=2))
+    integ = be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=4)
+    ctx = be.make_context(system, integ, 0)
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300 * u.kelvin, 6)
+    spec = LegSpec(name="pool", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states[:2]], n_atoms=alch.system.getNumParticles(),
+                   backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=2.0,
+                   steps_per_iteration=50, seed=9)
+    settings = AlsSettings(candidates=21, initial_windows={"discharge": 3, "vanish": 4}, window_ps=1.0,
+                           equilibration_ps=0.2, sample_interval_ps=0.05, walk_ps=0.2, max_windows=10)
+    messages = []
+    with WindowPool(spec, [0, 0, 0], log=messages.append) as pool:
+        result, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings,
+                                            messages.append, pool=pool)
+    assert result.provenance["windows_run_concurrently"] is True
+    assert result.states[0] == AlchemicalState(1.0, 1.0, 1.0) and result.states[-1] == AlchemicalState(1.0, 0.0, 0.0)
+    assert 6 <= len(result.states) <= 10 and len(configs) == len(result.states)
+    assert all(np.all(np.isfinite(c[0])) for c in configs)
+    last = {rec["stage"]: rec for rec in result.provenance["iterations"]}
+    assert set(last) == {"discharge", "vanish"}
+    assert all(rec["status"] in ("converged", "saturated", "max_windows") for rec in last.values())

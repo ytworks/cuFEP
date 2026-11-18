@@ -339,8 +339,8 @@ def run_leg(job: LegJob) -> dict:
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
     from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
-    from cufep.sampling.hrex import ReplicaExchangeSampler, SamplerError
-    from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT
+    from cufep.sampling.hrex import ReplicaExchangeSampler, SamplerError, WindowPool
+    from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
     from cufep.sampling.storage import read_samples
     from cufep.sampling.worker import LegSpec
 
@@ -544,12 +544,33 @@ def run_leg(job: LegJob) -> dict:
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.adaptive.window_ps, timestep_fs)
             else:
                 a_ = ls.adaptive
-                schedule, cfgs = adaptive_schedule(
-                    ctx, integ, stages, T, timestep_fs,
-                    AlsSettings(overlap_threshold=a_.overlap_threshold, candidates=a_.candidates,
-                                initial_windows=a_.initial_windows.model_dump(), window_ps=a_.window_ps,
-                                sample_interval_ps=a_.sample_interval_ps,
-                                max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent), log)
+                als = AlsSettings(overlap_threshold=a_.overlap_threshold, candidates=a_.candidates,
+                                  initial_windows=a_.initial_windows.model_dump(), window_ps=a_.window_ps,
+                                  equilibration_ps=a_.equilibration_ps, sample_interval_ps=a_.sample_interval_ps,
+                                  walk_ps=a_.walk_ps,
+                                  max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent)
+                # the windows of an iteration run at the same time on the GPUs the scheduler grants
+                n_first = sum(als.initial_windows[st] for st in stages) - (len(stages) - 1)
+                devices = list(job.devices)
+                if job.control is not None:
+                    granted = job.control.request_devices(
+                        n_first, n_first * (als.window_ps + als.equilibration_ps) / max(1, job.oversubscription))
+                    devices = granted or devices
+                if job.inline or len(devices) < 2:
+                    schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log)
+                else:
+                    pool_spec = LegSpec(
+                        name=job.tag, system_xml=alch_xml, states=[stage_state(stages[0], 0.0).to_dict(),
+                                                                   stage_state(stages[-1], 1.0).to_dict()],
+                        n_atoms=alch.system.getNumParticles(), backend=backend_name,
+                        precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
+                        pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
+                        timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 23,
+                        cpu_threads=cfg.resources.cpu_threads_per_worker,
+                        box_safety=1.3 if barostat == "membrane" else None,
+                        mps_thread_percentage=thread_percentage(job.oversubscription))
+                    with WindowPool(pool_spec, devices[:n_first], log) as pool:
+                        schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, pool=pool)
             schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
                           backend=backend_name)
             del ctx, integ

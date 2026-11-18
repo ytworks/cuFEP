@@ -237,7 +237,8 @@ def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker
     arrays = None
     worker = None
     try:
-        arrays = SharedArrays(len(spec.states), spec.n_atoms, len(spec.states), names=shm_names)
+        if shm_names:                                    # none for workers that only run single windows
+            arrays = SharedArrays(len(spec.states), spec.n_atoms, len(spec.states), names=shm_names)
         worker = ReplicaWorker(spec, device, arrays, worker_id)
         conn.send(("ready", worker.describe()))
         while True:
@@ -248,6 +249,9 @@ def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker
                 _cmd, cur, assignments, iteration, record, steps = msg
                 result = worker.run(cur, assignments, iteration, record, steps)
                 conn.send(("done", result))
+            elif msg[0] == "window":                     # one window of the adaptive precalculation
+                from cufep.alchemy.schedule import run_window
+                conn.send(("done", run_window(worker.context, worker.integrator, msg[1])))
             else:
                 conn.send(("error", f"unknown command {msg[0]!r}"))
     except EOFError:
