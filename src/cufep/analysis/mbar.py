@@ -45,6 +45,9 @@ class LegAnalysis:
     lrc_delta_g: float = 0.0
     lrc_error: float = 0.0
     lrc_samples: int = 0
+    #: the same correction in the homogeneous (isotropic) approximation that OpenMM's
+    #: long-range correction and OpenFE use; reported for comparison
+    lrc_isotropic: float = 0.0
     temperature_K: float = 298.15
 
     def to_dict(self) -> dict:
@@ -181,6 +184,15 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         lrc_n = int(du.size)
         lrc_dg, lrc_se = tail_free_energy(du, temperature_K)
 
+    lrc_iso = 0.0
+    if "lrc_s6" in attrs:
+        rc = float(attrs.get("lrc_cutoff_nm", 0.9))
+        coupled = states == 0
+        volume = float(samples["volume"][n_equilibration:][coupled].mean()) if coupled.any() else float("nan")
+        if np.isfinite(volume) and volume > 0:
+            lrc_iso = float((16.0 * np.pi / volume) * (float(attrs["lrc_s12"]) / (9.0 * rc ** 9)
+                                                       - float(attrs["lrc_s6"]) / (3.0 * rc ** 3)))
+
     return LegAnalysis(
         n_states=n_states, n_iterations_used=int(n), statistical_inefficiency=float(g),
         effective_samples_per_state=float(n / g), delta_g=float(f_k[-1] * kt), delta_g_error=float(df_k[-1] * kt),
@@ -188,4 +200,5 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         overlap_neighbour=neighbour, min_overlap=float(min(neighbour)) if neighbour else 1.0,
         round_trips=count_round_trips(states), swap_acceptance_neighbour=neighbour_swap_fraction(states),
         forward=forward, reverse=reverse, forward_reverse_gap=float(gap),
-        lrc_delta_g=lrc_dg, lrc_error=lrc_se, lrc_samples=lrc_n, temperature_K=temperature_K)
+        lrc_delta_g=lrc_dg, lrc_error=lrc_se, lrc_samples=lrc_n, lrc_isotropic=lrc_iso,
+        temperature_K=temperature_K)

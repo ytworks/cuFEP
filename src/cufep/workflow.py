@@ -280,6 +280,7 @@ def run_leg(job: LegJob) -> dict:
                                           ligand_symmetry_number)
     from cufep.alchemy.schedule import Schedule, ScheduleSettings, refine, trailblaze
     from cufep.analysis.mbar import analyze_leg
+    from cufep.analysis.structure import structural_analysis
     from cufep.backends import get_backend
     from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
     from cufep.sampling.hrex import ReplicaExchangeSampler, SamplerError
@@ -413,7 +414,7 @@ def run_leg(job: LegJob) -> dict:
         alch.system.addForce(restraint.create_force())
     alch_xml = mm.XmlSerializer.serialize(alch.system)
     tail = None
-    if cfg.analysis.lrc == "reweight":
+    if cfg.analysis.lrc in ("reweight", "isotropic"):
         tail = TailEnergy.from_system(system, prep["ligand"], alch.ligand_parameters, cfg.dynamics.cutoff_nm,
                                       cfg.analysis.lrc_cutoff_nm).to_dict()
     backend_name, bnotes = _choose_backend(cfg, alch.system, log)
@@ -425,6 +426,13 @@ def run_leg(job: LegJob) -> dict:
     n_equil = max(1, int(round(cfg.sampling.equilibration_ns * 1000.0 / cfg.sampling.iteration_ps)))
     n_prod = max(4, int(round(job.production_ns * 1000.0 / cfg.sampling.iteration_ps)))
     ckpt_stride = max(1, int(round(cfg.sampling.checkpoint_interval_ps / cfg.sampling.iteration_ps)))
+
+    frame_atoms = prep["solute"] if is_complex else prep["ligand"]
+    where = {a: i for i, a in enumerate(frame_atoms)}
+    top_atoms = list(prep["topology"].atoms())
+    frame_ligand = [where[i] for i in prep["ligand"] if top_atoms[i].element is not None
+                    and top_atoms[i].element.symbol != "H"]
+    frame_ca = [where[i] for i in prep["protein"] if top_atoms[i].name == "CA" and i in where] if is_complex else []
 
     def run_with(backend_name: str) -> tuple[dict, Schedule]:
         hrex_dir = leg_dir / "hrex"
@@ -477,7 +485,7 @@ def run_leg(job: LegJob) -> dict:
                 pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
                 timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 17,
                 cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail,
-                frame_atoms=prep["solute"] if is_complex else prep["ligand"],
+                frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
                 box_safety=1.3 if barostat == "membrane" else None)
             changed = None
             with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline,
@@ -536,13 +544,18 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 6. analysis ------------------------------------------------------------------------------
     analysis = analyze_leg(samples, T)
-    total = analysis.delta_g - analysis.lrc_delta_g        # decoupling with the full LJ range
+    correction = {"reweight": analysis.lrc_delta_g, "isotropic": analysis.lrc_isotropic, "none": 0.0}[cfg.analysis.lrc]
+    total = analysis.delta_g - correction                  # decoupling with the full LJ range
+    structure = structural_analysis(samples, int(samples["attrs"].get("n_equilibration_iterations", 0)))
+    if structure is not None:
+        notes += structure["warnings"]
     result = {
         "ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "backend": backend_name,
         "temperature_K": T, "timestep_fs": timestep_fs, "n_states": analysis.n_states,
         "production_ns": float(analysis.n_iterations_used * cfg.sampling.iteration_ps / 1000.0),
         "delta_g_decouple": total, "delta_g_mbar": analysis.delta_g, "delta_g_mbar_error": analysis.delta_g_error,
-        "lrc": analysis.lrc_delta_g, "lrc_error": analysis.lrc_error,
+        "lrc": correction, "lrc_method": cfg.analysis.lrc, "lrc_reweight": analysis.lrc_delta_g,
+        "lrc_isotropic": analysis.lrc_isotropic, "lrc_error": analysis.lrc_error, "structure": structure,
         "restraint_release": release_dg, "restraint_release_analytical": release_dg_analytical,
         "ligand_symmetry_number": symmetry, "analysis": analysis.to_dict(), "notes": notes, "units": "kJ/mol",
     }
@@ -551,7 +564,7 @@ def run_leg(job: LegJob) -> dict:
     result["sampling_reasons"] = reasons
     (leg_dir / "result.json").write_text(json.dumps(result, indent=1))
     log(f"dG(decouple) = {total / KCAL:.2f} kcal/mol (MBAR {analysis.delta_g / KCAL:.2f} ± "
-        f"{analysis.delta_g_error / KCAL:.2f}, tail {-analysis.lrc_delta_g / KCAL:+.2f}); "
+        f"{analysis.delta_g_error / KCAL:.2f}, tail {-correction / KCAL:+.2f}); "
         f"min overlap {analysis.min_overlap:.3f}, round trips {analysis.round_trips}, "
         f"N_eff/state {analysis.effective_samples_per_state:.0f}")
     return result

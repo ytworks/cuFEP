@@ -141,7 +141,9 @@ class SamplingConfig(_Section):
 class AnalysisConfig(_Section):
     estimator: Literal["mbar"] = "mbar"
     #: long-range dispersion correction for the ligand-environment LJ at the coupled end state
-    lrc: Literal["reweight", "none"] = "reweight"
+    #: reweight = explicit tail by reweighting (default); isotropic = homogeneous tail, as in
+    #: OpenMM's long-range correction and OpenFE; none = truncated interaction
+    lrc: Literal["reweight", "isotropic", "none"] = "reweight"
     lrc_cutoff_nm: float = 2.0
 
 

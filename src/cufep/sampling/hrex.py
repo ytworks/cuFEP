@@ -143,7 +143,12 @@ class ReplicaExchangeSampler:
         self.arrays = SharedArrays(self.k, spec.n_atoms, self.k, fallback_dir=str(self.storage.dir))
         self.storage.set_meta(states=spec.states, temperature_K=spec.temperature_K,
                               backend=spec.backend, leg=spec.name,
-                              iteration_ps=spec.steps_per_iteration * spec.timestep_fs * 1e-3)
+                              iteration_ps=spec.steps_per_iteration * spec.timestep_fs * 1e-3,
+                              frame_ligand=list(spec.frame_ligand), frame_ca=list(spec.frame_ca))
+        if spec.lrc is not None:
+            from cufep.alchemy.lrc import TailEnergy
+            tail = TailEnergy.from_dict(spec.lrc)
+            self.storage.set_meta(lrc_s6=tail._s6, lrc_s12=tail._s12, lrc_cutoff_nm=tail.cutoff_nm)  # noqa: SLF001
         self.workers: list = []
         self._iter_seconds: float | None = None
         self.accepted = self.attempted = 0

@@ -47,6 +47,9 @@ class LegSpec:
     lrc: dict | None = None
     #: atoms whose positions are saved for structural analysis (coupled-state replica)
     frame_atoms: list[int] = field(default_factory=list)
+    #: positions *within frame_atoms* of the ligand heavy atoms and the protein C-alpha atoms
+    frame_ligand: list[int] = field(default_factory=list)
+    frame_ca: list[int] = field(default_factory=list)
 
     @property
     def n_states(self) -> int:
