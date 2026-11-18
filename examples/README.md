@@ -1,1 +1,30 @@
 # cuFEP examples
+
+Each directory holds the only two inputs cuFEP needs, a protein PDB and a ligand SDF with
+the ligand in the pocket, plus a configuration that names them and an output directory.
+Both structures come from the Schrödinger public binding free energy benchmark (MIT
+licence, see `benchmarks/THIRD_PARTY/`).
+
+| directory | system | experiment |
+|---|---|---|
+| `kinase_tyk2/` | TYK2 kinase (PDB 4GIH) with ligand ejm_31 | -9.54 kcal/mol |
+| `membrane_a2a/` | adenosine A2A receptor (PDB 5OLZ) with compound 4e, in a POPC bilayer | -12.07 kcal/mol |
+
+```bash
+cufep() { docker run --rm --gpus all --shm-size=16g -u "$(id -u):$(id -g)" -v "$PWD":/work cufep:latest "$@"; }
+
+cufep plan examples/kinase_tyk2/config.yaml     # show the automatic decisions
+cufep run  examples/kinase_tyk2/config.yaml     # three repeats, default sampling
+cufep run  examples/membrane_a2a/config.yaml
+```
+
+For a first look that finishes in minutes, shorten the sampling on the command line
+(the result is then not converged):
+
+```bash
+cufep run examples/kinase_tyk2/config.yaml --repeats 1 --production-ns 0.2 -o runs/tyk2_try
+```
+
+The A2A example needs no membrane settings: cuFEP recognises the receptor as a membrane
+protein, orients it, builds the bilayer and hydrates the pocket. `auto_report.md` in the
+output directory lists these decisions.

@@ -138,3 +138,25 @@ def _plot(rows: list[dict], path: Path, name: str) -> None:
     ax.set_xlabel("experiment (kcal/mol)"); ax.set_ylabel("calculated (kcal/mol)")
     ax.set_title(f"{name}: binding free energies"); ax.legend(frameon=False, fontsize=8)
     fig.tight_layout(); fig.savefig(path); plt.close(fig)
+
+
+def freeze_schedules(name: str, run_dir: str | Path, dest: str | Path | None = None) -> Path:
+    """Copy the lambda schedules of a finished run to ``benchmarks/<name>/schedules``.
+
+    A later run with ``lambda_schedule: {mode: fixed, file: <that directory>}`` then uses
+    exactly these states instead of searching again.
+    """
+    import shutil
+
+    run_dir = Path(run_dir)
+    dest = Path(dest) if dest else data_root() / "benchmarks" / name / "schedules"
+    n = 0
+    for sched in sorted(run_dir.glob("*/repeat_*/*/schedule.yaml")):
+        leg, repeat, ligand = sched.parent.name, sched.parent.parent.name.split("_")[1], sched.parent.parent.parent.name
+        target = dest / ligand / f"{leg}_r{repeat}.yaml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(sched, target)
+        n += 1
+    if n == 0:
+        raise FileNotFoundError(f"no schedule.yaml found under {run_dir}")
+    return dest

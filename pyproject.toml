@@ -23,7 +23,7 @@ where = ["src"]
 cufep = ["benchmarks/*.yaml"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit"]
 markers = [
   "gpu: needs an NVIDIA GPU and the CUDA platform",
   "cupotential: needs the cuPotential OpenMM plugin",

@@ -168,6 +168,19 @@ def benchmark_report(name: str, directory: str) -> None:
     click.echo(report(name, directory))
 
 
+@benchmark.command("freeze")
+@click.argument("name")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False))
+@click.option("--dest", help="Where to write the schedules (default: benchmarks/<name>/schedules).")
+def benchmark_freeze(name: str, directory: str, dest) -> None:
+    """Save the lambda schedules of a finished benchmark run for exact re-runs."""
+    from cufep.benchmarks.runner import freeze_schedules
+    try:
+        click.echo(f"schedules written to {freeze_schedules(name, directory, dest)}")
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+
+
 @main.command("check-env")
 @click.option("--device", type=int, default=0, show_default=True)
 def check_env(device: int) -> None:
