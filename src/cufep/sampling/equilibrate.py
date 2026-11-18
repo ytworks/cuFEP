@@ -1,9 +1,11 @@
 """Minimisation and plain MD of the fully interacting system before the alchemical run.
 
 Follows OpenFE's ABFE protocol: minimise, NVT, NPT, then an NPT production run whose
-frames are used for the restraint search. Everything here runs on stock OpenMM: the
-cuPotential plugin is reported to fail on unminimised coordinates, and bilayers need the
-stock semi-isotropic barostat anyway.
+frames are used for the restraint search. Minimisation, NVT and NPT run on stock OpenMM
+(the cuPotential plugin is reported to fail on unminimised coordinates). The production
+run, which is the long part and cannot be spread over GPUs, runs on the backend of the leg
+(``md_backend``); if that backend cannot run the system or fails, it is repeated on stock
+OpenMM and the fact is recorded.
 
 Time step: 4 fs with hydrogen mass repartitioning by default. If the run blows up it is
 repeated from the minimised structure at 2 fs ("auto" fallback) and the choice is recorded.
@@ -38,6 +40,8 @@ class EquilibrationSettings:
     platform: str = "CUDA"
     precision: str = "mixed"
     seed: int = 0
+    #: backend of the production run (the minimisation, NVT and NPT always use stock OpenMM)
+    md_backend: str = "openmm"
     #: heavy atoms held by harmonic position restraints during NVT/NPT (released for production)
     restrained_atoms: list[int] = field(default_factory=list)
     restraint_k: float = 1000.0            # kJ/mol/nm^2
@@ -147,6 +151,33 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
     del ctx, integ
 
     # ---- production (no position restraints), frames for the restraint search -----------
+    start = (pos, vel, bx)
+    notes: list[str] = []
+    md_backend = backend
+    if settings.md_backend != "openmm":
+        try:
+            md_backend = get_backend(settings.md_backend, precision=settings.precision, platform=settings.platform)
+            if hasattr(md_backend, "check_system"):
+                probe = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
+                probe.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in bx])
+                md_backend.check_system(probe)
+        except Exception as exc:  # noqa: BLE001 - any reason the backend cannot run this system
+            log(f"pre-equilibration MD on stock OpenMM ({settings.md_backend} cannot run it: {str(exc)[:150]})")
+            md_backend = backend
+    try:
+        return _production(system, md_backend, start, frame_atoms, settings, dt_fs, device, log, notes)
+    except (mm.OpenMMException, EquilibrationError) as exc:
+        if md_backend is backend:
+            raise
+        log(f"pre-equilibration MD failed on {settings.md_backend} ({str(exc)[:150]}); repeating it on stock OpenMM")
+        notes.append(f"the pre-equilibration MD failed on {settings.md_backend} and was repeated on stock OpenMM")
+        return _production(system, backend, start, frame_atoms, settings, dt_fs, device, log, notes)
+
+
+def _production(system, backend, start, frame_atoms, settings: EquilibrationSettings, dt_fs: float, device, log,
+                notes: list[str]) -> EquilibrationResult:
+    """The unrestrained NPT run after NVT and NPT; its frames are used for the restraint search."""
+    pos, vel, bx = start
     ctx, integ = _context(system, backend, settings, dt_fs, device, True, None, settings.seed + 200)
     _load(ctx, pos, bx, vel)
     per_frame = max(1, int(round(settings.frame_interval_ps * 1000.0 / dt_fs)))
@@ -183,7 +214,6 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
 
     advance(settings.production_ns)
     total = settings.production_ns
-    notes: list[str] = []
     if settings.max_production_ns is not None:
         while not settled() and total + 5.0 <= settings.max_production_ns + 1e-9:
             log(f"bilayer area or pocket hydration still drifting after {total:g} ns; extending by 5 ns")
@@ -208,7 +238,7 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
 def pre_equilibrate(system: mm.System, positions, box, frame_atoms: list[int],
                     settings: EquilibrationSettings | None = None, device: int | None = None,
                     log=print) -> EquilibrationResult:
-    """Minimise and equilibrate the fully interacting system on stock OpenMM."""
+    """Minimise and equilibrate the fully interacting system (see the module docstring)."""
     settings = settings or EquilibrationSettings()
     attempts = [settings.timestep_fs] if settings.timestep_fs else [4.0, 2.0]
     last: Exception | None = None

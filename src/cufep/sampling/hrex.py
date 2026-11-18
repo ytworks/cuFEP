@@ -30,6 +30,9 @@ class IterationStats:
     iteration: int
     seconds: float
     swap_fraction: float
+    #: time the slowest worker needed, and the sum over workers (seconds)
+    slowest_worker: float = 0.0
+    all_workers: float = 0.0
 
 
 def mix_replicas(u: np.ndarray, state_of_replica: np.ndarray, rng: np.random.Generator,
@@ -40,23 +43,27 @@ def mix_replicas(u: np.ndarray, state_of_replica: np.ndarray, rng: np.random.Gen
     Returns the new assignment and (accepted, attempted) counts.
     """
     k = len(state_of_replica)
-    s = np.array(state_of_replica, dtype=int)
     if k < 2:
-        return s, 0, 0
+        return np.array(state_of_replica, dtype=int), 0, 0
     n = min(k ** 3, 50000) if n_attempts is None else int(n_attempts)
     pairs = rng.integers(0, k, size=(n, 2))
     log_r = np.log(rng.random(n))
+    # Plain Python lists: this loop runs every iteration in the controller, and indexing NumPy
+    # scalars made it the largest serial cost of an iteration (40 ms for 28 replicas).
+    rows = np.asarray(u, dtype=float).tolist()
+    s = [int(x) for x in state_of_replica]
     accepted = attempted = 0
-    for (i, j), lr in zip(pairs, log_r):
+    for i, j, lr in zip(pairs[:, 0].tolist(), pairs[:, 1].tolist(), log_r.tolist()):
         if i == j:
             continue
         attempted += 1
         si, sj = s[i], s[j]
-        log_p = -(u[i, sj] + u[j, si] - u[i, si] - u[j, sj])
+        ui, uj = rows[i], rows[j]
+        log_p = -(ui[sj] + uj[si] - ui[si] - uj[sj])
         if log_p >= 0.0 or lr < log_p:
             s[i], s[j] = sj, si
             accepted += 1
-    return s, accepted, attempted
+    return np.array(s, dtype=int), accepted, attempted
 
 
 class _Process:
@@ -313,7 +320,9 @@ class ReplicaExchangeSampler:
                 self.checkpoint()
             dt = time.perf_counter() - t0
             self._iter_seconds = dt if self._iter_seconds is None else 0.9 * self._iter_seconds + 0.1 * dt
-            stats.append(IterationStats(self.iteration, dt, frac))
+            worker_seconds = [float(res.get("seconds", 0.0)) for res in results if res]
+            stats.append(IterationStats(self.iteration, dt, frac, max(worker_seconds, default=0.0),
+                                        float(sum(worker_seconds))))
             if progress_every and self.iteration % progress_every == 0:
                 self.log(f"[{self.spec.name}] iteration {self.iteration}: {self._iter_seconds:.2f} s/iteration, "
                          f"{100 * frac:.0f}% of replicas changed state")

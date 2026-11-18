@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import time
 import traceback
 from dataclasses import dataclass, field
 
@@ -175,6 +176,7 @@ class ReplicaWorker:
         from cufep.sampling.states import set_state
 
         u = self._u
+        t_start = time.perf_counter()
         arrays, nxt = self.arrays, 1 - cur
         n_steps = self.spec.steps_per_iteration if steps is None else int(steps)
         out: dict = {"recorded": None}
@@ -212,6 +214,8 @@ class ReplicaWorker:
                     rec["frame"] = np.asarray(pos[self.spec.frame_atoms], dtype=np.float32)
                     rec["box"] = np.asarray(new_box, dtype=np.float32)
                 out["recorded"] = rec
+        out["seconds"] = time.perf_counter() - t_start
+        out["n_replicas"] = len(assignments)
         return out
 
     def close(self) -> None:
