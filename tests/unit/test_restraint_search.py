@@ -46,9 +46,9 @@ def test_search_picks_rigid_ring_atoms_and_nearby_backbone(tyk2_complex):
     assert tuple(sorted(r.guest_atoms[:2])) in bonded and tuple(sorted(r.guest_atoms[1:])) in bonded
     assert 0.5 <= r.r0 <= 1.5
     assert np.radians(30) <= r.theta_a0 <= np.radians(150) and np.radians(30) <= r.theta_b0 <= np.radians(150)
-    # reference values are the trajectory means of the chosen coordinates
+    # reference values are those of the final frame, as in OpenFE
     v = r.values(frames)
-    assert r.r0 == pytest.approx(v[:, 0].mean(), abs=1e-9)
+    assert (r.r0, r.theta_a0, r.phi_b0) == pytest.approx((v[-1, 0], v[-1, 1], v[-1, 4]), abs=1e-9)
     assert found.ligand_rmsd_nm < 0.05
     # a rigid-body rattle of the ligand in its pocket does not disqualify its ring atoms
     def rattle(fr):
@@ -71,6 +71,11 @@ def test_a_ligand_that_moves_is_reported_and_the_search_goes_on(tyk2_complex):
     found = find_boresch_restraint(top, _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=shift),
                                    lig, rdmol, 298.15)
     assert found.ligand_rmsd_nm == pytest.approx(0.354, abs=0.02)
+    # the restraint holds the ligand where it is at the end, not at a place between the two positions
+    frames = _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=shift)
+    v = found.restraint.values(frames)
+    assert found.restraint.r0 == pytest.approx(v[-1, 0], abs=1e-9)
+    assert abs(found.restraint.r0 - v[:, 0].mean()) > 0.01
     assert any("moved away from its starting pose" in n and "pose_rmsd_warning_nm" in n for n in found.notes)
     quiet = find_boresch_restraint(top, _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=shift),
                                    lig, rdmol, 298.15, RestraintSearchSettings(pose_rmsd_warning_nm=0.5))

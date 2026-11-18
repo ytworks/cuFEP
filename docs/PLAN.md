@@ -67,11 +67,33 @@ TYK2 ejm_31 を旧スケジュール (28〜31 windows、production 5 ns) で 3 r
   2〜6 本、往復は 0)。solvent leg ではほぼ全ての replica が両端に達している。
 
 つまり、リガンドの有無で安定な向きが変わるポケットの側鎖が数 ns では入れ替わらず、
-開始構造の向きが結果に残る。FEP+ は結合部位の REST2 と水の GCMC でこの種の問題に対処
-している。cuFEP の対策の候補は次のとおりで、どれを採るかは未決定。
+開始構造の向きが結果に残る。
 
-1. window を減らして replica の往復を速くする (adaptive lambda scheduling で 15 windows 前後に
-   なる)。手順 9 で repeat の間の開きを測り直す。
-2. production を長くする。
+### 手順 9 で分かったこと (2026-11-19)
+
+lambda window を作り替えた後の 3 repeats (TYK2 ejm_31、production 5 ns):
+
+| lambda window | complex leg | solvent leg | dG_bind (kcal/mol) | 平均 ± SD |
+|---|---|---|---|---|
+| 旧方式 (28〜31 / 31〜34 windows) | 43.6、38.9、42.6 | 20.3、20.6、20.2 | -14.0、-9.0、-13.1 | -12.1 ± 2.7 |
+| fixed (OpenFE と同じ 30 / 14 windows) | 40.5、41.8、38.9 | 20.8、20.0、20.7 | -10.5、-12.5、-9.0 | -10.7 ± 1.8 |
+| adaptive (既定。19 / 21 windows) | 41.1、39.0、41.3 | 19.9、21.4、20.6 | -11.9、-8.4、-11.5 | -10.6 ± 1.9 |
+
+window の数と overlap を変えても repeat の間の開きは変わらない。adaptive の既定では、両 leg の
+全ての隣り合う window で overlap 0.13 以上、交換 5% 以上になっている。以前に候補に挙げた
+「window を減らして replica の往復を速くする」は、この結果から対策にならない。
+
+solvent leg にも遅い自由度がある。リガンドのアセトアミド基がピリジン環に対して反転する
+二面角で、水中では数 ns に 1 回しか入れ替わらない。solvent leg の値は、結合時の向きのまま
+だった実行で約 20.0、反転した実行で約 20.9 kcal/mol である (13 回の実行で相関 0.8。window の
+数 13〜34 には依らない)。OpenFE の参照計算の solvent leg も 3 repeats の間で 1.4 kcal/mol
+開いている。complex leg ではこの二面角は結合時の向きに固定されている。
+
+FEP+ は結合部位とリガンドの REST2 と水の GCMC でこの種の問題に対処している。OpenFE は
+3 repeats の平均と標準偏差を報告する。cuFEP の対策の候補は次のとおりで、どれを採るかは
+未決定 (オーナーが決める)。
+
+1. repeat を増やして平均する (`sampling.repeats`。OpenFE の既定は 3)。
+2. production を長くする (OpenFE は 10 ns)。
 3. 結合部位の側鎖とリガンドに REST2 を入れる (FEP+ の方式)。
 4. リガンドの無い側の window の初期構造を、リガンドを消した状態の MD から取る。

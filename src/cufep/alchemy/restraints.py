@@ -389,21 +389,23 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
                     ang = v[:, 1:3]
                     if ang.min() < flat_margin or ang.max() > math.pi - flat_margin:
                         continue
-                    means = [float(v[:, 0].mean()), float(ang[:, 0].mean()), float(ang[:, 1].mean()),
-                             circular_mean(v[:, 3]), circular_mean(v[:, 4]), circular_mean(v[:, 5])]
-                    if not all(eq_margin <= m <= math.pi - eq_margin for m in means[1:3]):
+                    # Reference values: those of the final frame, from which the alchemical run
+                    # starts (as OpenFE). A mean over the trajectory is a geometry that a ligand
+                    # which moved between two positions never has.
+                    reference = [float(x) for x in v[-1]]
+                    if not all(eq_margin <= m <= math.pi - eq_margin for m in reference[1:3]):
                         continue
                     stds = [float(v[:, 0].std()), float(ang[:, 0].std()), float(ang[:, 1].std()),
                             circular_std(v[:, 3]), circular_std(v[:, 4]), circular_std(v[:, 5])]
                     score = (stds[0] / sig_r) ** 2 + sum((x / sig_a) ** 2 for x in stds[1:])
                     if best is None or score < best[0]:
-                        best = (score, (h0, h1, h2), (g0, g1, g2), means, stds)
+                        best = (score, (h0, h1, h2), (g0, g1, g2), reference, stds)
         if best is not None:
             break          # OpenFE: the first (most central) guest anchor with a valid host anchor
     if best is None:
         raise RestraintError("no host/guest atom combination gave a stable, non-collinear restraint geometry")
-    score, host, guest, means, stds = best
-    restraint = BoreschRestraint(host, guest, means[0], means[1], means[2], means[3], means[4], means[5],
+    score, host, guest, ref, stds = best
+    restraint = BoreschRestraint(host, guest, ref[0], ref[1], ref[2], ref[3], ref[4], ref[5],
                                  s.k_r, s.k_angle, s.k_angle, s.k_angle, s.k_angle, s.k_angle)
     labels = ["r", "theta_A", "theta_B", "phi_A", "phi_B", "phi_C"]
     return RestraintSearchResult(restraint=restraint, score=float(score),
