@@ -193,6 +193,13 @@ class WindowLimits(_Section):
     solvent: int = 32
 
 
+class PrecalculationLengths(_Section):
+    """A length of the precalculation of adaptive lambda scheduling for each leg, in ps."""
+
+    complex: float = Field(ge=0.0)
+    solvent: float = Field(ge=0.0)
+
+
 class AdaptiveConfig(_Section):
     """Adaptive lambda scheduling (Midgley et al., J. Chem. Inf. Model. 2025, 65, 512)."""
 
@@ -202,10 +209,15 @@ class AdaptiveConfig(_Section):
     candidates: int = Field(default=101, ge=3)
     #: windows per leg and stage in the first iteration (the schedule never gets smaller than this)
     initial_windows: InitialWindows = Field(default_factory=InitialWindows)
-    #: MD per new window in the precalculation during which energies are recorded
-    window_ps: float = Field(default=50.0, gt=0.0)
-    #: MD in a new window before that, not recorded
-    equilibration_ps: float = Field(default=0.0, ge=0.0)
+    #: MD per new window in the precalculation during which energies are recorded: one number
+    #: for both legs, or one per leg. The solvent leg has the paper's 50 ps. A complex leg needs
+    #: longer: the pocket adapts to a partly decoupled ligand over hundreds of picoseconds, and
+    #: 50 ps read the overlap there several times too high
+    window_ps: float | PrecalculationLengths = Field(
+        default_factory=lambda: PrecalculationLengths(complex=500.0, solvent=50.0))
+    #: MD in a new window before that, not recorded; one number or one per leg
+    equilibration_ps: float | PrecalculationLengths = Field(
+        default_factory=lambda: PrecalculationLengths(complex=500.0, solvent=0.0))
     #: interval at which energies are recorded during that MD
     sample_interval_ps: float = Field(default=0.5, gt=0.0)
     #: the windows of an iteration run at the same time on the available GPUs; before the first
@@ -214,6 +226,31 @@ class AdaptiveConfig(_Section):
     #: largest number of windows per leg; reaching it ends the precalculation with a warning
     max_windows: WindowLimits = Field(default_factory=WindowLimits)
 
+    @field_validator("window_ps")
+    @classmethod
+    def _recorded_md_is_not_empty(cls, v):
+        values = (v.complex, v.solvent) if isinstance(v, PrecalculationLengths) else (v,)
+        if min(values) <= 0.0:
+            raise ValueError("window_ps must be above 0 in both legs")
+        return v
+
+    @field_validator("equilibration_ps")
+    @classmethod
+    def _equilibration_is_not_negative(cls, v):
+        if not isinstance(v, PrecalculationLengths) and v < 0.0:
+            raise ValueError("equilibration_ps must not be negative")
+        return v
+
+    def window(self, leg: str) -> float:
+        """Recorded MD per new window of the precalculation in this leg, ps."""
+        v = self.window_ps
+        return float(getattr(v, leg)) if isinstance(v, PrecalculationLengths) else float(v)
+
+    def equilibration(self, leg: str) -> float:
+        """MD before that in this leg, ps."""
+        v = self.equilibration_ps
+        return float(getattr(v, leg)) if isinstance(v, PrecalculationLengths) else float(v)
+
 
 class LambdaScheduleConfig(_Section):
     #: adaptive: the precalculation decides the number and the values of the lambda windows;
@@ -221,6 +258,9 @@ class LambdaScheduleConfig(_Section):
     mode: Literal["adaptive", "fixed"] = "adaptive"
     windows: WindowsConfig = Field(default_factory=WindowsConfig)
     adaptive: AdaptiveConfig = Field(default_factory=AdaptiveConfig)
+    #: fixed mode: MD in each window, one window after the other, that gives the replicas their
+    #: start configurations
+    fixed_walk_ps: float = Field(default=50.0, gt=0.0)
     #: a schedule.yaml written by an earlier run (or a directory of them, as written by
     #: `cufep benchmark freeze`); if given it is used as it is, whatever the mode
     file: Path | None = None

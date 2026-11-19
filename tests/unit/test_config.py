@@ -72,7 +72,11 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert len(ls.windows.complex.vanish) == 15 and ls.windows.solvent.discharge == 5
     assert len(ls.windows.solvent.vanish) == 10
     a = ls.adaptive
-    assert (a.overlap_threshold, a.candidates, a.window_ps) == (0.04, 101, 50.0)
+    assert (a.overlap_threshold, a.candidates) == (0.04, 101)
+    # the precalculation: the paper's 50 ps in the solvent leg, 500 ps after 500 ps in the complex leg
+    assert (a.window("solvent"), a.equilibration("solvent")) == (50.0, 0.0)
+    assert (a.window("complex"), a.equilibration("complex")) == (500.0, 500.0)
+    assert ls.fixed_walk_ps == 50.0
     assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
     assert a.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 9}
     assert (a.max_windows.complex, a.max_windows.solvent) == (48, 32)
@@ -88,6 +92,21 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert cfg.lambda_schedule.adaptive.overlap_threshold == 0.03
     assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 5}
     assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
+
+
+def test_precalculation_lengths_are_one_number_or_one_per_leg(tmp_path):
+    one = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"window_ps": 20, "equilibration_ps": 0}}}))
+    a = one.lambda_schedule.adaptive
+    assert (a.window("complex"), a.window("solvent"), a.equilibration("complex")) == (20.0, 20.0, 0.0)
+    per_leg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {
+        "window_ps": {"complex": 200, "solvent": 50}, "equilibration_ps": {"complex": 100, "solvent": 0}}}}))
+    a = per_leg.lambda_schedule.adaptive
+    assert (a.window("complex"), a.window("solvent")) == (200.0, 50.0)
+    assert (a.equilibration("complex"), a.equilibration("solvent")) == (100.0, 0.0)
+    for bad in ({"window_ps": 0}, {"window_ps": {"complex": 500, "solvent": 0}}, {"equilibration_ps": -1},
+                {"window_ps": {"complex": 500}}):
+        with pytest.raises(Exception):
+            load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": bad}}))
 
 
 def test_rest2_is_on_by_default_and_can_be_set(tmp_path):

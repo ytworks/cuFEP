@@ -598,12 +598,12 @@ def run_leg(job: LegJob) -> dict:
                 else:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
-                cfgs = _walk_schedule(ctx, integ, schedule, ls.adaptive.window_ps, timestep_fs)
+                cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
             else:
                 a_ = ls.adaptive
                 als = AlsSettings(overlap_threshold=a_.overlap_threshold, candidates=a_.candidates,
-                                  initial_windows=a_.initial_windows.for_leg(job.leg), window_ps=a_.window_ps,
-                                  equilibration_ps=a_.equilibration_ps, sample_interval_ps=a_.sample_interval_ps,
+                                  initial_windows=a_.initial_windows.for_leg(job.leg), window_ps=a_.window(job.leg),
+                                  equilibration_ps=a_.equilibration(job.leg), sample_interval_ps=a_.sample_interval_ps,
                                   walk_ps=a_.walk_ps,
                                   max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent,
                                   rest2_scale=rest2.scale)

@@ -51,6 +51,10 @@ precalculation が overlap を高く見積もり、window が足されないま�
 lambda scheduling が 88 leg のうち 1 leg でしか window を足さず、実質は固定スケジュールだった。
 開始 window は論文の値に戻してある。
 
+手順 6 の確認を受けたオーナーの判断 (2026-11-19): complex leg は precalculation を長くする
+(規則は論文のまま、1 window あたり equilibration 500 ps + 記録 500 ps。solvent leg は論文の
+50 ps)。REST2 は scale 1.5 のまま。この設定で同じ 5 リガンドを走らせて確かめる。
+
 ## 改訂 7 までの手順と状態
 
 | # | 作業 | 状態 |

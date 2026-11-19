@@ -85,7 +85,10 @@ def lambda_window_table(cfg) -> str:
         a = ls.adaptive
         lines += ["mode adaptive: adaptive lambda scheduling decides the windows in a precalculation.",
                   f"  a window is added where the overlap of neighbouring windows is at or below {a.overlap_threshold:g};",
-                  f"  {a.candidates} candidate lambda values per stage, {a.window_ps:g} ps of MD per new window;",
+                  f"  {a.candidates} candidate lambda values per stage; MD per new window: " + "; ".join(
+                      f"{leg} leg {a.window(leg):g} ps"
+                      + (f" after {a.equilibration(leg):g} ps of equilibration" if a.equilibration(leg) > 0 else "")
+                      for leg in ("complex", "solvent")) + ";",
                   "  start: " + "; ".join(
                       f"{leg} leg " + ", ".join(f"{k} {v}" for k, v in a.initial_windows.for_leg(leg).items())
                       for leg in ("complex", "solvent"))

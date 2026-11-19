@@ -53,7 +53,7 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
     if tier == "smoke":
         data["system"]["ligand_names"] = entry["subset"][:1]
         data["sampling"] = dict(SMOKE_SAMPLING)
-        data["lambda_schedule"] = {"adaptive": {"window_ps": 10}}
+        data["lambda_schedule"] = {"adaptive": {"window_ps": 10, "equilibration_ps": 0}}
         data["membrane"].update(equilibration_ns=0.5)
     elif tier == "subset":
         data["system"]["ligand_names"] = list(entry["subset"])

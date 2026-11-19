@@ -142,7 +142,7 @@ number of pairs.
 The rule:
 
 1. Start with a few evenly spaced windows.
-2. Run `window_ps` (50 ps) of MD in every window that has not been run yet and record the
+2. Run `window_ps` of MD (50 ps in the paper) in every window that has not been run yet and record the
    energy of every sample at all candidate lambda values.
 3. Compute the overlap matrix of the current windows. If no pair is deficient, the schedule
    is final.
@@ -186,7 +186,7 @@ Points the paper does not specify, and cuFEP's rule for each:
 | upper limit of the number of windows | `max_windows`; reaching it ends the precalculation with a warning |
 | a pair exactly at the threshold | deficient (as in the analysis scripts published with the paper) |
 | data used for the overlap matrix | the windows currently in the schedule |
-| energy samples per window | every `sample_interval_ps` (0.5 ps), 100 per window |
+| energy samples per window | every `sample_interval_ps` (0.5 ps): 100 per window in the solvent leg, 1000 in the complex leg |
 | start of a new window | last configuration of the nearest window that has been run |
 
 The windows, the threshold and one record per iteration (windows, overlaps, the chosen
@@ -199,7 +199,8 @@ its own equilibration before the production.
 | point | Cresset (the paper, and Flare) | cuFEP |
 |---|---|---|
 | when the windows are chosen | in a precalculation before the production: "Once converged, all results from the ALS are discarded, and the converged bespoke λ schedule is used in a production run" | the same. No window is added during the equilibration or the production of the replica-exchange run |
-| rule and values | threshold 0.04, 101 candidates, 50 ps per window, one window per iteration into the longest bad section | the same |
+| rule and values | threshold 0.04, 101 candidates, one window per iteration into the longest bad section | the same |
+| MD per new window of the precalculation | 50 ps | solvent leg: 50 ps. Complex leg: 500 ps recorded after 500 ps of equilibration, because the pocket adapts to a partly decoupled ligand over hundreds of picoseconds ("What was measured on TYK2") |
 | initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state. For absolute FEP, Flare states only that the schedule is adaptive "for each stage of the calculation" | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
@@ -213,36 +214,40 @@ without replica exchange. For absolute binding they were checked on TYK2 with li
 (5 ns of production per window, replica exchange).
 
 *The solvent leg.* The overlaps of the precalculation hold in the production: a pair that
-the precalculation read at 0.042 had 0.038 in the production. On five TYK2 ligands with the
-default settings the precalculation added one window to the vanish stage of every solvent
-leg, and the lowest overlap in the production was 0.033 to 0.051.
+the precalculation read at 0.042 had 0.038 in the production. On five other TYK2 ligands
+the precalculation (50 ps per window, the paper's value) added one window to the vanish stage
+of every solvent leg, and the lowest overlap in the production was 0.033 to 0.051.
 
-*The complex leg: what a 50 ps precalculation cannot see.* In the vanish stage, between
-lambda 0.62 and 0.88, side chains of the pocket (VAL981, ILE960) change rotamer once the
-ligand is mostly decoupled, within nanoseconds, and the overlap of the windows falls while
-they do. Eight precalculations of 50 to 200 ps per window read overlaps between 0.04 and
-0.18 for the pairs 0.62-0.75 and 0.75-0.88, differently each time. Two runs in which the
-precalculation read at least 0.14 everywhere and added no window had lowest overlaps of
-0.022 and 0.055 in the production. A precalculation of 1 ns per window read 0.105 and 0.015
-there, and took as long as several more windows of production.
+*The complex leg: why its precalculation is longer.* In the vanish stage, between lambda
+0.62 and 0.88, side chains of the pocket (VAL981, ILE960) change rotamer once the ligand is
+mostly decoupled, and the overlap of the windows falls while they do. That takes hundreds of
+picoseconds, and a precalculation of 50 ps per window does not see it:
 
-The same happened on five other TYK2 ligands with the default settings (one run each). The
-precalculation added no window to any of the five complex legs. In all five the lowest pair
-of the production was lambda 0.75-0.88 of the vanish stage: the precalculation had read 0.058
-to 0.129 there, the production had 0.008 to 0.031, a replica moved between the two windows in
-at most 0.5 % of the iterations, and four of the five results were `NOT RELIABLE`.
+- Eight precalculations of 50 to 200 ps per window on ejm_31 read overlaps between 0.04 and
+  0.18 for the pairs 0.62-0.75 and 0.75-0.88, differently each time.
+- On five other ligands (one run each, 50 ps per window) the precalculation added no window
+  to any complex leg. In all five the lowest pair of the production was 0.75-0.88: the
+  precalculation had read 0.058 to 0.129 there, the production had 0.008 to 0.031, a replica
+  moved between the two windows in at most 0.5 % of the iterations, and four of the five
+  results were `NOT RELIABLE`.
+- A precalculation of 500 ps per window after 500 ps of equilibration on ejm_31 read 0.105
+  and 0.015 for the two pairs, as the production does (0.084 and 0.022 in one run), added a
+  window at 0.82, and then read at least 0.10 everywhere.
 
-So in a complex leg the schedule of the precalculation can leave a pair of windows below
-the warning level, and on TYK2 it usually does. The result then says `NOT RELIABLE` and
-names the pair, and the remedy is the one of Flare: more windows in that stage
-(`lambda_schedule.adaptive.initial_windows`, or `lambda_schedule.windows` with `mode: fixed`)
-and a new run of that leg ("When a leg is flagged"). The four legs above, started anew with
-13 initial vanish windows, had lowest overlaps of 0.067 to 0.139. For orientation:
+So the rule is the paper's in both legs, and the complex leg gives each new window 500 ps of
+equilibration and 500 ps of recorded MD (`lambda_schedule.adaptive.equilibration_ps` and
+`window_ps`, one value per leg).
 
-| TYK2, complex leg | windows | lowest overlap in production |
+If a pair of windows still ends below the warning level in the production, the result says
+`NOT RELIABLE` and names the pair, and the remedy is the one of Flare: more windows in that
+stage (`lambda_schedule.adaptive.initial_windows`, or `lambda_schedule.windows` with
+`mode: fixed`) and a new run of that leg ("When a leg is flagged"). For orientation, with a
+precalculation of 50 ps per window in the complex leg:
+
+| TYK2, complex leg, 50 ps per window | windows | lowest overlap in production |
 |---|---|---|
-| start 3 / 5 / 9 (the default), ejm_31, four runs | 15 | 0.022, 0.041, 0.055, 0.070 |
-| start 3 / 5 / 9 (the default), five other ligands | 15 | 0.008-0.031 |
+| start 3 / 5 / 9, ejm_31, four runs | 15 | 0.022, 0.041, 0.055, 0.070 |
+| start 3 / 5 / 9, five other ligands | 15 | 0.008-0.031 |
 | start 3 / 5 / 13, ejm_31, four runs | 19 | 0.092-0.145 |
 | start 3 / 5 / 13, four other ligands | 19 | 0.067-0.139 |
 | fixed windows (`lambda_schedule.windows`), ejm_31, three runs | 30 | 0.119-0.127 |

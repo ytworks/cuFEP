@@ -92,13 +92,18 @@ lambda_schedule:
       solvent:
         discharge: 5
         vanish: 9
-    window_ps: 50.0
-    equilibration_ps: 0.0
+    window_ps:                    # MD per new window of the precalculation that is recorded; a number = both legs
+      complex: 500.0
+      solvent: 50.0
+    equilibration_ps:             # MD in a new window before that
+      complex: 500.0
+      solvent: 0.0
     sample_interval_ps: 0.5
     walk_ps: 5.0
     max_windows:
       complex: 48
       solvent: 32
+  fixed_walk_ps: 50.0             # fixed mode: MD in each window that gives the replicas their start configurations
   file: null                      # a schedule.yaml of an earlier run, used as it is
 sampling:
   pre_equilibration:
@@ -177,9 +182,11 @@ the schedule in fixed mode.
 | `sampling.rest2.scale` | 1.5 (447 K at 298 K) | A torsion barrier E is crossed at a rate proportional to exp(-E / (kT x scale)). With 1.5 a barrier of 6 kcal/mol, which takes nanoseconds to cross at 298 K, is crossed about 30 times as often, while an amide bond (16 kcal/mol or more) stays 18 kT high. The scale must stay below the point where amide bonds isomerise: with 2.5 (745 K, inside the 670-1000 K that FEP+ uses for its hot region) the solvent legs of five TYK2 ligands ended with a cis amide in 6 to 15 of their 21 windows, none without REST2, and three of the five binding free energies moved 4-5 kcal/mol away from experiment (`spikes/m10_amide_isomers.py`). SOMD2's own default is 1.0 (off) |
 | `sampling.rest2.region` | ligand | default hot region of FEP+ and of SOMD2. `pocket` adds the protein residues within `pocket_cutoff_nm` (0.4 nm, cuFEP's own choice) of the ligand, as FEP+ does on request |
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
-| `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. The threshold has to stay low: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. On the TYK2 complex leg a threshold of 0.20 added windows until `max_windows` (see protocol.md) |
+| `lambda_schedule.adaptive.overlap_threshold`, `candidates` | 0.04, 101 | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. The threshold has to stay low: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. On the TYK2 complex leg a threshold of 0.20 added windows until `max_windows` (see protocol.md) |
+| `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent leg: 50 ps, no equilibration; complex leg: 500 ps after 500 ps of equilibration | Solvent leg: the paper's value, set there for a ligand in solution. Complex leg: cuFEP's own values. The pocket adapts to a partly decoupled ligand over hundreds of picoseconds, and a 50 ps precalculation read the overlap of the affected windows several times too high (protocol.md, "What was measured on TYK2") |
 | `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 in both legs | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer (cuFEP's own choice for these two) |
 | `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
+| `lambda_schedule.fixed_walk_ps` | 50 ps | cuFEP's own choice: in fixed mode the replicas get their start configurations from a walk through the windows with this much MD in each |
 | `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015; the warning level of Flare and of the alchemical best-practice guide |
 | `analysis.convergence_tolerance_sigma` | 2 | Klimovich, Shirts and Mobley 2015: the free energy from the first part and from the last part of the data "should converge rapidly to within uncertainty of the final value". The guideline gives no factor; 2 standard errors is cuFEP's own choice. The same tolerance is used for BAR against MBAR |
 | `analysis.convergence_points` | 10 | cuFEP's own choice for the number of points of the forward and reverse series |
