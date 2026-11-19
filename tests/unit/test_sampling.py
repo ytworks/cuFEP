@@ -1610,11 +1610,13 @@ def test_analyze_says_what_the_run_said(tmp_path):
     assert len(shown["forward"]) == 10 and len(shown["blocks"]) == 5 and shown["notes"] == ["a note of the run"]
 
     # these samples hold no data for a tail correction: asking for one stops
-    with pytest.raises(WorkflowError, match="without the data for a correction of the dispersion tail"):
+    with pytest.raises(WorkflowError, match="they hold no data for the tail correction .they were made with "
+                                            "analysis.lrc: none. and analysis.lrc is reweight"):
         leg_result_from_samples(leg, AnalysisConfig(lrc="reweight"), run)
     other.write_text(yaml.safe_dump({**base, "analysis": {"lrc": "isotropic"}}))
     stopped = CliRunner().invoke(main, ["analyze", str(leg), "--config", str(other)])
-    assert stopped.exit_code == 1 and "cannot be analysed with analysis.lrc: isotropic" in stopped.output
+    assert stopped.exit_code == 1 and "they hold no data for the tail correction (they were made with analysis.lrc: " \
+        "none) and analysis.lrc is isotropic" in stopped.output
 
     # a result of a version that recorded no settings: the defaults, and the command says so; the
     # notes of that version's analysis are not carried over
@@ -1791,13 +1793,13 @@ def test_samples_of_unrecorded_conditions_must_be_what_the_run_asks_for(tmp_path
                     sampling={"time_per_iteration_ps": 10.0, "equilibration_ns": 0.05, "production_ns": 0.5})
     assert problems(longer, 0.5) == [
         "length of an iteration: 2.5 ps -> 10 ps",
-        "production per lambda window: the samples hold 0.1 ns and 0.5 ns are asked for (samples of unrecorded "
-        "conditions are not added to)"]
-    assert problems(same, 0.2) == ["production per lambda window: the samples hold 0.1 ns and 0.2 ns are asked for "
-                                   "(samples of unrecorded conditions are not added to)"]
+        "production per lambda window: the samples hold 40 iterations (0.1 ns) and 0.5 ns are 200 iterations "
+        "(samples of unrecorded conditions are not added to)"]
+    assert problems(same, 0.2) == ["production per lambda window: the samples hold 40 iterations (0.1 ns) and 0.2 ns "
+                                   "are 80 iterations (samples of unrecorded conditions are not added to)"]
     assert problems(config(thermodynamics={"temperature_K": 310.0}, sampling=asked), 0.1) == ["temperature: 300 K -> 310 K"]
     assert problems(config(thermodynamics={"temperature_K": 300.0}, sampling=dict(asked, equilibration_ns=0.1)), 0.1) \
-        == ["equilibration per lambda window: 0.05 ns -> 0.1 ns"]
+        == ["equilibration per lambda window: 20 iterations (0.05 ns) -> 40 (0.1 ns)"]
     assert problems(same, 0.1, lambda_states=free) == ["the lambda states"]
     # states of a version before REST2 are the same states; 2.5 ps at 3 fs are 833 steps
     assert problems(same, 0.1, held=dict(attrs, states=[{k: v for k, v in x.items() if k != "rest2_scale"}

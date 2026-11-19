@@ -98,8 +98,10 @@ def flags_of(ligand_summary: dict) -> list[str]:
     return out
 
 
-#: the columns of benchmark_report.csv
-REPORT_COLUMNS = ("ligand", "exp", "fepplus", "cufep", "cufep_std", "n_repeats", "windows_complex", "windows_solvent",
+#: the columns of benchmark_report.csv: cufep_error is the standard error of one calculation
+#: (dg_bind_error; empty for a result of before it), cufep_std the standard deviation over repeats
+REPORT_COLUMNS = ("ligand", "exp", "fepplus", "cufep", "cufep_error", "cufep_std", "n_repeats", "windows_complex",
+                  "windows_solvent",
                   "windows_added_complex", "windows_added_solvent", "lowest_overlap", "lowest_overlap_used", "flags",
                   "warnings")
 
@@ -122,7 +124,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             continue
         if "dg_bind" not in s:
             without.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": None,
-                            "cufep_std": None, "n_repeats": s.get("n_repeats", 0),
+                            "cufep_error": None, "cufep_std": None, "n_repeats": s.get("n_repeats", 0),
                             "flags": "; ".join(flags_of(s) or ["no complete repeat"]),
                             "warnings": len(s.get("warnings", []))})
             continue
@@ -130,7 +132,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         added = first.get("lambda_windows_added") or {}
         flags = flags_of(s)
         rows.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": s["dg_bind"],
-                     "cufep_std": s.get("dg_bind_std"), "n_repeats": s["n_repeats"],
+                     "cufep_error": s.get("dg_bind_error"), "cufep_std": s.get("dg_bind_std"), "n_repeats": s["n_repeats"],
                      "windows_complex": (first.get("lambda_windows") or {}).get("complex"),
                      "windows_solvent": (first.get("lambda_windows") or {}).get("solvent"),
                      "windows_added_complex": None if added.get("complex") is None else sum(added["complex"].values()),
@@ -163,11 +165,16 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         if write:
             save(text)
         return text
-    lines += ["## Per ligand (kcal/mol)", "", "| ligand | experiment | cuFEP | SD over repeats | repeats | FEP+ |",
-              "|---|---|---|---|---|---|"]
+    lines += ["## Per ligand (kcal/mol)", "",
+              "Standard error: of one calculation, from its own trajectories (- for a result of an earlier version "
+              "that did not record it). SD over repeats: only where several independent calculations were run.", "",
+              "| ligand | experiment | cuFEP | standard error | SD over repeats | repeats | FEP+ |",
+              "|---|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: r["exp"]):
         sd = "" if r["cufep_std"] is None else f"{r['cufep_std']:.2f}"
-        lines.append(f"| {r['ligand']} | {r['exp']:.2f} | {r['cufep']:.2f} | {sd} | {r['n_repeats']} | {r['fepplus']:.2f} |")
+        se = "-" if r["cufep_error"] is None else f"{r['cufep_error']:.2f}"
+        lines.append(f"| {r['ligand']} | {r['exp']:.2f} | {r['cufep']:.2f} | {se} | {sd} | {r['n_repeats']} | "
+                     f"{r['fepplus']:.2f} |")
 
     def count(value) -> str:
         return "" if value is None else str(value)
@@ -226,6 +233,20 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     return text
 
 
+def error_bar(row: dict) -> float:
+    """The error bar of a ligand in the figure: the standard deviation over repeats where several
+    were run, else the standard error of the one calculation; 0 where neither is recorded."""
+    if row.get("n_repeats", 0) > 1 and row.get("cufep_std") is not None:
+        return float(row["cufep_std"])
+    return float(row["cufep_error"]) if row.get("cufep_error") is not None else 0.0
+
+
+def error_bar_label(rows: list[dict]) -> str:
+    kinds = {"SD over repeats" if r.get("n_repeats", 0) > 1 and r.get("cufep_std") is not None
+             else "standard error" if r.get("cufep_error") is not None else "none recorded" for r in rows}
+    return "error bars: " + ", ".join(sorted(kinds))
+
+
 def _plot(rows: list[dict], path: Path, name: str) -> None:
     try:
         import matplotlib
@@ -238,8 +259,8 @@ def _plot(rows: list[dict], path: Path, name: str) -> None:
     fig, ax = plt.subplots(figsize=(5.2, 5.0), dpi=150)
     ax.plot([lo, hi], [lo, hi], color="0.4", lw=1)
     ax.fill_between([lo, hi], [lo - 1, hi - 1], [lo + 1, hi + 1], color="0.9", zorder=0)
-    ax.errorbar(exp, [r["cufep"] for r in rows], yerr=[r["cufep_std"] or 0.0 for r in rows], fmt="o",
-                color="#1f6f8b", label="cuFEP (absolute)", capsize=2)
+    ax.errorbar(exp, [r["cufep"] for r in rows], yerr=[error_bar(r) for r in rows], fmt="o",
+                color="#1f6f8b", label="cuFEP (absolute; " + error_bar_label(rows) + ")", capsize=2)
     ax.plot(exp, [r["fepplus"] for r in rows], "s", mfc="none", color="#c0392b", label="FEP+ (relative, shifted)")
     ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
     ax.set_xlabel("experiment (kcal/mol)"); ax.set_ylabel("calculated (kcal/mol)")

@@ -199,6 +199,33 @@ def test_a_summary_of_an_earlier_version_is_not_shown_as_if_it_had_passed_the_ch
     assert "not_converged" not in columns and all(key in columns for key, _name in LEG_FLAGS)
 
 
+def test_the_report_shows_the_standard_error_of_one_calculation(tmp_path):
+    """Review of PR 1: with dg_bind -11.00, dg_bind_error 0.75 and one repeat the Markdown table and the CSV of
+    the benchmark report had no error and the figure an error bar of 0."""
+    from cufep.benchmarks.runner import error_bar, error_bar_label
+
+    one = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_error": 0.75, "dg_bind_std": None, "n_repeats": 1,
+           "warnings": [], "min_overlap": 0.08}
+    older = {"ligand": "jmc_30", "dg_bind": -10.5, "dg_bind_std": None, "dg_bind_mbar_error": 0.3, "n_repeats": 1,
+             "warnings": [], "min_overlap": 0.08}
+    three = {"ligand": "ejm_31", "dg_bind": -9.0, "dg_bind_error": 0.5, "dg_bind_std": 1.2, "n_repeats": 3,
+             "warnings": [], "min_overlap": 0.08}
+    (tmp_path / "summary.json").write_text(json.dumps([one, older, three]))
+    text = report("tyk2", tmp_path)
+    assert "| ligand | experiment | cuFEP | standard error | SD over repeats | repeats | FEP+ |" in text
+    assert "| -11.00 | 0.75 |  | 1 |" in text and "| -10.50 | - |  | 1 |" in text and "| -9.00 | 0.50 | 1.20 | 3 |" in text
+    with open(tmp_path / "benchmark_report.csv") as fh:
+        rows = {row["ligand"]: row for row in csv.DictReader(fh)}
+    assert rows["jmc_23"]["cufep_error"] == "0.75" and rows["jmc_23"]["cufep_std"] == ""
+    assert rows["jmc_30"]["cufep_error"] == "" and rows["ejm_31"]["cufep_std"] == "1.2"
+    bars = {r["ligand"]: error_bar(r) for r in rows.values() for r in [dict(r, n_repeats=int(r["n_repeats"]),
+            cufep_error=float(r["cufep_error"]) if r["cufep_error"] else None,
+            cufep_std=float(r["cufep_std"]) if r["cufep_std"] else None)]}
+    assert bars == {"jmc_23": 0.75, "jmc_30": 0.0, "ejm_31": 1.2}
+    assert error_bar_label([{"n_repeats": 1, "cufep_error": 0.75}, {"n_repeats": 1, "cufep_error": None}]) == \
+        "error bars: none recorded, standard error"
+
+
 def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path):
     """Review of PR 1: a leg whose only failed check was BAR against MBAR was named in summary.json and
     nowhere a person looks: not in the flags of the report, not in summary.csv, not in the result line."""

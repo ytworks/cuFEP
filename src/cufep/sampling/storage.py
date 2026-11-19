@@ -500,6 +500,15 @@ def stored_attributes(directory: str | Path) -> tuple[int, dict]:
         return committed_counts(h5)[0], decoded_attributes(h5)
 
 
+def stored_tail_iterations(directory: str | Path) -> np.ndarray:
+    """The iterations at which the samples in ``directory`` hold a tail energy (stored ones only)."""
+    path = Path(directory) / "samples.h5"
+    if not path.exists():
+        return np.zeros(0, dtype=int)
+    with open_samples(path) as h5:
+        return np.asarray(h5["lrc_iter"][:committed_counts(h5)[1]], dtype=int)
+
+
 def read_samples(directory: str | Path) -> dict:
     """Load everything analysis needs from a leg directory: what the file holds as stored
     (:func:`committed_counts`), also while the leg is being sampled (then up to its last

@@ -210,6 +210,23 @@ def test_the_notes_on_bilayer_and_pose_of_a_leg_that_is_not_run_follow_the_level
     (legs["complex"] / "result.json").write_text(json.dumps(old))
     assert leg_result_from_samples(legs["complex"], first, old["run"])["notes"] == kept
     assert leg_result_from_samples(legs["complex"], strict, old["run"])["notes"] == again["notes"]
+    # review of PR 1: a leg run again with --reschedule keeps its earlier samples in previous_<n>/, and their
+    # analysis gave none of these notes (the files are in the leg directory above). Now the archive holds
+    # copies, and an archive of an earlier version is read with the files above it: both agree with the leg
+    from cufep.workflow import archive_leg, leg_files
+    strict_notes = leg_result_from_samples(legs["complex"], strict, old["run"])["notes"]
+    archived = archive_leg(legs["complex"])
+    assert (archived / "equil.npz").exists() and (archived / "restraint.json").exists()
+    assert (legs["complex"] / "equil.npz").exists() and (legs["complex"] / "restraint.json").exists()
+    assert leg_result_from_samples(archived, strict, old["run"])["notes"] == strict_notes
+    (archived / "equil.npz").unlink()
+    (archived / "restraint.json").unlink()
+    assert leg_files(archived) == {"equil.npz": legs["complex"] / "equil.npz",
+                                   "restraint.json": legs["complex"] / "restraint.json"}
+    assert leg_result_from_samples(archived, strict, old["run"])["notes"] == strict_notes
+    for name in ("hrex", "result.json"):
+        (archived / name).rename(legs["complex"] / name)
+
     # without the files nothing can be judged again: what the run noted stays as it is
     notes, judged = notes_of_leg_files(legs["solvent"].parent / "nothing", strict, {})
     assert notes == [] and judged == ()

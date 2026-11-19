@@ -270,6 +270,25 @@ def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
     return out
 
 
+def iterations_for(ns: float, iteration_ps: float, least: int) -> int:
+    """The number of iterations a run makes for ``ns`` per lambda window with iterations of
+    ``iteration_ps`` (the length the configuration asks for): the one rule of :func:`run_leg`."""
+    return max(int(least), int(round(float(ns) * 1000.0 / float(iteration_ps))))
+
+
+def planned_iterations(iteration_ps: float, timestep_fs: float, equilibration_ns: float, production_ns: float):
+    """What a run of a leg plans: MD steps per iteration (whole steps of ``timestep_fs``), the
+    length of an iteration that gives (2.5 ps at 3 fs are 833 steps, 2.499 ps), and the numbers of
+    equilibration and production iterations. Used by the run of a leg and by every check of
+    stored samples against a run, so that the two cannot round differently."""
+    from types import SimpleNamespace
+
+    steps = max(1, int(round(float(iteration_ps) * 1000.0 / float(timestep_fs))))
+    return SimpleNamespace(steps_per_iteration=steps, iteration_ps=steps * float(timestep_fs) * 1e-3,
+                           n_equilibration=iterations_for(equilibration_ns, iteration_ps, 1),
+                           n_production=iterations_for(production_ns, iteration_ps, 4))
+
+
 def leg_seed(cfg: Config, repeat: int, leg: str) -> int:
     """The seed of a leg: every repeat and each of its two legs has its own."""
     return int(cfg.sampling.seed) + 7919 * int(repeat) + (0 if leg == "complex" else 104729)
@@ -343,7 +362,7 @@ def leg_spec(cfg: Config, built, states: list[dict], barostat: str, timestep_fs:
         precision=_precision(cfg, backend_name), platform=cfg.backend.platform,
         temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
         barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
-        steps_per_iteration=max(1, int(round(iteration_ps * 1000.0 / timestep_fs))), seed=seed,
+        steps_per_iteration=planned_iterations(iteration_ps, timestep_fs, 0.0, 0.0).steps_per_iteration, seed=seed,
         cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=built.tail, settings=samples_settings(cfg),
         box_safety=1.3 if barostat == "membrane" else None, **more)
 
@@ -736,6 +755,22 @@ def backend_fallback_refusal(exc: BaseException, backend_name: str, fallback: st
     return None
 
 
+#: the files of a leg that its samples were made from and that a new set of lambda windows uses again
+LEG_INPUT_FILES = ("equil.npz", "restraint.json")
+
+
+def leg_files(sample_dir: Path) -> dict[str, Path | None]:
+    """The pre-equilibration and the restraint (:data:`LEG_INPUT_FILES`) that belong to the samples
+    of ``sample_dir``: a leg directory, or a ``previous_<n>/`` in it. Such an archive holds copies
+    of them since this version; one of an earlier version has them in the leg directory above it,
+    which the leg used again. None for a file that is not there."""
+    out = {}
+    for name in LEG_INPUT_FILES:
+        candidates = [sample_dir / name] + ([sample_dir.parent / name] if sample_dir.name.startswith("previous_") else [])
+        out[name] = next((f for f in candidates if f.exists()), None)
+    return out
+
+
 def archive_leg(leg_dir: Path) -> Path | None:
     """Move the lambda windows, samples and result of a leg into ``previous_<n>/`` in its directory.
 
@@ -753,6 +788,11 @@ def archive_leg(leg_dir: Path) -> Path | None:
     dest.mkdir()
     for f in present:
         f.rename(dest / f.name)
+    # the files these samples were made from stay with the leg, which uses them again; the archive
+    # gets copies, so that it can be analysed as it is (leg_files)
+    for name in LEG_INPUT_FILES:
+        if (leg_dir / name).exists():
+            shutil.copy2(leg_dir / name, dest / name)
     # a leg that is being run again has had its result set aside by begin_leg: in the archive
     # it is the result of those windows and samples again
     if (dest / "result.previous.json").exists() and not (dest / "result.json").exists():
@@ -1105,9 +1145,8 @@ def run_leg(job: LegJob) -> dict:
     stages = list(STAGES_COMPLEX if is_complex else STAGES_SOLVENT)
     pressure = cfg.thermodynamics.pressure_bar
     iteration_ps = cfg.sampling.time_per_iteration_ps
-    steps_per_iteration = max(1, int(round(iteration_ps * 1000.0 / timestep_fs)))
-    n_equil = max(1, int(round(cfg.sampling.equilibration(job.leg) * 1000.0 / iteration_ps)))
-    n_prod = max(4, int(round(job.production_ns * 1000.0 / iteration_ps)))
+    plan = planned_iterations(iteration_ps, timestep_fs, cfg.sampling.equilibration(job.leg), job.production_ns)
+    steps_per_iteration, n_equil, n_prod = plan.steps_per_iteration, plan.n_equilibration, plan.n_production
     ckpt_stride = max(1, int(round(cfg.sampling.checkpoint_interval_ps / iteration_ps)))
 
     frame_atoms = prep["solute"] if is_complex else prep["ligand"]
@@ -1428,7 +1467,8 @@ def analysis_record(cfg) -> dict:
 
     settings = analysis_settings(cfg)
     a = settings.analysis
-    return {"version": ANALYSIS_VERSION, "lrc": a.lrc, "min_overlap": float(a.min_overlap),
+    return {"version": ANALYSIS_VERSION, "lrc": a.lrc, "lrc_cutoff_nm": float(a.lrc_cutoff_nm),
+            "min_overlap": float(a.min_overlap),
             "min_effective_samples": float(a.min_effective_samples), "halves_tolerance_kT": float(a.halves_tolerance_kT),
             "estimators_tolerance_kcal_mol": float(a.estimators_tolerance_kcal_mol),
             "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
@@ -1438,14 +1478,50 @@ def analysis_record(cfg) -> dict:
             "pose_rmsd_warning_nm": float(settings.restraints.pose_rmsd_warning_nm)}
 
 
-def analysis_settings_of(record: dict | None):
+def recorded_tail_radius(attrs: dict) -> float | None:
+    """The outer radius (nm) to which the samples with these attributes recorded their tail
+    energies, or None if they do not say."""
+    conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
+    tail = conditions.get("lrc") if isinstance(conditions.get("lrc"), dict) else {}
+    radius = tail.get("long_cutoff_nm")
+    return None if radius is None else float(radius)
+
+
+def analysis_problems(attrs: dict, analysis) -> list[str]:
+    """What the samples with these attributes lack for the analysis that ``analysis`` asks for
+    (empty if nothing): the data of the tail correction, and for the correction by reweighting
+    the outer radius the tail energies were recorded to, which cannot be changed afterwards.
+
+    The one check of this for every way to a result: :func:`leg_result_from_samples` (the run of
+    a leg, the refresh of a leg that a run does not sample, ``cufep analyze`` with and without
+    ``--config``) and the check before a run of the finished legs it will be combined with.
+    """
+    from cufep.sampling.storage import _same
+
+    a = getattr(analysis, "analysis", analysis)
+    problems = []
+    if a.lrc in ("reweight", "isotropic") and "lrc_s6" not in attrs:
+        problems.append(f"they hold no data for the tail correction (they were made with analysis.lrc: none) and "
+                        f"analysis.lrc is {a.lrc}")
+    radius = recorded_tail_radius(attrs)
+    if a.lrc == "reweight" and radius is not None and not _same(radius, float(a.lrc_cutoff_nm)):
+        problems.append(f"their tail energies were recorded to an outer radius of {radius:g} nm and "
+                        f"analysis.lrc_cutoff_nm is {float(a.lrc_cutoff_nm):g} (the radius cannot be changed after the "
+                        "sampling)")
+    return problems
+
+
+def analysis_settings_of(record: dict | None, attrs: dict | None = None):
     """The settings that a stored :func:`analysis_record` describes (:func:`analysis_settings`;
-    defaults for what it lacks)."""
+    defaults for what it lacks, except the outer radius of the tail correction, which a record of
+    an earlier version lacks and the samples ``attrs`` hold)."""
     from types import SimpleNamespace
 
     from cufep.config.schema import AnalysisConfig, MembraneConfig, RestraintConfig
 
-    record = record or {}
+    record = dict(record or {})
+    if "lrc_cutoff_nm" not in record and attrs is not None and recorded_tail_radius(attrs) is not None:
+        record["lrc_cutoff_nm"] = recorded_tail_radius(attrs)
     membrane, restraints = MembraneConfig(), RestraintConfig()
     return SimpleNamespace(
         analysis=AnalysisConfig(**{key: value for key, value in record.items() if key in AnalysisConfig.model_fields}),
@@ -1470,14 +1546,15 @@ def notes_of_leg_files(leg_dir: Path, settings, conditions: dict) -> tuple[list[
 
     notes: list[str] = []
     judged: list[str] = []
-    equil_file, restraint_file = leg_dir / "equil.npz", leg_dir / "restraint.json"
-    if equil_file.exists():
+    files = leg_files(leg_dir)
+    equil_file, restraint_file = files["equil.npz"], files["restraint.json"]
+    if equil_file is not None:
         eq = np.load(equil_file)
         barostat = conditions.get("barostat")
         in_membrane = barostat == "membrane" if barostat is not None else bool(equil_in_membrane(eq))
         notes += equil_notes(eq, settings, in_membrane)
         judged.append(BILAYER_NOTE)
-    stored = _read_json(restraint_file) if restraint_file.exists() else None
+    stored = _read_json(restraint_file) if restraint_file is not None else None
     if stored:
         notes += [n for n in restraint_notes(stored, settings) if n not in notes]
         judged.append(POSE_NOTE)
@@ -1508,10 +1585,7 @@ def restraint_release_of(leg_dir: Path, attrs: dict, temperature_K: float) -> tu
 
     states = attrs.get("states") if isinstance(attrs.get("states"), list) else []
     restrained = any(float(state.get("lambda_restraints", 1.0)) < 1.0 for state in states)
-    # the directory of an earlier set of windows of the leg (previous_<n>/) has it one level up
-    candidates = [leg_dir / "restraint.json"] + ([leg_dir.parent / "restraint.json"]
-                                                 if leg_dir.name.startswith("previous_") else [])
-    found = next((f for f in candidates if f.exists()), None)
+    found = leg_files(leg_dir)["restraint.json"]
     if found is None:
         if restrained:
             raise WorkflowError(f"the samples in {leg_dir} are of a leg with a restrained ligand, but its "
@@ -1550,21 +1624,29 @@ def unrecorded_samples_problems(attrs: dict, n_stored: int, leg_dir: Path, cfg: 
     if "iteration_ps" not in attrs:
         return problems + ["the file does not record the length of an iteration"]
     stored_ps = float(attrs["iteration_ps"])
-    # compared in whole steps: 2.5 ps at 3 fs are 833 steps, 2.499 ps
-    asked_ps = max(1, int(round(cfg.sampling.time_per_iteration_ps * 1000.0 / timestep_fs))) * timestep_fs * 1e-3
-    if abs(stored_ps - asked_ps) > 1e-6:
-        problems.append(f"length of an iteration: {stored_ps:g} ps -> {asked_ps:g} ps")
+    # the run's own plan (planned_iterations): iterations of whole steps, and numbers of iterations
+    plan = planned_iterations(cfg.sampling.time_per_iteration_ps, timestep_fs, cfg.sampling.equilibration(leg),
+                              production_ns)
+    same_length = abs(stored_ps - plan.iteration_ps) <= 1e-6
+    if not same_length:
+        problems.append(f"length of an iteration: {stored_ps:g} ps -> {plan.iteration_ps:g} ps")
     boundary = equilibration_boundary(attrs, leg_dir)
     if boundary is None:
         return problems + ["the file does not record where its production begins (the run that wrote it did not "
                            "finish); cufep analyze --equilibration-ns reads such samples"]
-    stored_equil, asked_equil = boundary * stored_ps / 1000.0, cfg.sampling.equilibration(leg)
-    if abs(boundary - max(1, int(round(asked_equil * 1000.0 / stored_ps)))) > 0:
-        problems.append(f"equilibration per lambda window: {stored_equil:g} ns -> {asked_equil:g} ns")
-    held = max(0, n_stored - boundary) * stored_ps / 1000.0
-    if held < production_ns - 1e-9:
-        problems.append(f"production per lambda window: the samples hold {held:g} ns and {production_ns:g} ns are asked "
-                        "for (samples of unrecorded conditions are not added to)")
+    # counted in the iterations of the samples: those of this run where the length is the same (the
+    # run's own plan), else iterations of their own length by the same rule
+    asked_equil = cfg.sampling.equilibration(leg)
+    n_equil = plan.n_equilibration if same_length else iterations_for(asked_equil, stored_ps, 1)
+    n_prod = plan.n_production if same_length else iterations_for(production_ns, stored_ps, 4)
+    if boundary != n_equil:
+        problems.append(f"equilibration per lambda window: {boundary} iterations ({boundary * stored_ps / 1000.0:g} ns) "
+                        f"-> {n_equil} ({asked_equil:g} ns)")
+    held = max(0, n_stored - boundary)
+    if held < n_prod:
+        problems.append(f"production per lambda window: the samples hold {held} iterations ({held * stored_ps / 1000.0:g} "
+                        f"ns) and {production_ns:g} ns are {n_prod} iterations (samples of unrecorded conditions are "
+                        "not added to)")
     return problems
 
 
@@ -1624,9 +1706,9 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         if n_equilibration is None:
             raise WorkflowError(f"the samples in {leg_dir} are of a run that did not finish and do not record where "
                                 "its production begins")
-    if a.lrc != "none" and "lrc_s6" not in attrs:
-        raise WorkflowError(f"the samples in {leg_dir} were made without the data for a correction of the dispersion "
-                            f"tail (analysis.lrc: none) and cannot be analysed with analysis.lrc: {a.lrc}")
+    problems = analysis_problems(attrs, settings)
+    if problems:
+        raise WorkflowError(f"the samples in {leg_dir} cannot be analysed with these settings: {'; '.join(problems)}")
     if schedule is None and (leg_dir / "schedule.yaml").exists():
         schedule = Schedule.load(leg_dir / "schedule.yaml")
     try:
@@ -1861,13 +1943,16 @@ def analysis_differences(result: dict, analysis) -> str:
 
 def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: int, cfg: Config) -> None:
     """Before a leg is sampled: the finished legs it will be combined with and that this run does
-    not sample must have been made under the temperature and pressure this run uses, and, with
-    the tail correction by reweighting, with the outer radius this run uses.
+    not sample must have been made under the temperature and pressure this run uses, and their
+    samples must hold what the analysis of this run needs (:func:`analysis_problems`; with the
+    correction by reweighting also tail energies in their production), since they are analysed
+    with it before they are combined.
 
     ``selected`` holds the (repeat, leg) of this ligand that the run samples. Raises WorkflowError
     with what differs, before any time is spent on a leg whose result could not be used.
     """
-    from cufep.sampling.storage import _same, stored_conditions
+    from cufep.analysis.mbar import MIN_INDEPENDENT_SAMPLES
+    from cufep.sampling.storage import _same, equilibration_boundary, stored_attributes, stored_tail_iterations
 
     asked = {"temperature_K": float(cfg.thermodynamics.temperature_K), "pressure_bar": float(cfg.thermodynamics.pressure_bar)}
     names = dict(CYCLE_CONDITIONS)
@@ -1884,17 +1969,21 @@ def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: 
             for key, value in asked.items():
                 if data.get(key) is not None and not _same(data[key], value):
                     differing.append(f"{names[key]}: {where} was made at {data[key]}; this run uses {value}")
-            if cfg.analysis.lrc == "reweight":
-                # what its samples hold, whatever its result says
-                tail = (stored_conditions(leg_dir / "hrex")[1] or {}).get("lrc") or {}
-                radius = tail.get("long_cutoff_nm")
-                if radius is not None and not _same(float(radius), float(cfg.analysis.lrc_cutoff_nm)):
-                    differing.append(f"{names['lrc_long_cutoff_nm']}: {where} recorded its tail energies to "
-                                     f"{float(radius):g}; this run uses {float(cfg.analysis.lrc_cutoff_nm):g}")
+            # what its samples hold, whatever its result says
+            n_stored, attrs = stored_attributes(leg_dir / "hrex")
+            if n_stored == 0:
+                continue                             # combined as it is and named (old_analysis)
+            differing += [f"{where} has samples that {problem}" for problem in analysis_problems(attrs, cfg)]
+            boundary = equilibration_boundary(attrs, leg_dir)
+            if cfg.analysis.lrc == "reweight" and "lrc_s6" in attrs and boundary is not None:
+                in_production = int(np.sum(stored_tail_iterations(leg_dir / "hrex") >= boundary))
+                if in_production < MIN_INDEPENDENT_SAMPLES:
+                    differing.append(f"{where} has {in_production} tail energies in its production; "
+                                     f"{MIN_INDEPENDENT_SAMPLES} are needed for the tail correction")
     if differing and selected:
         raise WorkflowError(
             f"{ligand_name}: the legs this run would sample could not be combined with the legs the ligand already "
-            f"has ({'; '.join(differing)}). Nothing was run. Use the conditions of the finished legs, or run all "
+            f"has ({'; '.join(differing)}). Nothing was run. Use the settings of the finished legs, or run all "
             "legs of the ligand under the new ones in a new output.dir.")
 
 

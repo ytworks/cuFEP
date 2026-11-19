@@ -326,8 +326,10 @@ def test_a_leg_that_starts_anew_keeps_what_it_had(tmp_path):
         (leg / name).write_text(name)
     first = archive_leg(leg)
     assert first == leg / "previous_1"
-    assert sorted(f.name for f in first.iterdir()) == ["hrex", "result.json", "schedule.yaml", "start_configs.npz",
-                                                       "timing.json"]
+    assert sorted(f.name for f in first.iterdir()) == ["equil.npz", "hrex", "restraint.json", "result.json",
+                                                       "schedule.yaml", "start_configs.npz", "timing.json"]
+    # the pre-equilibration and the restraint stay with the leg; the archive has copies of them
+    assert (first / "equil.npz").read_text() == "equil.npz" == (leg / "equil.npz").read_text()
     assert (first / "hrex" / "samples.h5").read_text() == "hrex/samples.h5"
     assert sorted(f.name for f in leg.iterdir()) == ["equil.npz", "log.txt", "previous_1", "restraint.json"]
     assert archive_leg(leg) is None                                   # only what must stay is left
@@ -456,11 +458,14 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     from cufep.sampling.storage import LegStorage
     storage = LegStorage(tmp_path / "f" / "repeat_0" / "solvent" / "hrex", 2, 2)
     storage.check_conditions({"temperature_K": 298.15, "lrc": {"cutoff_nm": 0.9, "long_cutoff_nm": 1.0}})
-    storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+    storage.set_meta(lrc_s6=1.0, lrc_s12=1.0, lrc_cutoff_nm=0.9, n_equilibration_iterations=0)
+    for it in range(8):
+        storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+        storage.append_record(it, {"lrc_du": -1.0})
     storage.close()
-    with pytest.raises(WorkflowError, match="outer radius of the tail correction .nm.: the solvent leg of repeat 0, "
-                                            "which is finished and not part of this run, recorded its tail energies "
-                                            "to 1; this run uses 2.*Nothing was run"):
+    with pytest.raises(WorkflowError, match="the solvent leg of repeat 0, which is finished and not part of this run, "
+                                            "has samples that their tail energies were recorded to an outer radius of "
+                                            "1 nm and analysis.lrc_cutoff_nm is 2.*Nothing was run"):
         check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))
     shorter = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc_cutoff_nm": 1.0}})
     check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, shorter)                         # the same radius
@@ -813,9 +818,10 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
     with h5py.File(hrex / "samples.h5", "a") as h5:
         del h5.attrs["conditions"]
         h5.attrs["temperature_K"], h5.attrs["iteration_ps"], h5.attrs["n_equilibration_iterations"] = 298.15, 2.5, 2
-    with pytest.raises(ConditionsError, match="did not record the conditions.*equilibration per lambda window: 0.005 ns "
-                                              "-> 1 ns; production per lambda window: the samples hold 0.01 ns and "
-                                              "10 ns are asked for.*--reschedule"):
+    with pytest.raises(ConditionsError, match="did not record the conditions.*equilibration per lambda window: 2 "
+                                              "iterations .0.005 ns. -> 400 .1 ns.; production per lambda window: the "
+                                              "samples hold 4 iterations .0.01 ns. and 10 ns are 4000 iterations.*"
+                                              "--reschedule"):
         check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
     short = {"equilibration_ns": 0.005, "production_ns": 0.01}
     check_leg_reuse(config(sampling=short), lig_dir, "solvent", 0, prep_info, 0.01)          # what they hold
@@ -937,6 +943,199 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
                                               "the lambda schedule .schedule.yaml. of this leg is not there. Nothing "
                                               "was changed"):
         check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
+
+
+def tail_leg(leg_dir, lrc="reweight", radius=2.0, tail_in_production=True, n=120, n_equilibration=20):
+    """A leg directory as a finished run leaves it, with tail data recorded to ``radius`` (or none)."""
+    from cufep.sampling.storage import LegStorage
+
+    rng = np.random.default_rng(4)
+    storage = LegStorage(leg_dir / "hrex", 3, 3)
+    conditions = {"temperature_K": 298.15, "pressure_bar": 1.0, "barostat": "isotropic",
+                  "lrc": None if lrc == "none" else {"cutoff_nm": 0.9, "long_cutoff_nm": radius, "n_ligand": 3,
+                                                    "n_environment": 30, "s6": 1.0, "s12": 1.0, "sha256": "x"}}
+    storage.check_conditions(conditions)
+    meta = {"temperature_K": 298.15, "iteration_ps": 2.5, "backend": "openmm", "leg": leg_dir.name}
+    if lrc != "none":
+        meta.update(lrc_s6=1.0, lrc_s12=1.0, lrc_cutoff_nm=0.9)
+    storage.set_meta(**meta)
+    storage.set_plan(n_equilibration, n)
+    for it in range(n):
+        x = rng.normal(size=3)
+        storage.append(np.repeat((0.5 * x ** 2)[:, None], 3, axis=1), np.arange(3), np.ones(3))
+        if lrc != "none" and it % 4 == 0 and (tail_in_production or it < n_equilibration):
+            storage.append_record(it, {"lrc_du": -2.0 + 0.1 * rng.normal()})
+    storage.close()
+
+
+def test_what_an_analysis_needs_from_the_samples_is_checked_in_one_place_before_any_sampling(tmp_path):
+    """Review of PR 1: (1) cufep analyze --config with analysis.lrc_cutoff_nm 3.0 on samples whose tail
+    energies were recorded to 2.0 nm gave the same result as 2.0, without a word and without the radius;
+    (2) a complex leg finished with analysis.lrc none, and the solvent leg alone was run with reweight: the
+    check before the run passed, and the two legs could not be combined after the solvent leg had been
+    sampled in full."""
+    import yaml
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+    from cufep.config.schema import AnalysisConfig, Config
+    from cufep.workflow import WorkflowError, analysis_problems, analysis_record, analysis_settings_of, \
+        check_partner_legs, leg_result_from_samples
+    from cufep.sampling.storage import stored_attributes
+
+    def config(**analysis):
+        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": analysis})
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    tail_leg(leg, radius=2.0)
+    attrs = stored_attributes(leg / "hrex")[1]
+    assert analysis_problems(attrs, config()) == [] and analysis_problems(attrs, config(lrc="isotropic")) == []
+    assert analysis_problems(attrs, config(lrc_cutoff_nm=3.0)) == [
+        "their tail energies were recorded to an outer radius of 2 nm and analysis.lrc_cutoff_nm is 3 (the radius "
+        "cannot be changed after the sampling)"]
+    assert analysis_problems(attrs, config(lrc="none", lrc_cutoff_nm=3.0)) == []       # no correction, no radius
+    # cufep analyze: the radius that was used is printed; another one given explicitly is refused
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["lrc_long_cutoff_nm"] == 2.0 and shown["lrc_cutoff_nm"] == 0.9 and shown["lrc_method"] == "reweight"
+    for radius, refused in ((2.0, False), (3.0, True)):
+        path = tmp_path / f"r{radius}.yaml"
+        path.write_text(yaml.safe_dump({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                        "analysis": {"lrc_cutoff_nm": radius}}))
+        out = CliRunner().invoke(main, ["analyze", str(leg), "--config", str(path)])
+        assert (out.exit_code == 1) is refused
+        if refused:
+            assert "recorded to an outer radius of 2 nm and analysis.lrc_cutoff_nm is 3" in out.output
+        else:
+            assert json.loads(out.output)["lrc_long_cutoff_nm"] == 2.0
+    # the record of the settings holds the radius; one of an earlier version takes it from the samples
+    record = analysis_record(config())
+    assert record["lrc_cutoff_nm"] == 2.0
+    del record["lrc_cutoff_nm"]
+    leg15 = tmp_path / "lig15" / "repeat_0" / "solvent"
+    tail_leg(leg15, radius=1.5)
+    attrs15 = stored_attributes(leg15 / "hrex")[1]
+    assert analysis_settings_of(record, attrs15).analysis.lrc_cutoff_nm == 1.5
+    assert analysis_settings_of(record).analysis.lrc_cutoff_nm == 2.0
+    # samples without tail data refuse an analysis with a correction, wherever it is made
+    none = tmp_path / "lig" / "repeat_0" / "complex"
+    tail_leg(none, lrc="none")
+    with pytest.raises(WorkflowError, match="they hold no data for the tail correction .they were made with "
+                                            "analysis.lrc: none. and analysis.lrc is reweight"):
+        leg_result_from_samples(none, AnalysisConfig(), {"leg": "complex"})
+    (none / "result.json").write_text(json.dumps({"leg": "complex", "temperature_K": 298.15, "pressure_bar": 1.0,
+                                                  "delta_g_decouple": 1.0, "delta_g_mbar_error": 0.1}))
+    with pytest.raises(WorkflowError, match="the complex leg of repeat 0, which is finished and not part of this run, "
+                                            "has samples that they hold no data for the tail correction.*Nothing was run"):
+        check_partner_legs(tmp_path / "lig", "lig", {(0, "solvent")}, 1, config())
+    check_partner_legs(tmp_path / "lig", "lig", {(0, "solvent")}, 1, config(lrc="none"))   # what they were made with
+    # a finished leg whose tail energies were all recorded in its equilibration
+    early = tmp_path / "early" / "repeat_0" / "complex"
+    tail_leg(early, tail_in_production=False)
+    (early / "result.json").write_text(json.dumps({"leg": "complex", "temperature_K": 298.15, "pressure_bar": 1.0,
+                                                   "delta_g_decouple": 1.0, "delta_g_mbar_error": 0.1}))
+    with pytest.raises(WorkflowError, match="has 0 tail energies in its production; 4 are needed"):
+        check_partner_legs(tmp_path / "early", "lig", {(0, "solvent")}, 1, config())
+
+
+def test_the_run_and_the_check_of_stored_samples_count_iterations_by_one_rule():
+    """Review of PR 1: with 2.5 ps per iteration and 3 fs steps a run makes 833 steps per iteration (2.499 ps)
+    and 4000 iterations for 10 ns; read again with the same settings, its samples were refused as 0.004 ns
+    too short."""
+    from cufep.config.schema import Config
+    from cufep.workflow import iterations_for, planned_iterations, unrecorded_samples_problems
+
+    plan = planned_iterations(2.5, 3.0, 1.0, 10.0)
+    assert plan.steps_per_iteration == 833 and plan.iteration_ps == pytest.approx(2.499)
+    assert (plan.n_equilibration, plan.n_production) == (400, 4000)
+    assert iterations_for(0.0, 2.5, 1) == 1 and iterations_for(0.001, 2.5, 4) == 4
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                 "dynamics": {"timestep_fs": 3.0}, "sampling": {"equilibration_ns": 1.0}})
+    attrs = {"temperature_K": 298.15, "iteration_ps": 833 * 3.0e-3, "n_equilibration_iterations": 400,
+             "n_planned_iterations": 4400}
+    from pathlib import Path
+    assert unrecorded_samples_problems(attrs, 4400, Path("leg"), cfg, "solvent", 10.0, None, 3.0) == []
+    short = unrecorded_samples_problems(attrs, 4399, Path("leg"), cfg, "solvent", 10.0, None, 3.0)
+    assert short == ["production per lambda window: the samples hold 3999 iterations (9.9935 ns) and 10 ns are 4000 "
+                     "iterations (samples of unrecorded conditions are not added to)"]
+    # an equilibration of 10 ns at 3 fs: 4000 iterations by the run's rule (4002 by the length an iteration had)
+    long = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                  "dynamics": {"timestep_fs": 3.0}, "sampling": {"equilibration_ns": 10.0}})
+    attrs = dict(attrs, n_equilibration_iterations=4000, n_planned_iterations=8000)
+    assert unrecorded_samples_problems(attrs, 8000, Path("leg"), long, "solvent", 10.0, None, 3.0) == []
+
+
+@pytest.mark.parametrize("state", ["as made", "other radius", "no tail data", "tail only in equilibration"])
+def test_one_state_of_a_leg_gives_one_answer_through_every_way_in(tmp_path, state):
+    """The same leg through every way to its result: the analysis of a run (leg_result_from_samples), the
+    refresh of a leg that a run does not sample, the check before a run of a finished leg it does not
+    sample, cufep analyze of the leg directory, of its hrex directory and of an archived copy, and cufep
+    analyze --config. Each gives the same free energy, or each refuses for the same reason."""
+    import shutil
+
+    import yaml
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+    from cufep.config.schema import Config
+    from cufep.workflow import (WorkflowError, analysis_record, check_partner_legs, leg_result_from_samples,
+                                refresh_leg_result)
+
+    lig = tmp_path / "lig"
+    leg = lig / "repeat_0" / "complex"
+    tail_leg(leg, lrc="none" if state == "no tail data" else "reweight",
+             tail_in_production=state != "tail only in equilibration")
+    data = {"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+            "analysis": {"lrc_cutoff_nm": 3.0 if state == "other radius" else 2.0}}
+    cfg = Config.model_validate(data)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(data))
+    reason = {"as made": None, "other radius": "recorded to an outer radius of 2 nm and analysis.lrc_cutoff_nm is 3",
+              "no tail data": "they hold no data for the tail correction",
+              "tail only in equilibration": "tail energies"}[state]
+    run = {"ligand": "lig", "leg": "complex", "repeat": 0, "backend": "openmm", "notes": []}
+    # the record of the result is of another version, so that the refresh has to analyse the samples
+    (leg / "result.json").write_text(json.dumps({"leg": "complex", "temperature_K": 298.15, "pressure_bar": 1.0,
+                                                 "delta_g_decouple": 0.0, "delta_g_mbar_error": 0.1, "run": run,
+                                                 "analysis_record": dict(analysis_record(cfg), version=1)}))
+    archive = leg / "previous_1"
+    archive.mkdir()
+    shutil.copytree(leg / "hrex", archive / "hrex")
+    shutil.copy(leg / "result.json", archive / "result.json")
+
+    answers = {}
+    try:
+        answers["the run's analysis"] = leg_result_from_samples(leg, cfg, run)["delta_g_decouple"]
+    except WorkflowError as exc:
+        answers["the run's analysis"] = str(exc)
+    log = []
+    outcome = refresh_leg_result(leg, cfg, log.append)
+    answers["the refresh"] = json.loads((leg / "result.json").read_text())["delta_g_decouple"] \
+        if outcome == "reanalysed" else log[-1]
+    try:
+        check_partner_legs(lig, "lig", {(0, "solvent")}, 1, cfg)
+        answers["the check before a run"] = "accepted"
+    except WorkflowError as exc:
+        answers["the check before a run"] = str(exc)
+    for name, args in (("analyze", [str(leg)]), ("analyze of hrex", [str(leg / "hrex")]),
+                       ("analyze of the archive", [str(archive)]),
+                       ("analyze --config", [str(leg), "--config", str(config_file)])):
+        if name != "analyze --config":                 # the settings of the leg's result are those of cfg
+            pass
+        out = CliRunner().invoke(main, ["analyze", *args] if name != "analyze --config" else ["analyze", *args])
+        answers[name] = json.loads(out.output)["delta_g_decouple"] if out.exit_code == 0 else out.output
+
+    if reason is None:
+        values = {name: value for name, value in answers.items() if name != "the check before a run"}
+        assert all(isinstance(value, float) for value in values.values()), answers
+        assert max(values.values()) - min(values.values()) < 1e-9, answers
+        assert answers["the check before a run"] == "accepted"
+    elif state == "tail only in equilibration":
+        # the samples say what they lack only once their production is read: the check before a run
+        # reads the iterations of the tail energies, every analysis reads the production
+        assert all("tail energies" in str(value) and ("0 tail" in str(value) or "production" in str(value))
+                   for value in answers.values()), answers
+    else:
+        assert all(isinstance(value, str) and reason in value for value in answers.values()), answers
 
 
 def test_a_run_can_be_restricted_to_ligands_and_legs():

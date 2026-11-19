@@ -196,8 +196,8 @@ def analyze(directory: str, config, equilibration_ns) -> None:
     from cufep.analysis.mbar import NoProduction
     from cufep.config.schema import AnalysisConfig
     from cufep.sampling.storage import equilibration_boundary, read_samples
-    from cufep.workflow import (WorkflowError, analysis_settings, analysis_settings_of, leg_result_from_samples,
-                                run_record_of)
+    from cufep.workflow import (WorkflowError, analysis_settings, analysis_settings_of, iterations_for,
+                                leg_result_from_samples, run_record_of)
 
     d = Path(directory)
     if d.name == "hrex" and (d / "samples.h5").exists():
@@ -208,9 +208,13 @@ def analyze(directory: str, config, equilibration_ns) -> None:
     samples = read_samples(hrex)
     attrs = samples["attrs"]
     if equilibration_ns is not None:
-        if "iteration_ps" not in attrs:
+        # the rule of the run (iterations_for), with the length of an iteration its configuration asked
+        # for where the samples record it, else the length an iteration had
+        recorded = ((attrs.get("conditions") or {}).get("settings") or {}).get("time_per_iteration_ps") \
+            if isinstance(attrs.get("conditions"), dict) else None
+        if recorded is None and "iteration_ps" not in attrs:
             raise click.ClickException(f"{hrex}: the samples do not record the length of an iteration")
-        n_equilibration = int(round(equilibration_ns * 1000.0 / float(attrs["iteration_ps"])))
+        n_equilibration = iterations_for(equilibration_ns, float(recorded or attrs["iteration_ps"]), 1)
     else:
         n_equilibration = equilibration_boundary(attrs, d)
         if n_equilibration is None:
@@ -233,13 +237,13 @@ def analyze(directory: str, config, equilibration_ns) -> None:
     if config is not None:
         settings, source = _load(config), f"--config {config}"
     elif (results.get("result.json") or {}).get("analysis_record"):
-        settings = analysis_settings_of(results["result.json"]["analysis_record"])
+        settings = analysis_settings_of(results["result.json"]["analysis_record"], attrs)
         source = "the settings the leg's result records"
     elif of_the_run:
-        settings = analysis_settings_of(of_the_run)
+        settings = analysis_settings_of(of_the_run, attrs)
         source = "the settings of the run that made the samples, which has no result (yet)"
     elif (results.get("result.previous.json") or {}).get("analysis_record"):
-        settings = analysis_settings_of(results["result.previous.json"]["analysis_record"])
+        settings = analysis_settings_of(results["result.previous.json"]["analysis_record"], attrs)
         source = "the settings the result records that the leg had before"
     else:
         tail = "reweight" if "lrc_s6" in attrs else "none"
@@ -259,6 +263,9 @@ def analyze(directory: str, config, equilibration_ns) -> None:
     out.update(n_equilibration_iterations=n_equilibration, n_iterations_stored=int(samples["u"].shape[0]))
     if "n_planned_iterations" in attrs:
         out["n_planned_iterations"] = int(attrs["n_planned_iterations"])
+    # the radii of the tail correction that were really used: the outer one the samples recorded
+    # their tail energies to, the inner one their interactions were cut off at
+    out.update(lrc_long_cutoff_nm=result.get("lrc_long_cutoff_nm"), lrc_cutoff_nm=attrs.get("lrc_cutoff_nm"))
     out.update(delta_g_decouple=result["delta_g_decouple"], lrc=result["lrc"], lrc_method=result["lrc_method"],
                quality=result["quality"], notes=result["notes"], analysis_record=result["analysis_record"],
                analysis_settings_from=source)
