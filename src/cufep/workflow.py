@@ -326,16 +326,15 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
         return
-    iteration_ps = float(cfg.sampling.time_per_iteration_ps)
-    asked = max(1, int(round(cfg.sampling.equilibration(leg) * 1000.0 / iteration_ps))) \
-        + max(4, int(round(production_ns * 1000.0 / iteration_ps)))
     if conditions is None:
-        if n_stored < asked:
-            raise ConditionsError(
-                f"the {n_stored} iterations of samples in {leg_dir / 'hrex'} were written by a version of cuFEP that "
-                f"did not record the conditions they were made under, and this run asks for {asked}: such samples "
-                "are not continued. Nothing was changed. They can be analysed (cufep analyze); to sample this leg "
-                "further, start it anew with --reschedule: the samples it has are kept in previous_<n>/.")
+        from cufep.sampling.storage import stored_attributes
+
+        used_timestep = float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+        states = [state.to_dict() for state in Schedule.load(sched_file).states] if sched_file.exists() else None
+        problems = unrecorded_samples_problems(stored_attributes(leg_dir / "hrex")[1], n_stored, leg_dir, cfg, leg,
+                                               production_ns, states, used_timestep)
+        if problems:
+            refuse_unrecorded_samples(leg_dir, n_stored, problems)
         return
     current = {"temperature_K": float(cfg.thermodynamics.temperature_K),
                "pressure_bar": float(cfg.thermodynamics.pressure_bar),
@@ -877,7 +876,6 @@ def run_leg(job: LegJob) -> dict:
     # ---- 2. restraint (complex only) --------------------------------------------------------
     t_restraint = time.perf_counter()
     restraint = None
-    release_dg = release_dg_analytical = 0.0
     symmetry = 1
     if is_complex:
         from openff.toolkit import Molecule
@@ -932,8 +930,6 @@ def run_leg(job: LegJob) -> dict:
                     + f" | r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * found.ligand_rmsd_nm:.2f} A")
             rfile.write_text(json.dumps({"restraint": restraint.to_dict(), "info": info,
                                          "ligand_symmetry_number": symmetry, "made_with": restraint_from}, indent=1))
-        release_dg = restraint.release_free_energy(T, "numerical")
-        release_dg_analytical = restraint.release_free_energy(T, "analytical")
         if symmetry > 1:
             notes.append(f"the ligand has {symmetry} heavy-atom graph symmetries; no symmetry correction is applied")
 
@@ -1096,8 +1092,13 @@ def run_leg(job: LegJob) -> dict:
             if sampler.unrecorded:
                 # samples of an earlier version, whose conditions are not recorded: a leg that has
                 # all its iterations is analysed as it is; nothing is added to such samples
-                if sampler.storage.n_iterations < total:
-                    sampler.storage.refuse_unrecorded()
+                from cufep.sampling.storage import decoded_attributes
+
+                problems = unrecorded_samples_problems(
+                    decoded_attributes(sampler.storage.h5), sampler.storage.n_iterations, leg_dir, cfg, job.leg,
+                    job.production_ns, [s.to_dict() for s in schedule.states], timestep_fs)
+                if problems:
+                    refuse_unrecorded_samples(leg_dir, sampler.storage.n_iterations, problems)
                 log(f"the {sampler.storage.n_iterations} iterations of samples of this leg were written by a "
                     "version that did not record their conditions; they are analysed as they are")
                 if "the samples" not in origin_not_recorded:
@@ -1170,9 +1171,7 @@ def run_leg(job: LegJob) -> dict:
     t_analysis = time.perf_counter()
     run_record = {
         "ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "backend": backend_name, "timestep_fs": timestep_fs,
-        "restraint_release": release_dg, "restraint_release_analytical": release_dg_analytical,
         "ligand_symmetry_number": symmetry, "notes": list(notes), "origin_not_recorded": list(origin_not_recorded),
-        "pressure_bar": float(cfg.thermodynamics.pressure_bar),
         "prepared_systems_sha256": record_digest(prep_info.get("made_from")),
         "rest2": {"scale": float(rest2.scale) if rest2_on else 1.0, "hot_protein_atoms": len(hot_atoms),
                   "hot_residues": hot_residues, "torsion_terms_scaled": alch.rest2_torsions,
@@ -1295,8 +1294,91 @@ _ANALYSIS_NOTES = ("NOT RELIABLE", "NOT CONVERGED", "convergence not assessed", 
                    "the two halves of the production", "half of the production does not",
                    "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record")
 #: what the run of a leg knows and its samples do not hold
-_RUN_KEYS = ("ligand", "leg", "repeat", "backend", "timestep_fs", "restraint_release", "restraint_release_analytical",
-             "ligand_symmetry_number", "rest2", "origin_not_recorded", "pressure_bar", "prepared_systems_sha256")
+_RUN_KEYS = ("ligand", "leg", "repeat", "backend", "timestep_fs", "ligand_symmetry_number", "rest2",
+             "origin_not_recorded", "prepared_systems_sha256")
+
+
+def restraint_release_of(leg_dir: Path, attrs: dict, temperature_K: float) -> tuple[float, float]:
+    """Free energy of releasing the Boresch restraint of a leg (numerical, analytical; kJ/mol), from
+    its ``restraint.json`` at the given temperature; (0, 0) for a leg without a restrain stage.
+
+    It is computed where the result is made and at the temperature of the samples, so that it
+    cannot be taken at another temperature than the free energy it is added to. A leg whose
+    stored states have a restrain stage must have the file.
+    """
+    from cufep.alchemy.restraints import BoreschRestraint
+
+    states = attrs.get("states") if isinstance(attrs.get("states"), list) else []
+    restrained = any(float(state.get("lambda_restraints", 1.0)) < 1.0 for state in states)
+    # the directory of an earlier set of windows of the leg (previous_<n>/) has it one level up
+    candidates = [leg_dir / "restraint.json"] + ([leg_dir.parent / "restraint.json"]
+                                                 if leg_dir.name.startswith("previous_") else [])
+    found = next((f for f in candidates if f.exists()), None)
+    if found is None:
+        if restrained:
+            raise WorkflowError(f"the samples in {leg_dir} are of a leg with a restrained ligand, but its "
+                                "restraint.json is not there: the release of the restraint cannot be computed")
+        return 0.0, 0.0
+    if not restrained and states:
+        return 0.0, 0.0
+    restraint = BoreschRestraint.from_dict((_read_json(found) or {}).get("restraint") or {})
+    return (float(restraint.release_free_energy(temperature_K, "numerical")),
+            float(restraint.release_free_energy(temperature_K, "analytical")))
+
+
+def unrecorded_samples_problems(attrs: dict, n_stored: int, leg_dir: Path, cfg: Config, leg: str, production_ns: float,
+                                states: list[dict] | None, timestep_fs: float) -> list[str]:
+    """Why samples whose conditions an earlier version did not record cannot stand for what this
+    run asks for; empty if they can.
+
+    Such samples are never added to, so they must be what the run asks for as they are: what
+    their file does hold (temperature, lambda states, length of an iteration, where the
+    production begins) must agree with the run, and the production they hold, counted with their
+    own iteration length from their own boundary, must be as long as the one asked for.
+    ``states`` are those of the leg's lambda schedule (None if there is none), ``timestep_fs``
+    the time step the leg uses.
+    """
+    from cufep.sampling.states import AlchemicalState
+    from cufep.sampling.storage import _same, equilibration_boundary
+
+    def normal(sequence):
+        return [AlchemicalState(**state).to_dict() for state in sequence]
+
+    problems = []
+    if "temperature_K" in attrs and not _same(float(attrs["temperature_K"]), float(cfg.thermodynamics.temperature_K)):
+        problems.append(f"temperature: {float(attrs['temperature_K']):g} K -> {float(cfg.thermodynamics.temperature_K):g} K")
+    if states is not None and isinstance(attrs.get("states"), list) and not _same(normal(attrs["states"]), normal(states)):
+        problems.append("the lambda states")
+    if "iteration_ps" not in attrs:
+        return problems + ["the file does not record the length of an iteration"]
+    stored_ps = float(attrs["iteration_ps"])
+    # compared in whole steps: 2.5 ps at 3 fs are 833 steps, 2.499 ps
+    asked_ps = max(1, int(round(cfg.sampling.time_per_iteration_ps * 1000.0 / timestep_fs))) * timestep_fs * 1e-3
+    if abs(stored_ps - asked_ps) > 1e-6:
+        problems.append(f"length of an iteration: {stored_ps:g} ps -> {asked_ps:g} ps")
+    boundary = equilibration_boundary(attrs, leg_dir)
+    if boundary is None:
+        return problems + ["the file does not record where its production begins (the run that wrote it did not "
+                           "finish); cufep analyze --equilibration-ns reads such samples"]
+    stored_equil, asked_equil = boundary * stored_ps / 1000.0, cfg.sampling.equilibration(leg)
+    if abs(boundary - max(1, int(round(asked_equil * 1000.0 / stored_ps)))) > 0:
+        problems.append(f"equilibration per lambda window: {stored_equil:g} ns -> {asked_equil:g} ns")
+    held = max(0, n_stored - boundary) * stored_ps / 1000.0
+    if held < production_ns - 1e-9:
+        problems.append(f"production per lambda window: the samples hold {held:g} ns and {production_ns:g} ns are asked "
+                        "for (samples of unrecorded conditions are not added to)")
+    return problems
+
+
+def refuse_unrecorded_samples(leg_dir: Path, n_stored: int, problems: list[str]) -> None:
+    from cufep.sampling.storage import ConditionsError
+
+    raise ConditionsError(
+        f"the {n_stored} iterations of samples in {leg_dir / 'hrex'} were written by a version of cuFEP that did not "
+        f"record the conditions they were made under, and they are not what this run asks for ({'; '.join(problems)}). "
+        "They are left as they are and can be analysed (cufep analyze). With these settings the leg has to be "
+        "started anew with --reschedule (the samples it has are kept in previous_<n>/), or the calculation needs a "
+        "new output.dir.")
 
 
 def run_record_of(result: dict | None, leg_dir: Path | None = None) -> dict:
@@ -1352,9 +1434,10 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     notes = list(run.get("notes") or [])
     notes += [n for n in (structure or {}).get("warnings", []) if n not in notes]
     origin_not_recorded = list(run.get("origin_not_recorded") or [])
-    # the pressure: what the run recorded, or what the samples were made under
+    # the pressure is the one the samples were made under; samples that do not record it have none
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
-    pressure = run.get("pressure_bar", conditions.get("pressure_bar"))
+    pressure = conditions.get("pressure_bar")
+    release, release_analytical = restraint_release_of(leg_dir, attrs, temperature)
     result = {
         "ligand": run.get("ligand"), "leg": run.get("leg"), "repeat": run.get("repeat"), "backend": run.get("backend"),
         "temperature_K": temperature, "pressure_bar": pressure,
@@ -1365,8 +1448,7 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "delta_g_mbar": res.delta_g, "delta_g_mbar_error": res.delta_g_error,
         "lrc": correction, "lrc_method": a.lrc, "lrc_reweight": res.lrc_delta_g,
         "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.lrc_error, "structure": structure,
-        "restraint_release": run.get("restraint_release", 0.0),
-        "restraint_release_analytical": run.get("restraint_release_analytical", 0.0),
+        "restraint_release": release, "restraint_release_analytical": release_analytical,
         "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
         "analysis_record": analysis_record(a), "run": run,
     }

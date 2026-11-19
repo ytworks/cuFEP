@@ -245,6 +245,31 @@ def equilibration_boundary(attrs: dict, leg_dir: str | Path | None = None) -> in
     return None
 
 
+def decoded_attributes(h5) -> dict:
+    """The attributes of a samples file as Python values (text that is JSON is decoded)."""
+    out = {}
+    for key, value in h5.attrs.items():
+        if isinstance(value, (bytes, str)):
+            text = value.decode() if isinstance(value, bytes) else value
+            try:
+                out[key] = json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                out[key] = text
+        else:
+            out[key] = value.item() if hasattr(value, "item") else value
+    return out
+
+
+def stored_attributes(directory: str | Path) -> tuple[int, dict]:
+    """(number of iterations, attributes) of the samples in ``directory``, read without changing
+    anything; (0, {}) if there are no samples."""
+    path = Path(directory) / "samples.h5"
+    if not path.exists():
+        return 0, {}
+    with h5py.File(path, "r") as h5:
+        return int(h5["u"].shape[0]), decoded_attributes(h5)
+
+
 def read_samples(directory: str | Path) -> dict:
     """Load everything analysis needs from a leg directory."""
     path = Path(directory) / "samples.h5"
@@ -253,14 +278,5 @@ def read_samples(directory: str | Path) -> dict:
         for name in ("frames", "frame_box"):
             if name in h5:
                 out[name] = h5[name][:]
-        out["attrs"] = {}
-        for key, value in h5.attrs.items():
-            if isinstance(value, (bytes, str)):
-                text = value.decode() if isinstance(value, bytes) else value
-                try:
-                    out["attrs"][key] = json.loads(text)
-                except (json.JSONDecodeError, TypeError):
-                    out["attrs"][key] = text
-            else:
-                out["attrs"][key] = value.item() if hasattr(value, "item") else value
+        out["attrs"] = decoded_attributes(h5)
     return out

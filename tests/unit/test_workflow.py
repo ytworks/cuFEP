@@ -733,15 +733,21 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
         check_leg_reuse(config(sampling={"rest2": {"scale": 2.0}}), lig_dir, "solvent", 0, prep_info, 10.0)
     check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0, reschedule=True)      # the leg starts anew
     check_leg_reuse(other, lig_dir, "solvent", 1, prep_info, 10.0)                       # a leg without files
-    # samples of a version that did not record their conditions: enough of them are analysed, too few
-    # are not continued
+    # samples of a version that did not record their conditions are held to what their own file says:
+    # six iterations of 2.5 ps at 298.15 K, two of them equilibration
     import h5py
     with h5py.File(hrex / "samples.h5", "a") as h5:
         del h5.attrs["conditions"]
-    with pytest.raises(ConditionsError, match="did not record the conditions.*this run asks for 4400.*not continued"):
+        h5.attrs["temperature_K"], h5.attrs["iteration_ps"], h5.attrs["n_equilibration_iterations"] = 298.15, 2.5, 2
+    with pytest.raises(ConditionsError, match="did not record the conditions.*equilibration per lambda window: 0.005 ns "
+                                              "-> 1 ns; production per lambda window: the samples hold 0.01 ns and "
+                                              "10 ns are asked for.*--reschedule"):
         check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
-    check_leg_reuse(config(sampling={"equilibration_ns": 0.0025, "production_ns": 0.005}), lig_dir, "solvent", 0,
-                    prep_info, 0.005)
+    short = {"equilibration_ns": 0.005, "production_ns": 0.01}
+    check_leg_reuse(config(sampling=short), lig_dir, "solvent", 0, prep_info, 0.01)          # what they hold
+    with pytest.raises(ConditionsError, match="temperature: 298.15 K -> 310 K"):
+        check_leg_reuse(config(sampling=short, thermodynamics={"temperature_K": 310.0}), lig_dir, "solvent", 0,
+                        prep_info, 0.01)
 
 
 def test_a_run_can_be_restricted_to_ligands_and_legs():

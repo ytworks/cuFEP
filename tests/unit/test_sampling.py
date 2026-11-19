@@ -770,13 +770,15 @@ def test_an_interrupted_leg_is_not_analysed_with_its_equilibration(tmp_path, tin
     assert equilibration_boundary(attrs, old) == 0
 
 
-def synthetic_leg(leg_dir, n=300, temperature=310.0, n_equilibration=20):
+def synthetic_leg(leg_dir, n=300, temperature=310.0, n_equilibration=20, lambda_states=None):
     """A leg directory with harmonic samples, as a finished run leaves it (no tail data, no schedule)."""
     u, states, _ = harmonic_samples(n, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12))
     storage = LegStorage(leg_dir / "hrex", 4, 4)
     for it in range(n):
         storage.append(u[it], states[it], np.ones(4))
     storage.set_meta(temperature_K=temperature, iteration_ps=2.5, backend="openmm", leg="solvent")
+    if lambda_states is not None:
+        storage.set_meta(states=lambda_states)
     storage.set_plan(n_equilibration, n)
     storage.close()
 
@@ -902,6 +904,91 @@ def test_a_result_of_another_analysis_is_made_again_before_the_legs_are_combined
     assert out["dg_bind"] == pytest.approx(current + 2.0) and out["old_analysis"] == [named]
     assert any("solvent leg" in w and "combined as they are" in w for w in out["warnings"])
     assert refresh_leg_result(lig / "repeat_0" / "nothing", settings, messages.append) == "not finished"
+
+
+def test_samples_of_unrecorded_conditions_must_be_what_the_run_asks_for(tmp_path):
+    """Review of PR 1, two findings on samples that an earlier version wrote without their conditions and
+    that are analysed as they are: the release of the restraint was taken at the temperature of the
+    configuration (and the pressure filled in from it), and 0.10 ns of production passed for 0.50 ns
+    because the rows were counted with the iteration length of the configuration."""
+    import h5py
+
+    from cufep.alchemy.restraints import BoreschRestraint
+    from cufep.config.schema import AnalysisConfig, Config
+    from cufep.sampling.storage import stored_attributes
+    from cufep.workflow import (WorkflowError, combine_ligand, leg_result_from_samples, restraint_release_of,
+                                unrecorded_samples_problems, write_leg_result)
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, **sections})
+
+    bound = [x.to_dict() for x in fixed_schedule(["restrain", "discharge", "vanish"],
+                                                  {"restrain": 2, "discharge": 2, "vanish": 2}).states]
+    free = [x.to_dict() for x in fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 3}).states]
+    lig = tmp_path / "lig"
+    complex_dir, solvent_dir = lig / "repeat_0" / "complex", lig / "repeat_0" / "solvent"
+    # 60 iterations of 2.5 ps at 300 K, the first 20 equilibration: 0.10 ns of production
+    for leg_dir, lambda_states in ((complex_dir, bound), (solvent_dir, free)):
+        synthetic_leg(leg_dir, n=60, temperature=300.0, n_equilibration=20, lambda_states=lambda_states)
+        with h5py.File(leg_dir / "hrex" / "samples.h5", "a") as h5:        # as an earlier version left a finished leg
+            del h5.attrs["n_planned_iterations"]
+    n, attrs = stored_attributes(complex_dir / "hrex")
+    assert n == 60 and "conditions" not in attrs and attrs["temperature_K"] == 300.0
+
+    def problems(cfg, production_ns, held=attrs, lambda_states=bound, timestep_fs=4.0):
+        return unrecorded_samples_problems(held, n, complex_dir, cfg, "complex", production_ns, lambda_states, timestep_fs)
+
+    asked = {"equilibration_ns": 0.05, "production_ns": 0.1}
+    same = config(thermodynamics={"temperature_K": 300.0}, sampling=asked)
+    assert problems(same, 0.1) == []
+    # the reviewer's case: an iteration of 10 ps and 0.50 ns of production are asked for; 55 rows "were enough"
+    longer = config(thermodynamics={"temperature_K": 300.0},
+                    sampling={"time_per_iteration_ps": 10.0, "equilibration_ns": 0.05, "production_ns": 0.5})
+    assert problems(longer, 0.5) == [
+        "length of an iteration: 2.5 ps -> 10 ps",
+        "production per lambda window: the samples hold 0.1 ns and 0.5 ns are asked for (samples of unrecorded "
+        "conditions are not added to)"]
+    assert problems(same, 0.2) == ["production per lambda window: the samples hold 0.1 ns and 0.2 ns are asked for "
+                                   "(samples of unrecorded conditions are not added to)"]
+    assert problems(config(thermodynamics={"temperature_K": 310.0}, sampling=asked), 0.1) == ["temperature: 300 K -> 310 K"]
+    assert problems(config(thermodynamics={"temperature_K": 300.0}, sampling=dict(asked, equilibration_ns=0.1)), 0.1) \
+        == ["equilibration per lambda window: 0.05 ns -> 0.1 ns"]
+    assert problems(same, 0.1, lambda_states=free) == ["the lambda states"]
+    # states of a version before REST2 are the same states; 2.5 ps at 3 fs are 833 steps
+    assert problems(same, 0.1, held=dict(attrs, states=[{k: v for k, v in x.items() if k != "rest2_scale"}
+                                                         for x in bound])) == []
+    assert problems(same, 0.0999, held=dict(attrs, iteration_ps=2.499), timestep_fs=3.0) == []
+    # a run that did not finish and did not record where its production begins
+    unknown = problems(same, 0.1, held=dict(attrs, n_equilibration_iterations=0))
+    assert len(unknown) == 1 and "does not record where its production begins" in unknown[0]
+    assert "does not record the length of an iteration" in problems(same, 0.1, held={"temperature_K": 300.0})[-1]
+
+    # the release of the restraint: from restraint.json at the temperature of the samples
+    restraint = BoreschRestraint(host_atoms=(1, 2, 3), guest_atoms=(4, 5, 6), r0=0.45, theta_a0=1.2, theta_b0=1.3,
+                                 phi_a0=0.3, phi_b0=-0.5, phi_c0=1.0)
+    run = {"ligand": "lig", "leg": "complex", "repeat": 0, "backend": "openmm", "timestep_fs": 4.0, "notes": []}
+    with pytest.raises(WorkflowError, match="restraint.json is not there"):
+        leg_result_from_samples(complex_dir, AnalysisConfig(lrc="none"), run)
+    (complex_dir / "restraint.json").write_text(json.dumps({"restraint": restraint.to_dict(), "info": {}}))
+    at_300 = restraint.release_free_energy(300.0, "numerical")
+    assert restraint_release_of(complex_dir, attrs, 300.0) == pytest.approx((at_300, restraint.release_free_energy(300.0, "analytical")))
+    assert abs(restraint.release_free_energy(315.0, "numerical") - at_300) > 1.0   # kJ/mol: the temperature matters
+    assert restraint_release_of(complex_dir / "previous_1", attrs, 300.0)[0] == pytest.approx(at_300)
+    assert restraint_release_of(solvent_dir, stored_attributes(solvent_dir / "hrex")[1], 300.0) == (0.0, 0.0)
+    bound_result = leg_result_from_samples(complex_dir, AnalysisConfig(lrc="none"), run)
+    assert bound_result["temperature_K"] == 300.0 and bound_result["restraint_release"] == pytest.approx(at_300)
+    assert bound_result["pressure_bar"] is None                    # not recorded, and not filled in from a configuration
+    free_result = leg_result_from_samples(solvent_dir, AnalysisConfig(lrc="none"), dict(run, leg="solvent"))
+    assert free_result["restraint_release"] == 0.0
+    write_leg_result(complex_dir, bound_result)
+    write_leg_result(solvent_dir, free_result)
+    out = combine_ligand(lig, "lig", 1)
+    assert out["dg_bind"] == pytest.approx((free_result["delta_g_decouple"] - bound_result["delta_g_decouple"] - at_300) / 4.184)
+    assert "pressure (bar): not recorded for the complex leg, the solvent leg" in out["not_compared"]
+    # samples that do record their conditions give their pressure
+    with h5py.File(solvent_dir / "hrex" / "samples.h5", "a") as h5:
+        h5.attrs["conditions"] = json.dumps({"pressure_bar": 1.0})
+    assert leg_result_from_samples(solvent_dir, AnalysisConfig(lrc="none"), dict(run, leg="solvent"))["pressure_bar"] == 1.0
 
 
 def test_an_interruption_before_the_first_checkpoint_does_not_leave_samples_twice(tmp_path, tiny_leg):
