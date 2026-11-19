@@ -30,6 +30,7 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        import matplotlib.ticker  # noqa: F401
     except Exception:  # noqa: BLE001
         return None
 
@@ -70,6 +71,8 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
                     low = matrix[k, k + 1] < (quality.get("overlap") or {}).get("threshold", 0.03)
                     ax.text(k + 1, k, f"{matrix[k, k + 1]:.2f}", ha="center", va="center", fontsize=5,
                             color="#c0392b" if low else "black")
+            ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
+            ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
             ax.set_xlabel("lambda window"); ax.set_ylabel("lambda window")
         ax.set_title(f"overlap matrix, lowest overlap of neighbours {a['min_overlap']:.3f}", fontsize=10)
     fig.suptitle(f"{legs[0][1].get('ligand', '')}  (repeat {legs[0][1].get('repeat', 0)})", fontsize=11)
