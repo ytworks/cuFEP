@@ -82,6 +82,39 @@ def test_a_ligand_that_moves_is_reported_and_the_search_goes_on(tyk2_complex):
     assert not any("moved away" in n for n in quiet.notes)
 
 
+def test_the_pose_is_compared_with_the_input_pose(tyk2_complex):
+    """Review of PR 1: a ligand that had moved before the frames kept for the search began was not reported."""
+    top, pos, lig, rdmol = tyk2_complex
+    shift = np.array([0.5, 0.0, 0.0])
+
+    def moved_before_the_trajectory(fr):
+        fr[:, lig, :] += shift                                      # in every frame: the ligand sits 5 A away
+        return fr
+
+    frames = _trajectory(pos, lig, np.random.default_rng(11), ligand_motion=moved_before_the_trajectory)
+    unaware = find_boresch_restraint(top, frames, lig, rdmol, 298.15)
+    assert unaware.ligand_rmsd_nm < 0.05 and not any("moved away" in n for n in unaware.notes)
+    aware = find_boresch_restraint(top, frames, lig, rdmol, 298.15, input_pose_nm=pos)
+    assert aware.ligand_rmsd_nm == pytest.approx(0.5, abs=0.05)
+    assert any("moved away from its input pose" in n and "5.0 A" in n for n in aware.notes)
+    assert aware.restraint.host_atoms == unaware.restraint.host_atoms       # the restraint itself is as before
+    assert aware.restraint.r0 == pytest.approx(unaware.restraint.r0)
+
+    # a ligand written in another periodic image has not moved
+    box = np.diag([8.0, 9.0, 10.0])
+    rng = np.random.default_rng(12)
+    still = np.repeat(pos[None], 40, axis=0) + rng.normal(scale=0.01, size=(40, *pos.shape))
+    still[::2, lig, :] += box[0]                                    # every other frame: one box vector away
+    still[5::10, lig, :] -= box[2]
+    boxes = np.repeat(box[None], 40, axis=0)
+    given = pos.copy()
+    given[lig] += box[1]                                            # and the input in yet another image
+    imaged = find_boresch_restraint(top, still, lig, rdmol, 298.15, input_pose_nm=given, frame_boxes_nm=boxes,
+                                    input_box_nm=box)
+    assert imaged.ligand_rmsd_nm < 0.05 and not any("moved away" in n for n in imaged.notes)
+    assert 0.5 <= imaged.restraint.r0 <= 1.5
+
+
 def test_pose_rmsd_ignores_swaps_of_symmetry_equivalent_atoms(tyk2_complex):
     top, pos, lig, rdmol = tyk2_complex
     perms = heavy_atom_symmetries(rdmol)

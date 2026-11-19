@@ -285,13 +285,41 @@ def _guest_anchor_candidates(rdmol, ligand_atoms: list[int], rmsf: np.ndarray, r
     return [t[2] for t in triples[:limit]]
 
 
+def nearest_image_of_ligand(positions_nm: np.ndarray, ligand: np.ndarray, anchor: np.ndarray,
+                            box_nm: np.ndarray) -> np.ndarray:
+    """Copy of the coordinates with the ligand, as a whole, in the periodic image nearest to ``anchor``.
+
+    ``positions_nm`` is (n_atoms, 3) or (n_frames, n_atoms, 3); ``anchor`` and ``box_nm`` (3 x 3
+    box vectors) are one per frame accordingly.
+    """
+    single = positions_nm.ndim == 2
+    pos = np.array(positions_nm[None] if single else positions_nm, dtype=float)
+    anchors = np.asarray(anchor, dtype=float).reshape(-1, 3)
+    boxes = np.asarray(box_nm, dtype=float).reshape(-1, 3, 3)
+    shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)], dtype=float)
+    for f in range(pos.shape[0]):
+        candidates = shifts @ boxes[min(f, len(boxes) - 1)]
+        centre = pos[f, ligand].mean(axis=0)
+        best = candidates[np.argmin(np.linalg.norm(centre + candidates - anchors[min(f, len(anchors) - 1)], axis=1))]
+        pos[f, ligand] += best
+    return pos[0] if single else pos
+
+
 def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[int], rdmol,
                            temperature_K: float = 298.15,
-                           settings: RestraintSearchSettings | None = None) -> RestraintSearchResult:
+                           settings: RestraintSearchSettings | None = None,
+                           input_pose_nm: np.ndarray | None = None, frame_boxes_nm: np.ndarray | None = None,
+                           input_box_nm: np.ndarray | None = None) -> RestraintSearchResult:
     """Choose Boresch restraint atoms from an MD trajectory of the bound complex.
 
     ``frames_nm`` has shape (n_frames, n_atoms, 3) with whole (unwrapped) molecules;
     ``rdmol`` is the ligand with atoms in the same order as ``ligand_atoms``.
+
+    ``input_pose_nm`` are the coordinates of the prepared input, in the same atom order. With
+    them the pose check asks how far the ligand is from the pose that was given, and not from
+    the first frame of a trajectory that may begin after the ligand has moved. With the box
+    vectors of the frames and of the input, the ligand is first brought to the periodic image
+    nearest to the protein.
     """
     s = settings or RestraintSearchSettings()
     kt = R_GAS * temperature_K
@@ -306,6 +334,9 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
 
     heavy_local = [i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]
     lig_heavy = lig[heavy_local]
+    if frame_boxes_nm is not None:
+        # the ligand in the periodic image nearest to the protein, whatever image it was written in
+        frames_nm = nearest_image_of_ligand(frames_nm, lig, frames_nm[:, ca, :].mean(axis=1), frame_boxes_nm)
 
     # Frame of the binding site: superpose on the backbone atoms around the ligand, so that
     # domain motions elsewhere do not count as flexibility of the site (OpenFE's "local" RMSF).
@@ -331,14 +362,21 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     # the symmetry of the molecule interchanges may swap places (OpenFE reports the same
     # symmetry-corrected RMSD). The run goes on in any case, as in OpenFE; a large value is
     # reported with the result.
-    reference = aligned[0, lig_heavy, :]
+    if input_pose_nm is None:
+        reference = aligned[0, lig_heavy, :]         # no input structure given: the first frame
+    else:
+        given = np.array(input_pose_nm, dtype=float)
+        if input_box_nm is not None:
+            given = nearest_image_of_ligand(given, lig, given[ca].mean(axis=0), input_box_nm)
+        reference = kabsch_align(given[None], mean, site)[0][lig_heavy, :]
     rmsd = None
     for perm in heavy_atom_symmetries(rdmol):
         d = np.sqrt(((aligned[:, lig_heavy[perm], :] - reference) ** 2).sum(axis=2).mean(axis=1))
         rmsd = d if rmsd is None else np.minimum(rmsd, d)
     tail = float(rmsd[len(rmsd) // 2:].mean())
     if tail > s.pose_rmsd_warning_nm:
-        notes.append(f"the ligand moved away from its starting pose in the pre-equilibration MD (heavy-atom RMSD "
+        notes.append(f"the ligand moved away from its {'input' if input_pose_nm is not None else 'starting'} pose "
+                     f"in the pre-equilibration MD (heavy-atom RMSD "
                      f"{10 * tail:.1f} A over the second half, above restraints.pose_rmsd_warning_nm = "
                      f"{10 * s.pose_rmsd_warning_nm:g} A); the result is for the pose it moved to")
 

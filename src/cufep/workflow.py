@@ -610,7 +610,11 @@ def run_leg(job: LegJob) -> dict:
                                                    host_max_distance_nm=rc.host_max_distance_nm,
                                                    dssp_filter=rc.dssp_filter,
                                                    pose_rmsd_warning_nm=rc.pose_rmsd_warning_nm)
-                found = find_boresch_restraint(prep["topology"], full, prep["ligand"], rdmol, T, settings)
+                # the pose is compared with the prepared input: the frames kept for the search begin
+                # only after the first part of the pre-equilibration
+                found = find_boresch_restraint(prep["topology"], full, prep["ligand"], rdmol, T, settings,
+                                               input_pose_nm=prep["positions"], frame_boxes_nm=eq["frame_boxes"],
+                                               input_box_nm=prep["box"])
                 restraint = found.restraint
                 if rc.force_constants == "auto":
                     restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)
