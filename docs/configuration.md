@@ -70,7 +70,7 @@ restraints:
   host_min_distance_nm: 0.5
   host_max_distance_nm: 1.5
   dssp_filter: true
-  pose_rmsd_warning_nm: 0.3       # warn when the ligand ends up further than this from its starting pose
+  pose_rmsd_warning_nm: 0.3       # warn when the ligand ends up further than this from the pose that was given
 alchemy:
   softcore_alpha: 0.5
 lambda_schedule:
@@ -106,7 +106,7 @@ lambda_schedule:
       complex: 48
       solvent: 32
   fixed_walk_ps: 50.0             # fixed mode: MD in each window that gives the replicas their start configurations
-  file: null                      # a schedule.yaml of an earlier run, used as it is
+  file: null                      # a schedule.yaml of an earlier run of the same leg (or a directory of them), used as it is
 sampling:
   pre_equilibration:
     complex: {nvt_ns: 0.25, npt_ns: 0.5, md_ns: 5.0}

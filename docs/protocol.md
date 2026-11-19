@@ -108,17 +108,23 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
 1. Pre-equilibration: minimise, 0.25 ns NVT and 0.5 ns NPT on stock OpenMM, then 5 ns NPT
    on the backend of the leg (solvent leg: 0.1, 0.2 and 0.5 ns). A bilayer system is held
    by position restraints during NVT and NPT and then runs unrestrained for
-   `membrane.equilibration_ns`.
+   `membrane.equilibration_ns`. At the end of that run cuFEP checks whether the bilayer has
+   settled: between the last two quarters the mean area in the membrane plane must not change
+   by more than `membrane.area_tolerance` (1 %) and the mean number of water molecules within
+   0.6 nm of the ligand by more than `membrane.pocket_water_tolerance` (1.5). If it has not,
+   the result carries a warning with the two changes; the run is not made longer. In the A2A
+   example the area was still shrinking after 10 ns, by 1.5 % between the last two quarters.
 2. Complex leg only: choose the Boresch restraint from that trajectory. Ligand anchor:
    three bonded atoms of an aromatic ring near the centre of the molecule. Protein anchor:
    three bonded backbone atoms in stable secondary structure, RMSF below 0.1 nm, 0.5-1.5 nm
    from the ligand anchor. Candidates with a restrained angle near 0 or 180 degrees are
    rejected and the one with the smallest fluctuations is taken. The reference distance and
    angles are those of the final frame, from which the alchemical run starts, as in OpenFE.
-   Force constants: 10 kcal/mol/A^2 and 80 kcal/mol/rad^2. If the ligand moves away from its starting pose in
-   this trajectory (symmetry-corrected heavy-atom RMSD above `restraints.pose_rmsd_warning_nm`
-   over the second half), the run goes on, as in OpenFE, and the result carries a warning: it
-   is then the free energy of the pose the ligand moved to.
+   Force constants: 10 kcal/mol/A^2 and 80 kcal/mol/rad^2. If the ligand has moved away from
+   the pose that was given (symmetry-corrected heavy-atom RMSD against the prepared input
+   coordinates, in the frame of the binding site, above `restraints.pose_rmsd_warning_nm` over
+   the second half of the trajectory), the run goes on, as in OpenFE, and the result carries
+   a warning: it is then the free energy of the pose the ligand moved to.
 3. Lambda windows: adaptive lambda scheduling, or the windows given in the configuration.
 4. Hamiltonian replica exchange, one replica per lambda window, 2.5 ps per iteration: 1 ns
    equilibration and 5 ns production per window.
@@ -390,6 +396,13 @@ below 0.03, a convergence analysis, and a comparison of TI and MBAR.
 | convergence | the free energy from the first half of the production alone, and from the second half alone, lies within `analysis.convergence_tolerance_sigma` (2) MBAR standard errors of the free energy from all of it | `NOT CONVERGED` | "In a favorable case, both sets of data should converge rapidly to within uncertainty of the final value." It gives no factor; 2 is cuFEP's own choice |
 | estimators | BAR between neighbouring windows and MBAR agree within the same tolerance | a warning | "we primarily look for disagreement between TI-based methods and BAR-based methods". cuFEP does not record dU/dlambda and has no TI estimate; BAR against MBAR is a weaker comparison |
 
+The two halves are the first and the second half of the production in time and share no
+iteration. A part of the production gets an estimate of its own only if it holds at least
+four statistically independent samples per lambda window (the iterations divided by the
+statistical inefficiency). If a half does not, the leg is reported as "convergence not
+assessed", with the number of independent samples a half holds; that is a production too
+short for the check, and it is kept apart from `NOT CONVERGED`.
+
 With independent samples a half of the data differs from the whole by about one standard
 error, so at a tolerance of 2 about one leg in twenty is flagged by chance.
 
@@ -405,9 +418,12 @@ from the first half and 31.6 from the second.
 
 `analysis.png` in each repeat directory shows, for both legs, the forward and reverse series
 (the free energy from growing parts of the production, counted from its start and from its
-end, at `analysis.convergence_points` points), the two halves, the band of the tolerance and
-the overlap matrix. The number of round trips of the replicas and the exchange between
-neighbouring windows are in `result.json`; no threshold is applied to them.
+end, at up to `analysis.convergence_points` points, each drawn at the fraction of the
+production it really uses), the two halves, the estimates from `analysis.convergence_blocks`
+consecutive blocks that do not overlap, the band of the tolerance and the overlap matrix. A
+free energy that keeps moving in one direction shows as a staircase of the blocks. The number
+of round trips of the replicas and the exchange between neighbouring windows are in
+`result.json`; no threshold is applied to them.
 
 ### When a leg is flagged
 
@@ -416,9 +432,11 @@ Flare user adds a further instance of a link "with longer simulation time/more L
 windows"; the other legs and ligands keep their results and the binding free energy is put
 together again.
 
-- `NOT CONVERGED`: a longer production. `cufep run CONFIG --ligand NAME --leg complex
-  --production-ns 10` (or a larger `sampling.production_ns`) continues the replica-exchange
-  run of that leg from its last iteration; the analysis then covers the whole production.
+- `NOT CONVERGED`, or convergence not assessed: a longer production. `cufep run CONFIG
+  --ligand NAME --leg complex --production-ns 10` (or a larger `sampling.production_ns`)
+  continues the replica-exchange run of that leg from its last iteration; the analysis then
+  covers the whole production. The number is the length of the production in total, not what
+  is added: a leg that has 5 ns runs 5 ns more.
 - `NOT RELIABLE`: more lambda windows in the stage that the message names
   (`lambda_schedule.adaptive.initial_windows`, a different `overlap_threshold`, or
   `lambda_schedule.windows` with `mode: fixed`), then `cufep run CONFIG --ligand NAME --leg
@@ -428,6 +446,34 @@ together again.
 
 A run restricted with `--ligand` or `--leg` writes its timing to `timing_rerun.json` and
 leaves `timing.json` of the whole run in place.
+
+### Running again in the same output directory
+
+A leg that runs again goes on from what it has. So that this cannot give a wrong number:
+
+- What a leg gave before is set aside as `result.previous.json` when it runs again, for
+  instance its result at 5 ns when it is continued to 10 ns. If the run fails, the leg is
+  `FAILED`: it has no result, the ligand has no binding free energy from it, and the command
+  ends with an error. The earlier result is a record and is never used in its place.
+- A leg gets a result only if it has reached the length that was asked for, with every
+  iteration stored once. A run that was interrupted before its first checkpoint starts again
+  from iteration 0 with an empty storage.
+- Samples are continued only under the conditions they were made under: the lambda states,
+  temperature, pressure and barostat, friction, time step, length of an iteration, backend,
+  precision, and the System with its restraint and REST2 region. If a run gives something
+  else, it stops before anything is written and names what differs. A leg that has samples
+  keeps their backend.
+- The prepared systems, the pre-equilibration and the restraint are used again only if the
+  input files and the settings that went into them are the same; otherwise the run stops and
+  asks for a new `output.dir`. Only the lambda windows of a leg can be determined again in
+  place, with `--reschedule`.
+- A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg: its
+  stages and its two end states are checked. Give a directory as written by `cufep benchmark
+  freeze`, or the file of one leg together with `--leg`.
+
+Output directories written before these checks existed do not hold the records to compare
+with. They can still be continued: what they do hold (states, temperature, backend, length
+of an iteration) is compared, and the log says which files could not be compared.
 
 ## Long-range dispersion
 

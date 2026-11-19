@@ -76,9 +76,12 @@ again, and the rest of the calculation keeps its results.
 |---|---|---|
 | `NOT RELIABLE` | two neighbouring lambda windows overlap by less than 0.03 in the production | give that stage more lambda windows and start the leg anew |
 | `NOT CONVERGED` | the first and the second half of the production give different free energies | run the leg longer; it continues from where it stopped |
+| convergence not assessed | the production is too short for the check (too few independent samples in a half) | run the leg longer |
+| `FAILED` | a leg did not finish; the command ends with an error and the ligand has no binding free energy from that leg | read the message, then run the leg again |
 
 ```bash
 # longer: the complex leg of one ligand goes on from 5 to 10 ns per lambda window
+# (--production-ns is the length in total, not what is added)
 cufep run config.yaml --ligand ejm_31 --leg complex --production-ns 10
 
 # more lambda windows: change lambda_schedule in config.yaml (for example
@@ -89,6 +92,12 @@ cufep run config.yaml --ligand ejm_31 --leg complex --reschedule
 With `--reschedule` the windows and samples the leg had are moved to `previous_<n>/` in its
 directory; its pre-equilibration and restraint are used again. `analysis.png` in each
 repeat directory shows the convergence and the overlap matrix of both legs.
+
+A leg that runs again keeps what it gave before as `result.previous.json`. It continues only
+under the conditions and from the input its files were made with: a run with another
+temperature, another input file or other settings of the preparation stops and asks for a new
+`output.dir` ([docs/protocol.md](docs/protocol.md), "Running again in the same output
+directory").
 
 ## Configuration
 
