@@ -233,11 +233,13 @@ def test_the_numbers_of_time_blocks_for_the_standard_error_are_settings(tmp_path
     for bad in ({"error_blocks": []}, {"error_blocks": [10, 1]}, {"part_error_blocks": 1}):
         with pytest.raises(Exception):
             load_config(write(tmp_path, {**BASE, "analysis": bad}))
-    # the name of an earlier version: read with a notice while it holds its default, refused otherwise
-    cfg, notices = load_config_with_notices(write(tmp_path, {**BASE, "analysis": {"halves_error_blocks": 5}}))
-    assert cfg.analysis.part_error_blocks == 5 and "analysis.halves_error_blocks: 5" in notices[0]
-    with pytest.raises(ValueError, match="Use analysis.part_error_blocks"):
-        load_config(write(tmp_path, {**BASE, "analysis": {"halves_error_blocks": 3}}))
+    # the name of an earlier version is the setting of this one, in files and in stored records alike
+    # (review of PR 1: a record with 2 was read as 5 without a word, a file with 3 was refused)
+    for value in (5, 3):
+        cfg, notices = load_config_with_notices(write(tmp_path, {**BASE, "analysis": {"halves_error_blocks": value}}))
+        assert cfg.analysis.part_error_blocks == value
+        assert notices[0].startswith(f"analysis.halves_error_blocks: {value} is analysis.part_error_blocks in this version")
+    assert analysis_settings_of({"version": 4, "halves_error_blocks": 2}).analysis.part_error_blocks == 2
 
 
 def test_documented_defaults_are_the_defaults_of_the_code(repo):

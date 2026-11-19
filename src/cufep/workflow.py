@@ -777,26 +777,38 @@ def archive_leg(leg_dir: Path) -> Path | None:
     The leg then starts anew from its pre-equilibration and restraint, which stay where they
     are. Nothing is deleted. Returns the new directory, or None if the leg had none of these.
     """
+    import os
+
     present = [leg_dir / name for name in LEG_RUN_FILES if (leg_dir / name).exists()]
     present += sorted(path for path in leg_dir.glob(f"{FAILED_BACKEND_DIR}_*") if path.is_dir())
-    if not present:
+    # an archive that an interrupted call began is completed, not begun a second time
+    staging = sorted(leg_dir.glob(".previous_*.partial"))
+    if not present and not staging:
         return None
-    n = 1
-    while (leg_dir / f"previous_{n}").exists():
-        n += 1
+    if staging:
+        stage = staging[0]
+        n = int(stage.name.split("_")[1].split(".")[0])
+    else:
+        n = 1
+        while (leg_dir / f"previous_{n}").exists():
+            n += 1
+        stage = leg_dir / f".previous_{n}.partial"
+        stage.mkdir()
     dest = leg_dir / f"previous_{n}"
-    dest.mkdir()
-    for f in present:
-        f.rename(dest / f.name)
     # the files these samples were made from stay with the leg, which uses them again; the archive
-    # gets copies, so that it can be analysed as it is (leg_files)
+    # gets copies (leg_files), each written whole under another name first
     for name in LEG_INPUT_FILES:
-        if (leg_dir / name).exists():
-            shutil.copy2(leg_dir / name, dest / name)
+        if (leg_dir / name).exists() and not (stage / name).exists():
+            part = stage / f"{name}.copying"
+            shutil.copy2(leg_dir / name, part)
+            os.replace(part, stage / name)
+    for f in present:
+        f.rename(stage / f.name)
     # a leg that is being run again has had its result set aside by begin_leg: in the archive
     # it is the result of those windows and samples again
-    if (dest / "result.previous.json").exists() and not (dest / "result.json").exists():
-        (dest / "result.previous.json").rename(dest / "result.json")
+    if (stage / "result.previous.json").exists() and not (stage / "result.json").exists():
+        (stage / "result.previous.json").rename(stage / "result.json")
+    stage.rename(dest)                                  # the archive appears complete, in one step
     return dest
 
 
@@ -1359,7 +1371,8 @@ def run_leg(job: LegJob) -> dict:
 
     slowest = analysis_dict["slowest_window"]
     blocks = analysis_dict.get("delta_g_error_n_blocks")
-    error_from = f"from {blocks} time blocks" if analysis_dict.get("delta_g_error_from") == "time blocks" else "analytical"
+    error_from = (f"from {blocks} time blocks" if analysis_dict.get("delta_g_error_from") == "time blocks"
+                  else analysis_dict.get("delta_g_error_from") or "analytical")
     log(f"dG(decouple) = {number(total, 2, KCAL)} ± {number(analysis_dict['delta_g_error'], 2, KCAL)} kcal/mol "
         f"(standard error {error_from}; MBAR {number(analysis_dict['delta_g_mbar'], 2, KCAL)} ± "
         f"{number(analysis_dict['delta_g_mbar_error'], 2, KCAL)}, tail {number(-correction, 2, KCAL)}); "
@@ -1478,6 +1491,83 @@ def analysis_record(cfg) -> dict:
             "pose_rmsd_warning_nm": float(settings.restraints.pose_rmsd_warning_nm)}
 
 
+def analyse_leg_directory(directory, config=None, equilibration_ns: float | None = None,
+                          equilibration_iterations: int | None = None) -> dict:
+    """The result of the samples in a leg directory (or its hrex/, or an archive previous_<n>/), as
+    ``cufep analyze`` gives it and with the settings it uses: those of ``config`` (a whole
+    configuration) if given, else those the leg's result records, else those its run stored with
+    the samples before it began, else those of the result the leg had before, else the defaults.
+    Returns {"result", "samples", "n_equilibration", "source", "directory"}. Raises WorkflowError
+    (and NoProduction, NoCorrection through it) with the reason. The one way for every tool that
+    analyses a leg directory, so that they cannot differ in settings or in the equilibration."""
+    from cufep.analysis.mbar import NoProduction
+    from cufep.config.schema import AnalysisConfig
+    from cufep.sampling.storage import equilibration_boundary, read_samples
+
+    d = Path(directory)
+    if d.name == "hrex" and (d / "samples.h5").exists():
+        d = d.parent
+    hrex = d / "hrex"
+    if not (hrex / "samples.h5").exists():
+        raise WorkflowError(f"{d}: no samples (hrex/samples.h5) in this directory")
+    samples = read_samples(hrex)
+    attrs = samples["attrs"]
+    if equilibration_iterations is not None:
+        n_equilibration = int(equilibration_iterations)            # as given, exactly
+    elif equilibration_ns is not None:
+        # the rule of the run (iterations_for), with the length of an iteration its configuration asked
+        # for where the samples record it, else the length an iteration had (which can differ from the
+        # one asked for by a fraction of a step: then --equilibration-iterations gives the boundary
+        # exactly); an equilibration of 0 is none
+        recorded = ((attrs.get("conditions") or {}).get("settings") or {}).get("time_per_iteration_ps") \
+            if isinstance(attrs.get("conditions"), dict) else None
+        if recorded is None and "iteration_ps" not in attrs:
+            raise WorkflowError(f"{hrex}: the samples do not record the length of an iteration")
+        n_equilibration = iterations_for(equilibration_ns, float(recorded or attrs["iteration_ps"]),
+                                         1 if equilibration_ns > 0 else 0)
+    else:
+        n_equilibration = equilibration_boundary(attrs, d)
+        if n_equilibration is None:
+            raise WorkflowError(
+                f"{hrex}: these samples are of a run that did not finish and that was made by a version of cuFEP "
+                "which recorded the end of the equilibration only then. Give the length of the equilibration per "
+                "lambda window with --equilibration-ns (sampling.equilibration_ns of that run; the default was 1).")
+    results = {}
+    for name in ("result.json", "result.previous.json"):
+        if (d / name).exists():
+            try:
+                results[name] = json.loads((d / name).read_text())
+            except json.JSONDecodeError:
+                continue
+    earlier = results.get("result.json") or results.get("result.previous.json")
+    of_the_run = attrs.get("analysis_record") if isinstance(attrs.get("analysis_record"), dict) else None
+    if config is not None:
+        settings, source = config, "the configuration given"
+    elif (results.get("result.json") or {}).get("analysis_record"):
+        settings = analysis_settings_of(results["result.json"]["analysis_record"], attrs)
+        source = "the settings the leg's result records"
+    elif of_the_run:
+        settings = analysis_settings_of(of_the_run, attrs)
+        source = "the settings of the run that made the samples, which has no result (yet)"
+    elif (results.get("result.previous.json") or {}).get("analysis_record"):
+        settings = analysis_settings_of(results["result.previous.json"]["analysis_record"], attrs)
+        source = "the settings the result records that the leg had before"
+    else:
+        tail = "reweight" if "lrc_s6" in attrs else "none"
+        if earlier is not None and earlier.get("lrc_method") in ("reweight", "isotropic", "none"):
+            tail = earlier["lrc_method"]
+        # the defaults, with the outer radius the samples recorded their tail energies to
+        settings = analysis_settings_of({"lrc": tail}, attrs)
+        source = "the defaults: the leg has no record of the settings it was analysed with"
+    try:
+        result = leg_result_from_samples(d, settings, run_record_of(earlier, d), samples=samples,
+                                         n_equilibration=n_equilibration)
+    except NoProduction as exc:
+        raise WorkflowError(f"{hrex}: no production yet: {exc}") from exc
+    return {"result": result, "samples": samples, "n_equilibration": n_equilibration, "source": source,
+            "directory": d}
+
+
 def recorded_tail_radius(attrs: dict) -> float | None:
     """The outer radius (nm) to which the samples with these attributes recorded their tail
     energies, or None if they do not say."""
@@ -1517,9 +1607,9 @@ def analysis_settings_of(record: dict | None, attrs: dict | None = None):
     an earlier version lacks and the samples ``attrs`` hold)."""
     from types import SimpleNamespace
 
-    from cufep.config.schema import AnalysisConfig, MembraneConfig, RestraintConfig
+    from cufep.config.schema import AnalysisConfig, MembraneConfig, RestraintConfig, renamed_settings
 
-    record = dict(record or {})
+    record, _renamed = renamed_settings("analysis", dict(record or {}))
     if "lrc_cutoff_nm" not in record and attrs is not None and recorded_tail_radius(attrs) is not None:
         record["lrc_cutoff_nm"] = recorded_tail_radius(attrs)
     membrane, restraints = MembraneConfig(), RestraintConfig()
@@ -1941,22 +2031,69 @@ def analysis_differences(result: dict, analysis) -> str:
                                           {k: v for k, v in current.items() if k != "version"}))
 
 
-def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: int, cfg: Config) -> None:
+def samples_analysis_problems(leg_dir: Path, analysis) -> list[str]:
+    """Why the samples of a leg directory cannot give a result with the settings ``analysis``,
+    found by the functions of the analysis itself (:func:`analysis_problems`, then the production
+    from the stored boundary to the stored end and the tail correction of it) without solving
+    MBAR; empty if they can."""
+    from cufep.analysis.mbar import MIN_INDEPENDENT_SAMPLES, NoCorrection, tail_series
+    from cufep.sampling.storage import equilibration_boundary, read_samples
+
+    samples = read_samples(leg_dir / "hrex")
+    attrs = samples["attrs"]
+    problems = analysis_problems(attrs, analysis)
+    if problems:
+        return problems
+    boundary = equilibration_boundary(attrs, leg_dir)
+    if boundary is None:
+        return ["they do not record where their production begins"]
+    n = int(samples["u"].shape[0]) - boundary
+    if n < MIN_INDEPENDENT_SAMPLES:
+        return [f"they hold {max(0, n)} iterations of production"]
+    a = getattr(analysis, "analysis", analysis)
+    try:
+        series = tail_series(samples, a.lrc, boundary, n, float(attrs.get("temperature_K", 298.15)))
+    except NoCorrection as exc:
+        return [str(exc)]
+    why = series.estimate(np.ones(series.values.size, dtype=bool))[3]
+    return [f"the tail correction of their production cannot be estimated: {why}"] if why else []
+
+
+def combined_record(leg_dir: Path, data: dict, cfg: Config) -> tuple[dict, list[str]]:
+    """What a finished leg that a run does not sample will be combined with at the end of that run,
+    and why it could not be: its result as it is, if it was analysed as this run analyses or its
+    samples are gone; else the result its samples will give when they are analysed again
+    (:func:`refresh_leg_result`): temperature and pressure of the samples, the correction of this
+    run, the outer radius the samples recorded."""
+    from cufep.sampling.storage import stored_attributes
+
+    n_stored, attrs = stored_attributes(leg_dir / "hrex")
+    if data.get("analysis_record") == analysis_record(cfg) or n_stored == 0:
+        return data, []
+    conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
+    record = {key: data.get(key) for key, _name in CYCLE_CONDITIONS}
+    record.update(temperature_K=attrs.get("temperature_K"), pressure_bar=conditions.get("pressure_bar"),
+                  lrc_method=cfg.analysis.lrc, lrc_long_cutoff_nm=recorded_tail_radius(attrs))
+    return record, samples_analysis_problems(leg_dir, cfg)
+
+
+def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: int, cfg: Config,
+                       prep_info: dict | None = None) -> None:
     """Before a leg is sampled: the finished legs it will be combined with and that this run does
-    not sample must have been made under the temperature and pressure this run uses, and their
-    samples must hold what the analysis of this run needs (:func:`analysis_problems`; with the
-    correction by reweighting also tail energies in their production), since they are analysed
-    with it before they are combined.
+    not sample must be legs of the same thermodynamic cycle as the ones this run makes.
 
-    ``selected`` holds the (repeat, leg) of this ligand that the run samples. Raises WorkflowError
-    with what differs, before any time is spent on a leg whose result could not be used.
+    Each of them is taken as it will be combined (:func:`combined_record`: its result, or what its
+    samples give when they are analysed again), and compared with what the legs of this run will
+    record by the rule of the combination itself (:func:`cycle_differences`); samples that cannot
+    be analysed with the settings of this run are named too. ``selected`` holds the (repeat, leg)
+    of this ligand that the run samples, ``prep_info`` the record of its prepared systems if they
+    exist. Raises WorkflowError with what differs, before any time is spent on a leg whose result
+    could not be used.
     """
-    from cufep.analysis.mbar import MIN_INDEPENDENT_SAMPLES
-    from cufep.sampling.storage import _same, equilibration_boundary, stored_attributes, stored_tail_iterations
-
-    asked = {"temperature_K": float(cfg.thermodynamics.temperature_K), "pressure_bar": float(cfg.thermodynamics.pressure_bar)}
-    names = dict(CYCLE_CONDITIONS)
-    differing = []
+    own = {"temperature_K": float(cfg.thermodynamics.temperature_K), "pressure_bar": float(cfg.thermodynamics.pressure_bar),
+           "prepared_systems_sha256": record_digest((prep_info or {}).get("made_from")), "lrc_method": cfg.analysis.lrc,
+           "lrc_long_cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}
+    legs, differing = [("the legs this run samples", own)], []
     for r in range(repeats):
         for leg in ("complex", "solvent"):
             if (r, leg) in selected:
@@ -1965,22 +2102,13 @@ def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: 
             state, data = leg_state(leg_dir)
             if state != "finished":
                 continue
-            where = f"the {leg} leg of repeat {r}, which is finished and not part of this run,"
-            for key, value in asked.items():
-                if data.get(key) is not None and not _same(data[key], value):
-                    differing.append(f"{names[key]}: {where} was made at {data[key]}; this run uses {value}")
-            # what its samples hold, whatever its result says
-            n_stored, attrs = stored_attributes(leg_dir / "hrex")
-            if n_stored == 0:
-                continue                             # combined as it is and named (old_analysis)
-            differing += [f"{where} has samples that {problem}" for problem in analysis_problems(attrs, cfg)]
-            boundary = equilibration_boundary(attrs, leg_dir)
-            if cfg.analysis.lrc == "reweight" and "lrc_s6" in attrs and boundary is not None:
-                in_production = int(np.sum(stored_tail_iterations(leg_dir / "hrex") >= boundary))
-                if in_production < MIN_INDEPENDENT_SAMPLES:
-                    differing.append(f"{where} has {in_production} tail energies in its production; "
-                                     f"{MIN_INDEPENDENT_SAMPLES} are needed for the tail correction")
-    if differing and selected:
+            where = f"the {leg} leg of repeat {r} (finished, not part of this run)"
+            record, problems = combined_record(leg_dir, data, cfg)
+            legs.append((where, record))
+            differing += [f"{where} has samples that cannot be analysed with the settings of this run: {problem}"
+                          for problem in problems]
+    differing = cycle_differences(legs)[0] + differing
+    if differing and selected and len(legs) > 1:
         raise WorkflowError(
             f"{ligand_name}: the legs this run would sample could not be combined with the legs the ligand already "
             f"has ({'; '.join(differing)}). Nothing was run. Use the settings of the finished legs, or run all "
@@ -2111,7 +2239,11 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                             if "halves" not in quality or (quality.get(key) or {}).get("ok") is None]
                 old_analysis.append(f"{where}: {differs}" + (f"; not checked: {', '.join(not_made)}" if not_made else ""))
         warnings += [f"the result of the {item}. Its free energy and uncertainty are combined as they are" for item in old_analysis]
+    # the version of the analysis behind every leg that is combined (None: not recorded)
+    versions = sorted({(result.get("analysis_record") or {}).get("version") for _where, result in complete},
+                      key=lambda v: -1 if v is None else v)
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
+                 "analysis_versions": versions,
                  "failed_legs": failed_legs, "inconsistent_legs": inconsistent, "not_compared": not_compared,
                  "origin_not_recorded": unrecorded, "old_analysis": old_analysis,
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],

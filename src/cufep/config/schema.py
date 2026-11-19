@@ -436,11 +436,6 @@ REMOVED_SETTINGS = {
         "analysis.estimators_tolerance_kcal_mol (BAR and MBAR within 1 kcal/mol)",
         "A multiple of the standard error cannot be turned into kT or kcal/mol: remove the line and set those "
         "three where their defaults do not suit (docs/configuration.md)"),
-    ("analysis", "halves_error_blocks"): (
-        5.0,
-        "The number of time blocks for the standard error of a half of the production is now that of every "
-        "part of the production (the halves, the forward and reverse series, the consecutive blocks)",
-        "Use analysis.part_error_blocks"),
     ("lambda_schedule", "adaptive", "equilibration_check_ps"): (
         250.0,
         "Adaptive lambda scheduling chooses the lambda windows in its precalculation only and no longer adds "
@@ -448,6 +443,30 @@ REMOVED_SETTINGS = {
         "Remove the line; lambda_schedule.adaptive.window_ps and equilibration_ps set the lengths of the "
         "precalculation"),
 }
+
+
+#: settings of earlier versions that have another name now: (old path) -> (new path, what changed).
+#: Applied to configuration files and to the records of the settings stored with results and
+#: samples alike (:func:`renamed_settings`)
+RENAMED_SETTINGS = {
+    ("analysis", "halves_error_blocks"): (
+        ("analysis", "part_error_blocks"),
+        "the number of time blocks for the standard error of a half of the production is now that of every "
+        "part of the production (the halves, the forward and reverse series, the consecutive blocks)"),
+}
+
+
+def renamed_settings(section: str, record: dict) -> tuple[dict, list[str]]:
+    """A flat record of the settings of one section (``record``, as results store it) with the
+    names of this version, and what was renamed."""
+    record, notices = dict(record), []
+    for (old_section, old), ((new_section, new), what) in RENAMED_SETTINGS.items():
+        if old_section == section and old in record:
+            value = record.pop(old)
+            if new not in record:
+                record[new] = value
+            notices.append(f"{section}.{old}: {value} is {section}.{new} in this version ({what})")
+    return record, notices
 
 
 def migrate_settings(data: dict) -> tuple[dict, list[str]]:
@@ -458,6 +477,10 @@ def migrate_settings(data: dict) -> tuple[dict, list[str]]:
     """
     data = copy.deepcopy(data)
     notices: list[str] = []
+    for section in {path[0] for path in RENAMED_SETTINGS}:
+        if isinstance(data.get(section), dict):
+            data[section], renamed = renamed_settings(section, data[section])
+            notices += renamed
     for path, (default, now, to_do) in REMOVED_SETTINGS.items():
         block = data
         for name in path[:-1]:

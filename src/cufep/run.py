@@ -129,9 +129,9 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
             if lig.name not in to_run:
                 continue
             mine = {(r, leg) for name, r, leg in selected if name == lig.name}
-            check_partner_legs(lig_dirs[lig.name], lig.name, mine, repeats, resolved)
             info = check_prepared(resolved, lig, lig_dirs[lig.name], membrane, resolved.solvation.box_shape,
                                   lambda message: None)
+            check_partner_legs(lig_dirs[lig.name], lig.name, mine, repeats, resolved, info)
             for r, leg in sorted(mine):
                 if info is not None:
                     check_leg_reuse(resolved, lig_dirs[lig.name], leg, r, info, resolved.sampling.production(leg),

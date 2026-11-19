@@ -339,7 +339,11 @@ class ReplicaExchangeSampler:
             for _ in range(n):
                 ids.append((d, self._next_worker_id))
                 self._next_worker_id += 1
-        self.workers = keep                            # the stopped ones are gone, whatever happens next
+        # the stopped ones are gone, whatever happens next: the workers and the devices they name agree
+        # before anything can fail (review of PR 1: after a failed start the devices still named the
+        # stopped workers, and asking for them again changed nothing)
+        self.workers = keep
+        self.devices = [w.device for w in keep]
         new, _ready = start_workers([lambda d=d, i=i: _Process(ctx, self.spec, d, self.arrays.names, i, self.start_number)
                                      for d, i in ids])
         self.workers = keep + new
@@ -433,7 +437,19 @@ class ReplicaExchangeSampler:
         self.arrays.box[self.cur] = ckpt["boxes"]
         # the rows the checkpoint names: iterations that were run without being stored have none
         # (a checkpoint of an earlier version does not say, and then every iteration had a row)
-        rows = int((ckpt.get("extra") or {}).get("rows", ckpt["iteration"]))
+        extra = ckpt.get("extra") or {}
+        rows = int(extra.get("rows", ckpt["iteration"]))
+        if "rows" not in extra:
+            # a checkpoint of an earlier version, which numbered records by iteration: records with a
+            # number beyond the stored rows show iterations that were run without being stored (a
+            # warm-up), and then nothing tells which rows belong to the checkpoint (review of PR 1)
+            last = self.storage.last_record_iteration()
+            if last is not None and last >= self.storage.n_iterations:
+                raise StorageError(
+                    f"{self.storage.h5_path} was written by an earlier version, and its records carry iteration "
+                    f"{last} while it holds {self.storage.n_iterations} rows: some iterations were run without being "
+                    "stored, and its checkpoint does not say which rows belong to it. Nothing was changed; start "
+                    "the leg anew with --reschedule")
         if self.storage.n_iterations < rows:
             raise StorageError(
                 f"{self.storage.h5_path} holds {self.storage.n_iterations} iterations, fewer than the "

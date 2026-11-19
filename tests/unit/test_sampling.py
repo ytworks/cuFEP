@@ -131,9 +131,9 @@ def test_analysis_of_a_leg_with_a_window_that_overlaps_no_other_is_bounded():
     # value for them): only the whole is shown, flagged by its own overlap; the parts say why they are not
     assert [point[0] for point in res.forward] == [1.0] == [point[0] for point in res.reverse]
     assert res.forward[-1][1] == res.delta_g and res.reverse[-1][1] == res.delta_g
-    assert len(res.parts_not_determined) == 18 + 5 and "below 0.03: their free energy is not determined" in \
+    assert len(res.parts_not_determined) == 18 + 5 and "the samples do not connect the lambda windows" in \
         res.parts_not_determined[0]
-    assert res.blocks == [] and "the first half (iterations 0-750 of the production): lambda windows 0 and 1 overlap" \
+    assert res.blocks == [] and "the first half (iterations 0-750 of the production): the samples do not connect" \
         in res.convergence_note
     assert all(value is None for value in res.delta_g_error_blocks.values()) and res.delta_g_error_from == "analytical"
 
@@ -561,20 +561,228 @@ def test_a_part_of_the_production_whose_windows_do_not_overlap_has_no_estimate(m
         "none", np.zeros(0), np.zeros(0), 298.15), 2.479, 0.03, int(np.ceil(g.max())), np.array([0.0, 2.0]))
     trapped = estimator.estimate(*estimator.masks(0, 300), np.array([0.0, 2.0]))
     assert not trapped.determined and trapped.value is None
-    assert trapped.reason.startswith("lambda windows 0 and 1 overlap by 0.000 among these samples, below 0.03")
+    assert trapped.reason.startswith("the samples do not connect the lambda windows: the second largest eigenvalue of "
+                                     "their overlap matrix is 1.000000") and trapped.kind == "not determined"
     # the halves are not compared, and say why
     assert np.isnan(res.first_half[0]) and np.isnan(res.second_half[0])
-    assert "the second half (iterations 300-600 of the production): lambda windows 0 and 1 overlap by 0.000" in \
-        res.convergence_note
+    assert "the second half (iterations 300-600 of the production): the samples do not connect" in res.convergence_note
     halves = quality_checks(res.to_dict())["halves"]
     assert halves["ok"] is None and halves["reason"] == res.convergence_note
     # a number of blocks without whose first block nothing connects the windows is not used
     assert res.delta_g_error_blocks["5"] is None
-    assert res.delta_g_error_blocks_note["5"].startswith("without block 1: lambda windows 0 and 1 overlap by")
+    assert res.delta_g_error_blocks_note["5"].startswith("without block 1: the samples do not connect")
     # the reverse series has no estimate before it reaches back into the first 120 iterations
     reverse_fractions = [round(point[0], 2) for point in res.reverse]
     assert reverse_fractions == [0.9, 1.0] and len(res.forward) == 10
     assert sum(text.startswith("reverse point") for text in res.parts_not_determined) == 8
+
+
+def test_connected_windows_are_determined_whatever_the_level_and_unconnected_ones_never(monkeypatch):
+    """Review of PR 1: whether a part is determined depended on analysis.min_overlap. With 0, a half whose
+    two windows share no sample passed (0 >= 0) and was compared; with the default, 34 windows of the same
+    Hamiltonian (each element 1/34 = 0.0294, dG exactly 0) were called not determined. Determined now means
+    connected by the samples (the second eigenvalue of the overlap matrix, Klimovich et al. 2015, section
+    3.4); the level of analysis.min_overlap is a reason of its own."""
+    import cufep.analysis.mbar as mbar
+
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
+    rng = np.random.default_rng(3)
+    n, centres = 600, np.array([0.0, 1.0])
+    x = centres[None, :] + rng.normal(size=(n, 2))
+    u = 0.5 * (x[:, :, None] - centres[None, None, :]) ** 2
+    u[120:, 0, 1] = u[120:, 1, 0] = 1500.0
+    states = np.tile(np.arange(2), (n, 1))
+    for level in (0.0, 0.03):
+        res = analyze_leg({"u": u, "states": states}, 298.15, min_overlap=level)
+        assert np.isnan(res.second_half[0]) and "the second half" in res.convergence_note
+        assert "the samples do not connect the lambda windows" in res.convergence_note
+    # 34 windows with the same Hamiltonian: every element 1/34, below 0.03, and yet connected
+    k = 34
+    x = rng.normal(size=(200, k))
+    same = {"u": np.repeat((0.5 * x ** 2)[:, :, None], k, axis=2), "states": np.tile(np.arange(k), (200, 1))}
+    res = analyze_leg(same, 298.15)
+    assert res.delta_g == pytest.approx(0.0, abs=1e-9) and res.min_overlap == pytest.approx(1 / 34, abs=1e-3)
+    assert "not connect" not in res.convergence_note and "not connect" not in " ".join(res.parts_not_determined)
+    assert "below analysis.min_overlap (0.03), the level of a reliable estimate" in res.convergence_note
+    lenient = analyze_leg(same, 298.15, min_overlap=0.02)
+    assert lenient.convergence_note == "" and lenient.first_half[0] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_the_analytical_error_with_a_correction_is_an_upper_bound(monkeypatch):
+    """Review of PR 1: where no time blocks can be used, the analytical error added MBAR's and the
+    correction's as if they were independent, but both come from the same configurations: in a two-state
+    model their correlation was -0.79 and the error of the difference 0.108 kJ/mol against 0.082 reported.
+    Their covariance is not known, so the sum of the two errors, an upper bound, is reported."""
+    rng = np.random.default_rng(5)
+    kt = 8.31446261815324e-3 * 298.15
+    n = 400
+    x = rng.random(n * 2).reshape(n, 2) < 0.5
+    u = np.zeros((n, 2, 2))
+    u[:, :, 1] = 1.6 * x                                            # u0 = 0, u1 = 1.6 x
+    states = np.tile(np.arange(2), (n, 1))
+    coupled = x[:, 0]                                               # the replica in state 0
+    samples = {"u": u, "states": states, "volume": np.ones((n, 2)), "lrc_iter": np.arange(n),
+               "lrc_du": -0.8 * kt * coupled.astype(float), "attrs": {}}
+    res = analyze_leg(samples, 298.15, n_equilibration=0, tail="reweight", error_blocks=[1000])
+    assert res.delta_g_error_from == "analytical upper bound" and res.delta_g_error_blocks == {"1000": None}
+    assert res.delta_g_error == pytest.approx(res.delta_g_mbar_error + res.correction_error)
+    assert res.delta_g_error >= 0.108 * 0.9 and res.correction_correlation is None
+    # with blocks that can be used, the correlation is taken from their replicates: here it is negative
+    # (the configurations that raise the MBAR part lower the correction), so the error exceeds the sum in
+    # quadrature that independent errors would give
+    blocks = analyze_leg(samples, 298.15, n_equilibration=0, tail="reweight", error_blocks=[20])
+    assert blocks.correction_correlation is not None and blocks.correction_correlation < 0
+    analytic = np.sqrt(blocks.delta_g_mbar_error ** 2 + blocks.correction_error ** 2
+                       - 2 * blocks.correction_correlation * blocks.delta_g_mbar_error * blocks.correction_error)
+    assert blocks.delta_g_error >= analytic - 1e-12
+    assert analytic > np.hypot(blocks.delta_g_mbar_error, blocks.correction_error)
+
+
+def test_a_damaged_tail_is_refused_and_a_correction_for_comparison_never_stops_the_analysis():
+    """Review of PR 1: one tail energy of NaN gave exit code 0 with a free energy of null; volumes of zero in
+    an old file made the isotropic correction, computed for comparison only, divide by zero and lose the
+    correction by reweighting as well."""
+    from cufep.analysis.mbar import NoCorrection
+
+    samples = leg_with_tail(n=60, tail=lambda it, rng: np.full(it.size, -2.0))
+    samples["attrs"] = {"lrc_s6": 1.0, "lrc_s12": 1.0, "lrc_cutoff_nm": 0.9}
+    broken = dict(samples, lrc_du=samples["lrc_du"].copy())
+    broken["lrc_du"][3] = np.nan
+    with pytest.raises(NoCorrection, match="1 of the 15 tail energies in these iterations are not finite"):
+        analyze_leg(broken, 298.15, n_equilibration=0, tail="reweight")
+    zero = dict(samples, volume=np.zeros((60, 3)))
+    res = analyze_leg(zero, 298.15, n_equilibration=0, tail="reweight")
+    assert res.correction == pytest.approx(-2.0) and res.lrc_isotropic is None and res.lrc_reweight == pytest.approx(-2.0)
+    with pytest.raises(NoCorrection, match="volumes of the coupled state in these iterations are not finite and positive"):
+        analyze_leg(zero, 298.15, n_equilibration=0, tail="isotropic")
+    # the effective number of the exponential weights of the correction: 15 equal ones count as 15
+    assert res.correction_effective_samples == pytest.approx(15.0) and res.correction_largest_weight == pytest.approx(1 / 15)
+    skewed = dict(samples, lrc_du=np.where(np.arange(15) < 2, -40.0, 0.0))
+    few = analyze_leg(skewed, 298.15, n_equilibration=0, tail="reweight")
+    assert few.correction_effective_samples == pytest.approx(2.0, abs=1e-3) and few.correction_largest_weight > 0.49
+
+
+def test_a_block_without_an_estimate_leaves_the_others(monkeypatch):
+    """Review of PR 1: of five consecutive blocks, the last had no tail energy; all five disappeared from
+    the result. The four that have an estimate are kept at their places."""
+    samples = leg_with_tail(n=100, k=2, tail=lambda it, rng: np.full(it.size, -4.0))
+    keep = samples["lrc_iter"] < 80
+    samples["lrc_iter"], samples["lrc_du"] = samples["lrc_iter"][keep], samples["lrc_du"][keep]
+    res = analyze_leg(samples, 298.15, n_equilibration=0, tail="reweight")
+    assert [(start, end) for start, end, _dg, _err in res.blocks] == [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8)]
+    assert all(dg == pytest.approx(4.0) for _s, _e, dg, _err in res.blocks)
+    assert any(text.startswith("block 5 of 5") for text in res.parts_not_determined)
+
+
+def test_the_reread_of_stored_legs_gives_what_cufep_analyze_gives(tmp_path):
+    """Review of PR 1: the script that reads stored legs again analysed them without the tail correction and
+    stopped on a leg whose error did not come from time blocks; cufep analyze gave 5.7317 kJ/mol where the
+    script wrote 1.7317 and then failed."""
+    import importlib.util
+    import sys as system
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+
+    run = tmp_path / "run"
+    leg = run / "lig" / "repeat_0" / "solvent"
+    storage = LegStorage(leg / "hrex", 4, 4)
+    storage.check_conditions({"temperature_K": 298.15, "lrc": {"cutoff_nm": 0.9, "long_cutoff_nm": 2.0}})
+    storage.set_meta(temperature_K=298.15, iteration_ps=2.5, backend="openmm", leg="solvent", lrc_s6=1.0, lrc_s12=1.0,
+                     lrc_cutoff_nm=0.9)
+    storage.set_plan(0, 120)
+    u, states, _ = harmonic_samples(120, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(9))
+    for it in range(120):
+        storage.append(u[it], states[it], np.ones(4))
+        if it % 4 == 0:
+            storage.append_record(it, {"lrc_du": -4.0})
+    storage.close()
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    spec = importlib.util.spec_from_file_location("m11", pathlib_path() / "spikes" / "m11_convergence_report.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    out = tmp_path / "reread.json"
+    argv = system.argv
+    system.argv = ["m11", str(run), "--out", str(out), "--jobs", "1"]
+    try:
+        module.main()
+    finally:
+        system.argv = argv
+    row = json.loads(out.read_text())[0]
+    assert row["delta_g"] * 4.184 == pytest.approx(shown["delta_g_decouple"]) and shown["lrc"] == pytest.approx(-4.0)
+    assert row["error"] * 4.184 == pytest.approx(shown["delta_g_error"])
+    assert row["halves_kT"] == pytest.approx(shown["quality"]["halves"].get("difference_kT"), nan_ok=True)
+
+
+def _reread(run_dir, tmp_path):
+    import importlib.util
+    import sys as system
+
+    spec = importlib.util.spec_from_file_location("m11", pathlib_path() / "spikes" / "m11_convergence_report.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    out = tmp_path / "reread.json"
+    argv = system.argv
+    system.argv = ["m11", str(run_dir), "--out", str(out), "--jobs", "1"]
+    try:
+        module.main()
+    finally:
+        system.argv = argv
+    from pathlib import Path
+    return {Path(row["leg_dir"]).parts[-3]: row for row in json.loads(out.read_text())}
+
+
+@pytest.mark.parametrize("case", ["reweight", "isotropic", "none", "strict levels", "no tail in production",
+                                  "boundary unknown", "a tail energy not finite"])
+def test_the_reread_and_cufep_analyze_agree_whatever_the_settings(tmp_path, case):
+    """Review of PR 1: the script that reads stored legs guessed the correction from the data (isotropic
+    legs got the correction by reweighting, a reweighted leg without tail energies got none, 0 +- 0),
+    ignored stored levels and numbers of blocks, took all rows as production where the boundary was not
+    known, and stopped on a leg whose tail held a NaN. It and cufep analyze must give the same answer, or
+    refuse alike."""
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+    from cufep.config.schema import AnalysisConfig
+    from cufep.workflow import analysis_record
+
+    run = tmp_path / "run"
+    leg = run / case.replace(" ", "_") / "repeat_0" / "solvent"
+    storage = LegStorage(leg / "hrex", 4, 4)
+    storage.check_conditions({"temperature_K": 298.15, "lrc": {"cutoff_nm": 0.9, "long_cutoff_nm": 2.0}})
+    storage.set_meta(temperature_K=298.15, iteration_ps=2.5, backend="openmm", leg="solvent", lrc_s6=1.0, lrc_s12=1.0,
+                     lrc_cutoff_nm=0.9)
+    if case != "boundary unknown":
+        storage.set_plan(20, 140)
+    u, states, _ = harmonic_samples(140, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(9))
+    for it in range(140):
+        storage.append(u[it], states[it], np.full(4, 30.0))
+        if it % 4 == 0 and (case != "no tail in production" or it < 20):
+            storage.append_record(it, {"lrc_du": float("nan") if (case == "a tail energy not finite" and it == 40) else -4.0})
+    storage.close()
+    settings = {"reweight": {}, "isotropic": {"lrc": "isotropic"}, "none": {"lrc": "none"},
+                "strict levels": {"min_effective_samples": 150.0, "error_blocks": [7]}}.get(case, {})
+    if case != "boundary unknown":
+        (leg / "result.json").write_text(json.dumps({"leg": "solvent", "analysis_record": analysis_record(
+            AnalysisConfig(**settings))}))
+    shown = CliRunner().invoke(main, ["analyze", str(leg)])
+    row = _reread(run, tmp_path)[case.replace(" ", "_")]
+    if case in ("no tail in production", "boundary unknown", "a tail energy not finite"):
+        assert shown.exit_code == 1 and "error" in row and "delta_g" not in row
+        return
+    assert shown.exit_code == 0, shown.output
+    out = json.loads(shown.output)
+    assert row["delta_g"] * 4.184 == pytest.approx(out["delta_g_decouple"])
+    assert row["error"] * 4.184 == pytest.approx(out["delta_g_error"])
+    assert row["tail"] == out["lrc_method"] == settings.get("lrc", "reweight")
+    assert row["analysis_record"] == out["analysis_record"] and row["samples_ok"] == out["quality"]["samples"]["ok"]
+    if case == "strict levels":
+        assert out["quality"]["samples"]["ok"] is False and list(out["delta_g_error_blocks"]) == ["7"]
+
+
+def pathlib_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[2]
 
 
 def test_a_tail_correction_without_observations_in_the_production_is_no_correction(tmp_path):
@@ -636,7 +844,8 @@ def test_every_part_is_the_reported_quantity_and_its_error_agrees_with_the_scatt
     assert abs(values.mean() - truth) < 3 * scatter / np.sqrt(len(values))
     assert 0.8 * scatter < np.sqrt(np.mean([res.delta_g_error ** 2 for _, res in legs])) < 1.4 * scatter
     for samples, res in legs:
-        analytic = np.hypot(res.delta_g_mbar_error, res.correction_error)
+        sm, sc, rho = res.delta_g_mbar_error, res.correction_error, res.correction_correlation
+        analytic = sm + sc if rho is None else np.sqrt(sm ** 2 + sc ** 2 - 2 * rho * sm * sc)
         assert res.delta_g_error >= analytic - 1e-12 and res.delta_g == pytest.approx(res.delta_g_mbar - res.correction)
     # the halves by hand: MBAR of the half's own samples minus the correction of the half's own tail energies
     samples, res = legs[0]
@@ -1107,6 +1316,109 @@ def test_the_first_write_to_a_file_of_an_earlier_version_counts_what_it_held_fir
         assert h5["committed_counts"][:].tolist() == [6, 3, 3] and h5["volume"].shape[0] == 10
     st.close()
     _assert_exactly(tmp_path / "leg", 10)
+
+
+def _killed_after_publishing(directory):
+    """In a process of its own: six stored rows and a checkpoint, four more rows, and the process ends at
+    once after the counts were published and before anything else happens."""
+    import os
+
+    import cufep.sampling.storage as storage_module
+
+    st = LegStorage(directory, 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 6), 0)
+    st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6, {"start": 0, "rows": 6})
+    _fill(st, _rows(6, 4), 6)
+    real = storage_module._publish
+
+    def publish_and_die(h5, *counts):
+        real(h5, *counts)
+        os._exit(7)
+
+    storage_module._publish = publish_and_die
+    st.flush()
+
+
+def test_a_process_killed_right_after_the_counts_were_published_leaves_a_readable_leg(tmp_path):
+    """Review of PR 1: the counts were published before the data was flushed; a process killed in between
+    left counts of ten rows over the data of six, and neither the reader nor the checkpoint of six rows could
+    use the file. The data reaches the file first now."""
+    import multiprocessing as mp
+
+    proc = mp.get_context("fork").Process(target=_killed_after_publishing, args=(tmp_path / "leg",))
+    proc.start()
+    proc.join(60)
+    assert proc.exitcode == 7
+    data = read_samples(tmp_path / "leg")
+    rows = data["u"].shape[0]
+    assert rows in (6, 10)
+    _assert_exactly(tmp_path / "leg", rows)
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    assert st.read_checkpoint()["iteration"] == 6
+    st.truncate(6)                                                   # as a resume from its checkpoint does
+    _assert_exactly(tmp_path / "leg", 6)
+
+
+def test_a_checkpoint_of_an_earlier_version_after_a_warm_up_is_refused(tmp_path, tiny_leg):
+    """Review of PR 1: an earlier version numbered records by iteration and kept no count of rows in its
+    checkpoint. After a warm-up of four iterations without storage, six stored ones and a checkpoint, and
+    four more stored ones, the file held ten rows; the checkpoint (iteration 10) was taken for ten rows and
+    the trajectory after it stayed. Such a checkpoint is refused before anything is added."""
+    from cufep.sampling.storage import StorageError
+
+    spec, pos, box = tiny_leg
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        for it in range(10):
+            s.storage.append(np.zeros((4, 4)), np.arange(4), np.ones(4))
+            s.storage.append_record(4 + it, {"frame": np.zeros((3, 3), np.float32), "box": np.eye(3, dtype=np.float32)})
+        s.storage.write_checkpoint(s.arrays.pos[0], s.arrays.vel[0], s.arrays.box[0], np.arange(4), 10, {"start": 0})
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        with pytest.raises(StorageError, match="its records carry iteration 13 while it holds 10 rows"):
+            s.restore()
+    assert read_samples(tmp_path / "hrex")["u"].shape[0] == 10      # nothing was changed
+    # an ordinary checkpoint of that version (every iteration stored) is resumed
+    with ReplicaExchangeSampler(spec, tmp_path / "plain", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(4, record_stride=1)
+        s.storage.write_checkpoint(s.arrays.pos[s.cur], s.arrays.vel[s.cur], s.arrays.box[s.cur], s.state_of_replica, 4,
+                                   {"start": 0})
+    with ReplicaExchangeSampler(spec, tmp_path / "plain", devices=[None], inline=True, log=lambda m: None) as s:
+        assert s.restore() and s.iteration == 4 and s.storage.n_iterations == 4
+
+
+def test_a_failed_change_of_devices_leaves_workers_and_devices_in_agreement(tmp_path, tiny_leg, monkeypatch):
+    """Review of PR 1: from devices [0, 1] to [1, 2] with the worker on GPU 2 failing to start: one worker
+    on GPU 1 was left and the devices still said [0, 1], so asking for [0, 1] again changed nothing."""
+    import cufep.sampling.hrex as hrex
+    from cufep.sampling.hrex import WorkerError
+
+    class Fake:
+        fail_on = None
+
+        def __init__(self, ctx, spec, device, names, worker_id, start=0):
+            self.device, self.worker_id = device, worker_id
+
+        def wait_ready(self, timeout):
+            if self.device == Fake.fail_on:
+                raise WorkerError(f"worker {self.worker_id} failed to start: injected")
+            return "ready"
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(hrex, "_Process", Fake)
+    spec, pos, box = tiny_leg
+    s = ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[0, 1], inline=False, log=lambda m: None)
+    s.start()
+    Fake.fail_on = 2
+    with pytest.raises(WorkerError, match="injected"):
+        s.set_devices([1, 2])
+    assert [w.device for w in s.workers] == s.devices == [1]
+    Fake.fail_on = None
+    assert s.set_devices([0, 1]) is True
+    assert sorted(w.device for w in s.workers) == sorted(s.devices) == [0, 1]
+    s.close()
 
 
 def test_iterations_that_were_not_stored_have_no_row_and_the_leg_still_resumes(tmp_path, tiny_leg):

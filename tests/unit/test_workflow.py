@@ -447,8 +447,8 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
                                       "thermodynamics": {"temperature_K": temperature}})
 
     write(tmp_path / "f", 0, "solvent", pressure_bar=1.0, **usual)
-    with pytest.raises(WorkflowError, match="temperature .K.: the solvent leg of repeat 0, which is finished and not "
-                                            "part of this run, was made at 298.15; this run uses 315.0.*Nothing was run"):
+    with pytest.raises(WorkflowError, match="temperature .K.: the legs this run samples 315.0, the solvent leg of "
+                                            "repeat 0 .finished, not part of this run. 298.15.*Nothing was run"):
         check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(315.0))
     check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))                 # the same conditions
     check_partner_legs(tmp_path / "f", "lig", {(0, "complex"), (0, "solvent")}, 1, config(315.0))  # its own samples decide
@@ -463,9 +463,11 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
         storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
         storage.append_record(it, {"lrc_du": -1.0})
     storage.close()
-    with pytest.raises(WorkflowError, match="the solvent leg of repeat 0, which is finished and not part of this run, "
-                                            "has samples that their tail energies were recorded to an outer radius of "
-                                            "1 nm and analysis.lrc_cutoff_nm is 2.*Nothing was run"):
+    with pytest.raises(WorkflowError, match="outer radius of the tail correction .nm.: the legs this run samples 2.0, "
+                                            "the solvent leg of repeat 0 .finished, not part of this run. 1.0.*the "
+                                            "solvent leg of repeat 0 .finished, not part of this run. has samples that "
+                                            "cannot be analysed with the settings of this run: their tail energies were "
+                                            "recorded to an outer radius of 1 nm.*Nothing was run"):
         check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))
     shorter = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc_cutoff_nm": 1.0}})
     check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, shorter)                         # the same radius
@@ -1024,8 +1026,9 @@ def test_what_an_analysis_needs_from_the_samples_is_checked_in_one_place_before_
         leg_result_from_samples(none, AnalysisConfig(), {"leg": "complex"})
     (none / "result.json").write_text(json.dumps({"leg": "complex", "temperature_K": 298.15, "pressure_bar": 1.0,
                                                   "delta_g_decouple": 1.0, "delta_g_mbar_error": 0.1}))
-    with pytest.raises(WorkflowError, match="the complex leg of repeat 0, which is finished and not part of this run, "
-                                            "has samples that they hold no data for the tail correction.*Nothing was run"):
+    with pytest.raises(WorkflowError, match="the complex leg of repeat 0 .finished, not part of this run. has samples "
+                                            "that cannot be analysed with the settings of this run: they hold no data "
+                                            "for the tail correction.*Nothing was run"):
         check_partner_legs(tmp_path / "lig", "lig", {(0, "solvent")}, 1, config())
     check_partner_legs(tmp_path / "lig", "lig", {(0, "solvent")}, 1, config(lrc="none"))   # what they were made with
     # a finished leg whose tail energies were all recorded in its equilibration
@@ -1033,7 +1036,8 @@ def test_what_an_analysis_needs_from_the_samples_is_checked_in_one_place_before_
     tail_leg(early, tail_in_production=False)
     (early / "result.json").write_text(json.dumps({"leg": "complex", "temperature_K": 298.15, "pressure_bar": 1.0,
                                                    "delta_g_decouple": 1.0, "delta_g_mbar_error": 0.1}))
-    with pytest.raises(WorkflowError, match="has 0 tail energies in its production; 4 are needed"):
+    with pytest.raises(WorkflowError, match="the tail correction of their production cannot be estimated: 0 tail "
+                                            "energies were recorded in these iterations; 4 are needed"):
         check_partner_legs(tmp_path / "early", "lig", {(0, "solvent")}, 1, config())
 
 
@@ -1136,6 +1140,139 @@ def test_one_state_of_a_leg_gives_one_answer_through_every_way_in(tmp_path, stat
                    for value in answers.values()), answers
     else:
         assert all(isinstance(value, str) and reason in value for value in answers.values()), answers
+
+
+def test_the_check_before_a_run_takes_a_finished_leg_as_it_will_be_combined(tmp_path):
+    """Review of PR 1: (1) the check before a run read temperature and pressure from the old result of a
+    finished leg, while its analysis again takes them from its samples: 310 K samples with a result of
+    298.15 K passed and were refused after the run, 298.15 K samples with a result of 310 K were refused
+    before it; (2) a leg whose samples were gone, with lrc_method reweight and a radius of 1.5 nm in its
+    result, passed and was refused at the combination; (3) tail energies were counted from the boundary
+    on, also beyond the stored rows, where the analysis counts the production only."""
+    import h5py
+
+    from cufep.config.schema import Config
+    from cufep.sampling.storage import LegStorage
+    from cufep.workflow import WorkflowError, analysis_record, check_partner_legs
+
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
+
+    def finished(lig, temperature_in_samples, temperature_in_result, record=None):
+        leg = lig / "repeat_0" / "complex"
+        tail_leg(leg)
+        with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:
+            h5.attrs["temperature_K"] = temperature_in_samples
+        (leg / "result.json").write_text(json.dumps({
+            "leg": "complex", "temperature_K": temperature_in_result, "pressure_bar": 1.0, "delta_g_decouple": 1.0,
+            "delta_g_mbar_error": 0.1, "lrc_method": "reweight", "lrc_long_cutoff_nm": 2.0,
+            **({"analysis_record": record} if record else {})}))
+        return leg
+
+    finished(tmp_path / "a", 310.0, 298.15)
+    with pytest.raises(WorkflowError, match="temperature .K.: the legs this run samples 298.15, the complex leg of "
+                                            "repeat 0 .finished, not part of this run. 310.0"):
+        check_partner_legs(tmp_path / "a", "lig", {(0, "solvent")}, 1, cfg)
+    finished(tmp_path / "b", 298.15, 310.0)
+    check_partner_legs(tmp_path / "b", "lig", {(0, "solvent")}, 1, cfg)
+    # a result made with the settings of this run is combined as it is: its own temperature counts
+    finished(tmp_path / "c", 298.15, 310.0, record=analysis_record(cfg))
+    with pytest.raises(WorkflowError, match="temperature .K.: the legs this run samples 298.15, the complex leg"):
+        check_partner_legs(tmp_path / "c", "lig", {(0, "solvent")}, 1, cfg)
+    # samples gone: the result is combined as it is, and its correction must be that of this run
+    gone = finished(tmp_path / "d", 298.15, 298.15)
+    import shutil
+    shutil.rmtree(gone / "hrex")
+    data = json.loads((gone / "result.json").read_text())
+    (gone / "result.json").write_text(json.dumps(dict(data, lrc_long_cutoff_nm=1.5)))
+    with pytest.raises(WorkflowError, match="outer radius of the tail correction .nm.: the legs this run samples 2.0, "
+                                            "the complex leg of repeat 0 .finished, not part of this run. 1.5"):
+        check_partner_legs(tmp_path / "d", "lig", {(0, "solvent")}, 1, cfg)
+    (gone / "result.json").write_text(json.dumps(dict(data, lrc_method="isotropic")))
+    with pytest.raises(WorkflowError, match="correction for the dispersion tail: the legs this run samples reweight, "
+                                            "the complex leg of repeat 0 .finished, not part of this run. isotropic"):
+        check_partner_legs(tmp_path / "d", "lig", {(0, "solvent")}, 1, cfg)
+    # the tail energies of the production [boundary, stored end), as the analysis takes them
+    beyond = tmp_path / "e" / "repeat_0" / "complex"
+    tail_leg(beyond, tail_in_production=False)
+    with h5py.File(beyond / "hrex" / "samples.h5", "a") as h5:   # records with rows beyond the stored ones
+        h5["lrc_iter"].resize(40, axis=0)
+        h5["lrc_iter"][5:] = np.arange(120, 155)
+        h5["lrc_du"].resize(40, axis=0)
+        h5["lrc_du"][5:] = -2.0
+        h5["committed_counts"][1] = 40
+    (beyond / "result.json").write_text(json.dumps({"leg": "complex", "temperature_K": 298.15, "pressure_bar": 1.0,
+                                                    "delta_g_decouple": 1.0, "delta_g_mbar_error": 0.1}))
+    with pytest.raises(WorkflowError, match="the tail correction of their production cannot be estimated: 0 tail "
+                                            "energies were recorded in these iterations"):
+        check_partner_legs(tmp_path / "e", "lig", {(0, "solvent")}, 1, cfg)
+    # the isotropic correction needs both sums of the ligand, as its analysis does
+    partial = tmp_path / "f" / "repeat_0" / "complex"
+    tail_leg(partial)
+    with h5py.File(partial / "hrex" / "samples.h5", "a") as h5:
+        del h5.attrs["lrc_s12"]
+    (partial / "result.json").write_text((beyond / "result.json").read_text())
+    isotropic = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "isotropic"}})
+    with pytest.raises(WorkflowError, match="no Lennard-Jones sums of the ligand"):
+        check_partner_legs(tmp_path / "f", "lig", {(0, "solvent")}, 1, isotropic)
+
+
+def test_analyze_takes_the_recorded_radius_and_an_equilibration_given_exactly(tmp_path):
+    """Review of PR 1: (1) samples without any record of their settings, with tail energies recorded to 1.5
+    nm, were refused by cufep analyze against the default of 2.0 nm; (2) --equilibration-ns 0 dropped the
+    first iteration of the production, and a boundary of an old file whose iteration was 2.499 ps for 2.5 ps
+    asked could not be given exactly."""
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    tail_leg(leg, radius=1.5, n_equilibration=0, n=40)
+    shown = CliRunner().invoke(main, ["analyze", str(leg)])
+    assert shown.exit_code == 0, shown.output
+    out = json.loads(shown.output)
+    assert out["lrc_long_cutoff_nm"] == 1.5 and out["analysis_record"]["lrc_cutoff_nm"] == 1.5
+    assert out["analysis_settings_from"].startswith("the defaults")
+    zero = json.loads(CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-ns", "0"]).output)
+    assert zero["n_equilibration_iterations"] == 0 and zero["n_iterations_used"] == 40
+    exact = json.loads(CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-iterations", "7"]).output)
+    assert exact["n_equilibration_iterations"] == 7 and exact["n_iterations_used"] == 33
+
+
+def test_an_archive_that_failed_half_way_is_completed_and_never_read_half(tmp_path, monkeypatch):
+    """Review of PR 1: the archive of --reschedule moved the samples and the result first and then copied the
+    pre-equilibration; a copy cut short (disk full) left 20 bytes that were read in place of the whole file,
+    and a second call found nothing more to move."""
+    import shutil
+
+    from cufep.workflow import archive_leg, leg_files
+
+    leg = tmp_path / "repeat_0" / "complex"
+    (leg / "hrex").mkdir(parents=True)
+    for name in ("hrex/samples.h5", "result.json", "schedule.yaml"):
+        (leg / name).write_text(name)
+    (leg / "equil.npz").write_bytes(b"x" * 1000)
+    (leg / "restraint.json").write_text("{}")
+    real_copy = shutil.copy2
+    calls = []
+
+    def short_copy(src, dst, *args, **kwargs):
+        calls.append(dst)
+        if len(calls) == 1:
+            with open(dst, "wb") as fh:
+                fh.write(b"x" * 20)
+            raise OSError(28, "No space left on device")
+        return real_copy(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2", short_copy)
+    with pytest.raises(OSError, match="No space left"):
+        archive_leg(leg)
+    assert not (leg / "previous_1").exists()                       # no half archive to be read
+    assert (leg / "hrex").exists() or list(leg.glob(".previous_1.partial/hrex"))
+    previous = archive_leg(leg)                                     # the second call completes the same one
+    assert previous == leg / "previous_1" and not list(leg.glob(".previous_*"))
+    assert (previous / "equil.npz").read_bytes() == b"x" * 1000 and (previous / "hrex" / "samples.h5").exists()
+    assert leg_files(previous)["equil.npz"] == previous / "equil.npz"
+    assert archive_leg(leg) is None
 
 
 def test_a_run_can_be_restricted_to_ligands_and_legs():

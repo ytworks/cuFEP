@@ -17,35 +17,39 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 KCAL = 4.184
 
 
 def one_leg(leg_dir: str) -> dict | None:
-    from cufep.analysis.mbar import analyze_leg, quality_checks
-    from cufep.sampling.storage import read_samples
+    # the one way to the result of a leg directory, with the settings and the equilibration that
+    # cufep analyze uses (review of PR 1: this script analysed without the tail correction)
+    from cufep.workflow import analyse_leg_directory
 
     d = Path(leg_dir)
     try:
-        samples = read_samples(d / "hrex")
-        temperature = float(samples["attrs"].get("temperature_K", 298.15))
-        # the correction of the runs: by reweighting where the samples hold tail energies
-        tail = "reweight" if len(samples.get("lrc_du", [])) else "none"
-        a = analyze_leg(samples, temperature, tail=tail).to_dict()
+        done = analyse_leg_directory(d)
     except Exception as exc:  # noqa: BLE001
         return {"leg_dir": leg_dir, "error": f"{type(exc).__name__}: {exc}"}
-    q = quality_checks(a)
+    result = done["result"]
+    a, q, tail = result["analysis"], result["quality"], result["lrc_method"]
+    if not all(isinstance(result.get(key), (int, float)) and np.isfinite(result[key])
+               for key in ("delta_g_decouple", "delta_g_error")):
+        return {"leg_dir": leg_dir, "error": "the free energy or its standard error is not finite"}
 
     def kcal(value):
         return None if value is None else value / KCAL
 
     row = {"leg_dir": leg_dir, "run": d.parts[-4], "ligand": d.parts[-3], "repeat": d.parts[-2], "leg": d.parts[-1],
            "windows": a["n_states"], "production_iterations": a["n_iterations_used"],
-           "delta_g": kcal(a["delta_g"]), "error": kcal(a["delta_g_error"]),
+           "delta_g": kcal(result["delta_g_decouple"]), "error": kcal(result["delta_g_error"]),
            # the standard error MBAR gives, that of every number of time blocks, and the number reported
            "error_mbar": kcal(a.get("delta_g_mbar_error")), "error_n_blocks": a.get("delta_g_error_n_blocks"),
            "error_from": a.get("delta_g_error_from"), "tail": tail,
+           # the settings the leg was analysed with, and where they came from (as cufep analyze)
+           "analysis_record": result.get("analysis_record"), "settings_from": done["source"],
            "error_blocks": {count: kcal(value) for count, value in (a.get("delta_g_error_blocks") or {}).items()},
            "error_ratio": q["samples"].get("error_ratio"), "independent": q["samples"].get("independent"),
            "first_half": kcal(a["first_half"][0]), "second_half": kcal(a["second_half"][0]),
@@ -91,8 +95,11 @@ def main() -> None:
         else:
             runs.append(Path(a))
     legs = sorted(str(p.parent.parent) for run in runs for p in run.glob("*/repeat_*/*/hrex/samples.h5"))
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
-        rows = [r for r in pool.map(one_leg, legs) if r is not None]
+    if jobs <= 1:
+        rows = [r for r in map(one_leg, legs) if r is not None]
+    else:
+        with ProcessPoolExecutor(max_workers=jobs) as pool:
+            rows = [r for r in pool.map(one_leg, legs) if r is not None]
     out.parent.mkdir(parents=True, exist_ok=True)
     from cufep import jsonio
 

@@ -43,6 +43,10 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
             axes[row][1].set_axis_off()
             continue
         final, error = a["delta_g"] / KCAL, (a.get("delta_g_error") or 0.0) / KCAL
+        # since version 5 of the analysis every value is of the free energy with the tail correction;
+        # before, of MBAR alone, and the figure says so
+        version = (result.get("analysis_record") or {}).get("version")
+        corrected = version is not None and version >= 5
         ax = axes[row][0]
         conv = quality.get("halves") or {}
         ax.axhspan(final - error, final + error, color="0.88", zorder=0,
@@ -71,9 +75,12 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         samples = quality.get("samples") or {}
         if samples.get("fewest") is not None:
             verdict += (", " if verdict else "") + f"fewest independent samples {samples['fewest']:.0f} (window {samples['window']})"
-        ax.set_title(f"{leg} leg: {final:.2f} ± {error:.2f} kcal/mol" + (f"\n{verdict}" if verdict else ""), fontsize=9)
+        what = "" if corrected else f" (MBAR without the tail correction, analysis version {version or 'not recorded'})"
+        ax.set_title(f"{leg} leg: {final:.2f} ± {error:.2f} kcal/mol{what}" + (f"\n{verdict}" if verdict else ""),
+                     fontsize=9)
         ax.set_xlabel("fraction of the production (diamonds: its two halves)")
-        ax.set_ylabel("free energy of decoupling, with the tail correction (kcal/mol)")
+        ax.set_ylabel("free energy of decoupling, with the tail correction (kcal/mol)" if corrected
+                      else "free energy of the leg by MBAR, without the tail correction (kcal/mol)")
         ax.legend(frameon=False, fontsize=8)
 
         ax = axes[row][1]

@@ -168,14 +168,15 @@ def test_a_summary_of_an_earlier_version_is_not_shown_as_if_it_had_passed_the_ch
     from cufep.benchmarks.runner import LEG_FLAGS, NOT_CHECKED, flags_of
     from cufep.run import result_line, write_summary
 
-    assert NOT_CHECKED == "checks of this version not made (analysed by an earlier version of cuFEP)"
+    assert NOT_CHECKED == "checks of this version not made"
+    earlier_version = f"{NOT_CHECKED} (analysed by an earlier version of cuFEP)"
     # as the versions before the corrected analysis wrote it
     earlier = {"ligand": "jmc_23", "units": "kcal/mol", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3,
                "n_repeats": 1, "warnings": [], "failed_legs": [], "not_reliable": [], "not_converged": ["complex leg"],
                "convergence_not_assessed": ["solvent leg"], "estimators_disagree": [], "min_overlap": 0.08,
                "repeats": [{"lambda_windows": {"complex": 16, "solvent": 13}}]}
     said = ["NOT CONVERGED by the check of an earlier version: complex leg",
-            "convergence not assessed by an earlier version: solvent leg", NOT_CHECKED]
+            "convergence not assessed by an earlier version: solvent leg", earlier_version]
     assert flags_of(earlier) == said
     (tmp_path / "summary.json").write_text(json.dumps([earlier]))
     text = report("tyk2", tmp_path)
@@ -186,11 +187,13 @@ def test_a_summary_of_an_earlier_version_is_not_shown_as_if_it_had_passed_the_ch
     assert result_line(earlier).endswith("(MBAR uncertainty, 1 repeat); " + "; ".join(said))
     # a result of the first versions, with no key of any check, and one of the analysis before the time blocks
     oldest = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3, "n_repeats": 1}
-    assert flags_of(oldest) == [NOT_CHECKED]
+    assert flags_of(oldest) == [earlier_version]
     before_blocks = dict(oldest, few_samples=["complex leg"], halves_differ=[], estimators_disagree=[], not_reliable=[])
-    assert flags_of(before_blocks) == ["few independent samples: complex leg", NOT_CHECKED]
+    assert flags_of(before_blocks) == ["few independent samples: complex leg", earlier_version]
     # a result of this version with nothing to say has no flag, and a ligand without a result is not "checked" either
-    current = dict(before_blocks, few_samples=[], dg_bind_error=0.5, dg_bind_error_from_time_blocks=True)
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+    current = dict(before_blocks, few_samples=[], dg_bind_error=0.5, dg_bind_error_from_time_blocks=True,
+                   analysis_versions=[ANALYSIS_VERSION])
     assert flags_of(current) == [] and flags_of({"ligand": "x", "n_repeats": 0, "warnings": ["not run"]}) == []
     # the keys of earlier versions are no columns of the table this version writes
     write_summary(tmp_path, [current], [SimpleNamespace(name="jmc_23", properties={})])
@@ -226,6 +229,30 @@ def test_the_report_shows_the_standard_error_of_one_calculation(tmp_path):
         "error bars: none recorded, standard error"
 
 
+def test_a_summary_names_the_version_of_the_analysis_of_its_legs():
+    """Review of PR 1: a summary of version 4 has dg_bind_error, which was taken for the mark of this version:
+    its results were shown as checked, though version 4 could not see the halves of the corrected value."""
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+    from cufep.benchmarks.runner import NOT_CHECKED, flags_of
+
+    base = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_error": 0.5, "dg_bind_std": None, "n_repeats": 1}
+    assert flags_of(dict(base)) == [f"{NOT_CHECKED} (analysed by an earlier version of cuFEP)"]
+    assert flags_of(dict(base, analysis_versions=[4])) == [f"{NOT_CHECKED} (analysed by version 4 of the analysis)"]
+    assert flags_of(dict(base, analysis_versions=[None, ANALYSIS_VERSION])) == [
+        f"{NOT_CHECKED} (analysed by versions not recorded, {ANALYSIS_VERSION} of the analysis)"]
+    assert flags_of(dict(base, analysis_versions=[ANALYSIS_VERSION])) == []
+
+
+def test_the_figure_shows_a_prediction_far_from_experiment_with_its_whole_error_bar():
+    """Review of PR 1: ejm_31, experiment -9.54, prediction -13.00 +- 1.25 kcal/mol: the axes were set from
+    the experimental values ([-12.04, -7.04]) and the point and its error bar were outside."""
+    from cufep.benchmarks.runner import figure_range
+
+    rows = [{"exp": -9.54, "fepplus": -9.2, "cufep": -13.0, "cufep_error": 1.25, "cufep_std": None, "n_repeats": 1}]
+    lo, hi = figure_range(rows)
+    assert lo <= -14.25 and hi >= -9.2 and lo <= -9.54 <= hi
+
+
 def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path):
     """Review of PR 1: a leg whose only failed check was BAR against MBAR was named in summary.json and
     nowhere a person looks: not in the flags of the report, not in summary.csv, not in the result line."""
@@ -234,8 +261,9 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
     from cufep.benchmarks.runner import LEG_FLAGS, flags_of
     from cufep.run import result_line, write_summary
 
+    from cufep.analysis.mbar import ANALYSIS_VERSION
     only_estimators = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3,
-                       "dg_bind_error": 0.5, "dg_bind_error_from_time_blocks": True,
+                       "dg_bind_error": 0.5, "dg_bind_error_from_time_blocks": True, "analysis_versions": [ANALYSIS_VERSION],
                        "n_repeats": 1, "warnings": ["repeat 0 complex: BAR between neighbouring lambda windows gives ..."],
                        "failed_legs": [], "not_reliable": [], "few_samples": [], "halves_differ": [],
                        "halves_not_compared": [], "estimators_disagree": ["complex leg"], "min_overlap": 0.08}

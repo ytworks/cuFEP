@@ -74,10 +74,25 @@ LEG_FLAGS = (("failed_legs", "FAILED"), ("inconsistent_legs", "LEGS MADE UNDER D
 #: they are not columns of summary.csv, which only this version writes.
 EARLIER_FLAGS = (("not_converged", "NOT CONVERGED by the check of an earlier version"),
                  ("convergence_not_assessed", "convergence not assessed by an earlier version"))
-#: a binding free energy without this key was not analysed by this version: the standard error
-#: from time blocks is part of every result since version 4 of the analysis
-CURRENT_RESULT_KEY = "dg_bind_error"
-NOT_CHECKED = "checks of this version not made (analysed by an earlier version of cuFEP)"
+#: the flag of a binding free energy whose legs were not all analysed by this version of the
+#: analysis: the summary names the versions of its legs (analysis_versions) since version 5; one
+#: that does not was made before
+NOT_CHECKED = "checks of this version not made"
+
+
+def not_checked(ligand_summary: dict) -> str | None:
+    """The flag of a binding free energy whose legs were analysed otherwise than by this version, or None."""
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+
+    if "dg_bind" not in ligand_summary:
+        return None
+    versions = ligand_summary.get("analysis_versions")
+    if versions is None:
+        return f"{NOT_CHECKED} (analysed by an earlier version of cuFEP)"
+    if list(versions) == [ANALYSIS_VERSION]:
+        return None
+    shown = ", ".join("not recorded" if v is None else str(v) for v in versions)
+    return f"{NOT_CHECKED} (analysed by version{'s' if len(versions) > 1 else ''} {shown} of the analysis)"
 
 
 def flags_of(ligand_summary: dict) -> list[str]:
@@ -93,8 +108,9 @@ def flags_of(ligand_summary: dict) -> list[str]:
         if items:
             out.append(f"{name}: " + ", ".join(str(item).split(":")[0] if key in ("old_analysis", "origin_not_recorded")
                                                else str(item) for item in items))
-    if "dg_bind" in ligand_summary and CURRENT_RESULT_KEY not in ligand_summary:
-        out.append(NOT_CHECKED)
+    flag = not_checked(ligand_summary)
+    if flag:
+        out.append(flag)
     return out
 
 
@@ -247,6 +263,15 @@ def error_bar_label(rows: list[dict]) -> str:
     return "error bars: " + ", ".join(sorted(kinds))
 
 
+def figure_range(rows: list[dict], margin: float = 1.0) -> tuple[float, float]:
+    """The range of both axes of the figure: every experimental value, every FEP+ value and every
+    cuFEP value with its whole error bar, and a margin (review of PR 1: a prediction far from the
+    experiment fell outside the axes, with its error bar)."""
+    values = [r["exp"] for r in rows] + [r["fepplus"] for r in rows if r.get("fepplus") is not None]
+    values += [r["cufep"] + sign * error_bar(r) for r in rows for sign in (-1.0, 1.0)]
+    return min(values) - margin, max(values) + margin
+
+
 def _plot(rows: list[dict], path: Path, name: str) -> None:
     try:
         import matplotlib
@@ -255,7 +280,7 @@ def _plot(rows: list[dict], path: Path, name: str) -> None:
     except Exception:  # noqa: BLE001
         return
     exp = [r["exp"] for r in rows]
-    lo, hi = min(exp) - 2.5, max(exp) + 2.5
+    lo, hi = figure_range(rows)
     fig, ax = plt.subplots(figsize=(5.2, 5.0), dpi=150)
     ax.plot([lo, hi], [lo, hi], color="0.4", lw=1)
     ax.fill_between([lo, hi], [lo - 1, hi - 1], [lo + 1, hi + 1], color="0.9", zorder=0)

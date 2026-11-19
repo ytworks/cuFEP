@@ -84,6 +84,14 @@ class LegAnalysis:
     correction: float = 0.0
     correction_error: float = 0.0
     correction_samples: int = 0
+    #: for the correction by reweighting: the effective number of its observations (1 / sum w^2 of
+    #: the normalised exponential weights) and the largest weight; a correction that rests on a few
+    #: configurations shows here. No level is applied
+    correction_effective_samples: float | None = None
+    correction_largest_weight: float | None = None
+    #: the correlation of the errors of MBAR and of the correction, from the jackknife replicates of
+    #: the most time blocks that can be used (None where none can be used or there is no correction)
+    correction_correlation: float | None = None
     #: the standard error of delta_g by the delete-one-block jackknife over time blocks common to
     #: all windows, for every number of blocks that was asked for (key: the number as text; None
     #: where that number cannot be used, with the reason in delta_g_error_blocks_note), and the
@@ -92,9 +100,10 @@ class LegAnalysis:
     delta_g_mbar_error_blocks: dict[str, float | None] = field(default_factory=dict)
     delta_g_error_blocks_note: dict[str, str] = field(default_factory=dict)
     #: where delta_g_error comes from: "time blocks" (the largest of delta_g_error_blocks, from
-    #: delta_g_error_n_blocks blocks) or "analytical" (MBAR and the correction for independent
-    #: samples, where that is larger or no number of blocks can be used; delta_g_error_note
-    #: says why none can)
+    #: delta_g_error_n_blocks blocks), "analytical" (the standard errors MBAR and the correction
+    #: give for independent samples, combined with their correlation from the jackknife:
+    #: correction_correlation), or "analytical upper bound" (their sum, where no number of blocks
+    #: can be used and the correlation is not known; delta_g_error_note says why none can)
     delta_g_error_from: str = ""
     delta_g_error_n_blocks: int | None = None
     delta_g_error_note: str = ""
@@ -380,6 +389,12 @@ class TailSeries:
             return 0.0, 0.0, 0, ""
         values = self.values[select]
         what = "tail energies" if self.method == "reweight" else "volumes of the coupled state"
+        bad = int(np.sum(~np.isfinite(values))) if self.method == "reweight" else \
+            int(np.sum(~(np.isfinite(values) & (values > 0))))
+        if bad:
+            kind = "not finite" if self.method == "reweight" else "not finite and positive"
+            return None, None, int(values.size), (f"{bad} of the {values.size} {what} in these iterations are {kind}; "
+                                                   "the samples are damaged")
         if values.size < MIN_INDEPENDENT_SAMPLES:
             return None, None, int(values.size), (f"{values.size} {what} were recorded in these iterations; "
                                                    f"{MIN_INDEPENDENT_SAMPLES} are needed for the tail correction")
@@ -392,6 +407,19 @@ class TailSeries:
         value = (16.0 * np.pi / volume) * (self.s12 / (9.0 * self.cutoff_nm ** 9) - self.s6 / (3.0 * self.cutoff_nm ** 3))
         error = abs(value) * float(values.std(ddof=1)) / (volume * np.sqrt(values.size))
         return float(value), float(error), int(values.size), ""
+
+    def weights(self, select) -> tuple[float | None, float | None]:
+        """For the correction by reweighting: the effective number of its observations, 1 / sum w^2
+        with the normalised exponential weights w (the effective sample number of pymbar's
+        ``compute_effective_sample_number``), and the largest weight. None for other methods."""
+        if self.method != "reweight":
+            return None, None
+        x = -np.asarray(self.values[select], dtype=float) / (R_GAS * self.temperature_K)
+        if not x.size or not np.all(np.isfinite(x)):
+            return None, None
+        w = np.exp(x - x.max())
+        w /= w.sum()
+        return float(1.0 / np.sum(w ** 2)), float(w.max())
 
 
 def tail_series(samples: dict, method: str, n_equilibration: int, n: int, temperature_K: float) -> TailSeries:
@@ -424,8 +452,11 @@ def tail_series(samples: dict, method: str, n_equilibration: int, n: int, temper
 
 @dataclass
 class PartEstimate:
-    """The free energy of a selection of the samples of a leg, or why it is not determined."""
+    """The free energy of a selection of the samples of a leg, or why it is not used: ``kind`` is
+    "not determined" (too few samples, no solution, windows not connected, no correction) or
+    "below the level" (determined, but its overlap is below analysis.min_overlap)."""
     reason: str = ""
+    kind: str = ""
     f: np.ndarray | None = None            # MBAR free energies, kT, relative to the first state
     mbar: float | None = None              # kJ/mol
     mbar_error: float | None = None        # analytical, kJ/mol (None where it was not computed)
@@ -478,7 +509,7 @@ class TimeRangeEstimator:
         if counts.min() < MIN_INDEPENDENT_SAMPLES:
             j = int(np.argmin(counts))
             return PartEstimate(reason=f"lambda window {j} keeps {int(counts[j])} sample(s) there; "
-                                       f"{MIN_INDEPENDENT_SAMPLES} are needed for an estimate")
+                                       f"{MIN_INDEPENDENT_SAMPLES} are needed for an estimate", kind="not determined")
         f = free_energies_from(self.reduced[:, columns], counts, f_start)
         df = None
         if f is None or analytic:
@@ -489,21 +520,36 @@ class TimeRangeEstimator:
             except Exception:  # noqa: BLE001  no solution of the MBAR equations
                 df = None
         if f is None or not np.all(np.isfinite(f)):
-            return PartEstimate(reason="the MBAR equations of these samples have no solution")
+            return PartEstimate(reason="the MBAR equations of these samples have no solution", kind="not determined")
         try:
             overlap = overlap_with_equal_weights(self.u_kn[:, columns], counts, f)
             neighbour = np.array([overlap[i, i + 1] for i in range(k - 1)])
+            # Klimovich et al. 2015, section 3.4: the overlap matrix is stochastic, its largest eigenvalue
+            # is 1, and the others "approach one when the matrices can be nearly decomposed into
+            # independent block matrices"; the variance of the free energies grows as lambda / (N (1 -
+            # lambda)). Windows whose samples do not connect them leave a second eigenvalue of 1.
+            second = float(np.sort(np.linalg.eigvalsh((overlap + overlap.T) / 2.0))[-2]) if k > 1 else 0.0
         except Exception:  # noqa: BLE001
-            neighbour = np.array([np.nan])
+            neighbour, second = np.array([np.nan]), 1.0
         lowest = float(np.min(neighbour)) if neighbour.size else 1.0
+        # determined: the gap below the largest eigenvalue is worth at least one sample of the window
+        # that has the fewest. This does not depend on analysis.min_overlap.
+        gap = 1.0 - second
+        if not np.isfinite(gap) or gap * int(counts.min()) < 1.0:
+            return PartEstimate(reason=f"the samples do not connect the lambda windows: the second largest eigenvalue "
+                                       f"of their overlap matrix is {second:.6f}, and 1 minus it times the {int(counts.min())} "
+                                       "samples of the window with the fewest is below one (Klimovich et al. 2015, "
+                                       "section 3.4): their free energy is not determined",
+                                lowest_overlap=lowest, kind="not determined")
         if require_overlap and not (np.isfinite(lowest) and lowest >= self.min_overlap):
             i = int(np.nanargmin(neighbour)) if np.isfinite(neighbour).any() else 0
             shown = "not defined" if not np.isfinite(lowest) else f"{lowest:.3f}"
             return PartEstimate(reason=f"lambda windows {i} and {i + 1} overlap by {shown} among these samples, below "
-                                       f"{self.min_overlap:g}: their free energy is not determined", lowest_overlap=lowest)
+                                       f"analysis.min_overlap ({self.min_overlap:g}), the level of a reliable estimate",
+                                lowest_overlap=lowest, kind="below the level")
         correction, correction_error, n_obs, why = self.tail.estimate(observations)
         if correction is None:
-            return PartEstimate(reason=why, correction_samples=n_obs)
+            return PartEstimate(reason=why, correction_samples=n_obs, kind="not determined")
         mbar = float(f[-1] * self.kt)
         mbar_error = None if df is None or not np.isfinite(df[-1]) else float(df[-1] * self.kt)
         return PartEstimate(f=f, mbar=mbar, mbar_error=mbar_error, correction=correction,
@@ -515,7 +561,8 @@ class TimeRangeEstimator:
         return ((self.iteration >= a) & (self.iteration < b),
                 (self.tail.times >= a) & (self.tail.times < b))
 
-    def jackknife(self, a: int, b: int, n_blocks: int, base: PartEstimate) -> tuple[float | None, float | None, str]:
+    def jackknife(self, a: int, b: int, n_blocks: int, base: PartEstimate,
+                  replicates: list | None = None) -> tuple[float | None, float | None, str]:
         """Standard errors (kJ/mol) of the value and of its MBAR part from the iterations [a, b) by
         the delete-one-block jackknife over ``n_blocks`` consecutive time blocks of the same length,
         common to all windows: sqrt((B - 1) / B * sum_b (x_b - mean)^2) with x_b the estimate
@@ -537,6 +584,8 @@ class TimeRangeEstimator:
                 return None, None, f"without block {i + 1}: {without.reason}"
             values.append(without.value)
             mbars.append(without.mbar)
+        if replicates is not None:                       # (MBAR, correction) of every replicate
+            replicates[:] = [(m, m - v) for m, v in zip(mbars, values)]
 
         def spread(x) -> float:
             x = np.asarray(x)
@@ -560,19 +609,40 @@ class TimeRangeEstimator:
                "block_notes": {}, "note": ""}
         if not base.determined:
             return out
+        replicates_of: dict[int, list] = {}
         for count in dict.fromkeys(int(c) for c in block_counts):
-            value, mbar, why = self.jackknife(a, b, count, base)
+            replicates_of[count] = []
+            value, mbar, why = self.jackknife(a, b, count, base, replicates_of[count])
             out["blocks"][str(count)], out["mbar_blocks"][str(count)] = value, mbar
             if why:
                 out["block_notes"][str(count)] = why
         usable = {count: value for count, value in out["blocks"].items() if value is not None}
-        analytic = (None if base.mbar_error is None
-                    else float(np.hypot(base.mbar_error, base.correction_error or 0.0)))
+        # The analytical error. MBAR and the correction are estimated from the same configurations of
+        # the coupled state, so their errors are correlated (review of PR 1: -0.79 in a two-state model).
+        # Their correlation is taken from the jackknife replicates of the most blocks that can be used;
+        # where no number of blocks can be used it is not known, and the sum of the two standard errors,
+        # an upper bound of the error of their difference (Cauchy-Schwarz), is taken instead.
+        out["correlation"] = None
+        sm, sc = base.mbar_error, base.correction_error or 0.0
+        if sm is None:
+            analytic = None
+        elif sc == 0.0:
+            analytic, kind = float(sm), "analytical"
+        elif usable:
+            pairs = np.array(replicates_of[max(int(c) for c in usable)])
+            dm, dc = pairs[:, 0] - pairs[:, 0].mean(), pairs[:, 1] - pairs[:, 1].mean()
+            rho = float(np.sum(dm * dc) / np.sqrt(np.sum(dm ** 2) * np.sum(dc ** 2))) \
+                if np.sum(dm ** 2) > 0 and np.sum(dc ** 2) > 0 else 0.0
+            rho = min(1.0, max(-1.0, rho))
+            out["correlation"] = rho
+            analytic, kind = float(np.sqrt(max(0.0, sm ** 2 + sc ** 2 - 2.0 * rho * sm * sc))), "analytical"
+        else:
+            analytic, kind = float(sm + sc), "analytical upper bound"
         best = max(usable, key=usable.get) if usable else None
         if best is not None and (analytic is None or usable[best] >= analytic):
             out.update(error=usable[best], error_from="time blocks", n_blocks=int(best))
         elif analytic is not None:
-            out.update(error=analytic, error_from="analytical")
+            out.update(error=analytic, error_from=kind)
         if not usable:
             out["note"] = ("no number of time blocks could be used: "
                            + "; ".join(f"{count} blocks: {why}" for count, why in out["block_notes"].items()))
@@ -927,6 +997,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     if correction is None:
         raise NoCorrection(f"the tail correction ({tail}) cannot be estimated from the production: {why}")
     mbar, mbar_error = float(f_k[-1] * kt), float(df_k[-1] * kt)
+    weights = series.weights(everything_obs)
     base = PartEstimate(f=f_k, mbar=mbar, mbar_error=mbar_error, correction=correction, correction_error=correction_error,
                         correction_samples=n_obs, value=mbar - correction)
     whole = estimator.part(0, n, error_blocks, base=base)
@@ -968,10 +1039,10 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     blocks = []
     edges = [int(round(k * n / n_blocks)) for k in range(n_blocks + 1)] if n_blocks >= 2 else []
     consecutive = [part(a, b, f"block {i + 1} of {n_blocks}") for i, (a, b) in enumerate(zip(edges[:-1], edges[1:]))]
-    missing = [c for c in consecutive if isinstance(c, str)]
-    if consecutive and not missing:
-        blocks = [(a / n, b / n, float(c[0]), float(c[1])) for a, b, c in zip(edges[:-1], edges[1:], consecutive)]
-    parts_not_determined += missing
+    # every block that has an estimate is kept at its place; the others are listed
+    blocks = [(a / n, b / n, float(c[0]), float(c[1])) for a, b, c in zip(edges[:-1], edges[1:], consecutive)
+              if not isinstance(c, str)]
+    parts_not_determined += [c for c in consecutive if isinstance(c, str)]
     bar_note = ""
     try:
         bar, bar_error = bar_between_neighbours(u_kn, n_k)
@@ -992,16 +1063,18 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         """The correction of the whole production by another method, for comparison."""
         try:
             value = tail_series(samples, method, n_equilibration, n, temperature_K).estimate(slice(None))[0]
-        except NoCorrection:
+        except Exception:  # noqa: BLE001  a value for comparison only: missing, never an error of the analysis
             return None
-        return None if value is None else float(value)
+        return None if value is None or not np.isfinite(value) else float(value)
 
     return LegAnalysis(
         n_states=n_states, n_iterations_used=int(n), statistical_inefficiency=float(g_sum),
         effective_samples_per_state=float(effective[slowest]), delta_g=float(base.value),
         delta_g_error=float(whole["error"]), delta_g_mbar=mbar, delta_g_mbar_error=mbar_error,
         correction_method=tail, correction=float(correction), correction_error=float(correction_error),
-        correction_samples=int(n_obs), delta_g_error_blocks=whole["blocks"],
+        correction_samples=int(n_obs), correction_effective_samples=weights[0], correction_largest_weight=weights[1],
+        correction_correlation=whole["correlation"],
+        delta_g_error_blocks=whole["blocks"],
         delta_g_mbar_error_blocks=whole["mbar_blocks"], delta_g_error_blocks_note=whole["block_notes"],
         delta_g_error_from=whole["error_from"], delta_g_error_n_blocks=whole["n_blocks"],
         delta_g_error_note=whole["note"], halves_error_blocks=half_blocks,

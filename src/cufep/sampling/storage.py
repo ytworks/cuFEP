@@ -346,6 +346,12 @@ class LegStorage:
         """Iterations this storage holds: those stored in the file and those still in memory."""
         return self._stored + len(self._rows)
 
+    def last_record_iteration(self) -> int | None:
+        """The largest iteration number that a stored record (tail energy, frame) carries, or None."""
+        with open_samples(self.h5_path) as h5:
+            numbers = np.concatenate([h5["lrc_iter"][:self._stored_tail], h5["frame_iter"][:self._stored_frames]])
+        return int(numbers.max()) if numbers.size else None
+
     @property
     def n_stored(self) -> int:
         """Iterations stored in the file (:func:`committed_counts`)."""
@@ -396,6 +402,10 @@ class LegStorage:
             if self._has_frames:
                 _write_at(h5["frames"], self._stored_frames, [record["frame"] for _, record in frames])
                 _write_at(h5["frame_box"], self._stored_frames, [record["box"] for _, record in frames])
+            # the data and the lengths of the datasets reach the file before the counts that name them
+            # (review of PR 1: a process killed between the counts and the flush left counts of ten
+            # rows over the data of six)
+            h5.flush()
             _publish(h5, rows, n_tail, n_frames)
             h5.flush()
         self._stored, self._stored_tail, self._stored_frames = rows, n_tail, n_frames
