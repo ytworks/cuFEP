@@ -281,7 +281,8 @@ The hot region is the ligand and, in the complex leg, the protein residues chose
 `sampling.rest2.region` and `sampling.rest2.residues` (whole residues).
 
 The scale along a leg. `sampling.rest2.scale` is T_hot / T in the middle of the leg, as
-SOMD2's `rest2_scale`; 1 switches REST2 off. The leg is treated as one path from 0 to 1 on
+SOMD2's `rest2_scale`; the default is 2.5 (745 K at 298 K; its basis is in
+configuration.md) and 1 switches REST2 off. The leg is treated as one path from 0 to 1 on
 which every stage takes an equal part, and a window at position x has
 
     T_hot / T = 1 + (scale - 1) (1 - 2 |x - 0.5|)

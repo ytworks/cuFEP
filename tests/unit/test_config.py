@@ -90,6 +90,22 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 13}
 
 
+def test_rest2_is_on_by_default_and_can_be_set(tmp_path):
+    from cufep.cli import lambda_window_table
+
+    cfg = load_config(write(tmp_path, BASE))
+    r2 = cfg.sampling.rest2
+    assert (r2.scale, r2.region, r2.pocket_cutoff_nm, r2.residues) == (2.5, "ligand", 0.4, [])
+    assert "hot region: the ligand; 2.5 times the temperature" in lambda_window_table(cfg)
+    cfg = load_config(write(tmp_path, {**BASE, "sampling": {"rest2": {"scale": 1.0}}}))
+    assert "off (sampling.rest2.scale is 1)" in lambda_window_table(cfg)
+    cfg = load_config(write(tmp_path, {**BASE, "sampling": {"rest2": {"scale": 2, "region": "pocket", "residues": ["A:960"]}}}))
+    assert "protein residues within 0.4 nm of it (A:960)" in lambda_window_table(cfg)
+    for bad in ({"scale": 0.9}, {"region": "protein"}, {"pocket_cutoff_nm": 0}):
+        with pytest.raises(Exception):
+            load_config(write(tmp_path, {**BASE, "sampling": {"rest2": bad}}))
+
+
 def test_one_value_of_a_section_can_be_set_and_the_rest_keep_their_defaults(tmp_path):
     cfg = load_config(write(tmp_path, {**BASE, "sampling": {"pre_equilibration": {"complex": {"md_ns": 1.0},
                                                                                  "solvent": {"nvt_ns": 0.05}}}}))

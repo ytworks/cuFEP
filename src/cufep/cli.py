@@ -101,6 +101,15 @@ def lambda_window_table(cfg) -> str:
             total += len(values)
             lines.append(f"  {leg:8s} {stage:10s} {len(values):2d}: " + " ".join(f"{v:g}" for v in values))
         lines.append(f"  {leg:8s} {'total':10s} {total - (len(ls.windows.for_leg(leg)) - 1):2d} (stage boundaries are shared)")
+    r2 = cfg.sampling.rest2
+    if r2.scale > 1.0:
+        region = "the ligand" if r2.region == "ligand" and not r2.residues else (
+            "the ligand and protein residues" + (f" within {r2.pocket_cutoff_nm:g} nm of it" if r2.region == "pocket" else "")
+            + (f" ({', '.join(r2.residues)})" if r2.residues else ""))
+        lines += ["# REST2", f"hot region: {region}; {r2.scale:g} times the temperature in the middle of each leg, "
+                             "unscaled in the first and the last lambda window."]
+    else:
+        lines += ["# REST2", "off (sampling.rest2.scale is 1)."]
     return "\n".join(lines)
 
 
