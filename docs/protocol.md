@@ -408,8 +408,8 @@ source code and papers (see "Sources").
 | time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 5 ns |
 | runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
 | reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | MBAR uncertainty; standard deviation over repeats if more than one |
-| checks after the run | convergence plots, exchange between replicas | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | overlap matrix, replica exchange matrix, forward and reverse convergence plot | overlap below 0.03, halves of the production against the whole, BAR against MBAR; flags in the result |
-| a calculation that is not good enough | longer simulation, set by the user | a further instance of the link with a longer simulation or more lambda windows, started by the user | more repeats or a longer simulation, set by the user | the flagged leg is run again by the user, longer or with more lambda windows |
+| checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03, halves of the production against the whole, BAR against MBAR; flags in the result |
+| a calculation that is not good enough | the user: "Try increasing the length of the simulations (i.e., 10 ns)", "try increasing the number of lambda windows and/or increasing the sampling" | the user runs a further instance of the link "with longer simulation time/more Lambda windows" | left to the user | the user runs the flagged leg again, longer or with more lambda windows |
 | replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 with `sampling.rest2` |
 | MD before the alchemical run | 1 ns and a short equilibration | minimisation, equilibration, MD for the restraint search | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
 | restraint | Boresch-type, atoms chosen from hydrogen bonds and salt bridges | Boresch, atoms and strengths chosen automatically | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |
@@ -426,9 +426,9 @@ Further differences from OpenFE, whose protocol cuFEP follows most closely:
 | ligand-environment dispersion tail | isotropic | explicit, by reweighting the coupled state |
 
 Sources: Schrödinger `fep_plus` and `fep_absolute_binding` command help and Python API
-documentation, Ross et al., Commun. Chem. 2023, 6, 222; Cresset Flare release notes for
+documentation, the "FEP+ troubleshooting" checklist of the FEP+ user manual, Ross et al., Commun. Chem. 2023, 6, 222; Cresset Flare release notes for
 versions 10 to 12 and the pyflare scripts `feprun.py` and `abferun.py`, Midgley et al. 2025;
-OpenFE 1.13 source and documentation; SOMD2 documentation (oversubscription factor); Mey et
+OpenFE 1.13 source and documentation (the plots are those of `multistate_analysis.py`); SOMD2 documentation (oversubscription factor); Mey et
 al., "Best Practices for Alchemical Free Energy Calculations", LiveCoMS 2020. Flare's preset
 values are not public.
 
