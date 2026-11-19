@@ -413,7 +413,7 @@ def run_leg(job: LegJob) -> dict:
     from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
     from cufep.sampling.hrex import ReplicaExchangeSampler, SamplerError, WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
-    from cufep.sampling.storage import read_samples
+    from cufep.sampling.storage import read_samples, stored_backend
     from cufep.sampling.worker import LegSpec
 
     cfg = Config.model_validate(job.config)
@@ -578,6 +578,13 @@ def run_leg(job: LegJob) -> dict:
                                       cfg.analysis.lrc_cutoff_nm).to_dict()
     backend_name, bnotes = _choose_backend(cfg, alch.system, log)
     notes += bnotes
+    # samples of two backends are never mixed: a leg that has samples goes on with their backend
+    made_with = stored_backend(leg_dir / "hrex")
+    if made_with is not None and made_with != backend_name:
+        log(f"this leg goes on with {made_with}, the backend its samples were made with "
+            f"(this run would have chosen {backend_name})")
+        notes.append(f"the leg was continued on {made_with}, the backend its samples were made with")
+        backend_name = made_with
     stages = list(STAGES_COMPLEX if is_complex else STAGES_SOLVENT)
     pressure = cfg.thermodynamics.pressure_bar
     iteration_ps = cfg.sampling.time_per_iteration_ps

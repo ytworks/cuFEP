@@ -61,6 +61,25 @@ class LegSpec:
     def alchemical_states(self) -> list[AlchemicalState]:
         return [AlchemicalState(**s) for s in self.states]
 
+    def conditions(self) -> dict:
+        """What the samples of this leg are samples of.
+
+        A leg can be continued only under the conditions its samples were made under: the
+        lambda states, temperature, pressure and barostat, the dynamics, the length of an
+        iteration, the backend, and the System, which holds the force field, the restraint and
+        the REST2 region and is represented by a checksum of its XML.
+        """
+        import hashlib
+
+        return {"states": [dict(s) for s in self.states], "temperature_K": float(self.temperature_K),
+                "pressure_bar": None if self.pressure_bar is None else float(self.pressure_bar),
+                "barostat": self.barostat, "barostat_frequency": int(self.barostat_frequency),
+                "friction_per_ps": float(self.friction_per_ps), "timestep_fs": float(self.timestep_fs),
+                "steps_per_iteration": int(self.steps_per_iteration), "backend": self.backend,
+                "precision": self.precision, "integrator": self.integrator, "n_atoms": int(self.n_atoms),
+                "system_sha256": hashlib.sha256(self.system_xml.encode()).hexdigest(),
+                "lrc": None if self.lrc is None else dict(self.lrc)}
+
 
 def _shared_directory(required_bytes: int, fallback: str | None = None) -> str:
     """Directory for the shared replica arrays.

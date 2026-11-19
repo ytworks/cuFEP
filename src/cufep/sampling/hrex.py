@@ -209,6 +209,13 @@ class ReplicaExchangeSampler:
         self.state_of_replica = np.arange(self.k)
         self.iteration = 0
         self.storage = LegStorage(storage_dir, self.k, self.k, len(spec.frame_atoms))
+        try:
+            # before anything is written: samples are continued only under the conditions they
+            # were made under
+            self.conditions_of_storage = self.storage.check_conditions(spec.conditions())
+        except Exception:
+            self.storage.close()
+            raise
         self.arrays = SharedArrays(self.k, spec.n_atoms, self.k, fallback_dir=str(self.storage.dir))
         self.storage.set_meta(states=spec.states, temperature_K=spec.temperature_K,
                               backend=spec.backend, leg=spec.name,

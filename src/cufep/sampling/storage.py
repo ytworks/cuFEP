@@ -9,6 +9,35 @@ import h5py
 import numpy as np
 
 
+class ConditionsError(Exception):
+    """Stored samples were made under other conditions than those of the run that opens them."""
+
+
+def _same(a, b) -> bool:
+    """Equality of stored and current conditions, with a tolerance for numbers."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, bool) or isinstance(b, bool) or a is None or b is None or isinstance(a, str) or isinstance(b, str):
+        return a == b
+    try:
+        return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(a)), abs(float(b)))
+    except (TypeError, ValueError):
+        return a == b
+
+
+def stored_backend(directory: str | Path) -> str | None:
+    """Backend with which the samples in ``directory`` were made, or None if there are none."""
+    path = Path(directory) / "samples.h5"
+    if not path.exists():
+        return None
+    with h5py.File(path, "r") as h5:
+        if h5["u"].shape[0] == 0 or "backend" not in h5.attrs:
+            return None
+        return str(h5.attrs["backend"])
+
+
 class LegStorage:
     """Append-only sample storage with truncation for restarts.
 
@@ -47,6 +76,50 @@ class LegStorage:
             self.h5.attrs["n_equilibration_iterations"] = 0
         elif self.h5["u"].shape[1:] != (n_replicas, n_states):
             raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")
+
+    # -- conditions ---------------------------------------------------------------
+    def check_conditions(self, conditions: dict) -> str:
+        """Record the conditions of the samples, or refuse to continue them under other ones.
+
+        Nothing is written if they differ: the samples and their metadata stay as they are.
+        A file written before conditions were recorded is compared in what it holds (states,
+        temperature, backend, length of an iteration). Returns "new", "same" or "older file".
+        """
+        if self.n_iterations == 0:
+            self.h5.attrs["conditions"] = json.dumps(conditions)
+            return "new"
+        if "conditions" in self.h5.attrs:
+            stored, kind = json.loads(self.h5.attrs["conditions"]), "same"
+            current = conditions
+        else:
+            kind = "older file"
+            stored = {key: self.h5.attrs[key] for key in ("temperature_K", "backend") if key in self.h5.attrs}
+            if "states" in self.h5.attrs:
+                stored["states"] = json.loads(self.h5.attrs["states"])
+            if "iteration_ps" in self.h5.attrs:
+                stored["iteration_ps"] = float(self.h5.attrs["iteration_ps"])
+            current = dict(conditions, iteration_ps=conditions["steps_per_iteration"] * conditions["timestep_fs"] * 1e-3)
+        differing = []
+        for key, old in stored.items():
+            new = current.get(key)
+            if not _same(old, new):
+                if key == "states":
+                    differing.append("the lambda states")
+                elif key == "system_sha256":
+                    differing.append("the System (force field, restraint or REST2 region)")
+                elif key == "lrc":
+                    differing.append("the Lennard-Jones parameters of the ligand's dispersion tail")
+                else:
+                    differing.append(f"{key}: {old} -> {new}")
+        if differing:
+            raise ConditionsError(
+                f"the {self.n_iterations} iterations of samples in {self.dir} were made under other conditions than "
+                f"this run asks for ({'; '.join(differing)}). They are left as they are. A calculation under other "
+                "conditions needs a new output.dir; only the lambda windows of a leg can be determined again in "
+                "place, with --reschedule.")
+        if kind == "older file":
+            self.h5.attrs["conditions"] = json.dumps(conditions)
+        return kind
 
     # -- metadata -----------------------------------------------------------------
     def set_meta(self, **kwargs) -> None:

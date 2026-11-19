@@ -237,3 +237,60 @@ def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
     assert np.isfinite(res.delta_g) and set(res.stage_delta_g) == {"discharge", "vanish"}
     # decoupling a water molecule from water costs free energy (hydration free energy ~ -6 kcal/mol)
     assert res.delta_g > 0
+
+
+def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tmp_path, tiny_leg):
+    """Review of PR 1: a leg ended at 300 K was reopened at 315 K and analysed as if nothing had changed."""
+    import dataclasses
+
+    import h5py
+
+    from cufep.sampling.storage import ConditionsError, stored_backend
+
+    spec, pos, box = tiny_leg
+    leg = tmp_path / "hrex"
+    assert stored_backend(leg) is None
+    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+        assert s.conditions_of_storage == "new"
+        s.initialize(pos, box)
+        s.run(6, record_stride=2, checkpoint_stride=3)
+    assert stored_backend(leg) == "openmm"
+
+    def stored():
+        with h5py.File(leg / "samples.h5", "r") as h5:
+            return h5["u"].shape[0], float(h5.attrs["temperature_K"]), str(h5.attrs["states"]), h5["u"][:].copy()
+
+    before = stored()
+    assert before[:2] == (6, 300.0)
+    other_states = [dict(st) for st in spec.states]
+    other_states[1]["lambda_electrostatics"] = 0.4
+    changes = {"temperature_K": dataclasses.replace(spec, temperature_K=315.0),
+               "the lambda states": dataclasses.replace(spec, states=other_states),
+               "the System": dataclasses.replace(spec, system_xml=spec.system_xml + "\n"),
+               "steps_per_iteration": dataclasses.replace(spec, steps_per_iteration=20),
+               "pressure_bar": dataclasses.replace(spec, pressure_bar=2.0),
+               "backend": dataclasses.replace(spec, backend="cupotential")}
+    for what, changed in changes.items():
+        with pytest.raises(ConditionsError, match=what) as err:
+            ReplicaExchangeSampler(changed, leg, devices=[None], inline=True, log=lambda m: None)
+        assert "left as they are" in str(err.value) and "new output.dir" in str(err.value)
+        after = stored()
+        assert after[:3] == before[:3] and np.array_equal(after[3], before[3])     # nothing was written
+
+    # the same conditions: the run goes on, here to a longer production
+    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+        assert s.conditions_of_storage == "same" and s.restore() and s.iteration == 6
+        s.run(2, record_stride=2, checkpoint_stride=3)
+    assert stored()[0] == 8
+
+    # a file of a version that did not record the conditions is compared in what it holds
+    with h5py.File(leg / "samples.h5", "a") as h5:
+        del h5.attrs["conditions"]
+    with pytest.raises(ConditionsError, match="temperature_K: 300.0 -> 315.0"):
+        ReplicaExchangeSampler(changes["temperature_K"], leg, devices=[None], inline=True, log=lambda m: None)
+    with pytest.raises(ConditionsError, match="iteration_ps"):
+        ReplicaExchangeSampler(changes["steps_per_iteration"], leg, devices=[None], inline=True, log=lambda m: None)
+    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+        assert s.conditions_of_storage == "older file" and s.restore() and s.iteration == 8
+    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+        assert s.conditions_of_storage == "same"                       # recorded from then on
