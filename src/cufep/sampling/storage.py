@@ -1,4 +1,5 @@
-"""Storage for one leg: energies in HDF5, restart state in an atomically written NPZ."""
+"""Storage for one leg: energies in HDF5 parts that are written once and named by an atomically
+replaced manifest, restart state in an atomically written NPZ."""
 from __future__ import annotations
 
 import json
@@ -72,8 +73,9 @@ def open_samples(path: str | Path, mode: str = "r", wait_s: float = READ_WAIT_S)
 ROW_DATASETS = ("u", "states", "volume")
 TAIL_DATASETS = ("lrc_iter", "lrc_du")
 FRAME_DATASETS = ("frame_iter", "frames", "frame_box")
-#: the dataset that says how much of every dataset is stored (:func:`committed_counts`): three
-#: integers, written in place and never deleted, so that a failed update leaves the earlier counts
+#: the dataset in which samples of the previous version say how much of every dataset is stored
+#: (:func:`committed_counts`); this version writes it once, with zeros, in the empty samples.h5 of
+#: a new leg, so that an earlier version reads such a leg as holding no samples
 COUNTS = "committed_counts"
 #: the attribute in which one earlier version kept them (h5py replaces an attribute by deleting it
 #: and creating it anew, so a failure in between lost them; review of PR 1)
@@ -81,14 +83,14 @@ COMMITTED = "committed"
 
 
 def committed_counts(h5) -> tuple[int, int, int]:
-    """(iterations, tail records, frame records) that an open samples file holds as stored.
+    """(iterations, tail records, frame records) that a samples file of an earlier version holds
+    as stored: the samples of a leg without a manifest (:func:`stored_layout`).
 
-    :class:`LegStorage` writes the datasets first and then this count, in one attribute, so the
-    file holds one state of the run up to the count, whatever happened to a write after it; every
-    reader takes this many and no more. A file of an earlier version has no such attribute: it
-    holds the iterations that all three row datasets hold, and the records of those iterations
-    that all datasets of the records hold. A count that a dataset is shorter than is a damaged
-    file and raises StorageError.
+    The previous version wrote the datasets first and then these counts, so the file holds one
+    state of the run up to them; every reader takes this many and no more. A file of a version
+    before it has no counts: it holds the iterations that all three row datasets hold, and the
+    records of those iterations that all datasets of the records hold. A count that a dataset is
+    shorter than is a damaged file and raises StorageError.
     """
     lengths = {name: int(h5[name].shape[0]) for name in ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS if name in h5}
     stored = None
@@ -114,19 +116,6 @@ def committed_counts(h5) -> tuple[int, int, int]:
         return int(np.sum(h5[names[0]][:keep] < rows))
 
     return rows, records(TAIL_DATASETS), records(FRAME_DATASETS)
-
-
-def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
-    """(number of iterations, conditions) of the samples in ``directory``, read without changing
-    anything; (0, None) if there are no samples, (n, None) if their conditions are not recorded."""
-    path = Path(directory) / "samples.h5"
-    if not path.exists():
-        return 0, None
-    with open_samples(path) as h5:
-        n = committed_counts(h5)[0]
-        if n == 0 or "conditions" not in h5.attrs:
-            return n, None
-        return n, json.loads(h5.attrs["conditions"])
 
 
 def conditions_differences(stored: dict, current: dict) -> list[str]:
@@ -172,326 +161,6 @@ def other_conditions(n_iterations: int, directory, differing: list[str]) -> "Con
         "place, with --reschedule.")
 
 
-def stored_backend(directory: str | Path) -> str | None:
-    """Backend with which the samples in ``directory`` were made, or None if there are none."""
-    path = Path(directory) / "samples.h5"
-    if not path.exists():
-        return None
-    with open_samples(path) as h5:
-        if committed_counts(h5)[0] == 0 or "backend" not in h5.attrs:
-            return None
-        return str(h5.attrs["backend"])
-
-
-def _write_at(dataset, offset: int, values) -> None:
-    """Make ``dataset`` hold ``values`` from row ``offset`` on and nothing after them."""
-    dataset.resize(offset + len(values), axis=0)
-    if len(values):
-        dataset[offset:offset + len(values)] = np.stack([np.asarray(v) for v in values])
-
-
-def _publish(h5, rows: int, tail: int, frames: int) -> None:
-    """Say how much of every dataset is stored (:func:`committed_counts`): the three integers of
-    the counts dataset, written in place after the data they count. The dataset exists before
-    any data is extended (:func:`_ensure_counts`), so this never creates or deletes anything."""
-    h5[COUNTS][...] = np.array([rows, tail, frames], dtype="i8")
-
-
-def _ensure_counts(h5) -> tuple[int, int, int]:
-    """The counts of an open file, after making sure that it has the counts dataset.
-
-    A file of an earlier version has none: its counts are what its datasets hold
-    (:func:`committed_counts`), and they are written, and flushed, before any of its datasets is
-    extended, so that a write that fails half-way cannot make unwritten rows count (review of
-    PR 1)."""
-    counts = committed_counts(h5)
-    if COUNTS not in h5:
-        h5.create_dataset(COUNTS, data=np.array(counts, dtype="i8"))
-        h5.flush()
-    return counts
-
-
-class LegStorage:
-    """The samples of one leg and the state to restart it from.
-
-    ``samples.h5``
-        u        (n_iter, n_replicas, n_states)  reduced potentials of each replica at every state
-        states   (n_iter, n_replicas)            state each replica was simulated in
-        volume   (n_iter, n_replicas)            box volume, nm^3
-        lrc_iter, lrc_du                         coupled-state tail energies (kJ/mol)
-        frame_iter, frames, frame_box            coupled-state coordinates of selected atoms
-        committed_counts                         how many rows and records are stored
-    ``checkpoint.npz``
-        positions, velocities and boxes of every replica, the state permutation and the
-        number of committed iterations.
-
-    The rows of the iterations are kept in memory and go to ``samples.h5`` when a checkpoint
-    is written, and when the storage is closed; in between the file is closed. Another process
-    can therefore read the samples of a leg that is being sampled (``cufep analyze``).
-
-    A write is a transaction. Every dataset is written from the stored count on (overwriting
-    whatever a failed write left there), and only then is the new count published in place
-    (:func:`committed_counts`), which every reader goes by. A write that fails at any point
-    leaves the file at its earlier state for every reader, keeps the rows in memory, and the
-    next write starts again from the same place: nothing is stored twice and nothing that was
-    not written is read. Truncation publishes the smaller count first and shortens the
-    datasets after it. (HDF5's single-writer-multiple-reader mode was not taken: a writer that
-    is killed leaves such a file unreadable until it is repaired, attributes cannot be added in
-    that mode, and files of earlier versions could not use it.)
-    """
-
-    def __init__(self, directory: str | Path, n_replicas: int, n_states: int, n_frame_atoms: int = 0) -> None:
-        self.dir = Path(directory)
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self.h5_path = self.dir / "samples.h5"
-        self.ckpt_path = self.dir / "checkpoint.npz"
-        self.n_replicas, self.n_states, self.n_frame_atoms = n_replicas, n_states, n_frame_atoms
-        #: iterations that are not in the file yet: (u, states, volume) each, and the records
-        #: (iteration, tail energy and frame of the coupled state) that belong to them
-        self._rows: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
-        self._records: list[tuple[int, dict]] = []
-        if not self.h5_path.exists():
-            with self._file_for_writing() as h5:
-                k, s = n_replicas, n_states
-                h5.create_dataset("u", shape=(0, k, s), maxshape=(None, k, s), dtype="f8", chunks=(16, k, s))
-                h5.create_dataset("states", shape=(0, k), maxshape=(None, k), dtype="i4", chunks=(256, k))
-                h5.create_dataset("volume", shape=(0, k), maxshape=(None, k), dtype="f8", chunks=(256, k))
-                h5.create_dataset("lrc_iter", shape=(0,), maxshape=(None,), dtype="i8", chunks=(1024,))
-                h5.create_dataset("lrc_du", shape=(0,), maxshape=(None,), dtype="f8", chunks=(1024,))
-                h5.create_dataset("frame_iter", shape=(0,), maxshape=(None,), dtype="i8", chunks=(256,))
-                if n_frame_atoms:
-                    h5.create_dataset("frames", shape=(0, n_frame_atoms, 3), maxshape=(None, n_frame_atoms, 3),
-                                      dtype="f4", chunks=(8, n_frame_atoms, 3), compression="gzip",
-                                      compression_opts=1)
-                    h5.create_dataset("frame_box", shape=(0, 3, 3), maxshape=(None, 3, 3), dtype="f4")
-                h5.attrs["n_equilibration_iterations"] = 0
-                h5.create_dataset(COUNTS, data=np.zeros(3, dtype="i8"))
-        with open_samples(self.h5_path) as h5:
-            if h5["u"].shape[1:] != (n_replicas, n_states):
-                raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")
-            #: what the file holds as stored: iterations, tail records, frame records
-            self._stored, self._stored_tail, self._stored_frames = committed_counts(h5)
-            self._has_frames = "frames" in h5
-
-    def _file_for_writing(self, wait_s: float = WRITE_WAIT_S):
-        return open_samples(self.h5_path, "a", wait_s)
-
-    def attributes(self) -> dict:
-        """The attributes of the samples file as Python values."""
-        with open_samples(self.h5_path) as h5:
-            return decoded_attributes(h5)
-
-    # -- conditions ---------------------------------------------------------------
-    def check_conditions(self, conditions: dict) -> str:
-        """Record the conditions of the samples, or refuse to continue them under other ones.
-
-        Nothing is written if they differ: the samples and their metadata stay as they are.
-        Returns "new", "same" or "unrecorded".
-
-        "unrecorded": the file holds samples of a version that did not record their conditions.
-        Nothing on the disk tells what they were made with (the soft-core, the pressure and the
-        friction were stored nowhere, and that version rewrote temperature, backend and states
-        every time it opened the file), so they cannot be checked and nothing is written to the
-        file. Such samples are read and analysed; they are not continued (:meth:`refuse_unrecorded`).
-        """
-        if self.n_iterations == 0:
-            with self._file_for_writing() as h5:
-                h5.attrs["conditions"] = json.dumps(conditions)
-            return "new"
-        with open_samples(self.h5_path) as h5:
-            stored = h5.attrs["conditions"] if "conditions" in h5.attrs else None
-        if stored is None:
-            return "unrecorded"
-        differing = conditions_differences(json.loads(stored), conditions)
-        if differing:
-            raise other_conditions(self.n_iterations, self.dir, differing)
-        return "same"
-
-    def refuse_unrecorded(self) -> None:
-        """Raise: samples whose conditions were not recorded are not continued."""
-        raise ConditionsError(
-            f"the {self.n_iterations} iterations of samples in {self.dir} were written by a version of cuFEP that "
-            "did not record the conditions they were made under, so nothing shows that this run would continue "
-            "them under the same ones. They are left as they are and can be analysed (cufep analyze). To sample "
-            "this leg further, start it anew with --reschedule: the samples it has are kept in previous_<n>/.")
-
-    # -- metadata -----------------------------------------------------------------
-    def set_meta(self, **kwargs) -> None:
-        with self._file_for_writing() as h5:
-            for key, value in kwargs.items():
-                h5.attrs[key] = json.dumps(value) if isinstance(value, (dict, list)) else value
-
-    def set_plan(self, n_equilibration: int, n_total: int, analysis_record: dict | None = None) -> None:
-        """Record, before the run, how many of its iterations are equilibration and how many it has,
-        and the settings its result will be analysed with (``analysis_record``).
-
-        It goes to the disk at once: an analysis of a run that was interrupted must not count
-        equilibration as production, and must judge the leg by the levels of its run.
-        """
-        with self._file_for_writing() as h5:
-            h5.attrs["n_equilibration_iterations"] = int(n_equilibration)
-            h5.attrs["n_planned_iterations"] = int(n_total)
-            if analysis_record is not None:
-                h5.attrs["analysis_record"] = json.dumps(analysis_record)
-
-    def clear_plan(self) -> None:
-        """A run that starts anew has no plan until :meth:`set_plan` gives it one."""
-        with self._file_for_writing() as h5:
-            h5.attrs["n_equilibration_iterations"] = 0
-            if "n_planned_iterations" in h5.attrs:
-                del h5.attrs["n_planned_iterations"]
-
-    @property
-    def n_iterations(self) -> int:
-        """Iterations this storage holds: those stored in the file and those still in memory."""
-        return self._stored + len(self._rows)
-
-    def last_record_iteration(self) -> int | None:
-        """The largest iteration number that a stored record (tail energy, frame) carries, or None."""
-        with open_samples(self.h5_path) as h5:
-            numbers = np.concatenate([h5["lrc_iter"][:self._stored_tail], h5["frame_iter"][:self._stored_frames]])
-        return int(numbers.max()) if numbers.size else None
-
-    @property
-    def n_stored(self) -> int:
-        """Iterations stored in the file (:func:`committed_counts`)."""
-        return self._stored
-
-    # -- appending ------------------------------------------------------------------
-    def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray) -> int:
-        n = self.n_iterations
-        self._rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8")))
-        return n
-
-    def append_record(self, iteration: int, record: dict) -> None:
-        kept = {}
-        if "lrc_du" in record:
-            kept["lrc_du"] = float(record["lrc_du"])
-        if "frame" in record and self.n_frame_atoms and self._has_frames:
-            kept["frame"] = np.array(record["frame"], dtype="f4")
-            kept["box"] = np.array(record["box"], dtype="f4")
-        if kept:
-            self._records.append((int(iteration), kept))
-
-    def flush(self, wait_s: float = WRITE_WAIT_S) -> bool:
-        """Store the iterations that are in memory: a transaction (see the class).
-
-        False, with nothing written and everything still in memory, if another process held the
-        file for all of ``wait_s``. Any other failure is raised with the file at its earlier
-        state and everything still in memory; calling it again repeats the same write.
-        """
-        if not self._rows and not self._records:
-            return True
-        try:
-            h5 = self._file_for_writing(wait_s)
-        except OSError as exc:
-            if _held_by_another_process(exc):
-                return False
-            raise
-        tail = [(it, record["lrc_du"]) for it, record in self._records if "lrc_du" in record]
-        frames = [(it, record) for it, record in self._records if "frame" in record]
-        rows = self._stored + len(self._rows)
-        n_tail, n_frames = self._stored_tail + len(tail), self._stored_frames + len(frames)
-        with h5:
-            _ensure_counts(h5)
-            for column, name in enumerate(ROW_DATASETS):
-                _write_at(h5[name], self._stored, [row[column] for row in self._rows])
-            _write_at(h5["lrc_iter"], self._stored_tail, [it for it, _ in tail])
-            _write_at(h5["lrc_du"], self._stored_tail, [du for _, du in tail])
-            _write_at(h5["frame_iter"], self._stored_frames, [it for it, _ in frames])
-            if self._has_frames:
-                _write_at(h5["frames"], self._stored_frames, [record["frame"] for _, record in frames])
-                _write_at(h5["frame_box"], self._stored_frames, [record["box"] for _, record in frames])
-            # the data and the lengths of the datasets reach the file before the counts that name them
-            # (review of PR 1: a process killed between the counts and the flush left counts of ten
-            # rows over the data of six)
-            h5.flush()
-            _publish(h5, rows, n_tail, n_frames)
-            h5.flush()
-        self._stored, self._stored_tail, self._stored_frames = rows, n_tail, n_frames
-        self._rows.clear()
-        self._records.clear()
-        return True
-
-    def truncate(self, n_iterations: int) -> None:
-        """Drop everything after ``n_iterations`` iterations, in memory and in the file: the
-        smaller count is published first, the datasets are shortened after it."""
-        n_iterations = int(n_iterations)
-        del self._rows[max(0, n_iterations - self._stored):]
-        self._records = [(it, record) for it, record in self._records if it < n_iterations]
-        with open_samples(self.h5_path) as h5:
-            tail_its = h5["lrc_iter"][:self._stored_tail]
-            frame_its = h5["frame_iter"][:self._stored_frames]
-            lengths = {name: int(h5[name].shape[0]) for name in ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS
-                       if name in h5}
-            published = COUNTS in h5
-        rows = min(self._stored, n_iterations)
-        tail, frames = int(np.sum(tail_its < n_iterations)), int(np.sum(frame_its < n_iterations))
-        wanted = {**{name: rows for name in ROW_DATASETS}, **{name: tail for name in TAIL_DATASETS},
-                  **{name: frames for name in FRAME_DATASETS}}
-        if published and (rows, tail, frames) == (self._stored, self._stored_tail, self._stored_frames) and all(
-                lengths[name] == wanted[name] for name in lengths):
-            return                                         # nothing to cut: the file is not opened for writing
-        with self._file_for_writing() as h5:
-            _ensure_counts(h5)
-            _publish(h5, rows, tail, frames)
-            h5.flush()
-            self._stored, self._stored_tail, self._stored_frames = rows, tail, frames
-            for name in lengths:
-                if h5[name].shape[0] != wanted[name]:
-                    h5[name].resize(wanted[name], axis=0)
-            h5.flush()
-
-    # -- checkpoint -------------------------------------------------------------------
-    def write_checkpoint(self, positions, velocities, boxes, state_of_replica, iteration: int,
-                         extra: dict | None = None, wait_s: float = WRITE_WAIT_S) -> bool:
-        """Store the iterations that are in memory, then the state to restart from.
-
-        In that order: a checkpoint never names an iteration whose samples are not in the file.
-        False, with neither written, if another process held the samples file for all of
-        ``wait_s``; the iterations stay in memory and the earlier checkpoint stays valid.
-        """
-        if not self.flush(wait_s):
-            return False
-        tmp = self.ckpt_path.with_suffix(".tmp.npz")
-        np.savez(tmp, positions=positions, velocities=velocities, boxes=boxes,
-                 state_of_replica=np.asarray(state_of_replica), iteration=int(iteration),
-                 extra=json.dumps(extra or {}))
-        os.replace(tmp, self.ckpt_path)
-        return True
-
-    def read_checkpoint(self) -> dict | None:
-        if not self.ckpt_path.exists():
-            return None
-        with np.load(self.ckpt_path, allow_pickle=False) as data:
-            out = {k: data[k] for k in ("positions", "velocities", "boxes", "state_of_replica")}
-            out["iteration"] = int(data["iteration"])
-            out["extra"] = json.loads(str(data["extra"]))
-        return out
-
-    def close(self, wait_s: float = CHECKPOINT_WAIT_S) -> None:
-        """Store what is in memory.
-
-        These are the iterations after the last checkpoint (a run that resumes drops them; a
-        leg that is only read afterwards has them). If they cannot be stored, StorageError says
-        so (StorageBusyError if another process held the file for ``wait_s``); the file keeps
-        what it held, and the rows stay in memory, so that the caller can try again.
-        """
-        if not self._rows and not self._records:
-            return
-        pending, stored = len(self._rows), self._stored
-        try:
-            written = self.flush(wait_s)
-        except Exception as exc:  # noqa: BLE001  said, and raised as what it means for the samples
-            raise StorageError(f"the {pending} iteration(s) after iteration {stored} could not be stored in "
-                               f"{self.h5_path} ({type(exc).__name__}: {exc}); the file holds the {stored} "
-                               "before them") from exc
-        if not written:
-            raise StorageBusyError(f"the {pending} iteration(s) after iteration {stored} could not be stored: another "
-                                   f"process held {self.h5_path} open for {wait_s:g} s; the file holds the {stored} "
-                                   "before them")
-
-
 def equilibration_boundary(attrs: dict, leg_dir: str | Path | None = None) -> int | None:
     """The number of equilibration iterations of the samples with these attributes, or None if
     the file does not tell.
@@ -526,34 +195,525 @@ def decoded_attributes(h5) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------------- the layout
+#: the file that names the stored parts of the samples of a leg, with their counts, and holds the
+#: attributes of the samples
+MANIFEST = "manifest.json"
+#: the parts that each write adds: written once under another name, made durable, renamed, and
+#: never opened for writing again
+SEGMENT_PATTERN = "segment_{:06d}.h5"
+#: the suffix of a file while it is written; such a file is never read
+WRITING = ".writing"
+
+
+def _fsync_path(path: Path) -> None:
+    """Make what was written to ``path`` (a file, or a directory and its entries) durable; where
+    the system cannot, nothing is done."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _replace(source: Path, target: Path) -> None:
+    """Put ``source`` in the place of ``target`` in one step: the rename every write of the storage
+    ends with."""
+    os.replace(source, target)
+
+
+def _write_manifest(directory: Path, manifest: dict) -> None:
+    """Write the manifest of a leg in one step: the whole file under another name, made durable,
+    then renamed over the old one. A reader sees the old manifest or the new one, never a part."""
+    from cufep import jsonio
+
+    path = Path(directory) / MANIFEST
+    part = path.with_name(MANIFEST + WRITING)
+    with open(part, "w") as fh:
+        fh.write(jsonio.dumps(manifest))
+        fh.flush()
+        os.fsync(fh.fileno())
+    _replace(part, path)
+    _fsync_path(Path(directory))
+
+
+def read_manifest(directory: str | Path) -> dict | None:
+    """The manifest of the samples in ``directory``, or None for samples of an earlier version
+    (one samples.h5 that holds everything)."""
+    path = Path(directory) / MANIFEST
+    if not path.exists():
+        return None
+    try:
+        manifest = json.loads(path.read_text())
+        [(str(p["file"]), int(p["rows"]), int(p["tail"]), int(p["frames"])) for p in manifest["parts"]]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise StorageError(f"{path} cannot be read ({type(exc).__name__}: {exc}); it is damaged") from exc
+    return manifest
+
+
+def stored_layout(directory: str | Path) -> tuple[list[tuple[Path, int, int, int]], dict]:
+    """The stored parts of the samples in ``directory`` and their attributes, as every reader takes
+    them: [(file, iterations, tail records, frame records), ...] in order, and the attributes.
+    ([], {}) if there are no samples. Samples of an earlier version are one part, samples.h5,
+    counted by :func:`committed_counts`, with the attributes of that file."""
+    d = Path(directory)
+    manifest = read_manifest(d)
+    if manifest is None:
+        path = d / "samples.h5"
+        if not path.exists():
+            return [], {}
+        with open_samples(path) as h5:
+            counts, attrs = committed_counts(h5), decoded_attributes(h5)
+        return [(path, *counts)], attrs
+    parts = [(d / str(p["file"]), int(p["rows"]), int(p["tail"]), int(p["frames"])) for p in manifest["parts"]]
+    missing = [path.name for path, *_counts in parts if not path.exists()]
+    if missing:
+        raise StorageError(f"{d / MANIFEST} names parts of the samples that are not there ({', '.join(missing)}); "
+                           "the leg is damaged")
+    return parts, dict(manifest.get("attrs") or {})
+
+
+def _manifest_text(directory: str | Path) -> str | None:
+    try:
+        return (Path(directory) / MANIFEST).read_text()
+    except OSError:
+        return None
+
+
+def _read(directory: str | Path, names: tuple[str, ...]) -> dict:
+    """The datasets ``names`` of the samples in ``directory``: each part to its count, concatenated.
+    A dataset that a part holds fewer of than its count, or that a part with records lacks, is a
+    damaged leg (StorageError); one that no part has is left out.
+
+    A writer that opens the leg removes the parts that its manifest no longer names; a reader that
+    read the manifest before and finds a part gone reads the new manifest and starts again."""
+    for attempt in range(3):
+        before = _manifest_text(directory)
+        try:
+            return _read_once(directory, names)
+        except (StorageError, OSError):
+            if attempt == 2 or _manifest_text(directory) == before:
+                raise
+    raise AssertionError("unreachable")
+
+
+def _read_once(directory: str | Path, names: tuple[str, ...]) -> dict:
+    parts, attrs = stored_layout(directory)
+    if not parts:
+        raise StorageError(f"{directory}: no samples")
+    count_of = {**{name: 1 for name in ROW_DATASETS}, **{name: 2 for name in TAIL_DATASETS},
+                **{name: 3 for name in FRAME_DATASETS}}
+    pieces: dict[str, list] = {name: [] for name in names}
+    lacking: dict[str, int] = {name: 0 for name in names}
+    for part in parts:
+        path = part[0]
+        with open_samples(path) as h5:
+            for name in names:
+                need = part[count_of[name]]
+                if name not in h5:
+                    lacking[name] += need
+                    continue
+                if h5[name].shape[0] < need:
+                    raise StorageError(f"{path}: {name} holds {h5[name].shape[0]} entries, fewer than the {need} "
+                                       "the samples say it holds; the leg is damaged")
+                pieces[name].append(h5[name][:need])
+    out = {}
+    for name in names:
+        if pieces[name] and lacking[name]:
+            raise StorageError(f"{directory}: {lacking[name]} entries of {name} are in parts that do not have it; "
+                               "the leg is damaged")
+        if pieces[name]:
+            out[name] = np.concatenate(pieces[name])
+    out["attrs"] = attrs
+    return out
+
+
+def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
+    """(number of iterations, conditions) of the samples in ``directory``, read without changing
+    anything; (0, None) if there are no samples, (n, None) if their conditions are not recorded."""
+    parts, attrs = stored_layout(directory)
+    n = sum(rows for _path, rows, _tail, _frames in parts)
+    conditions = attrs.get("conditions")
+    return (n, conditions) if n and isinstance(conditions, dict) else (n, None)
+
+
+def stored_backend(directory: str | Path) -> str | None:
+    """Backend with which the samples in ``directory`` were made, or None if there are none."""
+    parts, attrs = stored_layout(directory)
+    if not sum(rows for _path, rows, _tail, _frames in parts) or "backend" not in attrs:
+        return None
+    return str(attrs["backend"])
+
+
 def stored_attributes(directory: str | Path) -> tuple[int, dict]:
     """(number of iterations, attributes) of the samples in ``directory``, read without changing
     anything; (0, {}) if there are no samples."""
-    path = Path(directory) / "samples.h5"
-    if not path.exists():
-        return 0, {}
-    with open_samples(path) as h5:
-        return committed_counts(h5)[0], decoded_attributes(h5)
+    parts, attrs = stored_layout(directory)
+    return sum(rows for _path, rows, _tail, _frames in parts), attrs
 
 
 def stored_tail_iterations(directory: str | Path) -> np.ndarray:
     """The iterations at which the samples in ``directory`` hold a tail energy (stored ones only)."""
-    path = Path(directory) / "samples.h5"
-    if not path.exists():
+    if not stored_layout(directory)[0]:
         return np.zeros(0, dtype=int)
-    with open_samples(path) as h5:
-        return np.asarray(h5["lrc_iter"][:committed_counts(h5)[1]], dtype=int)
+    return np.asarray(_read(directory, ("lrc_iter",)).get("lrc_iter", np.zeros(0)), dtype=int)
 
 
 def read_samples(directory: str | Path) -> dict:
-    """Load everything analysis needs from a leg directory: what the file holds as stored
-    (:func:`committed_counts`), also while the leg is being sampled (then up to its last
-    checkpoint) and after a write that failed half-way."""
-    path = Path(directory) / "samples.h5"
-    with open_samples(path) as h5:
-        rows, tail, frames = committed_counts(h5)
-        out = {name: h5[name][:rows] for name in ROW_DATASETS}
-        out.update({name: h5[name][:tail] for name in TAIL_DATASETS})
-        out.update({name: h5[name][:frames] for name in FRAME_DATASETS if name in h5})
-        out["attrs"] = decoded_attributes(h5)
-    return out
+    """Load everything analysis needs from a leg directory: the stored parts, each to its count
+    (:func:`stored_layout`), also while the leg is being sampled (then up to its last checkpoint)
+    and after a write that failed or a writer that was killed at any point."""
+    return _read(directory, ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS)
+
+
+def _segment_number(path: Path) -> int | None:
+    name = path.name.split(".")[0]
+    if not name.startswith("segment_"):
+        return None
+    try:
+        return int(name[len("segment_"):])
+    except ValueError:
+        return None
+
+
+class LegStorage:
+    """The samples of one leg and the state to restart it from.
+
+    ``samples.h5`` and ``segment_<n>.h5``, the parts of the samples
+        u        (n_iter, n_replicas, n_states)  reduced potentials of each replica at every state
+        states   (n_iter, n_replicas)            state each replica was simulated in
+        volume   (n_iter, n_replicas)            box volume, nm^3
+        lrc_iter, lrc_du                         coupled-state tail energies (kJ/mol), by row
+        frame_iter, frames, frame_box            coupled-state coordinates of selected atoms, by row
+    ``manifest.json``
+        the parts that are stored, in order, each with its numbers of iterations, tail records and
+        frame records, and the attributes of the samples (conditions, states, plan ...)
+    ``checkpoint.npz``
+        positions, velocities and boxes of every replica, the state permutation, the iteration,
+        the number of stored rows and the number of starts of the leg.
+
+    Stored data is never changed (review of PR 1: HDF5 rewrites and moves a compressed chunk of
+    frames when rows are added to it, so the frames of the last checkpoint were lost when the
+    writer was killed in the middle of the next write, whatever counts said). The rows of the
+    iterations are kept in memory; at a checkpoint they go to a new part, ``segment_<n>.h5``,
+    written whole under another name, made durable and renamed, and only then is the manifest,
+    which names it, replaced in one step. Truncation replaces the manifest alone; parts it drops
+    stay on the disk and their names are not used again. Whenever the writer is killed, the
+    manifest names complete parts only, and a reader sees one state of the run. A reader never
+    meets the writer in a file, since no part is opened for writing once it exists: a leg can be
+    analysed while it is sampled, and nobody waits for anybody.
+
+    ``samples.h5`` is the first part: empty for a leg of this version, all the samples of a leg
+    of an earlier version, which is never written to again. Such a leg gets its manifest at its
+    first write, with the counts (:func:`committed_counts`) and attributes of that file.
+    """
+
+    def __init__(self, directory: str | Path, n_replicas: int, n_states: int, n_frame_atoms: int = 0) -> None:
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.h5_path = self.dir / "samples.h5"
+        self.ckpt_path = self.dir / "checkpoint.npz"
+        self.n_replicas, self.n_states, self.n_frame_atoms = n_replicas, n_states, n_frame_atoms
+        #: iterations that are not stored yet: (u, states, volume) each, and the records (row, tail
+        #: energy and frame of the coupled state) that belong to them
+        self._rows: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+        self._records: list[tuple[int, dict]] = []
+        if not self.h5_path.exists():
+            part = self.h5_path.with_name(self.h5_path.name + WRITING)
+            with h5py.File(part, "w") as h5:
+                k, s = n_replicas, n_states
+                h5.create_dataset("u", shape=(0, k, s), maxshape=(None, k, s), dtype="f8", chunks=(16, k, s))
+                h5.create_dataset("states", shape=(0, k), maxshape=(None, k), dtype="i4", chunks=(256, k))
+                h5.create_dataset("volume", shape=(0, k), maxshape=(None, k), dtype="f8", chunks=(256, k))
+                h5.create_dataset("lrc_iter", shape=(0,), maxshape=(None,), dtype="i8", chunks=(1024,))
+                h5.create_dataset("lrc_du", shape=(0,), maxshape=(None,), dtype="f8", chunks=(1024,))
+                h5.create_dataset("frame_iter", shape=(0,), maxshape=(None,), dtype="i8", chunks=(256,))
+                if n_frame_atoms:
+                    h5.create_dataset("frames", shape=(0, n_frame_atoms, 3), maxshape=(None, n_frame_atoms, 3),
+                                      dtype="f4", chunks=(8, n_frame_atoms, 3))
+                    h5.create_dataset("frame_box", shape=(0, 3, 3), maxshape=(None, 3, 3), dtype="f4")
+                h5.attrs["n_equilibration_iterations"] = 0
+                h5.create_dataset(COUNTS, data=np.zeros(3, dtype="i8"))
+            _fsync_path(part)
+            _replace(part, self.h5_path)
+            _write_manifest(self.dir, {"format": 2, "parts": [{"file": "samples.h5", "rows": 0, "tail": 0, "frames": 0}],
+                                       "attrs": {"n_equilibration_iterations": 0}})
+        with open_samples(self.h5_path) as h5:
+            if h5["u"].shape[1:] != (n_replicas, n_states):
+                raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")
+            self._has_frames = "frames" in h5
+        self._remove_unused()
+        self._load()
+
+    def _load(self) -> None:
+        """What is stored: the parts and their counts (:func:`stored_layout`)."""
+        self._parts = stored_layout(self.dir)[0]
+        self._stored = sum(rows for _p, rows, _t, _f in self._parts)
+
+    def _manifest(self) -> dict:
+        """The manifest as it is now; for samples of an earlier version, the one they get at their
+        first write: samples.h5 as their only part, with its counts and attributes."""
+        manifest = read_manifest(self.dir)
+        if manifest is None:
+            from cufep import jsonio
+
+            path, rows, tail, frames = self._parts[0]
+            manifest = {"format": 2, "parts": [{"file": path.name, "rows": rows, "tail": tail, "frames": frames}],
+                        "attrs": jsonio.clean(stored_layout(self.dir)[1])}
+        return manifest
+
+    def _commit(self, manifest: dict, what: str) -> None:
+        """Replace the manifest by ``manifest``; StorageError, with the old one in place, if that fails."""
+        try:
+            _write_manifest(self.dir, manifest)
+        except Exception as exc:  # noqa: BLE001  raised as what it means for the samples
+            self._load()
+            raise StorageError(f"{what} could not be stored in {self.dir} ({type(exc).__name__}: {exc}); the "
+                               "samples are as they were") from exc
+        self._load()
+
+    def _set_attrs(self, changes: dict, remove: tuple = ()) -> None:
+        from cufep import jsonio
+
+        manifest = self._manifest()
+        attrs = dict(manifest.get("attrs") or {})
+        attrs.update(jsonio.clean(changes))
+        for key in remove:
+            attrs.pop(key, None)
+        manifest["attrs"] = attrs
+        self._commit(manifest, f"the attributes {', '.join(sorted(set(changes) | set(remove)))}")
+
+    def attributes(self) -> dict:
+        """The attributes of the samples as Python values."""
+        return stored_layout(self.dir)[1]
+
+    # -- conditions ---------------------------------------------------------------
+    def check_conditions(self, conditions: dict) -> str:
+        """Record the conditions of the samples, or refuse to continue them under other ones.
+
+        Nothing is written if they differ: the samples and their metadata stay as they are.
+        Returns "new", "same" or "unrecorded".
+
+        "unrecorded": the leg holds samples of a version that did not record their conditions.
+        Nothing on the disk tells what they were made with (the soft-core, the pressure and the
+        friction were stored nowhere, and that version rewrote temperature, backend and states
+        every time it opened the file), so they cannot be checked and nothing is written. Such
+        samples are read and analysed; they are not continued (:meth:`refuse_unrecorded`).
+        """
+        if self.n_iterations == 0:
+            self._set_attrs({"conditions": conditions})
+            return "new"
+        stored = self.attributes().get("conditions")
+        if not isinstance(stored, dict):
+            return "unrecorded"
+        differing = conditions_differences(stored, conditions)
+        if differing:
+            raise other_conditions(self.n_iterations, self.dir, differing)
+        return "same"
+
+    def refuse_unrecorded(self) -> None:
+        """Raise: samples whose conditions were not recorded are not continued."""
+        raise ConditionsError(
+            f"the {self.n_iterations} iterations of samples in {self.dir} were written by a version of cuFEP that "
+            "did not record the conditions they were made under, so nothing shows that this run would continue "
+            "them under the same ones. They are left as they are and can be analysed (cufep analyze). To sample "
+            "this leg further, start it anew with --reschedule: the samples it has are kept in previous_<n>/.")
+
+    # -- metadata -----------------------------------------------------------------
+    def set_meta(self, **kwargs) -> None:
+        self._set_attrs(kwargs)
+
+    def set_plan(self, n_equilibration: int, n_total: int, analysis_record: dict | None = None) -> None:
+        """Record, before the run, how many of its iterations are equilibration and how many it has,
+        and the settings its result will be analysed with (``analysis_record``).
+
+        It goes to the disk at once: an analysis of a run that was interrupted must not count
+        equilibration as production, and must judge the leg by the levels of its run.
+        """
+        changes = {"n_equilibration_iterations": int(n_equilibration), "n_planned_iterations": int(n_total)}
+        if analysis_record is not None:
+            changes["analysis_record"] = analysis_record
+        self._set_attrs(changes)
+
+    def clear_plan(self) -> None:
+        """A run that starts anew has no plan until :meth:`set_plan` gives it one."""
+        self._set_attrs({"n_equilibration_iterations": 0}, remove=("n_planned_iterations",))
+
+    @property
+    def n_iterations(self) -> int:
+        """Iterations this storage holds: those stored and those still in memory."""
+        return self._stored + len(self._rows)
+
+    @property
+    def n_stored(self) -> int:
+        """Iterations stored (named by the manifest)."""
+        return self._stored
+
+    # -- appending ------------------------------------------------------------------
+    def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray) -> int:
+        n = self.n_iterations
+        self._rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8")))
+        return n
+
+    def append_record(self, iteration: int, record: dict) -> None:
+        kept = {}
+        if "lrc_du" in record:
+            kept["lrc_du"] = float(record["lrc_du"])
+        if "frame" in record and self.n_frame_atoms and self._has_frames:
+            kept["frame"] = np.array(record["frame"], dtype="f4")
+            kept["box"] = np.array(record["box"], dtype="f4")
+        if kept:
+            self._records.append((int(iteration), kept))
+
+    def _next_segment(self) -> Path:
+        """A name no manifest has named: one more than the number of parts made (which the manifest
+        keeps, so that a part dropped by a truncation and then removed does not give its name again)
+        and than any number in the directory (a part left by a write that failed)."""
+        manifest = read_manifest(self.dir) or {}
+        numbers = [n for n in (_segment_number(p) for p in self.dir.glob("segment_*")) if n is not None]
+        return self.dir / SEGMENT_PATTERN.format(max(numbers + [int(manifest.get("segments_made", 0))]) + 1)
+
+    def _remove_unused(self) -> None:
+        """Remove what the manifest does not name: parts that a truncation dropped and what writes that
+        failed or were killed left (review of PR 1: they stayed on the disk). Only the writer, when it
+        opens the leg, does this; a reader that meets a part gone reads the manifest again (_read)."""
+        manifest = read_manifest(self.dir)
+        named = set() if manifest is None else {str(part["file"]) for part in manifest["parts"]}
+        for path in [*self.dir.glob("segment_*"), self.dir / (MANIFEST + WRITING), self.dir / ("samples.h5" + WRITING)]:
+            if path.name not in named and path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+
+    def _write_segment(self, target: Path, tail: list, frames: list) -> None:
+        """Write the iterations in memory and ``tail`` and ``frames`` records to ``target`` in one step."""
+        part = target.with_name(target.name + WRITING)
+        k, s, m = self.n_replicas, self.n_states, len(self._rows)
+        with h5py.File(part, "w") as h5:
+            h5.create_dataset("u", data=np.stack([row[0] for row in self._rows]) if m else np.zeros((0, k, s)))
+            h5.create_dataset("states", data=np.stack([row[1] for row in self._rows]) if m else
+                              np.zeros((0, k), dtype="i4"))
+            h5.create_dataset("volume", data=np.stack([row[2] for row in self._rows]) if m else np.zeros((0, k)))
+            h5.create_dataset("lrc_iter", data=np.array([it for it, _ in tail], dtype="i8"))
+            h5.create_dataset("lrc_du", data=np.array([du for _, du in tail], dtype="f8"))
+            h5.create_dataset("frame_iter", data=np.array([it for it, _ in frames], dtype="i8"))
+            if self._has_frames:
+                if frames:
+                    h5.create_dataset("frames", data=np.stack([r["frame"] for _, r in frames]), compression="gzip",
+                                      compression_opts=1)
+                    h5.create_dataset("frame_box", data=np.stack([r["box"] for _, r in frames]))
+                else:
+                    h5.create_dataset("frames", data=np.zeros((0, self.n_frame_atoms, 3), dtype="f4"))
+                    h5.create_dataset("frame_box", data=np.zeros((0, 3, 3), dtype="f4"))
+            h5.attrs["first_row"] = int(self._stored)
+        _fsync_path(part)
+        _replace(part, target)
+        _fsync_path(self.dir)
+
+    def flush(self, wait_s: float = WRITE_WAIT_S) -> bool:
+        """Store the iterations that are in memory as a new part (see the class); returns True.
+
+        A failure raises StorageError with what is stored unchanged and everything still in
+        memory; calling it again writes them again, as a part of another name. ``wait_s`` is not
+        used: no file is shared with a reader, so nothing has to be waited for.
+        """
+        if not self._rows and not self._records:
+            return True
+        tail = [(it, record["lrc_du"]) for it, record in self._records if "lrc_du" in record]
+        frames = [(it, record) for it, record in self._records if "frame" in record]
+        target = self._next_segment()
+        try:
+            self._write_segment(target, tail, frames)
+            manifest = self._manifest()
+            manifest["parts"] = list(manifest["parts"]) + [
+                {"file": target.name, "rows": len(self._rows), "tail": len(tail), "frames": len(frames)}]
+            manifest["segments_made"] = max(int(manifest.get("segments_made", 0)), _segment_number(target) or 0)
+            _write_manifest(self.dir, manifest)             # from here on the part is stored
+        except BaseException as exc:  # noqa: BLE001  an error or an interrupt (Ctrl-C), at any point
+            # what is stored is what the manifest names: if it names the new part, the iterations are
+            # stored and must not stay in memory, whatever ended the write (review of PR 1: an interrupt
+            # after the manifest was replaced left them in memory, and the close stored them twice)
+            self._load()
+            if any(path == target for path, *_counts in self._parts):
+                self._rows.clear()
+                self._records.clear()
+                if isinstance(exc, Exception):
+                    return True
+                raise
+            if not isinstance(exc, Exception):
+                raise
+            raise StorageError(f"the {len(self._rows)} iteration(s) after iteration {self._stored} could not be "
+                               f"stored in {self.dir} ({type(exc).__name__}: {exc}); the {self._stored} before "
+                               "them are stored, and these are kept in memory") from exc
+        self._rows.clear()
+        self._records.clear()
+        self._load()
+        return True
+
+    def truncate(self, n_iterations: int) -> None:
+        """Drop everything after ``n_iterations`` iterations, in memory and in what is stored: the
+        manifest is replaced by one that names that many rows and the records of those rows; no
+        part is changed."""
+        n_iterations = int(n_iterations)
+        del self._rows[max(0, n_iterations - self._stored):]
+        self._records = [(it, record) for it, record in self._records if it < n_iterations]
+        self._load()                                  # the parts and the manifest read together, now
+        if n_iterations >= self._stored:
+            return
+        manifest, kept, start = self._manifest(), [], 0
+        for entry, (path, rows, tail, frames) in zip(manifest["parts"], self._parts):
+            if start >= n_iterations:
+                break
+            if start + rows > n_iterations:
+                with open_samples(path) as h5:
+                    tail = int(np.sum(h5["lrc_iter"][:tail] < n_iterations))
+                    frames = int(np.sum(h5["frame_iter"][:frames] < n_iterations))
+                rows = n_iterations - start
+            kept.append(dict(entry, rows=rows, tail=tail, frames=frames))
+            start += rows
+        if not kept:            # nothing is left: the first part stays, empty, so that readers find 0 rows
+            kept = [dict(manifest["parts"][0], rows=0, tail=0, frames=0)]
+        manifest["parts"] = kept
+        self._commit(manifest, f"the cut to {n_iterations} iterations")
+
+    # -- checkpoint -------------------------------------------------------------------
+    def write_checkpoint(self, positions, velocities, boxes, state_of_replica, iteration: int,
+                         extra: dict | None = None, wait_s: float = WRITE_WAIT_S) -> bool:
+        """Store the iterations that are in memory, then the state to restart from; returns True.
+
+        In that order: a checkpoint never names an iteration whose samples are not stored. A
+        failure raises (StorageError) with the earlier checkpoint and samples as they were."""
+        self.flush(wait_s)
+        tmp = self.ckpt_path.with_suffix(".tmp.npz")
+        np.savez(tmp, positions=positions, velocities=velocities, boxes=boxes,
+                 state_of_replica=np.asarray(state_of_replica), iteration=int(iteration),
+                 extra=json.dumps(extra or {}))
+        _fsync_path(tmp)
+        _replace(tmp, self.ckpt_path)
+        _fsync_path(self.dir)
+        return True
+
+    def read_checkpoint(self) -> dict | None:
+        if not self.ckpt_path.exists():
+            return None
+        with np.load(self.ckpt_path, allow_pickle=False) as data:
+            out = {k: data[k] for k in ("positions", "velocities", "boxes", "state_of_replica")}
+            out["iteration"] = int(data["iteration"])
+            out["extra"] = json.loads(str(data["extra"]))
+        return out
+
+    def close(self, wait_s: float = CHECKPOINT_WAIT_S) -> None:
+        """Store what is in memory.
+
+        These are the iterations after the last checkpoint (a run that resumes drops them; a
+        leg that is only read afterwards has them). If they cannot be stored, StorageError says
+        so; what was stored is unchanged, and the rows stay in memory, so that the caller can try
+        again.
+        """
+        self.flush(wait_s)

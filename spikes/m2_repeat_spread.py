@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-import h5py
+from stored_frames import stored_frames
 import mdtraj as md
 import numpy as np
 
@@ -114,14 +114,7 @@ def rotamer(x):
 data = {}
 for r in repeats:
     eq = np.load(leg(r) / "equil.npz")
-    with h5py.File(leg(r) / "hrex" / "samples.h5", "r") as h:
-        chunks = []                                    # the run may have been stopped while writing
-        for start in range(0, h["frames"].shape[0], 25):
-            try:
-                chunks.append(h["frames"][start:start + 25])
-            except OSError:
-                break
-        fr = np.concatenate(chunks)
+    fr = stored_frames(leg(r) / "hrex")                # the run may have been stopped while writing
     res = json.loads((leg(r) / "result.json").read_text())
     data[r] = {"pre": describe(eq["frames"], "plain MD"), "hrex": describe(fr, "window 0"), "dg": res["delta_g_decouple"] / KJ,
                "stage": {k: v / KJ for k, v in res["analysis"]["stage_delta_g"].items()}}

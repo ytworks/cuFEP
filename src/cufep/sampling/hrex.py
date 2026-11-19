@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cufep.sampling.storage import LegStorage, StorageBusyError, StorageError
+from cufep.sampling.storage import LegStorage, StorageError
 from cufep.sampling.worker import LegSpec, ReplicaWorker, SharedArrays, worker_main
 
 
@@ -438,22 +438,18 @@ class ReplicaExchangeSampler:
         # the rows the checkpoint names: iterations that were run without being stored have none
         # (a checkpoint of an earlier version does not say, and then every iteration had a row)
         extra = ckpt.get("extra") or {}
-        rows = int(extra.get("rows", ckpt["iteration"]))
         if "rows" not in extra:
-            # a checkpoint of an earlier version, which numbered records by iteration: records with a
-            # number beyond the stored rows show iterations that were run without being stored (a
-            # warm-up), and then nothing tells which rows belong to the checkpoint (review of PR 1)
-            last = self.storage.last_record_iteration()
-            if last is not None and last >= self.storage.n_iterations:
-                raise StorageError(
-                    f"{self.storage.h5_path} was written by an earlier version, and its records carry iteration "
-                    f"{last} while it holds {self.storage.n_iterations} rows: some iterations were run without being "
-                    "stored, and its checkpoint does not say which rows belong to it. Nothing was changed; start "
-                    "the leg anew with --reschedule")
+            # a checkpoint of an earlier version does not say how many of its iterations were stored: one
+            # with iterations that were run without being stored (a warm-up) cannot be told from one
+            # without, whatever its records show (review of PR 1), so it is not continued from
+            from cufep.workflow import old_checkpoint_refusal
+
+            raise StorageError(f"the leg in {self.storage.dir}: {old_checkpoint_refusal(self.storage.dir)}")
+        rows = int(extra["rows"])
         if self.storage.n_iterations < rows:
             raise StorageError(
-                f"{self.storage.h5_path} holds {self.storage.n_iterations} iterations, fewer than the "
-                f"{rows} that its checkpoint names: the file was changed after the checkpoint was written. "
+                f"{self.storage.dir} holds {self.storage.n_iterations} iterations, fewer than the "
+                f"{rows} that its checkpoint names: the samples were changed after the checkpoint was written. "
                 "Nothing was changed; the samples can be analysed (cufep analyze), and --reschedule starts the leg anew")
         self.state_of_replica = ckpt["state_of_replica"].astype(int)
         self.iteration = ckpt["iteration"]
@@ -469,32 +465,19 @@ class ReplicaExchangeSampler:
                                "belong to the start they were created for; create a new sampler")
 
     def checkpoint(self, must: bool = False) -> bool:
-        """Store the samples that are in memory and the state to restart from.
+        """Store the samples that are in memory and the state to restart from
+        (:meth:`LegStorage.write_checkpoint`: a new part of the samples, then the checkpoint).
 
-        The samples file is open only for that. If another process is reading it just then (an
-        analysis of the running leg), an ordinary checkpoint waits a short while and is then
-        postponed to the next one: the samples stay in memory and the run goes on. With ``must``
-        (the start and the end of a run) it waits long and raises if the file stays held.
+        A reader of the leg (an analysis of the running leg) never holds a file that is written
+        here, so nothing waits for it. A write that fails raises StorageError; the earlier
+        checkpoint and the samples up to it are kept, and running the leg again resumes from there
+        on the same backend. ``must`` (the start and the end of a run) is kept for the callers.
         """
-        from cufep.sampling.storage import CHECKPOINT_WAIT_S, WRITE_WAIT_S
-
-        wait = WRITE_WAIT_S if must else CHECKPOINT_WAIT_S
-        written = self.storage.write_checkpoint(
+        self.storage.write_checkpoint(
             self.arrays.pos[self.cur], self.arrays.vel[self.cur], self.arrays.box[self.cur], self.state_of_replica,
-            self.iteration, extra={"start": self.start_number, "rows": self.storage.n_iterations}, wait_s=wait)
-        if written:
-            self.last_checkpoint = int(self.iteration)
-        elif must:
-            kept = "no checkpoint" if self.last_checkpoint is None else \
-                f"the checkpoint at iteration {self.last_checkpoint} and the samples up to it"
-            raise StorageBusyError(
-                f"the samples up to iteration {self.iteration} could not be stored: another process held "
-                f"{self.storage.h5_path} open for {wait:g} s. {kept[0].upper() + kept[1:]} are kept; running the "
-                "leg again resumes it from there on the same backend")
-        else:
-            self.log(f"[{self.spec.name}] the checkpoint at iteration {self.iteration} is postponed to the next one: "
-                     f"another process holds {self.storage.h5_path.name} open; the samples stay in memory")
-        return written
+            self.iteration, extra={"start": self.start_number, "rows": self.storage.n_iterations})
+        self.last_checkpoint = int(self.iteration)
+        return True
 
     def current_configurations(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Copies of (positions, boxes, state_of_replica)."""

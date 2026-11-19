@@ -407,6 +407,41 @@ def conditions_of_this_run(cfg: Config, lig_dir: Path, leg: str, repeat: int, pr
     return leg_spec(cfg, built, states, barostat, float(eq["timestep_fs"]), backend_name, 0).conditions()
 
 
+def leg_is_complete(leg_hrex: Path, total: int) -> bool:
+    """Whether the samples in ``leg_hrex`` are complete as they are: their checkpoint names ``total``
+    or more rows (those it records, or for a checkpoint of an earlier version, which did not record
+    them, its iteration) and the stored samples are exactly those. Samples that hold rows their
+    checkpoint does not name are not complete: they are resumed, and the resume cuts them to the
+    checkpoint. The one rule of run_leg and of the check before a run."""
+    from cufep.sampling.storage import stored_attributes
+
+    path = Path(leg_hrex) / "checkpoint.npz"
+    if not path.exists():
+        return False
+    with np.load(path, allow_pickle=False) as data:
+        extra = json.loads(str(data["extra"])) if "extra" in data.files else {}
+        iteration = int(data["iteration"])
+    named = int(extra["rows"]) if "rows" in extra else iteration
+    return named >= total and stored_attributes(leg_hrex)[0] == named
+
+
+def old_checkpoint_refusal(leg_hrex: Path) -> str | None:
+    """Why the checkpoint in ``leg_hrex`` cannot be continued from, or None: one of an earlier
+    version does not record how many of its iterations were stored, and iterations that were run
+    without being stored (a warm-up) cannot be told apart from stored ones (review of PR 1)."""
+    path = Path(leg_hrex) / "checkpoint.npz"
+    if not path.exists():
+        return None
+    with np.load(path, allow_pickle=False) as data:
+        extra = json.loads(str(data["extra"])) if "extra" in data.files else {}
+    if "rows" in extra:
+        return None
+    return (f"its checkpoint ({path}) was written by an earlier version of cuFEP and does not record how many of "
+            "its iterations were stored; iterations run without being stored cannot be told from stored ones, so "
+            "the leg is not continued from it. Nothing was changed. Its samples can be analysed as they are "
+            "(cufep analyze); --reschedule starts the leg anew and keeps them in previous_<n>/")
+
+
 def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info: dict, production_ns: float,
                     reschedule: bool = False, log=print) -> None:
     """Before a run writes or samples anything: what the leg directory holds must be usable by it.
@@ -417,7 +452,8 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     or ConditionsError.
     """
     from cufep.alchemy.schedule import Schedule
-    from cufep.sampling.storage import _same, conditions_differences, other_conditions, stored_conditions
+    from cufep.sampling.storage import (ConditionsError, _same, conditions_differences, other_conditions,
+                                        stored_conditions)
 
     leg_dir = lig_dir / f"repeat_{repeat}" / leg
     is_complex = leg == "complex"
@@ -449,6 +485,15 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
         return
+    # a leg that is to be continued from a checkpoint of an earlier version (run_leg analyses a leg
+    # that has all its iterations as it is, without its checkpoint)
+    used_timestep = float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+    plan = planned_iterations(cfg.sampling.time_per_iteration_ps, used_timestep, cfg.sampling.equilibration(leg),
+                              production_ns)
+    refusal = old_checkpoint_refusal(leg_dir / "hrex")
+    if refusal and conditions is not None and not leg_is_complete(leg_dir / "hrex",
+                                                                  plan.n_equilibration + plan.n_production):
+        raise ConditionsError(f"the {leg} leg of repeat {repeat}: {refusal}")
     if conditions is None:
         from cufep.sampling.storage import stored_attributes
 
@@ -1282,6 +1327,12 @@ def run_leg(job: LegJob) -> dict:
                     origin_not_recorded.append("the samples")
                 timed("sampling", t_sampling)
                 return read_samples(hrex_dir), schedule
+            if not sampler.storage.n_iterations - sampler.storage.n_stored and leg_is_complete(hrex_dir, total):
+                # the leg has all its iterations: nothing to continue, its samples are analysed as they are
+                # (whatever version wrote its checkpoint)
+                log(f"the leg holds all its {total} iterations; its samples are analysed as they are")
+                timed("sampling", t_sampling)
+                return read_samples(hrex_dir), schedule
             if not sampler.restore():
                 sampler.initialize(*configs)
             else:
@@ -1504,13 +1555,25 @@ def analyse_leg_directory(directory, config=None, equilibration_ns: float | None
     from cufep.config.schema import AnalysisConfig
     from cufep.sampling.storage import equilibration_boundary, read_samples
 
+    if equilibration_ns is not None and equilibration_iterations is not None:
+        raise WorkflowError("give the equilibration either as a length or as a number of iterations, not both")
+    if equilibration_ns is not None and not (np.isfinite(equilibration_ns) and equilibration_ns >= 0):
+        raise WorkflowError(f"the length of the equilibration must be a number of nanoseconds of 0 or more, not "
+                            f"{equilibration_ns}")
+    if equilibration_iterations is not None and int(equilibration_iterations) < 0:
+        raise WorkflowError(f"the number of equilibration iterations must be 0 or more, not {equilibration_iterations}")
     d = Path(directory)
     if d.name == "hrex" and (d / "samples.h5").exists():
         d = d.parent
     hrex = d / "hrex"
     if not (hrex / "samples.h5").exists():
         raise WorkflowError(f"{d}: no samples (hrex/samples.h5) in this directory")
-    samples = read_samples(hrex)
+    from cufep.sampling.storage import StorageError
+
+    try:
+        samples = read_samples(hrex)
+    except StorageError as exc:                    # a damaged leg is said as such, not as a traceback
+        raise WorkflowError(f"{d}: the samples cannot be read: {exc}") from exc
     attrs = samples["attrs"]
     if equilibration_iterations is not None:
         n_equilibration = int(equilibration_iterations)            # as given, exactly
@@ -1927,7 +1990,14 @@ def quality_warnings(result: dict, cfg) -> list[str]:
         shown = a["parts_not_determined"]
         out.append(f"parts of the production without an estimate ({len(shown)}; they are not shown in analysis.png): "
                    + "; ".join(shown[:3]) + ("; ..." if len(shown) > 3 else ""))
+    if a.get("parts_below_level"):
+        shown = a["parts_below_level"]
+        out.append(f"parts of the production whose lambda windows overlap below the level of a reliable estimate "
+                   f"({len(shown)}; their estimates are shown in analysis.png and rest on too little overlap): "
+                   + "; ".join(shown[:3]) + ("; ..." if len(shown) > 3 else ""))
     halves = q["halves"]
+    if halves.get("warning"):
+        out.append(f"the comparison of the two halves rests on too little overlap: {halves['warning']}")
     if halves["ok"] is False:
         if halves.get("difference") is not None:
             in_sigma = halves.get("difference_sigma")
@@ -2160,6 +2230,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
     # legs whose analysis does not meet a level of cufep.analysis.mbar.quality_checks
     flagged: dict[str, list[str]] = {"overlap": [], "samples": [], "halves": [], "estimators": []}
     not_assessed: list[str] = []           # legs too short to compare their halves
+    # legs whose halves were compared although the windows of a half overlap below analysis.min_overlap
+    below_level: list[str] = []
     failed_legs: list[str] = []
     for r in range(repeats):
         states = {leg: leg_state(lig_dir / f"repeat_{r}" / leg) for leg in ("complex", "solvent")}
@@ -2171,9 +2243,13 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                     if data.get("previous_result") else ""
                 warnings.append(f"repeat {r} {leg}: FAILED: {str(data.get('error', ''))[:300]}.{kept}")
         for leg, (state, data) in states.items():
-            # a finished leg whose analysis gave no number (windows without any overlap)
-            if state == "finished" and not all(isinstance(data.get(key), (int, float)) and np.isfinite(data[key])
-                                               for key in ("delta_g_decouple", "delta_g_mbar_error")):
+            if state != "finished":
+                continue
+            # a finished leg whose analysis gave no number (windows without any overlap), or no standard
+            # error of the number it reports (version 5 on: delta_g_error)
+            needed = ("delta_g_decouple", "delta_g_error") if "delta_g_error" in data else \
+                ("delta_g_decouple", "delta_g_mbar_error")
+            if not all(isinstance(data.get(key), (int, float)) and np.isfinite(data[key]) for key in needed):
                 where = f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else "")
                 failed_legs.append(where)
                 warnings.append(f"repeat {r} {leg}: FAILED: the analysis gave no free energy for this leg")
@@ -2216,6 +2292,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                     legs.append(where)
             if (quality.get("halves") or {}).get("reason"):
                 not_assessed.append(where)
+            if (quality.get("halves") or {}).get("warning"):
+                below_level.append(where)
     inconsistent, not_compared = cycle_differences(complete)
     if inconsistent:
         # these legs are not legs of one thermodynamic cycle: no number is made from them
@@ -2248,6 +2326,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                  "origin_not_recorded": unrecorded, "old_analysis": old_analysis,
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
                  "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,
+                 "halves_below_level": below_level,
                  "estimators_disagree": flagged["estimators"]}
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL

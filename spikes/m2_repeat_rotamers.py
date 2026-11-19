@@ -6,7 +6,8 @@ Used to explain why repeats of the TYK2 ejm_31 complex leg differ (ILE960 chi1).
 """
 import sys
 from pathlib import Path
-import h5py, mdtraj as md, numpy as np, yaml
+import mdtraj as md, numpy as np, yaml
+from stored_frames import stored_frames
 
 run_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "runs/tyk2_ejm_31")
 lig_dir = run_dir / (sys.argv[2] if len(sys.argv) > 2 else "ejm_31")
@@ -44,12 +45,7 @@ for rep_dir in sorted(lig_dir.glob("repeat_*")):
     print(f"\nrepeat {r} plain MD (250 frames over 5 ns), rotamer per 10 frames (- = g-, t = trans, + = g+):")
     for k in ("ILE960 chi1", "GLU979 chi1", "VAL981 chi1", "LEU1030 chi2", "ILE960 chi2"):
         print(f"  {k:13s}", "".join(code(tab[k])[::10]))
-    with h5py.File(leg / "hrex/samples.h5", "r") as h:
-        chunks = []
-        for s in range(0, h["frames"].shape[0], 25):
-            try: chunks.append(h["frames"][s:s + 25])
-            except OSError: break
-        fr = np.concatenate(chunks)
+    fr = stored_frames(leg / "hrex")
     tab = chi_table(md.Trajectory(fr, top))
     print(f"repeat {r} window 0 during replica exchange ({len(fr)} frames, every 10 ps), per 25 frames:")
     for k in ("ILE960 chi1", "GLU979 chi1", "VAL981 chi1", "LEU1030 chi2"):

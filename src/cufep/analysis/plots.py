@@ -66,9 +66,20 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         for k, (start, end, value, _err) in enumerate(blocks):
             ax.plot([start, end], [value / KCAL, value / KCAL], color="0.25", lw=2.5, solid_capstyle="butt",
                     label="consecutive blocks" if k == 0 else None)
+        # the range of the values, the whole and its band: an error bar that reaches further is cut by the
+        # axes (review of PR 1: a part with an error of thousands of kcal/mol flattened every other value)
+        shown = [final - error, final + error] + [p[1] / KCAL for name in ("forward", "reverse") for p in a.get(name, [])]
+        shown += [h[0] / KCAL for h in (a.get("first_half"), a.get("second_half")) if h is not None and h[0] is not None]
+        shown += [b[2] / KCAL for b in blocks]
+        shown = [v for v in shown if v is not None and np.isfinite(v)]
+        low, high = min(shown), max(shown)
+        margin = max(0.5, 0.15 * (high - low))
+        ax.set_ylim(low - margin, high + margin)
         verdict = ""
         if conv.get("difference_kT") is not None:
             verdict = f"halves differ by {conv['difference_kT']:.1f} kT"
+            if conv.get("warning"):
+                verdict += " (compared below the level of overlap)"
         if conv.get("reason"):
             verdict = "halves not compared"
             ax.text(0.5, 0.04, conv["reason"], transform=ax.transAxes, ha="center", va="bottom", fontsize=6, wrap=True)

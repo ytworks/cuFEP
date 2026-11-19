@@ -129,3 +129,56 @@ def potential(ctx, groups=None) -> float:
 
     kwargs = {} if groups is None else {"groups": groups}
     return ctx.getState(getEnergy=True, **kwargs).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)
+
+
+def as_earlier_version(hrex_dir, counts: bool = True) -> Path:
+    """Rewrite the samples of a leg as the versions before the manifest wrote them: one samples.h5 that
+    holds everything, with extendable datasets (frames in compressed chunks of 8), its attributes as HDF5
+    attributes (dicts and lists as JSON text), and the counts dataset of the previous version (``counts``)
+    or none (the versions before it). The manifest and the segments are removed. Returns samples.h5."""
+    import json
+
+    import h5py
+    import numpy as np
+
+    from cufep.sampling.storage import read_samples
+
+    d = Path(hrex_dir)
+    data = read_samples(d)
+    attrs = data.pop("attrs")
+    for path in [*d.glob("segment_*"), d / "manifest.json", d / "samples.h5"]:
+        if path.exists():
+            path.unlink()
+    n, k, s = data["u"].shape
+    with h5py.File(d / "samples.h5", "w") as h5:
+        h5.create_dataset("u", data=data["u"], maxshape=(None, k, s), chunks=(16, k, s))
+        h5.create_dataset("states", data=np.asarray(data["states"], dtype="i4"), maxshape=(None, k), chunks=(256, k))
+        h5.create_dataset("volume", data=data["volume"], maxshape=(None, k), chunks=(256, k))
+        for name, chunk in (("lrc_iter", 1024), ("lrc_du", 1024), ("frame_iter", 256)):
+            h5.create_dataset(name, data=data[name], maxshape=(None,), chunks=(chunk,))
+        if "frames" in data:
+            a = data["frames"].shape[1]
+            h5.create_dataset("frames", data=data["frames"], maxshape=(None, a, 3), chunks=(8, a, 3),
+                              compression="gzip", compression_opts=1)
+            h5.create_dataset("frame_box", data=data["frame_box"], maxshape=(None, 3, 3))
+        for key, value in attrs.items():
+            if value is not None:
+                h5.attrs[key] = json.dumps(value) if isinstance(value, (dict, list)) else value
+        if counts:
+            h5.create_dataset("committed_counts", data=np.array([n, len(data["lrc_iter"]), len(data["frame_iter"])],
+                                                                dtype="i8"))
+    return d / "samples.h5"
+
+
+def edit_attributes(hrex_dir, set: dict | None = None, remove=()) -> None:
+    """Change the recorded attributes of the samples of a leg of this version (in its manifest)."""
+    from cufep.sampling.storage import _write_manifest, read_manifest
+
+    manifest = read_manifest(hrex_dir)
+    assert manifest is not None, f"{hrex_dir} has no manifest"
+    attrs = dict(manifest.get("attrs") or {})
+    attrs.update(set or {})
+    for key in remove:
+        attrs.pop(key, None)
+    manifest["attrs"] = attrs
+    _write_manifest(Path(hrex_dir), manifest)

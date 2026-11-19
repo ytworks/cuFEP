@@ -9,7 +9,7 @@ configurations of all windows, for each repeat.
 import sys
 from pathlib import Path
 
-import h5py
+from stored_frames import stored_frames
 import numpy as np
 from openff.toolkit import Molecule
 from rdkit import Chem
@@ -57,8 +57,7 @@ def main() -> None:
         eq = np.load(d / "equil.npz")
         atoms = list(eq["frame_atoms"])
         local = np.array([atoms.index(a) for a in lig])
-        with h5py.File(d / "hrex" / "samples.h5", "r") as h:
-            frames = h["frames"][:][:, local, :]
+        frames = stored_frames(d / "hrex")[:, local, :]
         start = np.load(d / "start_configs.npz")["positions"][:, lig, :]
         pre = eq["frames"][:, local, :]
         print(f"\n{rep_dir.name}: {len(pre)} frames of pre-equilibration, {len(start)} start configurations, "

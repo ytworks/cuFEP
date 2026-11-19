@@ -415,18 +415,24 @@ A part of the production is used only if its free energy is determined:
 
 - every window keeps at least four samples in it;
 - the MBAR equations of its samples have a solution;
-- its samples connect the windows. The overlap matrix is stochastic, its largest eigenvalue is
-  1, and the others "approach one when the matrices can be nearly decomposed into independent
-  block matrices"; the variance of a free energy grows as lambda / (N (1 - lambda))
-  (Klimovich et al., section 3.4). A part is determined if 1 minus the second largest
-  eigenvalue, times the samples of the window with the fewest, is at least one. Without samples
-  that connect two windows the MBAR equations hold for any difference of their free energies,
-  and a solver that starts from a value returns it; such a part is found here, whatever
-  `analysis.min_overlap` is;
-- every pair of neighbouring windows overlaps by at least `analysis.min_overlap` (0.03) among
-  its samples, the level of Klimovich et al. below which the estimate "will likely be
-  substantially incorrect". A part below it is determined, but not used, and its reason says
-  so;
+- its samples determine the solution of its MBAR equations. Without samples that connect two
+  groups of windows the equations hold for any difference of their free energies, and a solver
+  that starts from a value returns it. The Hessian of the equations, which the Newton step of
+  the solver uses, is H = diag(N) - P P^T, with P_in the probability that sample n is of window
+  i: the Laplacian of a graph whose edge between two windows weighs the samples they share. The
+  free energies are unique if this graph is connected, that is if H with window 0 fixed has no
+  zero eigenvalue. With its smallest eigenvalue lambda, the solver, which stops where every
+  |gradient_i| / N_i is below 1e-8, may stop up to 1e-8 |N| / lambda away from the solution,
+  and the statistical standard error of that combination of free energies is about
+  1 / sqrt(lambda) (Shirts and Chodera 2008). A part is determined if the first is at most a
+  hundredth of the second and at most 0.01 kT, finer than the 0.01 kcal/mol to which free
+  energies are reported: the samples, not the start of the solver, fix its free energies.
+  (With the relative bound alone, two windows that shared 1e-9 of their samples had halves with
+  errors of thousands of kT that were the start of the solver, the whole, and agreed.) A
+  connected part of low precision is determined, however long its
+  chain of windows: 24 windows that overlap by 0.25, or 34 windows of one Hamiltonian, each
+  pair sharing 1/34, are. This does not depend on `analysis.min_overlap`, and a part whose
+  windows are not connected is found whatever it is;
 - the correction has at least four observations in it (tail energies for the correction by
   reweighting, volumes of the coupled state for the isotropic one), all of them finite (and the
   volumes positive). For the correction by reweighting the result also gives the effective
@@ -434,10 +440,17 @@ A part of the production is used only if its free energy is determined:
   largest weight, so that a correction resting on a few configurations shows; no level is
   applied to them.
 
-A part that is not determined, or below the level, is left out with the reason: such halves
-are "not compared", points and blocks are listed in `parts_not_determined`, and the other
-blocks keep their places. A production without
-the four observations of the correction gives the leg no free energy.
+A part that is not determined is left out with the reason: such halves are "not compared",
+points and blocks are listed in `parts_not_determined`, and the other blocks keep their places.
+A determined part whose neighbouring windows overlap among its samples by less than
+`analysis.min_overlap` (0.03, the level of Klimovich et al. below which the estimate "will
+likely be substantially incorrect") is used, and shown with its error and a warning: it is
+listed in `parts_below_level`, and for the halves the warning (`halves_warning`) stands next to
+their comparison and the ligand's summary names the leg (`halves_below_level`, "halves compared
+below the level of overlap" in the report, `summary.csv` and the result line). The overlap of the whole production is a check of its own (`NOT RELIABLE`);
+since every split of a chain of windows into two groups crosses a pair of neighbours, a leg
+whose windows are not connected always fails it. A production without the four observations of
+the correction gives the leg no free energy.
 
 This is the procedure of Klimovich, Shirts and Mobley 2015 (section 2.5: the series may be
 dU/dlambda or "any of the potential energy differences") and of Mey et al. 2020 (section 8.2)
@@ -758,24 +771,34 @@ belong together:
   never repeated. Versions before this one derived the streams from the seed and the worker
   alone, so a resumed leg repeated the thermal noise of its start: results of legs that those
   versions continued should not be relied on.
-- The samples go to `samples.h5` when a checkpoint is written, and the file is closed in
-  between. `cufep analyze` can therefore be used on a leg that is being sampled; it sees the
-  iterations up to the last checkpoint, all datasets to the same iteration. If a reader has
-  the file open at the moment of a checkpoint, that checkpoint is postponed to the next one
-  and the run goes on.
-- A write of the samples is a transaction: every dataset is written from the stored count on,
-  the data is flushed to the file, and only then is the new count published (the dataset
-  `committed_counts`, three integers written in place and never deleted), by which every reader
-  goes. A write that fails half-way, or a process killed at any point of it, leaves the file at
-  one written state; the samples stay in memory and the write is repeated from the same place,
-  so nothing is stored twice and nothing unwritten is read. A file of an earlier version gets
-  its counts, from what all its datasets hold, before anything of it is extended. If the
-  samples cannot be stored at the end of a run (another process held the file for ten
-  minutes), the leg fails with its last checkpoint kept and is resumed by running it again.
+- Stored samples are never changed. The iterations are kept in memory; at a checkpoint they go
+  to a new part, `hrex/segment_<n>.h5`, which is written whole under another name, made
+  durable and renamed. Only then is `hrex/manifest.json`, which names the parts in order with
+  their numbers of iterations, tail energies and frames, and holds the attributes of the
+  samples, replaced in one step (written under another name, made durable, renamed). Every
+  reader goes by the manifest. Whenever a write fails or the writer is killed, the manifest
+  names complete parts only: a reader sees one state of the run, nothing is stored twice, and
+  the parts the last checkpoint rests on are as they were. (Earlier versions added the rows to
+  one file. HDF5 rewrites a compressed chunk of frames when rows are added to it, so the frames
+  of the last checkpoint were lost when the writer was killed in the middle; review of PR 1.)
+  A truncation, as when a leg is resumed from its checkpoint, replaces the manifest alone. What
+  is stored is what the manifest names, whatever ends a write, an error or an interrupt: rows
+  that it names are never kept in memory to be stored again. When the sampler opens a leg it
+  removes what the manifest does not name (parts a truncation dropped, what a failed write
+  left); the manifest counts the parts made, so a name that a manifest held is never given
+  again, and a reader that finds a part gone reads the new manifest.
+- No part is opened for writing once it exists, so a reader and the sampler never meet in a
+  file. `cufep analyze` can be used on a leg that is being sampled; it sees the iterations up
+  to the last checkpoint, and no checkpoint waits for it. If the samples cannot be stored (a
+  full disk), the error is raised with the last checkpoint and its samples kept, and the leg is
+  resumed by running it again on the same backend.
 - The checkpoint names the iteration and the number of stored rows; records (tail energies,
-  frames) carry the row of their iteration. A checkpoint of an earlier version, whose records
-  show that iterations were run without being stored, cannot say which rows are its own and is
-  refused.
+  frames) carry the row of their iteration. A checkpoint of an earlier version does not record
+  how many of its iterations were stored, and iterations that were run without being stored (a
+  warm-up) cannot be told from stored ones, whatever its records show. A leg is therefore not
+  continued from such a checkpoint: the run is refused before anything is written, with what to
+  do (`--reschedule` starts the leg anew and keeps its samples in `previous_<n>/`). A leg that
+  holds all its iterations is analysed as it is.
 - Workers are started by one function for the replica exchange, the lambda precalculation and a
   change of GPUs: if one does not start, every worker that was started is stopped before the
   error is raised, and the workers and the GPUs the sampler names agree.
@@ -849,12 +872,13 @@ version wrote without a record of what they were made from are treated as follow
 | file | what happens |
 |---|---|
 | samples (`hrex/samples.h5`) without recorded conditions | read and analysed, never added to, and not written to. That version stored neither the soft-core nor pressure and friction, and it rewrote temperature, backend and states whenever it opened the file, so nothing on the disk shows what the samples were made with. They are held to what their file does hold: a run with another temperature, other lambda states or another length of an iteration is refused, and so is one that asks for more production than they have. A leg that has all its iterations is analysed as it is: the release of the restraint is computed at the temperature of the samples, and the pressure, which they do not record, is named as not compared when the legs are combined. To sample further, the leg is started anew with `--reschedule` |
-| samples without the stored count (`committed`) | read up to the iterations that all their row datasets hold, as before; a run that continues them writes the count from then on |
+| samples in one file (`hrex/samples.h5`, without `manifest.json`) | read as that version stored them: up to its stored counts (`committed_counts`), or, for the versions before them, up to the iterations that all their row datasets hold. A run that continues them never writes to that file: it adds parts and a manifest that names the file, with those counts, as its first part |
+| a checkpoint without the number of its stored rows | not continued from (see "A leg and its own files" above); the run is refused before anything is written |
 | samples that record their conditions with a checksum of the System and without the settings behind it (one version) | before a run, the System is built again from the files of the leg and all recorded conditions are compared, so that a run with another soft-core, restraint or REST2 region is refused before anything is written. If a file needed for that is missing, the run is refused |
 | prepared systems, pre-equilibration, restraint without a record | refused where what the file does hold contradicts the run (bilayer or not, barostat, box shape, ligand; length of the MD, a larger time step than configured; restraint selection and force constants). Otherwise used, and the leg and the ligand result name them (`origin_not_recorded`) |
 | a result without the version of its analysis | made again from the samples, see above |
 | `summary.json` of an earlier version, read by `cufep benchmark report` | the verdicts of that version are shown as such ("NOT CONVERGED by the check of an earlier version"), with the flag that the checks of this version were not made; they are made when the legs are analysed again |
-| an interrupted run that did not record where its production begins | `cufep analyze` asks for `--equilibration-ns` |
+| an interrupted run that did not record where its production begins | `cufep analyze` asks for the boundary: `--equilibration-ns` (a length of 0 or more) or `--equilibration-iterations` (exactly), not both |
 
 ## Long-range dispersion
 

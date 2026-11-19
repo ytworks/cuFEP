@@ -65,7 +65,9 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
 LEG_FLAGS = (("failed_legs", "FAILED"), ("inconsistent_legs", "LEGS MADE UNDER DIFFERENT CONDITIONS"),
              ("not_reliable", "NOT RELIABLE (overlap)"), ("old_analysis", "old analysis"),
              ("few_samples", "few independent samples"), ("halves_differ", "halves differ"),
-             ("halves_not_compared", "halves not compared"), ("estimators_disagree", "BAR and MBAR differ"),
+             ("halves_not_compared", "halves not compared"),
+             ("halves_below_level", "halves compared below the level of overlap"),
+             ("estimators_disagree", "BAR and MBAR differ"),
              ("origin_not_recorded", "origin of files not recorded"))
 
 

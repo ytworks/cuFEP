@@ -1,5 +1,6 @@
 """Replica mixing, MBAR, storage and an inline replica-exchange run on the CPU."""
 import json
+import pathlib
 
 import numpy as np
 import openmm as mm
@@ -561,8 +562,8 @@ def test_a_part_of_the_production_whose_windows_do_not_overlap_has_no_estimate(m
         "none", np.zeros(0), np.zeros(0), 298.15), 2.479, 0.03, int(np.ceil(g.max())), np.array([0.0, 2.0]))
     trapped = estimator.estimate(*estimator.masks(0, 300), np.array([0.0, 2.0]))
     assert not trapped.determined and trapped.value is None
-    assert trapped.reason.startswith("the samples do not connect the lambda windows: the second largest eigenvalue of "
-                                     "their overlap matrix is 1.000000") and trapped.kind == "not determined"
+    assert trapped.reason.startswith("the samples do not connect the lambda windows (windows 0-0; windows 1-1)") \
+        and trapped.kind == "not determined"
     # the halves are not compared, and say why
     assert np.isnan(res.first_half[0]) and np.isnan(res.second_half[0])
     assert "the second half (iterations 300-600 of the production): the samples do not connect" in res.convergence_note
@@ -581,9 +582,11 @@ def test_connected_windows_are_determined_whatever_the_level_and_unconnected_one
     """Review of PR 1: whether a part is determined depended on analysis.min_overlap. With 0, a half whose
     two windows share no sample passed (0 >= 0) and was compared; with the default, 34 windows of the same
     Hamiltonian (each element 1/34 = 0.0294, dG exactly 0) were called not determined. Determined now means
-    connected by the samples (the second eigenvalue of the overlap matrix, Klimovich et al. 2015, section
-    3.4); the level of analysis.min_overlap is a reason of its own."""
+    that the samples fix the solution of the MBAR equations (windows_determined); a determined part below
+    analysis.min_overlap is shown with its error and a warning (a connected part of low precision is not
+    dropped)."""
     import cufep.analysis.mbar as mbar
+    from cufep.analysis.mbar import quality_checks
 
     monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
     rng = np.random.default_rng(3)
@@ -596,16 +599,224 @@ def test_connected_windows_are_determined_whatever_the_level_and_unconnected_one
         res = analyze_leg({"u": u, "states": states}, 298.15, min_overlap=level)
         assert np.isnan(res.second_half[0]) and "the second half" in res.convergence_note
         assert "the samples do not connect the lambda windows" in res.convergence_note
-    # 34 windows with the same Hamiltonian: every element 1/34, below 0.03, and yet connected
+    # 34 windows with the same Hamiltonian: every element 1/34, below 0.03, and yet determined: the halves
+    # and the blocks have estimates (exactly 0) and errors, and the warning says what they rest on
     k = 34
     x = rng.normal(size=(200, k))
     same = {"u": np.repeat((0.5 * x ** 2)[:, :, None], k, axis=2), "states": np.tile(np.arange(k), (200, 1))}
     res = analyze_leg(same, 298.15)
     assert res.delta_g == pytest.approx(0.0, abs=1e-9) and res.min_overlap == pytest.approx(1 / 34, abs=1e-3)
-    assert "not connect" not in res.convergence_note and "not connect" not in " ".join(res.parts_not_determined)
-    assert "below analysis.min_overlap (0.03), the level of a reliable estimate" in res.convergence_note
+    assert res.convergence_note == "" and res.parts_not_determined == []
+    assert res.first_half[0] == pytest.approx(0.0, abs=1e-9) and res.second_half[0] == pytest.approx(0.0, abs=1e-9)
+    assert np.isfinite(res.first_half[1]) and np.isfinite(res.second_half[1])
+    assert len(res.forward) == 10 and len(res.reverse) == 10 and len(res.blocks) == 5
+    assert "below analysis.min_overlap (0.03), the level of a reliable estimate" in res.halves_warning
+    assert res.halves_warning.startswith("the first half (iterations 0-100 of the production): lambda windows")
+    assert len(res.parts_below_level) == 2 + 9 + 9 + 5            # halves, points short of the whole, blocks
+    assert all(value is not None for value in res.delta_g_error_blocks.values())
+    halves = quality_checks(res.to_dict())["halves"]
+    assert halves["ok"] is True and halves["warning"] == res.halves_warning and "reason" not in halves
     lenient = analyze_leg(same, 298.15, min_overlap=0.02)
-    assert lenient.convergence_note == "" and lenient.first_half[0] == pytest.approx(0.0, abs=1e-9)
+    assert lenient.convergence_note == "" and lenient.halves_warning == "" and lenient.parts_below_level == []
+    assert lenient.first_half[0] == pytest.approx(0.0, abs=1e-9)
+    assert "warning" not in quality_checks(lenient.to_dict())["halves"]
+
+
+def test_the_samples_determine_the_windows_they_connect_however_weakly():
+    """windows_determined: the free energies are fixed if the Hessian of the MBAR equations with window 0 fixed
+    (the Laplacian of the samples the windows share) leaves the solver's tolerance a negligible part of the
+    statistical error. Windows that share nothing are not; windows that share a little are, with a large error."""
+    from cufep.analysis.mbar import NEGLIGIBLE_FRACTION, solve_decorrelated, windows_determined
+
+    rng = np.random.default_rng(11)
+    m = 100
+
+    def two_windows(cross: float):
+        """Samples of two windows, 100 each, at a reduced energy of 0 in their own window and ``cross`` in the other."""
+        u_kn = np.zeros((2, 2 * m))
+        u_kn[1, :m] = cross + rng.normal(0.0, 0.1, m)
+        u_kn[0, m:] = cross + rng.normal(0.0, 0.1, m)
+        return u_kn, np.array([m, m])
+
+    u_kn, n_k = two_windows(1500.0)
+    fixed = windows_determined(u_kn, n_k, np.zeros(2))
+    assert not fixed.determined and fixed.smallest == 0.0 and fixed.groups == [[0], [1]]
+    u_kn, n_k = two_windows(30.0)                                  # share e^-30 of a sample: not fixed
+    fixed = windows_determined(u_kn, n_k, np.zeros(2))
+    assert not fixed.determined and fixed.numerical > NEGLIGIBLE_FRACTION * fixed.statistical
+    u_kn, n_k = two_windows(10.0)                                  # share a little: fixed, with a large error
+    f, df = solve_decorrelated(u_kn, n_k)
+    fixed = windows_determined(u_kn, n_k, f)
+    assert fixed.determined and fixed.statistical > 5.0 and fixed.numerical < 1e-4 * fixed.statistical
+    assert df[-1] == pytest.approx(fixed.statistical, rel=0.5)      # about the standard error MBAR gives
+    # four windows; windows 1 and 2 share nothing, the pairs (0, 1) and (2, 3) are the same Hamiltonian
+    u_kn = np.full((4, 4 * m), 1500.0)
+    u_kn[:2, :2 * m] = 0.0
+    u_kn[2:, 2 * m:] = 0.0
+    fixed = windows_determined(u_kn, np.full(4, m), np.zeros(4))
+    assert not fixed.determined and fixed.groups == [[0, 1], [2, 3]]
+    u_kn[1, 2 * m:3 * m] = 12.0                                     # e^-12 of a sample of window 2 in window 1
+    u_kn[2, m:2 * m] = 12.0                                         # and of window 1 in window 2
+    f, _df = solve_decorrelated(u_kn, np.full(4, m))
+    assert windows_determined(u_kn, np.full(4, m), f).determined
+
+
+def test_halves_that_the_solver_would_leave_at_its_start_are_not_compared(monkeypatch):
+    """Review of PR 1: two windows 9.5 apart (overlap 1e-9, true difference 5 kT). With a relative bound
+    alone the halves were determined: the solver could stop 30 kT from the solution and returned its start,
+    the whole, so the halves were 7.081 +- 3130 and 7.081 +- 629 kT and "agreed" (difference 0). A part is
+    determined only if the tolerance of the solver leaves its free energies uncertain by at most 0.01 kT."""
+    import dataclasses
+
+    import cufep.analysis.mbar as mbar
+    from cufep.analysis.mbar import RESOLUTION_KT, quality_checks, windows_determined
+
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
+    for separation in (9.0, 9.5):
+        samples = _two_harmonic_windows(1, 400, separation)
+        res = analyze_leg(samples, 298.15, n_equilibration=0)
+        assert np.isnan(res.first_half[0]) and np.isnan(res.second_half[0])
+        assert "the samples do not connect the lambda windows (windows 0-0; windows 1-1)" in res.convergence_note
+        halves = quality_checks(dataclasses.asdict(res))["halves"]
+        assert halves["ok"] is None and halves["reason"] == res.convergence_note and "difference" not in halves
+        assert quality_checks(dataclasses.asdict(res))["overlap"]["ok"] is False      # and the leg is NOT RELIABLE
+    # the bound itself: the slack of the solver of the whole of these samples is far above the resolution
+    u_kn = np.concatenate([samples["u"][:, 0, :], samples["u"][:, 1, :]]).T
+    fixed = windows_determined(u_kn - u_kn.min(), np.array([400, 400]), np.array([0.0, 7.0]))
+    assert not fixed.determined and fixed.numerical > RESOLUTION_KT
+
+
+def test_halves_below_the_level_reach_every_summary(tmp_path, monkeypatch):
+    """Review of PR 1: a leg whose whole production passed the overlap check (0.0814 at a level of 0.0813)
+    but whose first half overlapped by 0.079 was compared with a warning that reached no summary: not
+    the ligand's flags, not summary.csv, not the report. It is a flag of its own now."""
+    import dataclasses
+
+    import cufep.analysis.mbar as mbar
+    from cufep.analysis.mbar import quality_checks
+    from cufep.benchmarks.runner import flags_of
+    from cufep.config.schema import AnalysisConfig
+    from cufep.workflow import combine_ligand, leg_result_from_samples, write_leg_result
+
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
+    samples = _two_harmonic_windows(0, 600, 3.2)
+    res = analyze_leg(samples, 298.15, n_equilibration=0, min_overlap=0.0813)
+    quality = quality_checks(dataclasses.asdict(res), min_overlap=0.0813)
+    assert quality["overlap"]["ok"] and quality["halves"]["ok"] and quality["halves"]["warning"] == res.halves_warning
+    assert res.halves_warning.startswith("the first half (iterations 0-300 of the production): lambda windows 0 and 1 "
+                                         "overlap by 0.079")
+    # through the result of a leg to the ligand's summary and its flags
+    monkeypatch.undo()
+    lig = tmp_path / "lig"
+    settings = AnalysisConfig(lrc="none", min_overlap=0.5, convergence_points=4, convergence_blocks=2)
+    for leg in ("complex", "solvent"):
+        synthetic_leg(lig / "repeat_0" / leg)
+        run = {"ligand": "lig", "leg": leg, "repeat": 0, "backend": "openmm", "notes": [], "pressure_bar": 1.0}
+        write_leg_result(lig / "repeat_0" / leg, leg_result_from_samples(lig / "repeat_0" / leg, settings, run))
+    out = combine_ligand(lig, "lig", 1, settings)
+    assert out["halves_below_level"] == ["complex leg", "solvent leg"]
+    assert "halves compared below the level of overlap: complex leg, solvent leg" in flags_of(out)
+
+
+GOLDEN = pathlib.Path(__file__).parent / "data" / "analysis_golden.json"
+
+
+def _two_harmonic_windows(seed, n, separation):
+    """Two windows, harmonic wells of unit spring at 0 and at ``separation``; every sample independent."""
+    rng = np.random.default_rng(seed)
+    x = np.stack([rng.normal(0.0, 1.0, n), rng.normal(separation, 1.0, n)], axis=1)
+    u = np.stack([0.5 * x ** 2, 0.5 * (x - separation) ** 2 + 5.0], axis=2)
+    return {"u": u, "states": np.tile(np.arange(2), (n, 1))}
+
+
+def golden_analysis():
+    """The numbers of the analysis of fixed inputs: a leg with a tail correction whose error comes from time
+    blocks; one too short for blocks (the analytical error); a leg whose halves lie below the level of
+    overlap (shown with a warning); and windows that share too little for the halves to be determined."""
+    import dataclasses
+    from unittest import mock
+
+    import cufep.analysis.mbar as mbar
+
+    long_leg = leg_with_tail(seed=7, n=400, k=5, identical=False, tail=lambda it, rng: rng.normal(-3.0, 1.5, it.size))
+    short_leg = leg_with_tail(seed=8, n=24, k=3, identical=False, tail=lambda it, rng: rng.normal(-2.0, 1.0, it.size))
+    out = {}
+    cases = [("long", long_leg, dict(tail="reweight", error_blocks=(40, 20, 10, 5)), False),
+             ("short", short_leg, dict(tail="reweight", error_blocks=(1000,)), False),
+             ("below the level", _two_harmonic_windows(0, 600, 3.2), dict(min_overlap=0.0813), True),
+             ("hardly connected", _two_harmonic_windows(1, 400, 8.5), {}, True)]
+    for name, samples, settings, independent in cases:
+        with mock.patch.object(mbar, "neighbour_inefficiencies",
+                               (lambda u, states: np.ones((u.shape[2], 2))) if independent else mbar.neighbour_inefficiencies):
+            res = analyze_leg(samples, 298.15, n_equilibration=0, **settings)
+        quality = mbar.quality_checks(dataclasses.asdict(res), min_overlap=settings.get("min_overlap", 0.03))
+        out[name] = {"delta_g": res.delta_g, "delta_g_error": res.delta_g_error, "delta_g_error_from": res.delta_g_error_from,
+                     "delta_g_mbar": res.delta_g_mbar, "delta_g_mbar_error": res.delta_g_mbar_error,
+                     "correction": res.correction, "first_half": list(res.first_half), "second_half": list(res.second_half),
+                     "forward": [list(point) for point in res.forward], "reverse": [list(point) for point in res.reverse],
+                     "blocks": [list(b) for b in res.blocks], "delta_g_error_blocks": res.delta_g_error_blocks,
+                     "parts_not_determined": res.parts_not_determined, "parts_below_level": res.parts_below_level,
+                     "convergence_note": res.convergence_note, "halves_warning": res.halves_warning,
+                     "quality": {check: {key: quality[check].get(key) for key in ("ok", "difference", "warning", "reason")}
+                                 for check in ("overlap", "samples", "halves", "estimators")}}
+    return out
+
+
+def test_the_numbers_of_the_analysis_cannot_change_without_a_new_version():
+    """Review of PR 1: the analytical error was changed and the version of the analysis was not, so results
+    made before the change were taken as current and combined with their old errors. The analysis of fixed
+    inputs is pinned here with its version: a change of the numbers fails this test until ANALYSIS_VERSION is
+    raised and the numbers are recorded anew (python tests/unit/test_sampling.py --record-golden)."""
+    import math
+
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+
+    golden = json.loads(GOLDEN.read_text())
+    assert golden["version"] == ANALYSIS_VERSION, (
+        f"the numbers below were recorded for version {golden['version']} of the analysis, this is {ANALYSIS_VERSION}: "
+        "record them anew")
+    now = json.loads(json.dumps(golden_analysis(), default=float))
+
+    def same(a, b, where):
+        if isinstance(a, dict):
+            assert set(a) == set(b), where
+            for key in a:
+                same(a[key], b[key], f"{where}.{key}")
+        elif isinstance(a, list):
+            assert len(a) == len(b), where
+            for i, (x, y) in enumerate(zip(a, b)):
+                same(x, y, f"{where}[{i}]")
+        elif isinstance(a, float) and isinstance(b, float):
+            assert (math.isnan(a) and math.isnan(b)) or math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-9), (
+                f"{where}: {b} where version {golden['version']} gave {a}: the analysis changed; raise "
+                "ANALYSIS_VERSION and record the numbers anew")
+        else:
+            assert a == b, f"{where}: {b} where version {golden['version']} gave {a}"
+
+    same(golden["numbers"], now, "analysis")
+
+
+def test_a_long_chain_of_windows_that_overlap_is_connected(monkeypatch):
+    """Review of PR 1: 24 windows, window j sampling the points j and j+1 in turn, the two points with reduced
+    energies 0.1 j and every other point +1000: every neighbouring pair overlaps by 0.25. Each half solved by
+    MBAR gives 2.300 +- 0.949 kT, but the criterion of the second eigenvalue (100 x (1 - lambda_2) = 0.43)
+    called the windows unconnected and dropped the halves and every error from time blocks."""
+    import cufep.analysis.mbar as mbar
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
+    k, n = 24, 200
+    points = np.arange(k + 1)
+    energy = np.full((k + 1, k), 1000.0)                   # energy[point, window]
+    for j in range(k):
+        energy[j, j] = energy[j + 1, j] = 0.1 * j
+    x = np.array([[j + (it % 2) for j in range(k)] for it in range(n)])
+    u = energy[x]                                          # u[it, replica j, window]
+    states = np.tile(np.arange(k), (n, 1))
+    res = analyze_leg({"u": u, "states": states}, 298.15)
+    assert res.min_overlap == pytest.approx(0.25, abs=1e-6)
+    assert res.convergence_note == "" and np.isfinite(res.first_half[0]) and np.isfinite(res.second_half[0])
+    assert all(value is not None for value in res.delta_g_error_blocks.values())
+    assert res.parts_not_determined == [] and res.parts_below_level == []
+    assert len(res.forward) == 10 and len(res.reverse) == 10 and len(res.blocks) == 5
 
 
 def test_the_analytical_error_with_a_correction_is_an_upper_bound(monkeypatch):
@@ -714,7 +925,7 @@ def test_the_reread_of_stored_legs_gives_what_cufep_analyze_gives(tmp_path):
     assert row["halves_kT"] == pytest.approx(shown["quality"]["halves"].get("difference_kT"), nan_ok=True)
 
 
-def _reread(run_dir, tmp_path):
+def _reread(run_dir, tmp_path, capsys=None):
     import importlib.util
     import sys as system
 
@@ -729,7 +940,8 @@ def _reread(run_dir, tmp_path):
     finally:
         system.argv = argv
     from pathlib import Path
-    return {Path(row["leg_dir"]).parts[-3]: row for row in json.loads(out.read_text())}
+    rows = {Path(row["leg_dir"]).parts[-3]: row for row in json.loads(out.read_text())}
+    return rows if capsys is None else (rows, capsys.readouterr().out)
 
 
 @pytest.mark.parametrize("case", ["reweight", "isotropic", "none", "strict levels", "no tail in production",
@@ -778,6 +990,39 @@ def test_the_reread_and_cufep_analyze_agree_whatever_the_settings(tmp_path, case
     assert row["analysis_record"] == out["analysis_record"] and row["samples_ok"] == out["quality"]["samples"]["ok"]
     if case == "strict levels":
         assert out["quality"]["samples"]["ok"] is False and list(out["delta_g_error_blocks"]) == ["7"]
+
+
+def test_the_summary_of_the_reread_judges_every_leg_by_its_own_levels(tmp_path, capsys):
+    """Review of PR 1: a leg analysed with min_overlap 0.4, min_effective_samples 150 and error_blocks [7] failed
+    both checks rightly, but the summary said "below 0.03 in 1" and "fewer than 50 in 1", and its 7 blocks fell
+    out of the fixed columns 40, 20, 10, 5."""
+    from cufep.config.schema import AnalysisConfig
+    from cufep.workflow import analysis_record
+
+    run = tmp_path / "run"
+    for name, settings in (("strict", {"min_overlap": 0.4, "min_effective_samples": 150.0, "error_blocks": [7]}),
+                           ("default", {})):
+        leg = run / name / "repeat_0" / "solvent"
+        storage = LegStorage(leg / "hrex", 4, 4)
+        storage.check_conditions({"temperature_K": 298.15, "lrc": {"cutoff_nm": 0.9, "long_cutoff_nm": 2.0}})
+        storage.set_meta(temperature_K=298.15, iteration_ps=2.5, backend="openmm", leg="solvent")
+        storage.set_plan(0, 140)
+        u, states, _ = harmonic_samples(140, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4),
+                                        np.random.default_rng(9))
+        for it in range(140):
+            storage.append(u[it], states[it], np.full(4, 30.0))
+        storage.close()
+        (leg / "result.json").write_text(json.dumps({"leg": "solvent", "analysis_record": analysis_record(
+            AnalysisConfig(lrc="none", **settings))}))
+    rows, printed = _reread(run, tmp_path, capsys)
+    strict, default = rows["strict"], rows["default"]
+    assert strict["levels"]["min_overlap"] == 0.4 and strict["levels"]["min_effective_samples"] == 150.0
+    assert default["levels"]["min_overlap"] == 0.03 and default["levels"]["min_effective_samples"] == 50.0
+    assert strict["overlap_ok"] is False and strict["samples_ok"] is False
+    assert list(strict["error_blocks"]) == ["7"] and "7: " in printed
+    assert "below their level of overlap (0.03 in 1, 0.4 in 1) in 1" in printed
+    assert "than their level (50 in 1, 150 in 1) in 1" in printed
+    assert "0.03 in" not in printed.split("below their level")[0]     # no level is named without its legs
 
 
 def pathlib_path():
@@ -1066,134 +1311,304 @@ def _assert_exactly(directory, n):
     assert data["frame_box"].shape[0] == len(data["frame_iter"])
 
 
-WRITE_STEPS = ("/u", "/states", "/volume", "/lrc_iter", "/lrc_du", "/frame_iter", "/frames", "/frame_box", "publish")
+#: the steps of a write: the part is written under another name, made durable and renamed; then the manifest
+#: that names it is written under another name and renamed over the old one
+WRITE_STEPS = ("segment data", "segment rename", "manifest data", "manifest rename", "after the manifest")
+
+
+def _inject(monkeypatch, step, failed):
+    """Make the next write of the storage fail once at ``step``, leaving what such a failure leaves."""
+    import cufep.sampling.storage as storage_module
+
+    real_segment, real_replace = LegStorage._write_segment, storage_module._replace
+    real_manifest = storage_module._write_manifest
+
+    def write_segment(self, target, tail, frames):
+        if step == "segment data" and not failed:
+            failed.append(step)
+            target.with_name(target.name + ".writing").write_bytes(b"half a part")
+            raise OSError("injected failure while writing the part")
+        return real_segment(self, target, tail, frames)
+
+    def replace(source, target):
+        if not failed and ((step == "segment rename" and target.name.startswith("segment_"))
+                           or (step == "manifest rename" and target.name == "manifest.json")):
+            failed.append(step)
+            raise OSError("injected failure while renaming")
+        return real_replace(source, target)
+
+    def write_manifest(directory, manifest):
+        if step == "manifest data" and not failed:
+            failed.append(step)
+            (pathlib.Path(directory) / "manifest.json.writing").write_text('{"parts": [')
+            raise OSError("injected failure while writing the manifest")
+        real_manifest(directory, manifest)
+        if step == "after the manifest" and not failed:
+            failed.append(step)
+            raise OSError("injected failure after the manifest was replaced")
+
+    monkeypatch.setattr(LegStorage, "_write_segment", write_segment)
+    monkeypatch.setattr(storage_module, "_replace", replace)
+    monkeypatch.setattr(storage_module, "_write_manifest", write_manifest)
+
+
+def _parts_are_distinct_and_whole(directory):
+    from cufep.sampling.storage import read_manifest
+
+    files = [part["file"] for part in read_manifest(directory)["parts"]]
+    assert len(files) == len(set(files)) and all(name.endswith(".h5") for name in files)
 
 
 @pytest.mark.parametrize("step", WRITE_STEPS)
 def test_a_write_that_fails_at_any_step_stores_nothing_twice_and_nothing_unwritten(tmp_path, monkeypatch, step):
     """Review of PR 1: 6 iterations stored, 4 more in memory; the write of `states` failed once after `u`
     had been extended. The retry at close appended the 4 rows after the 10 of `u`: 14 rows, rows 7-10 twice
-    in the energies and four rows of zeros in the states. Every step of a write fails once here."""
-    import cufep.sampling.storage as storage_module
+    in the energies and four rows of zeros in the states. Every step of a write fails once here: what is
+    stored is one state of the run, and the write, repeated, stores the iterations once."""
+    from cufep.sampling.storage import StorageError
 
     st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
     _fill(st, _rows(0, 6), 0)
     assert st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6)
     _fill(st, _rows(6, 4), 6)
-    real_write, real_publish, failed = storage_module._write_at, storage_module._publish, []
-
-    def write_at(dataset, offset, values):
-        real_write(dataset, offset, values)                       # the data reaches the file, then it fails
-        if dataset.name == step and not failed and len(values):
-            failed.append(step)
-            raise OSError(f"injected failure after writing {step}")
-
-    def publish(h5, *counts):
-        if step == "publish" and not failed:
-            failed.append(step)
-            raise OSError("injected failure while publishing")
-        real_publish(h5, *counts)
-
-    monkeypatch.setattr(storage_module, "_write_at", write_at)
-    monkeypatch.setattr(storage_module, "_publish", publish)
-    with pytest.raises(OSError, match="injected"):
-        st.flush()
-    assert failed == [step] and st.n_iterations == 10 and st.n_stored == 6
-    _assert_exactly(tmp_path / "leg", 6)                          # every reader sees the state before the write
-    assert LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2).n_iterations == 6
-    st.close()                                                    # the retry, as when the sampler is closed
-    _assert_exactly(tmp_path / "leg", 10)
+    failed = []
+    _inject(monkeypatch, step, failed)
+    if step == "after the manifest":
+        assert st.flush() is True                                 # the manifest names the part: stored, once
+        assert failed == [step] and st.n_iterations == st.n_stored == 10
+        _assert_exactly(tmp_path / "leg", 10)
+    else:
+        with pytest.raises(StorageError, match="the 4 iteration.s. after iteration 6 could not be stored .*injected"):
+            st.flush()
+        assert failed == [step] and st.n_iterations == 10 and st.n_stored == 6
+        _assert_exactly(tmp_path / "leg", 6)                      # every reader sees the state before the write
+        assert LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2).n_iterations == 6
+        st.close()                                                # the retry, as when the sampler is closed
+        _assert_exactly(tmp_path / "leg", 10)
     again = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)   # opened again, it goes on from there
     assert again.n_iterations == 10
     _fill(again, _rows(10, 2), 10)
     again.close()
     _assert_exactly(tmp_path / "leg", 12)
+    _parts_are_distinct_and_whole(tmp_path / "leg")              # what the failure left is never named
 
 
-@pytest.mark.parametrize("step", ("publish", "resize"))
+@pytest.mark.parametrize("step", ("manifest data", "manifest rename"))
 def test_a_truncation_that_fails_leaves_one_state_of_the_samples(tmp_path, monkeypatch, step):
-    import h5py
-
-    import cufep.sampling.storage as storage_module
+    from cufep.sampling.storage import StorageError
 
     st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
     _fill(st, _rows(0, 10), 0)
     st.close()
     st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    real_publish = storage_module._publish
-    if step == "publish":
-        def publish(h5, *counts):
-            raise OSError("injected failure while publishing")
-        monkeypatch.setattr(storage_module, "_publish", publish)
-    else:
-        real_resize = h5py.Dataset.resize
-
-        def resize(self, *args, **kwargs):
-            if self.name == "/volume":
-                raise OSError("injected failure while shortening")
-            return real_resize(self, *args, **kwargs)
-        monkeypatch.setattr(h5py.Dataset, "resize", resize)
-    with pytest.raises(OSError, match="injected"):
+    failed = []
+    _inject(monkeypatch, step, failed)
+    with pytest.raises(StorageError, match="the cut to 7 iterations could not be stored .*injected"):
         st.truncate(7)
-    monkeypatch.setattr(storage_module, "_publish", real_publish)
-    if step == "publish":
-        _assert_exactly(tmp_path / "leg", 10)                     # nothing changed
-        assert st.n_stored == 10
-        st.truncate(7)
-    else:
-        _assert_exactly(tmp_path / "leg", 7)                      # the smaller count was published first
-        assert st.n_stored == 7
-        monkeypatch.undo()
+    _assert_exactly(tmp_path / "leg", 10)                         # nothing changed
+    assert st.n_stored == 10
+    st.truncate(7)                                                # repeated, it is done
+    _assert_exactly(tmp_path / "leg", 7)
+    assert st.n_stored == 7
     _fill(st, _rows(7, 3), 7)
     st.close()
     _assert_exactly(tmp_path / "leg", 10)
+    _parts_are_distinct_and_whole(tmp_path / "leg")
 
 
-def test_samples_of_earlier_versions_are_read_and_continued_from_what_all_their_datasets_hold(tmp_path):
-    """A file without the stored count (earlier versions) holds the iterations that all three row
-    datasets hold; it is continued from there, and from then on it has the count."""
-    import h5py
+@pytest.mark.parametrize("step", ("segment data", "after the manifest"))
+def test_an_interrupt_at_any_step_of_a_write_stores_nothing_twice(tmp_path, monkeypatch, step):
+    """Review of PR 1: Ctrl-C (KeyboardInterrupt, not an Exception) right after the manifest was replaced left
+    the iterations in memory, and the close of the sampler stored them again: 14 rows, rows 6-9 twice. What
+    is stored is what the manifest names, whatever ended the write."""
+    import cufep.sampling.storage as storage_module
 
     st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    _fill(st, _rows(0, 8), 0)
+    _fill(st, _rows(0, 6), 0)
+    st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6)
+    _fill(st, _rows(6, 4), 6)
+    real_segment, real_manifest, interrupted = LegStorage._write_segment, storage_module._write_manifest, []
+
+    def write_segment(self, target, tail, frames):
+        if step == "segment data" and not interrupted:
+            interrupted.append(step)
+            raise KeyboardInterrupt
+        return real_segment(self, target, tail, frames)
+
+    def write_manifest(directory, manifest):
+        real_manifest(directory, manifest)
+        if step == "after the manifest" and not interrupted:
+            interrupted.append(step)
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(LegStorage, "_write_segment", write_segment)
+    monkeypatch.setattr(storage_module, "_write_manifest", write_manifest)
+    with pytest.raises(KeyboardInterrupt):
+        st.flush()
+    stored = 10 if step == "after the manifest" else 6
+    assert st.n_stored == stored and st.n_iterations == 10
+    _assert_exactly(tmp_path / "leg", stored)
+    st.close()                                                    # as the sampler does on its way out
+    _assert_exactly(tmp_path / "leg", 10)
+    _parts_are_distinct_and_whole(tmp_path / "leg")
+
+
+def test_parts_that_nothing_names_are_removed_and_their_names_never_come_back(tmp_path, monkeypatch):
+    """Review of PR 1: parts dropped by a truncation and what failed writes left stayed on the disk for good.
+    The writer removes them when it opens the leg; the manifest counts the parts made, so a name that a
+    manifest held is never given again; a reader that meets a part gone reads the manifest again."""
+    import cufep.sampling.storage as storage_module
+    from cufep.sampling.storage import StorageError, _write_manifest, read_manifest
+
+    leg = tmp_path / "leg"
+    st = LegStorage(leg, 3, 3, n_frame_atoms=2)
+    for start in (0, 4, 8):
+        _fill(st, _rows(start, 4), start)
+        st.flush()
+    st.truncate(6)                                                # drops segment 3 and half of segment 2
+    (leg / "segment_000009.h5.writing").write_bytes(b"left by a write that was killed")
+    (leg / "manifest.json.writing").write_text("{")
+    before = sorted(path.name for path in leg.iterdir())
+    assert "segment_000003.h5" in before and "segment_000009.h5.writing" in before
+    st = LegStorage(leg, 3, 3, n_frame_atoms=2)                   # the writer opens the leg
+    assert sorted(path.name for path in leg.iterdir()) == ["manifest.json", "samples.h5", "segment_000001.h5",
+                                                           "segment_000002.h5"]
+    _assert_exactly(leg, 6)
+    _fill(st, _rows(6, 2), 6)
     st.close()
-    with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:   # as an earlier version killed while writing left it
-        del h5["committed_counts"]
+    assert read_manifest(leg)["parts"][-1]["file"] == "segment_000004.h5"      # not 3, which a manifest named
+    _assert_exactly(leg, 8)
+    # a reader that read the manifest just before the writer replaced it and removed a part: it starts again
+    real, calls = storage_module._read_once, []
+
+    def read_once(directory, names):
+        if not calls:
+            calls.append("first")
+            manifest = read_manifest(directory)
+            _write_manifest(pathlib.Path(directory), dict(manifest, parts=manifest["parts"][:-1]))
+            raise StorageError("a part named by the manifest that was read is gone")
+        return real(directory, names)
+
+    monkeypatch.setattr(storage_module, "_read_once", read_once)
+    assert read_samples(leg)["u"].shape[0] == 6 and calls == ["first"]
+    monkeypatch.undo()
+    # a damaged leg, whose manifest does not change, is said as such at once
+    manifest = read_manifest(leg)
+    _write_manifest(leg, dict(manifest, parts=manifest["parts"] + [{"file": "segment_000077.h5", "rows": 1, "tail": 0,
+                                                                    "frames": 0}]))
+    with pytest.raises(StorageError, match="names parts of the samples that are not there .segment_000077.h5."):
+        read_samples(leg)
+
+
+def test_a_leg_cut_to_nothing_reads_as_holding_no_samples(tmp_path):
+    """Review of PR 1: a leg started anew (initialize cuts the samples to 0) left a manifest without parts,
+    and `cufep analyze` stopped with a traceback; the first part stays, empty, and the samples read as 0 rows."""
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+
+    leg = tmp_path / "lig" / "repeat_0" / "complex"
+    st = LegStorage(leg / "hrex", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 6), 0)
+    st.close()
+    st = LegStorage(leg / "hrex", 3, 3, n_frame_atoms=2)
+    st.truncate(0)
+    data = read_samples(leg / "hrex")
+    assert data["u"].shape == (0, 3, 3) and data["frames"].shape[0] == 0 and st.n_iterations == 0
+    st.set_meta(temperature_K=298.15, iteration_ps=2.5)
+    st.set_plan(2, 100)                                            # as a run that started anew records it
+    shown = CliRunner().invoke(main, ["analyze", str(leg)])
+    assert shown.exit_code == 1 and "no production yet" in shown.output and "Traceback" not in shown.output
+
+
+def _earlier_leg(directory, n=8, counts=True):
+    """A leg of ``n`` iterations as a version before the manifest left it."""
+    from conftest import as_earlier_version
+
+    st = LegStorage(directory, 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, n), 0)
+    st.close()
+    return as_earlier_version(directory, counts)
+
+
+def test_samples_of_earlier_versions_are_read_and_continued_without_being_written_to(tmp_path):
+    """A leg of an earlier version (one samples.h5) holds what that file holds as stored: its counts, or for the
+    versions before them the iterations that all three row datasets hold. It is continued in new parts, and the
+    file itself is never written to again (review of PR 1: adding rows to it rewrote its compressed chunks of
+    frames, so the frames of its last checkpoint were lost when the writer was killed)."""
+    import hashlib
+
+    import h5py
+
+    from cufep.sampling.storage import StorageError, read_manifest, stored_attributes, stored_conditions
+
+    path = _earlier_leg(tmp_path / "leg", counts=False)
+    with h5py.File(path, "a") as h5:                              # as an earlier version killed while writing left it
         h5["u"].resize(10, axis=0)
         h5["lrc_iter"].resize(5, axis=0)
         h5["lrc_iter"][4] = 8
         h5["lrc_du"].resize(5, axis=0)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
     _assert_exactly(tmp_path / "leg", 8)
     st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    assert st.n_iterations == 8
+    assert st.n_iterations == 8 and read_manifest(tmp_path / "leg") is None      # opening writes nothing
     _fill(st, _rows(8, 4), 8)
     st.close()
     _assert_exactly(tmp_path / "leg", 12)
-    from cufep.sampling.storage import stored_attributes, stored_conditions
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest               # never written to
+    assert read_manifest(tmp_path / "leg")["parts"][0] == {"file": "samples.h5", "rows": 8, "tail": 4, "frames": 4}
     assert stored_attributes(tmp_path / "leg")[0] == 12 and stored_conditions(tmp_path / "leg")[0] == 12
-    from cufep.sampling.storage import committed_counts
-    with h5py.File(tmp_path / "leg" / "samples.h5", "r") as h5:
-        assert committed_counts(h5) == (12, 6, 6) and h5["committed_counts"][:].tolist() == [12, 6, 6]
-    # a count that the datasets do not hold is a damaged file, not a smaller sample
-    with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:
-        h5["states"].resize(11, axis=0)
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    st.truncate(6)                                                 # a resume within the old file: the manifest only
+    _assert_exactly(tmp_path / "leg", 6)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+    # a count that the datasets of such a file do not hold is a damaged leg, not a smaller sample
+    other = _earlier_leg(tmp_path / "other", counts=True)
+    with h5py.File(other, "a") as h5:
+        h5["states"].resize(7, axis=0)
+    with pytest.raises(StorageError, match="states are shorter than the 8 iterations"):
+        read_samples(tmp_path / "other")
+
+
+@pytest.mark.parametrize("step", WRITE_STEPS)
+def test_the_first_write_to_a_leg_of_an_earlier_version_that_fails_changes_nothing(tmp_path, monkeypatch, step):
+    """Review of PR 1: the first write to a file of an earlier version (six rows) failed after `volume` had been
+    extended, and the reader returned ten rows, four with a volume of zero. Such a file is not written to at
+    all now: the first write adds a part and the manifest that names it, or nothing."""
+    import hashlib
+
     from cufep.sampling.storage import StorageError
-    with pytest.raises(StorageError, match="states are shorter than the 12 iterations"):
-        read_samples(tmp_path / "leg")
+
+    path = _earlier_leg(tmp_path / "leg", n=6)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(6, 4), 6)
+    failed = []
+    _inject(monkeypatch, step, failed)
+    if step == "after the manifest":
+        st.flush()
+        _assert_exactly(tmp_path / "leg", 10)
+    else:
+        with pytest.raises(StorageError, match="injected"):
+            st.flush()
+        _assert_exactly(tmp_path / "leg", 6)
+        st.close()
+        _assert_exactly(tmp_path / "leg", 10)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+    _parts_are_distinct_and_whole(tmp_path / "leg")
 
 
-def test_the_storage_says_when_it_could_not_store_and_restore_refuses_a_file_shorter_than_its_checkpoint(
+def test_the_storage_says_when_it_could_not_store_and_restore_refuses_samples_shorter_than_their_checkpoint(
         tmp_path, tiny_leg, monkeypatch):
-    import cufep.sampling.storage as storage_module
     from cufep.sampling.hrex import SamplerError
-    from cufep.sampling.storage import StorageError
+    from cufep.sampling.storage import StorageError, _write_manifest, read_manifest
 
     st = LegStorage(tmp_path / "leg", 3, 3)
     _fill(st, _rows(0, 2), 0)
 
     def broken(*args, **kwargs):
         raise OSError("disk full")
-    monkeypatch.setattr(storage_module, "_publish", broken)
+    monkeypatch.setattr(LegStorage, "_write_segment", broken)
     with pytest.raises(StorageError, match="the 2 iteration.s. after iteration 0 could not be stored .* disk full"):
         st.close()
     monkeypatch.undo()
@@ -1208,7 +1623,7 @@ def test_the_storage_says_when_it_could_not_store_and_restore_refuses_a_file_sho
     # the sampler: an error of the storage at close is raised, unless another error is already on its way
     s = ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append)
     s.storage.append(np.zeros((4, 4)), np.arange(4), np.ones(4))
-    monkeypatch.setattr(storage_module, "_publish", broken)
+    monkeypatch.setattr(LegStorage, "_write_segment", broken)
     with pytest.raises(StorageError, match="disk full"):
         s.close()
     s = ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append)
@@ -1219,144 +1634,102 @@ def test_the_storage_says_when_it_could_not_store_and_restore_refuses_a_file_sho
     assert any("could not be stored" in line for line in log)
     monkeypatch.undo()
     assert not issubclass(StorageError, SamplerError)
-    # a file that holds fewer iterations than its checkpoint names is not continued
-    import h5py
-    with h5py.File(tmp_path / "hrex" / "samples.h5", "a") as h5:
-        frames = int(np.sum(h5["frame_iter"][:] < 2))
-        h5["committed_counts"][...] = [2, 0, frames]
+    # samples that hold fewer iterations than their checkpoint names are not continued
+    manifest = read_manifest(tmp_path / "hrex")
+    assert sum(part["rows"] for part in manifest["parts"]) == 4
+    manifest["parts"] = [part for part in manifest["parts"] if part["rows"] == 0] +         [part for part in manifest["parts"] if part["rows"]][:1]
+    _write_manifest(tmp_path / "hrex", manifest)
     with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append) as s:
         with pytest.raises(StorageError, match="holds 2 iterations, fewer than the 4 that its checkpoint names"):
             s.restore()
 
 
-@pytest.mark.parametrize("moment", ["before the counts are written", "after the counts are written"])
-@pytest.mark.parametrize("operation", ["flush", "truncate"])
-def test_a_failure_while_the_counts_are_written_keeps_the_last_valid_counts(tmp_path, monkeypatch, moment, operation):
-    """Review of PR 1: six iterations stored, the write of four more failed after `volume` was extended; a
-    truncation to six, as when the leg is resumed, then failed while the attribute of the counts was being
-    created anew (h5py deletes an attribute and creates it again): the old counts were gone, the reader fell
-    back to the rule of earlier versions and read ten rows, four of them with a volume of zero. The counts
-    are a dataset now, written in place."""
-    import h5py
-
-    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    _fill(st, _rows(0, 6), 0)
-    st.close()
-    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    _fill(st, _rows(6, 4), 6)
-    real_setitem = h5py.Dataset.__setitem__
-    failures = []
-
-    def setitem(self, key, value):
-        if self.name == "/volume" and not failures:              # the reviewer's first failure
-            failures.append("volume")
-            raise OSError("injected failure while writing volume")
-        if self.name == "/committed_counts" and failures == ["volume", "armed"]:
-            failures.append("counts")
-            if moment == "after the counts are written":
-                real_setitem(self, key, value)
-            raise OSError("injected failure while writing the counts")
-        return real_setitem(self, key, value)
-
-    monkeypatch.setattr(h5py.Dataset, "__setitem__", setitem)
-    with pytest.raises(OSError, match="volume"):
-        st.flush()
-    _assert_exactly(tmp_path / "leg", 6)
-    failures.append("armed")
-    if operation == "truncate":
-        del st._rows[:]                                          # a resume drops the rows after its checkpoint
-        st._records.clear()
-        with pytest.raises(OSError, match="counts"):
-            st.truncate(6)
-        _assert_exactly(tmp_path / "leg", 6)                     # never the ten rows, never a volume of zero
-        monkeypatch.undo()
-        st.truncate(6)
-        _assert_exactly(tmp_path / "leg", 6)
-        _fill(st, _rows(6, 2), 6)
-        st.close()
-        _assert_exactly(tmp_path / "leg", 8)
-    else:
-        with pytest.raises(OSError, match="counts"):
-            st.flush()
-        rows = read_samples(tmp_path / "leg")["u"].shape[0]
-        assert rows == (10 if moment == "after the counts are written" else 6)
-        _assert_exactly(tmp_path / "leg", rows)                  # whichever state, it is one written state
-        monkeypatch.undo()
-        st.close()
-        _assert_exactly(tmp_path / "leg", 10)
-
-
-def test_the_first_write_to_a_file_of_an_earlier_version_counts_what_it_held_first(tmp_path, monkeypatch):
-    """Review of PR 1: a file of an earlier version (no counts) with six rows; four are added and the write of
-    `volume` fails after it was extended: without counts all three row datasets were ten long and the reader
-    returned ten rows, four with a volume of zero. The counts of the old file are written before any dataset
-    is extended."""
-    import h5py
-
-    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    _fill(st, _rows(0, 6), 0)
-    st.close()
-    with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:
-        del h5["committed_counts"]
-    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    _fill(st, _rows(6, 4), 6)
-    real_setitem = h5py.Dataset.__setitem__
-
-    def setitem(self, key, value):
-        if self.name == "/volume":
-            raise OSError("injected failure while writing volume")
-        return real_setitem(self, key, value)
-
-    monkeypatch.setattr(h5py.Dataset, "__setitem__", setitem)
-    with pytest.raises(OSError, match="volume"):
-        st.flush()
-    monkeypatch.undo()
-    _assert_exactly(tmp_path / "leg", 6)
-    with h5py.File(tmp_path / "leg" / "samples.h5", "r") as h5:
-        assert h5["committed_counts"][:].tolist() == [6, 3, 3] and h5["volume"].shape[0] == 10
-    st.close()
-    _assert_exactly(tmp_path / "leg", 10)
-
-
-def _killed_after_publishing(directory):
-    """In a process of its own: six stored rows and a checkpoint, four more rows, and the process ends at
-    once after the counts were published and before anything else happens."""
+def _add_and_die(directory, step):
+    """In a process of its own: four more iterations for the leg in ``directory``; the process ends at once at
+    ``step`` of their write, before its checkpoint."""
     import os
 
     import cufep.sampling.storage as storage_module
 
     st = LegStorage(directory, 3, 3, n_frame_atoms=2)
-    _fill(st, _rows(0, 6), 0)
-    st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6, {"start": 0, "rows": 6})
     _fill(st, _rows(6, 4), 6)
-    real = storage_module._publish
+    real_replace, real_manifest = storage_module._replace, storage_module._write_manifest
+    if step == "while the part is written":
+        def write_segment(self, target, tail, frames):
+            import h5py
+            with h5py.File(target.with_name(target.name + ".writing"), "w") as h5:
+                h5.create_dataset("u", data=np.zeros((2, 3, 3)))
+            os._exit(71)
+        LegStorage._write_segment = write_segment
+    elif step == "after the part is renamed":
+        def replace(source, target):
+            real_replace(source, target)
+            if target.name.startswith("segment_"):
+                os._exit(71)
+        storage_module._replace = replace
+    elif step == "while the manifest is written":
+        def write_manifest(directory, manifest):
+            (pathlib.Path(directory) / "manifest.json.writing").write_text('{"parts": [')
+            os._exit(71)
+        storage_module._write_manifest = write_manifest
+    else:
+        def write_manifest(directory, manifest):
+            real_manifest(directory, manifest)
+            os._exit(71)
+        storage_module._write_manifest = write_manifest
+    st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 10,
+                        {"start": 1, "rows": 10})
+    os._exit(0)
 
-    def publish_and_die(h5, *counts):
-        real(h5, *counts)
-        os._exit(7)
 
-    storage_module._publish = publish_and_die
-    st.flush()
+KILL_STEPS = ("while the part is written", "after the part is renamed", "while the manifest is written",
+              "after the manifest is replaced")
 
 
-def test_a_process_killed_right_after_the_counts_were_published_leaves_a_readable_leg(tmp_path):
-    """Review of PR 1: the counts were published before the data was flushed; a process killed in between
-    left counts of ten rows over the data of six, and neither the reader nor the checkpoint of six rows could
-    use the file. The data reaches the file first now."""
+@pytest.mark.parametrize("earlier", [False, True], ids=["this version", "a file of the previous version"])
+@pytest.mark.parametrize("step", KILL_STEPS)
+def test_a_writer_killed_at_any_step_leaves_the_last_checkpoint_and_its_frames_intact(tmp_path, step, earlier):
+    """Review of PR 1: six iterations and their frames stored (the frames in compressed chunks of 8) with a
+    checkpoint; another process added four iterations and was killed at its first flush: after the resume the
+    old frames all differed from what had been stored, and a kill a few writes later made the truncation of
+    the resume fail ("filter returned failure during read"). HDF5 rewrites and moves a compressed chunk when
+    rows are added to it. Every write goes to a new part now: whenever the writer is killed, every file that
+    the last checkpoint rests on is as it was, and all old coordinates are read back after the resume."""
     import multiprocessing as mp
 
-    proc = mp.get_context("fork").Process(target=_killed_after_publishing, args=(tmp_path / "leg",))
+    from conftest import as_earlier_version
+
+    leg = tmp_path / "leg"
+    st = LegStorage(leg, 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 6), 0)
+    st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6,
+                        {"start": 0, "rows": 6})
+    st.close()
+    if earlier:
+        as_earlier_version(leg)
+    before = read_samples(leg)
+    files = {path.name: path.read_bytes() for path in leg.iterdir() if path.name != "manifest.json"}
+    proc = mp.get_context("fork").Process(target=_add_and_die, args=(leg, step))
     proc.start()
-    proc.join(60)
-    assert proc.exitcode == 7
-    data = read_samples(tmp_path / "leg")
-    rows = data["u"].shape[0]
-    assert rows in (6, 10)
-    _assert_exactly(tmp_path / "leg", rows)
-    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
-    assert st.read_checkpoint()["iteration"] == 6
-    st.truncate(6)                                                   # as a resume from its checkpoint does
-    _assert_exactly(tmp_path / "leg", 6)
+    proc.join(120)
+    assert proc.exitcode == 71
+    assert all((leg / name).read_bytes() == content for name, content in files.items())
+    rows = 10 if step == "after the manifest is replaced" else 6
+    _assert_exactly(leg, rows)                                      # one state of the run, readable
+    # the resume: from the checkpoint, cut to its rows
+    st = LegStorage(leg, 3, 3, n_frame_atoms=2)
+    checkpoint = st.read_checkpoint()
+    assert checkpoint["iteration"] == 6 and checkpoint["extra"]["rows"] == 6
+    st.truncate(6)
+    _assert_exactly(leg, 6)
+    after = read_samples(leg)
+    for name in ("u", "states", "volume", "lrc_iter", "lrc_du", "frame_iter", "frames", "frame_box"):
+        assert np.array_equal(after[name], before[name]), name     # every old coordinate, as it was stored
+    _fill(st, _rows(6, 4), 6)
+    st.close()
+    _assert_exactly(leg, 10)
+    assert np.array_equal(read_samples(leg)["frames"][:len(before["frames"])], before["frames"])
+    _parts_are_distinct_and_whole(leg)
 
 
 def test_a_checkpoint_of_an_earlier_version_after_a_warm_up_is_refused(tmp_path, tiny_leg):
@@ -1373,18 +1746,23 @@ def test_a_checkpoint_of_an_earlier_version_after_a_warm_up_is_refused(tmp_path,
             s.storage.append(np.zeros((4, 4)), np.arange(4), np.ones(4))
             s.storage.append_record(4 + it, {"frame": np.zeros((3, 3), np.float32), "box": np.eye(3, dtype=np.float32)})
         s.storage.write_checkpoint(s.arrays.pos[0], s.arrays.vel[0], s.arrays.box[0], np.arange(4), 10, {"start": 0})
+    refusal = "does not record how many of its iterations were stored.*Nothing was changed.*--reschedule"
     with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
-        with pytest.raises(StorageError, match="its records carry iteration 13 while it holds 10 rows"):
+        with pytest.raises(StorageError, match=refusal):
             s.restore()
     assert read_samples(tmp_path / "hrex")["u"].shape[0] == 10      # nothing was changed
-    # an ordinary checkpoint of that version (every iteration stored) is resumed
+    # review of PR 1: the records of that version, filtered to the stored rows, did not show the warm-up, and
+    # with records every 20 iterations or none it could not show at all. A checkpoint that does not record its
+    # rows is not continued from, whatever its records say; one with every iteration stored is refused alike
     with ReplicaExchangeSampler(spec, tmp_path / "plain", devices=[None], inline=True, log=lambda m: None) as s:
         s.initialize(pos, box)
-        s.run(4, record_stride=1)
+        s.run(4, record_stride=0)
         s.storage.write_checkpoint(s.arrays.pos[s.cur], s.arrays.vel[s.cur], s.arrays.box[s.cur], s.state_of_replica, 4,
                                    {"start": 0})
     with ReplicaExchangeSampler(spec, tmp_path / "plain", devices=[None], inline=True, log=lambda m: None) as s:
-        assert s.restore() and s.iteration == 4 and s.storage.n_iterations == 4
+        with pytest.raises(StorageError, match=refusal):
+            s.restore()
+    assert read_samples(tmp_path / "plain")["u"].shape[0] == 4
 
 
 def test_a_failed_change_of_devices_leaves_workers_and_devices_in_agreement(tmp_path, tiny_leg, monkeypatch):
@@ -1525,32 +1903,30 @@ def test_workers_that_started_are_stopped_when_another_does_not(tmp_path, tiny_l
 
 
 def test_a_final_checkpoint_that_cannot_be_stored_is_no_failure_of_the_backend(tmp_path, tiny_leg, monkeypatch):
-    """Review of PR 1: the last checkpoint met a reader that held samples.h5 for the whole wait; the error was
-    a SamplerError, which run_leg took for a failure of cuPotential: it set the samples aside and repeated
-    the whole leg on stock OpenMM."""
+    """Review of PR 1: the last checkpoint could not be stored; the error was a SamplerError, which run_leg
+    took for a failure of cuPotential: it set the samples aside and repeated the whole leg on stock OpenMM.
+    A failure of the storage is a StorageError, with the earlier checkpoint and its samples kept."""
     import openmm as mm
 
-    import cufep.sampling.storage as storage_module
     from cufep.sampling.hrex import SamplerError, WorkerError
-    from cufep.sampling.storage import StorageBusyError
+    from cufep.sampling.storage import StorageBusyError, StorageError
     from cufep.workflow import backend_fallback_refusal
 
     spec, pos, box = tiny_leg
-    monkeypatch.setattr(storage_module, "WRITE_WAIT_S", 0.3)
-    monkeypatch.setattr(storage_module, "CHECKPOINT_WAIT_S", 0.1)
     with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
         s.initialize(pos, box)
         s.run(2, record_stride=2, checkpoint_stride=2)
-        reader = hold_samples(tmp_path / "hrex" / "samples.h5", "r")
-        try:
-            with pytest.raises(StorageBusyError, match="the samples up to iteration 5 could not be stored: another "
-                                                       "process held .* The checkpoint at iteration 2 and the samples "
-                                                       "up to it are kept; running the leg again resumes it"):
-                s.run(3, record_stride=2, checkpoint_stride=100)
-        finally:
-            release(reader)
-    assert s.storage.read_checkpoint()["iteration"] == 2
+
+        def broken(*args, **kwargs):
+            raise OSError("disk full")
+        monkeypatch.setattr(LegStorage, "_write_segment", broken)
+        with pytest.raises(StorageError, match="the 3 iteration.s. after iteration 2 could not be stored .*disk full"):
+            s.run(3, record_stride=2, checkpoint_stride=100)
+        assert s.storage.read_checkpoint()["iteration"] == 2 and s.storage.n_stored == 2
+        monkeypatch.undo()
     # what run_leg makes of each kind of error
+    assert backend_fallback_refusal(StorageError("disk full"), "cupotential", "openmm", False) \
+        == "not a failure of the backend"
     busy = StorageBusyError("held")
     assert backend_fallback_refusal(busy, "cupotential", "openmm", False) == "not a failure of the backend"
     assert backend_fallback_refusal(SamplerError("the checkpoint does not match"), "cupotential", "openmm", False) \
@@ -1640,22 +2016,22 @@ def test_another_process_reads_the_samples_of_a_leg_that_is_being_sampled(tmp_pa
     assert read_samples(leg / "hrex")["u"].shape[0] == 100                  # and this process too
     assert np.array_equal(read_samples(leg / "hrex")["u"], u[:100])
 
-    # another process is reading the file just when a checkpoint is due: the checkpoint is postponed, the
-    # samples stay in memory, and the next one stores them all
-    reader = hold_samples(leg / "hrex" / "samples.h5", "r")
+    # other processes hold the samples open just when a checkpoint is due: the checkpoint is written all the
+    # same and at once, since a writer never opens a part that exists
+    readers = [hold_samples(leg / "hrex" / "samples.h5", "r"),
+               hold_samples(sorted((leg / "hrex").glob("segment_*.h5"))[-1], "r")]
     t0 = time.monotonic()
-    assert storage.write_checkpoint(*state, 107, wait_s=0.3) is False and 0.25 < time.monotonic() - t0 < 30.0
-    assert storage.read_checkpoint()["iteration"] == 100 and storage.n_iterations == 107
-    assert storage.flush(wait_s=0.0) is False
-    release(reader)
-    assert storage.write_checkpoint(*state, 107, wait_s=30.0) is True
-    assert storage.read_checkpoint()["iteration"] == 107 and storage.n_iterations == 107
+    assert storage.write_checkpoint(*state, 107) is True and time.monotonic() - t0 < 10.0
+    for reader in readers:
+        release(reader)
+    assert storage.read_checkpoint()["iteration"] == 107 and storage.n_iterations == storage.n_stored == 107
     data = read_samples(leg / "hrex")
     assert np.array_equal(data["u"], u) and np.array_equal(data["states"], states) and data["lrc_iter"].tolist()[-1] == 104
     assert data["frames"].shape == (27, 2, 3) and data["frame_iter"].tolist() == list(range(0, 107, 4))
     assert storage.flush() is True                                          # nothing is left in memory
 
-    # a reader waits for the sampler that is storing a checkpoint, as long as it is told to
+    # a reader waits for a file that another process holds for writing (a writer of an earlier version), as
+    # long as it is told to
     writer = hold_samples(leg / "hrex" / "samples.h5", "a")
     with pytest.raises(OSError, match="unable to lock file"):
         open_samples(leg / "hrex" / "samples.h5", "r", wait_s=0.3)
@@ -1671,41 +2047,43 @@ def test_another_process_reads_the_samples_of_a_leg_that_is_being_sampled(tmp_pa
     assert storage.n_iterations == 107
     storage.close()
     assert read_samples(leg / "hrex")["lrc_iter"].tolist()[-1] == 104
-    import h5py
-    with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:                # as if killed while storing
-        h5["u"].resize(110, axis=0)
-        h5["lrc_iter"].resize(28, axis=0)
-        h5["lrc_iter"][27] = 108
-        h5["lrc_du"].resize(28, axis=0)
+    # what a writer that was killed leaves: a part that was being written, and a part that the manifest does
+    # not name yet. Neither is read, and the next part gets a name that neither has
+    import shutil
+
+    from cufep.sampling.storage import read_manifest
+
+    last = sorted((leg / "hrex").glob("segment_*.h5"))[-1]
+    shutil.copy(last, last.with_name("segment_000098.h5.writing"))
+    shutil.copy(last, last.with_name("segment_000099.h5"))
     data = read_samples(leg / "hrex")
     assert data["u"].shape[0] == data["states"].shape[0] == data["volume"].shape[0] == 107
     assert len(data["lrc_iter"]) == len(data["lrc_du"]) == 27
+    named = [part["file"] for part in read_manifest(leg / "hrex")["parts"]]
+    again = LegStorage(leg / "hrex", 4, 4, n_frame_atoms=2)           # the writer removes them when it opens the leg
+    assert not (leg / "hrex" / "segment_000098.h5.writing").exists() and not (leg / "hrex" / "segment_000099.h5").exists()
+    again.append(u[0], states[0], np.ones(4))
+    again.close()
+    assert read_manifest(leg / "hrex")["parts"][-1]["file"] not in named
+    assert read_samples(leg / "hrex")["u"].shape[0] == 108
 
 
-def test_a_checkpoint_that_meets_a_reader_is_postponed_and_the_run_goes_on(tmp_path, tiny_leg, monkeypatch):
-    """The sampler of a leg does not stop, and loses nothing, when its samples file is held by a reader at
-    the moment of a checkpoint; the end of the run waits for the file."""
-    import cufep.sampling.storage as storage_module
-
+def test_a_checkpoint_is_written_while_readers_hold_the_samples(tmp_path, tiny_leg):
+    """The sampler of a leg neither waits nor loses anything when readers hold its samples at the moment of
+    a checkpoint: it never opens a part that exists, so every checkpoint is written when it is due."""
     spec, pos, box = tiny_leg
-    monkeypatch.setattr(storage_module, "CHECKPOINT_WAIT_S", 0.2)
-    held, log = [], []
-
-    def note(message):
-        log.append(message)
-        if "postponed" in message and held:
-            release(held.pop())                   # the reader goes away after the first postponed checkpoint
-
-    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=note) as s:
+    log = []
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append) as s:
         s.initialize(pos, box)
-        held.append(hold_samples(tmp_path / "hrex" / "samples.h5", "r"))
-        s.run(6, record_stride=2, checkpoint_stride=2)
-        assert s.iteration == 6 and s.storage.n_iterations == 6
-        assert s.storage.read_checkpoint()["iteration"] == 6
-    postponed = [message for message in log if "postponed" in message]
-    assert len(postponed) == 1 and postponed[0] == (
-        "[tiny] the checkpoint at iteration 2 is postponed to the next one: another process holds samples.h5 open; "
-        "the samples stay in memory")
+        held = [hold_samples(tmp_path / "hrex" / "samples.h5", "r")]
+        s.run(2, record_stride=2, checkpoint_stride=2)
+        assert s.storage.read_checkpoint()["iteration"] == 2
+        held.append(hold_samples(sorted((tmp_path / "hrex").glob("segment_*.h5"))[-1], "r"))
+        s.run(4, record_stride=2, checkpoint_stride=2)
+        assert s.iteration == 6 and s.storage.n_stored == 6 and s.storage.read_checkpoint()["iteration"] == 6
+        for holder in held:
+            release(holder)
+    assert not any("postponed" in message for message in log)
     data = read_samples(tmp_path / "hrex")
     assert data["u"].shape[0] == 6 and data["frame_iter"].tolist() == [0, 2, 4]
 
@@ -1815,9 +2193,18 @@ def test_a_resumed_leg_does_not_repeat_its_thermal_noise(tmp_path, monkeypatch):
     assert correlation(first, second) < 0.3                         # it was 1.000: the same numbers again
     third = resumed(tmp_path / "a", 2)                              # and every further start has its own
     assert correlation(first, third) < 0.3 and correlation(second, third) < 0.3
-    # a checkpoint of a version that did not count the starts: the leg has started once before
+    # a checkpoint of a version that did not count the starts did not record its rows either: it is not
+    # continued from (review of PR 1: which rows belong to it cannot be known), and nothing is changed
+    from cufep.sampling.storage import StorageError
+
     with sampler(tmp_path / "b") as s:
         s.storage.write_checkpoint(s.arrays.pos[0], s.arrays.vel[0], s.arrays.box[0], np.arange(2), 10)
+        with pytest.raises(StorageError, match="does not record how many of its iterations were stored"):
+            s.restore()
+        assert s.storage.n_iterations == 10
+    # one that records its rows and not its starts: the leg has started once before
+    with sampler(tmp_path / "b") as s:
+        s.storage.write_checkpoint(s.arrays.pos[0], s.arrays.vel[0], s.arrays.box[0], np.arange(2), 10, {"rows": 10})
         assert s.restore() and s.start_number == 1
 
     # the seeds: within the range of OpenMM and of the plugin, never zero, one per start, worker and purpose
@@ -1864,8 +2251,8 @@ def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tm
     assert stored_backend(leg) == "openmm"
 
     def stored():
-        with h5py.File(leg / "samples.h5", "r") as h5:
-            return h5["u"].shape[0], float(h5.attrs["temperature_K"]), str(h5.attrs["states"]), h5["u"][:].copy()
+        data = read_samples(leg)
+        return data["u"].shape[0], float(data["attrs"]["temperature_K"]), str(data["attrs"]["states"]), data["u"].copy()
 
     before = stored()
     assert before[:2] == (6, 300.0)
@@ -1919,7 +2306,9 @@ def test_the_tail_correction_is_recorded_with_the_samples_as_a_summary(tmp_path,
 
     leg = tmp_path / "lig" / "repeat_0" / "solvent"
     synthetic_leg(leg)
-    with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:                # as the version before wrote it
+    from conftest import as_earlier_version
+
+    with h5py.File(as_earlier_version(leg / "hrex"), "a") as h5:         # as the version before wrote it
         h5.attrs["conditions"] = json.dumps(dict(conditions, lrc=tail.to_dict()))
     storage = LegStorage(leg / "hrex", 4, 4)
     assert storage.check_conditions(conditions) == "same"
@@ -1958,7 +2347,9 @@ def test_samples_of_unrecorded_conditions_are_read_but_not_continued(tmp_path, t
         s.initialize(pos, box)
         s.run(6, record_stride=2, checkpoint_stride=3)
         s.storage.set_meta(n_equilibration_iterations=2)
-    with h5py.File(leg / "samples.h5", "a") as h5:                     # as the earlier version left it
+    from conftest import as_earlier_version
+
+    with h5py.File(as_earlier_version(leg), "a") as h5:                # as the earlier version left it
         del h5.attrs["conditions"]
 
     def content():
@@ -1978,6 +2369,7 @@ def test_samples_of_unrecorded_conditions_are_read_but_not_continued(tmp_path, t
                                                           ".*can be analysed.*--reschedule"):
                     step()
         assert content() == before                                     # no dataset and no attribute changed
+        assert sorted(path.name for path in leg.iterdir()) == ["checkpoint.npz", "samples.h5"]   # nothing added
         assert hashlib.sha256((leg / "checkpoint.npz").read_bytes()).hexdigest() == checkpoint
     with h5py.File(leg / "samples.h5", "r") as h5:
         assert "conditions" not in h5.attrs and h5["u"].shape[0] == 6  # no conditions of today on old rows
@@ -2084,9 +2476,10 @@ def test_analyze_says_what_the_run_said(tmp_path):
     result = leg_result_from_samples(leg, settings, run)
     # temperature, length and boundary are those of the samples; no configuration is asked for them
     assert result["temperature_K"] == 310.0 and result["production_ns"] == pytest.approx(280 * 2.5 / 1000.0)
-    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION == 5
+    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION == 6
     # the standard error of the leg: that of time blocks or the analytical one, whichever is larger. At the
-    # overlap level of 0.5 asked for here no part of these samples is determined, so it is the analytical one
+    # overlap level of 0.5 asked for here every part of these samples is below the level: determined, and
+    # shown with its error and a warning (review of PR 1)
     usable = [value for value in result["analysis"]["delta_g_error_blocks"].values() if value is not None]
     analytic = float(np.hypot(result["delta_g_mbar_error"], result["lrc_error"]))
     assert result["delta_g_error"] == result["analysis"]["delta_g_error"] == pytest.approx(max(usable + [analytic]))
@@ -2094,8 +2487,11 @@ def test_analyze_says_what_the_run_said(tmp_path):
     assert result["delta_g_decouple"] == result["analysis"]["delta_g"] == result["delta_g_mbar"] - result["lrc"]
     assert result["quality"]["uncertainty"] == result["delta_g_error"]
     assert result["quality"]["overlap"]["threshold"] == 0.5 and result["quality"]["overlap"]["ok"] is False
-    assert attempted(result["analysis"], "forward") == 4 and result["analysis"]["blocks"] == []
-    assert sum(text.startswith("block ") and " of 2 " in text for text in result["analysis"]["parts_not_determined"]) == 2
+    assert attempted(result["analysis"], "forward") == 4 and len(result["analysis"]["blocks"]) == 2
+    assert not any(text.startswith("block ") for text in result["analysis"]["parts_not_determined"])
+    assert sum(text.startswith("block ") and " of 2 " in text and "below analysis.min_overlap (0.5)" in text
+               for text in result["analysis"]["parts_below_level"]) == 2
+    assert result["quality"]["halves"]["warning"] == result["analysis"]["halves_warning"] != ""
     assert result["notes"][0] == "a note of the run" and result["notes"][1].startswith("NOT RELIABLE")
     assert result["run"] == run and result["ligand"] == "lig" and result["lrc"] == 0.0
     write_leg_result(leg, result)
@@ -2103,7 +2499,7 @@ def test_analyze_says_what_the_run_said(tmp_path):
     shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
     assert shown["analysis_settings_from"] == "the settings the leg's result records"
     assert shown["quality"] == json.loads(json.dumps(result["quality"]))
-    assert attempted(shown, "forward") == 4 and shown["blocks"] == [] and shown["notes"] == result["notes"]
+    assert attempted(shown, "forward") == 4 and len(shown["blocks"]) == 2 and shown["notes"] == result["notes"]
     assert shown["delta_g_decouple"] == pytest.approx(result["delta_g_decouple"]) and shown["temperature_K"] == 310.0
     assert json.loads((leg / "result.json").read_text())["notes"] == result["notes"]      # the command only prints
 
@@ -2184,9 +2580,9 @@ def test_a_leg_whose_first_run_was_interrupted_is_judged_by_the_levels_of_that_r
     assert shown["quality"]["overlap"]["threshold"] == 0.03 and len(shown["forward"]) == 10
     (leg / "result.json").unlink()
     # samples of a run that stored no settings: the result the leg had before, then the defaults
-    import h5py
-    with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:
-        del h5.attrs["analysis_record"]
+    from conftest import edit_attributes
+
+    edit_attributes(leg / "hrex", remove=("analysis_record",))
     shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
     assert shown["analysis_settings_from"] == "the settings the result records that the leg had before"
     assert shown["quality"]["overlap"]["threshold"] == 0.03 and len(shown["forward"]) == 10
@@ -2194,6 +2590,36 @@ def test_a_leg_whose_first_run_was_interrupted_is_judged_by_the_levels_of_that_r
     shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
     assert shown["analysis_settings_from"].startswith("the defaults") and shown["analysis_record"] == dict(
         alone, min_overlap=0.03, convergence_points=10, convergence_blocks=5)
+
+
+def test_a_result_of_the_previous_version_of_the_analysis_is_made_again_from_its_samples(tmp_path):
+    """Review of PR 1: the analytical error changed (0.081627 -> 0.113619 kJ/mol for the same samples) while
+    the version of the analysis stayed 5: a leg that was not run again kept its result, refresh_leg_result()
+    said "current", and the check before a run took the old error without a word. A change of the numbers
+    needs a new version (the golden test), and a result of the previous version is made again from its
+    samples, by the refresh and by the check before a run alike."""
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+    from cufep.config.schema import Config
+    from cufep.workflow import combined_record, leg_result_from_samples, refresh_leg_result, write_leg_result
+
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "none"}})
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    synthetic_leg(leg)
+    run = {"ligand": "lig", "leg": "solvent", "repeat": 0, "backend": "openmm", "notes": []}
+    fresh = leg_result_from_samples(leg, cfg, run)
+    assert fresh["analysis_record"]["version"] == ANALYSIS_VERSION == 6
+    previous = dict(fresh, delta_g_error=0.7 * fresh["delta_g_error"], temperature_K=999.0,
+                    analysis_record=dict(fresh["analysis_record"], version=ANALYSIS_VERSION - 1))
+    write_leg_result(leg, previous)
+    record, _problems = combined_record(leg, json.loads((leg / "result.json").read_text()), cfg)
+    assert record["temperature_K"] == pytest.approx(fresh["temperature_K"])     # from the samples, not the old result
+    said = []
+    assert refresh_leg_result(leg, cfg, said.append) == "reanalysed" and len(said) == 1
+    again = json.loads((leg / "result.json").read_text())
+    assert again["analysis_record"]["version"] == ANALYSIS_VERSION
+    assert again["delta_g_error"] == pytest.approx(fresh["delta_g_error"])
+    assert again["delta_g_decouple"] == pytest.approx(fresh["delta_g_decouple"])
+    assert refresh_leg_result(leg, cfg, said.append) == "current"
 
 
 def test_a_result_of_another_analysis_is_made_again_before_the_legs_are_combined(tmp_path):
@@ -2284,7 +2710,9 @@ def test_samples_of_unrecorded_conditions_must_be_what_the_run_asks_for(tmp_path
     # 60 iterations of 2.5 ps at 300 K, the first 20 equilibration: 0.10 ns of production
     for leg_dir, lambda_states in ((complex_dir, bound), (solvent_dir, free)):
         synthetic_leg(leg_dir, n=60, temperature=300.0, n_equilibration=20, lambda_states=lambda_states)
-        with h5py.File(leg_dir / "hrex" / "samples.h5", "a") as h5:        # as an earlier version left a finished leg
+        from conftest import as_earlier_version
+
+        with h5py.File(as_earlier_version(leg_dir / "hrex"), "a") as h5:   # as an earlier version left a finished leg
             del h5.attrs["n_planned_iterations"]
     n, attrs = stored_attributes(complex_dir / "hrex")
     assert n == 60 and "conditions" not in attrs and attrs["temperature_K"] == 300.0
@@ -2373,3 +2801,14 @@ def test_an_interruption_before_the_first_checkpoint_does_not_leave_samples_twic
         assert len(data["lrc_iter"]) == len(set(data["lrc_iter"].tolist()))
         assert analyze_leg(data, 300.0).n_iterations_used == 4
 
+
+
+if __name__ == "__main__":
+    import sys
+
+    if "--record-golden" in sys.argv:
+        from cufep.analysis.mbar import ANALYSIS_VERSION
+
+        GOLDEN.parent.mkdir(exist_ok=True)
+        GOLDEN.write_text(json.dumps({"version": ANALYSIS_VERSION, "numbers": golden_analysis()}, indent=1, default=float))
+        print(f"recorded {GOLDEN} for version {ANALYSIS_VERSION}")

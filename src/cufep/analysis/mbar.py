@@ -22,13 +22,27 @@ KCAL = 4.184
 #:      the free energy that is reported (MBAR minus the tail correction of the same iterations);
 #:      a part counts only if its estimate is determined; the reported standard error is never
 #:      smaller than the analytical one
-ANALYSIS_VERSION = 5
+#:   6  the analytical error includes the correlation of MBAR and the correction (from the
+#:      jackknife, else their sum as an upper bound); a part is determined if its samples fix the
+#:      solution of its MBAR equations (windows_determined), and a determined part below
+#:      analysis.min_overlap is used with a warning; blocks without an estimate leave the others.
+#:      The numbers of a fixed input are pinned by a test, so that a change of them cannot keep
+#:      the version
+ANALYSIS_VERSION = 6
 #: numbers of time blocks the standard error of a leg is computed with; the largest of the errors
 #: they give is the one reported (:meth:`TimeRangeEstimator.part`). The numbers are cuFEP's choice:
 #: the literature asks for blocks longer than the correlation time and for a standard error that
 #: no longer grows with the length of the blocks (Grossfield et al. 2018, section 7.3.2), and
 #: gives no numbers. Defaults of ``analysis.error_blocks`` and ``analysis.part_error_blocks``.
 BLOCK_COUNTS = (40, 20, 10, 5)
+#: the relative tolerance to which :func:`free_energies_from` solves the MBAR equations
+SOLVER_TOLERANCE = 1.0e-8
+#: a part is determined if the tolerance of the solver leaves its free energies uncertain by at
+#: most this fraction of their statistical standard error and by at most RESOLUTION_KT
+#: (:func:`windows_determined`)
+NEGLIGIBLE_FRACTION = 0.01
+#: kT; finer than the 0.01 kcal/mol (0.017 kT at 298 K) to which free energies are reported
+RESOLUTION_KT = 0.01
 #: number of time blocks for the standard error of a part of the production (a half, a point
 #: of the forward and reverse series, a consecutive block); default of analysis.part_error_blocks
 PART_BLOCK_COUNT = 5
@@ -156,9 +170,12 @@ class LegAnalysis:
     first_half: tuple[float, float] = (float("nan"), float("nan"))
     second_half: tuple[float, float] = (float("nan"), float("nan"))
     halves_error_blocks: list[int | None] = field(default_factory=list)
-    #: why the halves have no estimate (too few samples, a pair of windows without overlap in a
-    #: half, no tail samples in a half), if they have none
+    #: why the halves have no estimate (too few samples, windows that the samples of a half do
+    #: not connect, no tail samples in a half), if they have none
     convergence_note: str = ""
+    #: the halves have estimates, but the windows of a half overlap below analysis.min_overlap:
+    #: which half, and by how much (their comparison rests on too little overlap)
+    halves_warning: str = ""
     #: difference between the two halves
     forward_reverse_gap: float = 0.0
     #: delta_g from consecutive blocks of the production that do not overlap:
@@ -167,6 +184,9 @@ class LegAnalysis:
     #: the points of the forward and reverse series and the consecutive blocks that have no
     #: estimate, and why (the free energy of their samples is not determined)
     parts_not_determined: list[str] = field(default_factory=list)
+    #: the halves, points and blocks that have an estimate although their neighbouring windows
+    #: overlap below analysis.min_overlap, and by how much (shown, with this warning)
+    parts_below_level: list[str] = field(default_factory=list)
     #: sum of BAR between neighbouring windows, a second estimator on the same data
     bar_delta_g: float = float("nan")
     bar_delta_g_error: float = float("nan")
@@ -327,7 +347,7 @@ def kept_sample_iterations(n: int, g: np.ndarray, start: int = 0, stop: int | No
     return np.concatenate([kept_iterations(start, stop, g_window) for g_window in g])
 
 
-def free_energies_from(u_kn: np.ndarray, n_k: np.ndarray, f_k: np.ndarray, tolerance: float = 1.0e-8,
+def free_energies_from(u_kn: np.ndarray, n_k: np.ndarray, f_k: np.ndarray, tolerance: float = SOLVER_TOLERANCE,
                        max_iterations: int = 25) -> np.ndarray | None:
     """MBAR free energies (kT, relative to the first state) of samples grouped by state, by
     Newton-Raphson from the nearby solution ``f_k``. None if that does not converge.
@@ -451,12 +471,85 @@ def tail_series(samples: dict, method: str, n_equilibration: int, n: int, temper
 
 
 @dataclass
+class Determinacy:
+    """Whether the samples of a part determine its free energies (:func:`windows_determined`)."""
+    determined: bool
+    #: the smallest eigenvalue of the Hessian of the MBAR equations with window 0 fixed
+    smallest: float
+    #: how far from the solution the solver may stop along the least determined combination of
+    #: free energies (kT), and the standard error of that combination (kT); inf if not fixed at all
+    numerical: float
+    statistical: float
+    #: the two groups of windows that the least determined combination moves against each other
+    groups: list[list[int]]
+
+
+def windows_determined(reduced_u_kn: np.ndarray, n_k: np.ndarray, f_k: np.ndarray) -> Determinacy:
+    """Whether the samples determine the free energies ``f_k`` (kT) that solve their MBAR equations.
+
+    The Newton step of the solver (:func:`free_energies_from`) uses the Hessian of the MBAR
+    equations, H = diag(N) - P P^T with P_in the probability that sample n is of state i. It is
+    the Laplacian of a graph whose edge between windows i and j weighs sum_n P_in P_jn, the
+    samples the two share. The free energies (relative to window 0) are unique if and only if this
+    graph is connected, that is if H with window 0 fixed has no zero eigenvalue; without samples
+    that connect two groups of windows the MBAR equations hold for any difference of their free
+    energies, and a solver started from a value returns it. With a smallest eigenvalue lambda
+    the solver, which stops where every |gradient_i| / N_i is below its tolerance, may stop up
+    to tolerance * |N| / lambda away from the solution, while the statistical standard error of
+    that combination of free energies is about 1 / sqrt(lambda) (the Hessian is the information
+    of the equations; Shirts and Chodera 2008). The part is determined if the first is at most
+    ``NEGLIGIBLE_FRACTION`` of the second and at most ``RESOLUTION_KT``: the samples, not the
+    start of the solver, fix the free energies to the precision they are reported with (review
+    of PR 1: with the relative bound alone, windows that shared 1e-8 of a sample had a standard
+    error of thousands of kT and a solver that could stop 30 kT away; its halves were the start
+    of the solver, the whole, and agreed). A connected part of low precision is determined,
+    however long its chain of windows (review of PR 1: a chain of 24 windows that overlap by
+    0.25 was called unconnected, and 34 windows of one Hamiltonian, each pair sharing 1/34,
+    likewise); its standard error is large and its overlap is a check of its own.
+    """
+    from scipy.special import logsumexp
+
+    n_k = np.asarray(n_k, dtype=float)
+    k = len(n_k)
+    if k < 2:
+        return Determinacy(True, float("inf"), 0.0, 0.0, [list(range(k))])
+    with np.errstate(all="ignore"):
+        log_p = (np.log(n_k) + np.asarray(f_k, dtype=float))[:, None] - np.asarray(reduced_u_kn, dtype=float)
+        p = np.exp(log_p - logsumexp(log_p, axis=0))
+    hessian = np.diag(p.sum(axis=1)) - p @ p.T
+    if not np.all(np.isfinite(hessian)):
+        return Determinacy(False, float("nan"), float("inf"), float("inf"), [list(range(k))])
+    values, vectors = np.linalg.eigh(hessian[1:, 1:])
+    smallest = float(values[0])
+    if smallest > 0.0:
+        numerical = SOLVER_TOLERANCE * float(np.linalg.norm(n_k)) / smallest
+        statistical = 1.0 / np.sqrt(smallest)
+    else:
+        numerical = statistical = float("inf")
+    determined = bool(smallest > 0.0 and numerical <= min(NEGLIGIBLE_FRACTION * statistical, RESOLUTION_KT))
+    # the windows that the least determined combination moves together, against the others
+    v = np.concatenate([[0.0], vectors[:, 0]])
+    middle = (v.max() + v.min()) / 2.0
+    side = v > middle
+    groups = sorted(([int(i) for i in np.flatnonzero(side == s)] for s in (False, True) if np.any(side == s)),
+                    key=lambda g: g[0])
+    return Determinacy(determined, smallest, float(numerical), float(statistical), groups)
+
+
+def _windows_shown(groups: list[list[int]]) -> str:
+    return "; ".join(f"windows {g[0]}-{g[-1]}" if g == list(range(g[0], g[-1] + 1)) else "windows " + ", ".join(map(str, g))
+                     for g in groups)
+
+
+@dataclass
 class PartEstimate:
-    """The free energy of a selection of the samples of a leg, or why it is not used: ``kind`` is
-    "not determined" (too few samples, no solution, windows not connected, no correction) or
-    "below the level" (determined, but its overlap is below analysis.min_overlap)."""
+    """The free energy of a selection of the samples of a leg, or why it is not used (``reason``;
+    ``kind`` "not determined": too few samples, no solution, windows not connected, no correction).
+    A determined part whose neighbouring windows overlap below analysis.min_overlap is used, and
+    ``warning`` says so."""
     reason: str = ""
     kind: str = ""
+    warning: str = ""
     f: np.ndarray | None = None            # MBAR free energies, kT, relative to the first state
     mbar: float | None = None              # kJ/mol
     mbar_error: float | None = None        # analytical, kJ/mol (None where it was not computed)
@@ -479,13 +572,15 @@ class TimeRangeEstimator:
     error or a check is always one of the quantity that is reported.
 
     A selection is used only if its free energy is determined: every window keeps at least
-    ``MIN_INDEPENDENT_SAMPLES`` samples in it, the MBAR equations converge, the neighbouring
-    windows overlap among its samples by at least ``min_overlap`` (the level of Klimovich, Shirts
-    and Mobley 2015, section 3.5, below which an estimate "will likely be substantially
-    incorrect"), and the tail correction has its observations in it. Without samples that connect
-    two windows the MBAR equations hold for any difference of their free energies (the gradient
-    is zero), so a solver started from a value returns that value; the overlap of such samples is
-    zero whatever the free energies, which is how it is found.
+    ``MIN_INDEPENDENT_SAMPLES`` samples in it, the MBAR equations converge, the samples determine
+    their solution (:func:`windows_determined`: windows that the samples do not connect have no
+    determined difference of free energies, and a solver started from a value returns it), and
+    the tail correction has its observations in it. A determined selection whose neighbouring
+    windows overlap among its samples by less than ``min_overlap`` (the level of Klimovich,
+    Shirts and Mobley 2015, section 3.5, below which an estimate "will likely be substantially
+    incorrect") is used, with a warning: its estimate and its error are shown, and the warning
+    says that they rest on too little overlap (review of PR 1: a connected part of low precision
+    is shown with its error and a warning, a part that is not determined is not).
     """
 
     def __init__(self, u_kn: np.ndarray, n_k: np.ndarray, iteration: np.ndarray, tail: TailSeries, kt: float,
@@ -500,8 +595,8 @@ class TimeRangeEstimator:
         self.longest = max(1, int(longest_interval))
         self.f_whole = np.asarray(f_whole, dtype=float)
 
-    def estimate(self, columns: np.ndarray, observations: np.ndarray, f_start: np.ndarray, analytic: bool = False,
-                 require_overlap: bool = True) -> PartEstimate:
+    def estimate(self, columns: np.ndarray, observations: np.ndarray, f_start: np.ndarray,
+                 analytic: bool = False) -> PartEstimate:
         """The estimate from the samples ``columns`` and the tail observations ``observations``
         (boolean masks), solved from ``f_start``; with ``analytic`` also MBAR's standard error."""
         k = len(self.n_k)
@@ -521,32 +616,36 @@ class TimeRangeEstimator:
                 df = None
         if f is None or not np.all(np.isfinite(f)):
             return PartEstimate(reason="the MBAR equations of these samples have no solution", kind="not determined")
+        # determined: the samples fix the solution (windows_determined). This does not depend on
+        # analysis.min_overlap, which is a level of reliability and a warning of its own below.
+        try:
+            fixed = windows_determined(self.reduced[:, columns], counts, f)
+        except Exception:  # noqa: BLE001  a matrix that cannot be decomposed determines nothing
+            fixed = None
+        if fixed is None or not fixed.determined:
+            if fixed is None:
+                why = "whether they do could not be computed"
+            elif not np.isfinite(fixed.numerical):
+                why = "the samples these groups share do not fix the difference of their free energies"
+            else:
+                why = (f"the samples these groups share fix the difference of their free energies only to within "
+                       f"{fixed.numerical:.2g} kT (standard error {fixed.statistical:.2g} kT), more than "
+                       f"{min(NEGLIGIBLE_FRACTION * fixed.statistical, RESOLUTION_KT):.2g} kT")
+            shown = "" if fixed is None else f" ({_windows_shown(fixed.groups)})"
+            return PartEstimate(reason=f"the samples do not connect the lambda windows{shown}: {why}, so it is not "
+                                       "determined", kind="not determined")
         try:
             overlap = overlap_with_equal_weights(self.u_kn[:, columns], counts, f)
             neighbour = np.array([overlap[i, i + 1] for i in range(k - 1)])
-            # Klimovich et al. 2015, section 3.4: the overlap matrix is stochastic, its largest eigenvalue
-            # is 1, and the others "approach one when the matrices can be nearly decomposed into
-            # independent block matrices"; the variance of the free energies grows as lambda / (N (1 -
-            # lambda)). Windows whose samples do not connect them leave a second eigenvalue of 1.
-            second = float(np.sort(np.linalg.eigvalsh((overlap + overlap.T) / 2.0))[-2]) if k > 1 else 0.0
         except Exception:  # noqa: BLE001
-            neighbour, second = np.array([np.nan]), 1.0
+            neighbour = np.array([np.nan])
         lowest = float(np.min(neighbour)) if neighbour.size else 1.0
-        # determined: the gap below the largest eigenvalue is worth at least one sample of the window
-        # that has the fewest. This does not depend on analysis.min_overlap.
-        gap = 1.0 - second
-        if not np.isfinite(gap) or gap * int(counts.min()) < 1.0:
-            return PartEstimate(reason=f"the samples do not connect the lambda windows: the second largest eigenvalue "
-                                       f"of their overlap matrix is {second:.6f}, and 1 minus it times the {int(counts.min())} "
-                                       "samples of the window with the fewest is below one (Klimovich et al. 2015, "
-                                       "section 3.4): their free energy is not determined",
-                                lowest_overlap=lowest, kind="not determined")
-        if require_overlap and not (np.isfinite(lowest) and lowest >= self.min_overlap):
+        warning = ""
+        if not (np.isfinite(lowest) and lowest >= self.min_overlap):
             i = int(np.nanargmin(neighbour)) if np.isfinite(neighbour).any() else 0
             shown = "not defined" if not np.isfinite(lowest) else f"{lowest:.3f}"
-            return PartEstimate(reason=f"lambda windows {i} and {i + 1} overlap by {shown} among these samples, below "
-                                       f"analysis.min_overlap ({self.min_overlap:g}), the level of a reliable estimate",
-                                lowest_overlap=lowest, kind="below the level")
+            warning = (f"lambda windows {i} and {i + 1} overlap by {shown} among these samples, below "
+                       f"analysis.min_overlap ({self.min_overlap:g}), the level of a reliable estimate")
         correction, correction_error, n_obs, why = self.tail.estimate(observations)
         if correction is None:
             return PartEstimate(reason=why, correction_samples=n_obs, kind="not determined")
@@ -554,7 +653,7 @@ class TimeRangeEstimator:
         mbar_error = None if df is None or not np.isfinite(df[-1]) else float(df[-1] * self.kt)
         return PartEstimate(f=f, mbar=mbar, mbar_error=mbar_error, correction=correction,
                             correction_error=correction_error, correction_samples=n_obs, value=mbar - correction,
-                            lowest_overlap=lowest)
+                            lowest_overlap=lowest, warning=warning)
 
     def masks(self, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
         """The samples and the tail observations of the iterations [a, b) of the production."""
@@ -623,8 +722,11 @@ class TimeRangeEstimator:
         # where no number of blocks can be used it is not known, and the sum of the two standard errors,
         # an upper bound of the error of their difference (Cauchy-Schwarz), is taken instead.
         out["correlation"] = None
-        sm, sc = base.mbar_error, base.correction_error or 0.0
-        if sm is None:
+        # an error that is not a finite number is no error: the analytical one is then not available
+        # (review of PR 1: a NaN from pymbar replaced a usable error from time blocks)
+        sm = base.mbar_error if base.mbar_error is not None and np.isfinite(base.mbar_error) else None
+        sc = base.correction_error if base.correction_error is not None and np.isfinite(base.correction_error) else None
+        if sm is None or sc is None:
             analytic = None
         elif sc == 0.0:
             analytic, kind = float(sm), "analytical"
@@ -841,6 +943,8 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
     if analysis.get("convergence_note"):
         conv["reason"] = str(analysis["convergence_note"])
     elif per_window and all(h is not None for h in halves):
+        if analysis.get("halves_warning"):
+            conv["warning"] = str(analysis["halves_warning"])
         first, second = _number(halves[0][0]), _number(halves[1][0])
         conv.update(first_half=first, second_half=second)
         if first is not None and second is not None:
@@ -945,8 +1049,9 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     of ``part_error_blocks`` time blocks within it. MBAR is solved on samples that are
     decorrelated window by window (:func:`neighbour_inefficiencies`, :func:`decorrelated`), as
     Klimovich, Shirts and Mobley 2015 and alchemlyb do. A part whose free energy is not
-    determined (``min_overlap``, see TimeRangeEstimator) is left out with the reason; halves that
-    are not determined are reported as not compared. BAR between neighbouring windows is
+    determined (see TimeRangeEstimator) is left out with the reason; halves that are not
+    determined are reported as not compared. A part whose windows overlap below ``min_overlap``
+    is kept and listed with a warning (``parts_below_level``, ``halves_warning``). BAR between neighbouring windows is
     compared with the MBAR part, on the same samples. Raises NoProduction and NoCorrection.
     """
     kt = R_GAS * temperature_K
@@ -1003,16 +1108,23 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     whole = estimator.part(0, n, error_blocks, base=base)
 
     parts_not_determined: list[str] = []
+    parts_below_level: list[str] = []
+    warnings_of: dict[str, str] = {}
 
     def part(a: int, b: int, label: str):
-        """(dG, error, number of time blocks behind the error) of the iterations [a, b), or a reason."""
+        """(dG, error, number of time blocks behind the error) of the iterations [a, b), or a reason.
+        A part below the level of overlap is returned, and its warning listed."""
         if (a, b) == (0, n):
             return whole["estimate"].value, whole["error"], whole["n_blocks"]
         result = estimator.part(a, b, [part_error_blocks])
+        where = f"{label} (iterations {a}-{b} of the production)"
         if not result["estimate"].determined:
-            return f"{label} (iterations {a}-{b} of the production): {result['estimate'].reason}"
+            return f"{where}: {result['estimate'].reason}"
         if result["error"] is None:
-            return f"{label} (iterations {a}-{b} of the production): no standard error could be computed"
+            return f"{where}: no standard error could be computed"
+        if result["estimate"].warning:
+            warnings_of[label] = f"{where}: {result['estimate'].warning}"
+            parts_below_level.append(warnings_of[label])
         return result["estimate"].value, result["error"], result["n_blocks"]
 
     forward, reverse = [], []
@@ -1032,9 +1144,12 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     if convergence_note:
         first_half = second_half = (float("nan"), float("nan"))
         half_blocks = [None, None]
+        halves_warning = ""
     else:
         first_half, second_half = ((float(h[0]), float(h[1])) for h in halves)
         half_blocks = [halves[0][2], halves[1][2]]
+        halves_warning = "; ".join(warnings_of[label] for label in ("the first half", "the second half")
+                                   if label in warnings_of)
     gap = abs(first_half[0] - second_half[0])
     blocks = []
     edges = [int(round(k * n / n_blocks)) for k in range(n_blocks + 1)] if n_blocks >= 2 else []
@@ -1070,7 +1185,9 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     return LegAnalysis(
         n_states=n_states, n_iterations_used=int(n), statistical_inefficiency=float(g_sum),
         effective_samples_per_state=float(effective[slowest]), delta_g=float(base.value),
-        delta_g_error=float(whole["error"]), delta_g_mbar=mbar, delta_g_mbar_error=mbar_error,
+        # no standard error at all (no time blocks, no finite analytical one): none, never a number
+        delta_g_error=float(whole["error"]) if whole["error"] is not None else float("nan"),
+        delta_g_mbar=mbar, delta_g_mbar_error=mbar_error,
         correction_method=tail, correction=float(correction), correction_error=float(correction_error),
         correction_samples=int(n_obs), correction_effective_samples=weights[0], correction_largest_weight=weights[1],
         correction_correlation=whole["correlation"],
@@ -1092,8 +1209,8 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         overlap_used_neighbour=used_neighbour,
         min_overlap_used=float(min(used_neighbour)) if used_neighbour else float("nan"),
         forward=forward, reverse=reverse, first_half=first_half, second_half=second_half,
-        convergence_note=convergence_note, forward_reverse_gap=float(gap), blocks=blocks,
-        parts_not_determined=parts_not_determined,
+        convergence_note=convergence_note, halves_warning=halves_warning, forward_reverse_gap=float(gap), blocks=blocks,
+        parts_not_determined=parts_not_determined, parts_below_level=parts_below_level,
         bar_delta_g=float(bar), bar_delta_g_error=float(bar_error), bar_note=bar_note,
         lrc_reweight=whole_correction("reweight"), lrc_isotropic=whole_correction("isotropic"),
         temperature_K=temperature_K)

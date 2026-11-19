@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-import h5py
+from stored_frames import stored_frames
 import mdtraj as md
 import numpy as np
 
@@ -49,14 +49,7 @@ def two_state(angle_deg, centre_a: float, centre_b: float, half_width: float = 5
 
 
 def frames_of(leg_dir: Path):
-    with h5py.File(leg_dir / "hrex" / "samples.h5", "r") as h:
-        chunks = []
-        for s in range(0, h["frames"].shape[0], 50):
-            try:
-                chunks.append(h["frames"][s:s + 50])
-            except OSError:
-                break
-    return np.concatenate(chunks)
+    return stored_frames(leg_dir / "hrex", step=50)
 
 
 def main() -> None:

@@ -4,7 +4,8 @@
 """
 import json, sys
 from pathlib import Path
-import h5py, numpy as np, yaml
+import numpy as np, yaml
+from cufep.sampling.storage import read_samples
 from cufep.analysis.mbar import solve_mbar
 
 KT = 8.31446261815324e-3 * 298.15 / 4.184     # kcal/mol
@@ -13,8 +14,8 @@ for leg_name in ("complex", "solvent"):
     print(f"===== {leg_name} leg: free energy (kcal/mol) from 1 ns blocks of the production (iterations 400-2400)")
     for r in range(3):
         leg = lig_dir / f"repeat_{r}/{leg_name}"
-        with h5py.File(leg / "hrex/samples.h5", "r") as h:
-            u = h["u"][:2400]; states = h["states"][:2400]
+        samples = read_samples(leg / "hrex")              # every stored part, to its count
+        u = samples["u"][:2400]; states = samples["states"][:2400]
         sched = yaml.safe_load((leg / "schedule.yaml").read_text())["states"]
         n = len(sched)
         le = np.array([s["lambda_electrostatics"] for s in sched]); ls = np.array([s["lambda_sterics"] for s in sched])

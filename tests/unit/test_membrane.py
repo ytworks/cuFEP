@@ -153,9 +153,10 @@ def test_the_notes_on_bilayer_and_pose_of_a_leg_that_is_not_run_follow_the_level
     legs = {name: lig / "repeat_0" / name for name in ("complex", "solvent")}
     for name, leg in legs.items():
         synthetic_leg(leg)
-        with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:        # the conditions say what kind of leg it is
-            h5.attrs["conditions"] = json.dumps({"barostat": "membrane" if name == "complex" else "isotropic",
-                                                 "pressure_bar": 1.0})
+        from conftest import edit_attributes
+
+        edit_attributes(leg / "hrex", {"conditions": {"barostat": "membrane" if name == "complex" else "isotropic",
+                                                      "pressure_bar": 1.0}})   # the conditions say what kind of leg
     # the files of the complex leg: the area falls by 1.5 % between the last two quarters, the ligand is
     # 2.5 A from its input pose; both files hold a note that depends on no level
     area = np.concatenate([np.full(200, 66.0), np.full(100, 65.0), np.full(100, 65.0 * 0.985)])

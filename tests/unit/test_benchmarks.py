@@ -294,10 +294,12 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
     everything = dict(only_estimators, failed_legs=["solvent leg of repeat 1"], not_reliable=["complex leg"],
                       inconsistent_legs=[], old_analysis=["solvent leg: version 2 of the analysis; this run uses version 3"],
                       few_samples=["complex leg"], halves_differ=["complex leg"], halves_not_compared=["solvent leg"],
+                      halves_below_level=["complex leg"],
                       origin_not_recorded=["complex leg: the samples"], min_overlap=0.02, min_overlap_used=0.012)
     assert flags_of(everything) == [
         "FAILED: solvent leg of repeat 1", "NOT RELIABLE (overlap): complex leg", "old analysis: solvent leg",
         "few independent samples: complex leg", "halves differ: complex leg", "halves not compared: solvent leg",
+        "halves compared below the level of overlap: complex leg",
         "BAR and MBAR differ: complex leg", "origin of files not recorded: complex leg"]
     assert "; NOT RELIABLE (overlap): complex leg (neighbouring lambda windows overlap by only 0.012);" in result_line(everything)
     nothing = {"ligand": "x", "n_repeats": 0, "warnings": []}

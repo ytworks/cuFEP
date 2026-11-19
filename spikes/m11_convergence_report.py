@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -60,7 +61,12 @@ def one_leg(leg_dir: str) -> dict | None:
            "kept_samples": q["samples"].get("kept"), "neighbour": q["samples"].get("neighbour"),
            "g_slowest": q["samples"].get("statistical_inefficiency"),
            "overlap_ok": q["overlap"]["ok"], "samples_ok": q["samples"]["ok"], "halves_ok": q["halves"]["ok"],
-           "halves_reason": q["halves"].get("reason"), "estimators_ok": q["estimators"]["ok"],
+           "halves_reason": q["halves"].get("reason"), "halves_warning": q["halves"].get("warning"),
+           "estimators_ok": q["estimators"]["ok"],
+           # the levels this leg was judged by (its stored record of the analysis, or the defaults)
+           "levels": {"min_overlap": q["overlap"]["threshold"], "min_effective_samples": q["samples"]["threshold"],
+                      "halves_tolerance_kT": q["halves"]["tolerance_kT"],
+                      "estimators_tolerance_kcal": q["estimators"]["tolerance"] / KCAL},
            "mode": None, "start": None, "added": None, "precalculation_lowest_overlap": None, "threshold": None,
            "rest2": 1.0}
     sched = d / "schedule.yaml"
@@ -127,16 +133,19 @@ def main() -> None:
     import numpy as np
 
     print()
-    print(f"{'run':30s} {'ligand':7s} {'leg':7s}  error: reported (blocks)  MBAR  ratio | blocks 40    20    10     5 | samples: "
-          f"kept  count as  check before -> now")
+    print(f"{'run':30s} {'ligand':7s} {'leg':7s}  error: reported (blocks)  MBAR  ratio | error with blocks: number: error "
+          f"| samples: kept  count as  level  check before -> now")
     for r in done:
-        blocks = "  ".join("    -" if r["error_blocks"].get(c) is None else f"{r['error_blocks'][c]:5.2f}" for c in ("40", "20", "10", "5"))
+        # the numbers of blocks this leg was evaluated with (review of PR 1: a leg with 7 blocks fell out
+        # of fixed columns of 40, 20, 10 and 5)
+        blocks = "  ".join(f"{c}: " + ("-" if v is None else f"{v:.2f}") for c, v in r["error_blocks"].items())
         ratio = "    -" if r["error_ratio"] is None else f"{r['error_ratio']:5.2f}"
-        before = min(r["fewest_samples"], r["kept_samples"]) >= 50.0
+        level = r["levels"]["min_effective_samples"]
+        before = min(r["fewest_samples"], r["kept_samples"]) >= level      # the same level before and after
         source = str(r["error_n_blocks"]) if r["error_from"] == "time blocks" else "anal"
         print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s}          {r['error']:5.2f}  ({source:>4s})  "
-              f"{r['error_mbar']:5.2f} {ratio} |      {blocks} |         {r['kept_samples']:5d}    {r['independent']:6.1f}  "
-              f"{'ok   ' if before else 'below'} -> {'ok' if r['samples_ok'] else 'below'}")
+              f"{r['error_mbar']:5.2f} {ratio} | {blocks} |         {r['kept_samples']:5d}    {r['independent']:6.1f}  "
+              f"{level:5g}  {'ok   ' if before else 'below'} -> {'ok' if r['samples_ok'] else 'below'}")
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]
         if sub:
@@ -150,25 +159,33 @@ def main() -> None:
             from_blocks = [r["error"] for r in sub if r["error_from"] == "time blocks"]
             analytical = [r["error"] for r in sub if r["error_from"] != "time blocks"]
             ratios = [r["error_ratio"] for r in sub if r["error_ratio"] is not None]
-            before = sum(min(r["fewest_samples"], r["kept_samples"]) < 50.0 for r in sub)
+            before = sum(min(r["fewest_samples"], r["kept_samples"]) < r["levels"]["min_effective_samples"] for r in sub)
+            reported = Counter(r["error_n_blocks"] for r in sub if r["error_from"] == "time blocks")
             print(f"{leg}: standard error from time blocks in {len(from_blocks)} legs: {spread(from_blocks)} kcal/mol; "
                   f"the analytical one in {len(analytical)}: {spread(analytical)}; of MBAR alone "
                   f"{spread([r['error_mbar'] for r in sub])}; ratio of the MBAR part {spread(ratios)} ({len(ratios)} legs); "
-                  f"samples check below the level in {before} legs before the discount and in "
+                  f"samples check below each leg's level in {before} legs before the discount and in "
                   f"{sum(r['samples_ok'] is False for r in sub)} now; number of blocks reported: "
-                  + ", ".join(f"{c}: {sum(r['error_n_blocks'] == c and r['error_from'] == 'time blocks' for r in sub)}"
-                              for c in (40, 20, 10, 5)))
+                  + (", ".join(f"{c}: {m}" for c, m in sorted(reported.items(), reverse=True)) or "none"))
     print()
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]
         if sub:
-            print(f"{leg}: {len(sub)} legs; overlap below 0.03 in {sum(r['overlap_ok'] is False for r in sub)} "
+            # every leg is judged by the levels it was analysed with (review of PR 1: the summary named the
+            # default levels for legs judged by others); the levels that occur are listed with their legs
+            def levels(key: str) -> str:
+                return ", ".join(f"{value:g} in {m}" for value, m in sorted(Counter(r["levels"][key] for r in sub).items()))
+
+            print(f"{leg}: {len(sub)} legs; below their level of overlap ({levels('min_overlap')}) in "
+                  f"{sum(r['overlap_ok'] is False for r in sub)} "
                   f"(all iterations: {sum('all iterations' in r['overlap_below'] for r in sub)}, the samples of the "
                   f"estimate: {sum('the samples of the estimate' in r['overlap_below'] for r in sub)}); "
-                  f"fewer than 50 independent samples in a window in {sum(r['samples_ok'] is False for r in sub)}; "
-                  f"halves differ by more than 1 kT in {sum(r['halves_ok'] is False for r in sub)}, not compared in "
-                  f"{sum(r['halves_reason'] is not None for r in sub)}; BAR and MBAR more than 1 kcal/mol apart in "
-                  f"{sum(r['estimators_ok'] is False for r in sub)}")
+                  f"fewer independent samples in a window than their level ({levels('min_effective_samples')}) in "
+                  f"{sum(r['samples_ok'] is False for r in sub)}; halves differ by more than their tolerance "
+                  f"({levels('halves_tolerance_kT')} kT) in {sum(r['halves_ok'] is False for r in sub)}, not compared in "
+                  f"{sum(r['halves_reason'] is not None for r in sub)}, compared below their level of overlap in "
+                  f"{sum(bool(r.get('halves_warning')) for r in sub)}; BAR and MBAR further apart than their tolerance "
+                  f"({levels('estimators_tolerance_kcal')} kcal/mol) in {sum(r['estimators_ok'] is False for r in sub)}")
 
 
 if __name__ == "__main__":

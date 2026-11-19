@@ -817,7 +817,9 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
     # samples of a version that did not record their conditions are held to what their own file says:
     # six iterations of 2.5 ps at 298.15 K, two of them equilibration
     import h5py
-    with h5py.File(hrex / "samples.h5", "a") as h5:
+    from conftest import as_earlier_version
+
+    with h5py.File(as_earlier_version(hrex), "a") as h5:
         del h5.attrs["conditions"]
         h5.attrs["temperature_K"], h5.attrs["iteration_ps"], h5.attrs["n_equilibration_iterations"] = 298.15, 2.5, 2
     with pytest.raises(ConditionsError, match="did not record the conditions.*equilibration per lambda window: 2 "
@@ -931,11 +933,12 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
     monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: pytest.fail("the run was not refused"))
     (out / "resolved_config.yaml").write_text("the record of the run that made the samples")
     before = {path: path.read_bytes() for path in (out / "resolved_config.yaml", leg_dir / "result.json",
-                                                   leg_dir / "hrex" / "samples.h5")}
+                                                   *sorted((leg_dir / "hrex").iterdir()))}
     log = []
     with pytest.raises(ConditionsError, match=refusal):
         driver._run(other, out, False, log.append)
     assert all(path.read_bytes() == content for path, content in before.items())
+    assert sorted((leg_dir / "hrex").iterdir()) == sorted(path for path in before if path.parent == leg_dir / "hrex")
     assert not (leg_dir / "started.json").exists() and not (leg_dir / "result.previous.json").exists()
     assert (out / "resolved_config.refused.yaml").exists() and any(line.startswith("refused: ") for line in log)
 
@@ -1155,13 +1158,14 @@ def test_the_check_before_a_run_takes_a_finished_leg_as_it_will_be_combined(tmp_
     from cufep.sampling.storage import LegStorage
     from cufep.workflow import WorkflowError, analysis_record, check_partner_legs
 
+    from conftest import as_earlier_version, edit_attributes
+
     cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
 
     def finished(lig, temperature_in_samples, temperature_in_result, record=None):
         leg = lig / "repeat_0" / "complex"
         tail_leg(leg)
-        with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:
-            h5.attrs["temperature_K"] = temperature_in_samples
+        edit_attributes(leg / "hrex", {"temperature_K": temperature_in_samples})
         (leg / "result.json").write_text(json.dumps({
             "leg": "complex", "temperature_K": temperature_in_result, "pressure_bar": 1.0, "delta_g_decouple": 1.0,
             "delta_g_mbar_error": 0.1, "lrc_method": "reweight", "lrc_long_cutoff_nm": 2.0,
@@ -1194,7 +1198,7 @@ def test_the_check_before_a_run_takes_a_finished_leg_as_it_will_be_combined(tmp_
     # the tail energies of the production [boundary, stored end), as the analysis takes them
     beyond = tmp_path / "e" / "repeat_0" / "complex"
     tail_leg(beyond, tail_in_production=False)
-    with h5py.File(beyond / "hrex" / "samples.h5", "a") as h5:   # records with rows beyond the stored ones
+    with h5py.File(as_earlier_version(beyond / "hrex"), "a") as h5:   # records with rows beyond the stored ones
         h5["lrc_iter"].resize(40, axis=0)
         h5["lrc_iter"][5:] = np.arange(120, 155)
         h5["lrc_du"].resize(40, axis=0)
@@ -1208,8 +1212,7 @@ def test_the_check_before_a_run_takes_a_finished_leg_as_it_will_be_combined(tmp_
     # the isotropic correction needs both sums of the ligand, as its analysis does
     partial = tmp_path / "f" / "repeat_0" / "complex"
     tail_leg(partial)
-    with h5py.File(partial / "hrex" / "samples.h5", "a") as h5:
-        del h5.attrs["lrc_s12"]
+    edit_attributes(partial / "hrex", remove=("lrc_s12",))
     (partial / "result.json").write_text((beyond / "result.json").read_text())
     isotropic = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "isotropic"}})
     with pytest.raises(WorkflowError, match="no Lennard-Jones sums of the ligand"):
@@ -1273,6 +1276,74 @@ def test_an_archive_that_failed_half_way_is_completed_and_never_read_half(tmp_pa
     assert (previous / "equil.npz").read_bytes() == b"x" * 1000 and (previous / "hrex" / "samples.h5").exists()
     assert leg_files(previous)["equil.npz"] == previous / "equil.npz"
     assert archive_leg(leg) is None
+
+
+def test_a_leg_is_not_continued_from_a_checkpoint_that_does_not_record_its_rows(tmp_path, ligands):
+    """Review of PR 1: such a checkpoint (earlier versions) is refused before anything is run when the leg is
+    still to be continued; a leg that holds all its iterations is analysed as it is."""
+    from cufep.config.schema import Config
+    from cufep.sampling.storage import ConditionsError, LegStorage
+    from cufep.workflow import check_leg_reuse, old_checkpoint_refusal, prep_made_from, samples_settings
+
+    cfg = Config.model_validate({"system": {"protein": str(tmp_path / "p.pdb"), "ligand": "l.sdf"},
+                                 "sampling": {"equilibration_ns": 0.005, "production_ns": 0.01}})
+    lig = ligands[0]
+    lig_dir = tmp_path / "out" / lig.name
+    (lig_dir / "prep").mkdir(parents=True)
+    prep_info = {"ligand": lig.name, "complex_barostat": "isotropic", "membrane": False, "box_shape": "dodecahedron",
+                 "made_from": prep_made_from(cfg, lig, False, "dodecahedron")}
+    hrex = lig_dir / "repeat_0" / "solvent" / "hrex"
+
+    def leg(rows, extra):
+        import shutil
+        shutil.rmtree(hrex, ignore_errors=True)
+        storage = LegStorage(hrex, 2, 2)
+        storage.check_conditions({"temperature_K": 298.15, "pressure_bar": 1.0, "friction_per_ps": 1.0,
+                                  "settings": samples_settings(cfg)})
+        for _ in range(rows):
+            storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+        storage.write_checkpoint(np.zeros((2, 3, 3)), np.zeros((2, 3, 3)), np.zeros((2, 3, 3)), [0, 1], rows, extra)
+        storage.close()
+
+    leg(3, {"start": 0})                       # 2 + 4 iterations are planned: it would be continued
+    assert "does not record how many of its iterations were stored" in old_checkpoint_refusal(hrex)
+    with pytest.raises(ConditionsError, match="the solvent leg of repeat 0: its checkpoint .* was written by an earlier "
+                                              "version.*Nothing was changed"):
+        check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
+    leg(6, {"start": 0})                       # all its iterations: analysed as it is
+    check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
+    leg(3, {"start": 0, "rows": 3})            # a checkpoint of this version is continued
+    assert old_checkpoint_refusal(hrex) is None
+    check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
+    # complete: the checkpoint names all the iterations and the samples hold exactly those (review of PR 1:
+    # samples stored twice after an interrupt were taken as complete and analysed with their duplicates)
+    from cufep.workflow import leg_is_complete
+    leg(6, {"start": 0, "rows": 6})
+    assert leg_is_complete(hrex, 6) and not leg_is_complete(hrex, 7)
+    storage = LegStorage(hrex, 2, 2)
+    storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+    storage.close()                            # a row the checkpoint does not name
+    assert not leg_is_complete(hrex, 6)
+    leg(6, {"start": 0})                       # an earlier version: its iteration stands for its rows
+    assert leg_is_complete(hrex, 6)
+
+
+def test_the_equilibration_of_cufep_analyze_is_given_one_way_and_is_a_length(tmp_path):
+    """Review of PR 1: --equilibration-ns 0.05 with --equilibration-iterations 0 used all 120 rows, and
+    --equilibration-ns -0.5 was taken for 0."""
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    tail_leg(leg, n_equilibration=20, n=120)
+    both = CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-ns", "0.05", "--equilibration-iterations", "0"])
+    assert both.exit_code == 1 and "either as a length or as a number of iterations, not both" in both.output
+    for bad in ("-0.5", "nan", "inf"):
+        out = CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-ns", bad])
+        assert out.exit_code != 0 and ("nanoseconds of 0 or more" in out.output or "Invalid value" in out.output), bad
+    out = json.loads(CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-ns", "0.05"]).output)
+    assert out["n_equilibration_iterations"] == 20 and out["n_iterations_used"] == 100
 
 
 def test_a_run_can_be_restricted_to_ligands_and_legs():

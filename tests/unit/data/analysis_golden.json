@@ -1,0 +1,651 @@
+{
+ "version": 6,
+ "numbers": {
+  "long": {
+   "delta_g": 5.281209545080566,
+   "delta_g_error": 0.22149745361491593,
+   "delta_g_error_from": "time blocks",
+   "delta_g_mbar": 1.664195148516504,
+   "delta_g_mbar_error": 0.07743976082409829,
+   "correction": -3.617014396564062,
+   "first_half": [
+    5.165442112405506,
+    0.35438511887607116
+   ],
+   "second_half": [
+    5.394889528697364,
+    0.2883718777136369
+   ],
+   "forward": [
+    [
+     0.1,
+     4.683071674574597,
+     0.9467337713372208
+    ],
+    [
+     0.2,
+     4.800311417517335,
+     0.6310678911135145
+    ],
+    [
+     0.3,
+     4.834457021670296,
+     0.35162829675764196
+    ],
+    [
+     0.4,
+     4.808496287113496,
+     0.16327947677477483
+    ],
+    [
+     0.5,
+     5.165442112405506,
+     0.35438511887607116
+    ],
+    [
+     0.6,
+     5.113155810006862,
+     0.3497292183630428
+    ],
+    [
+     0.7,
+     5.141305186041144,
+     0.2551547319038468
+    ],
+    [
+     0.8,
+     5.14224774524292,
+     0.24564481769835844
+    ],
+    [
+     0.9,
+     5.21879823177135,
+     0.24010175506070486
+    ],
+    [
+     1.0,
+     5.281209545080566,
+     0.22149745361491593
+    ]
+   ],
+   "reverse": [
+    [
+     0.1,
+     5.805705612957273,
+     0.4174443431476699
+    ],
+    [
+     0.2,
+     5.796083037207367,
+     0.2888838427125698
+    ],
+    [
+     0.3,
+     5.583170504998226,
+     0.28215973646132314
+    ],
+    [
+     0.4,
+     5.520291510686662,
+     0.2948532594381697
+    ],
+    [
+     0.5,
+     5.394889528697364,
+     0.2883718777136369
+    ],
+    [
+     0.6,
+     5.564060809468785,
+     0.24319068670162716
+    ],
+    [
+     0.7,
+     5.46359019025077,
+     0.23928293720595217
+    ],
+    [
+     0.8,
+     5.39450524072386,
+     0.24019546971997907
+    ],
+    [
+     0.9,
+     5.346012578430472,
+     0.24256777612605168
+    ],
+    [
+     1.0,
+     5.281209545080566,
+     0.22149745361491593
+    ]
+   ],
+   "blocks": [
+    [
+     0.0,
+     0.2,
+     4.800311417517335,
+     0.6310678911135145
+    ],
+    [
+     0.2,
+     0.4,
+     4.816371739114473,
+     0.20764139525830635
+    ],
+    [
+     0.4,
+     0.6,
+     5.649103303014007,
+     0.6960323470722135
+    ],
+    [
+     0.6,
+     0.8,
+     5.22792986883644,
+     0.48359248991300163
+    ],
+    [
+     0.8,
+     1.0,
+     5.796083037207367,
+     0.2888838427125698
+    ]
+   ],
+   "delta_g_error_blocks": {
+    "40": 0.19620100285453237,
+    "20": 0.22149745361491593,
+    "10": 0.18537719213867707,
+    "5": 0.20587321319811905
+   },
+   "parts_not_determined": [],
+   "parts_below_level": [],
+   "convergence_note": "",
+   "halves_warning": "",
+   "quality": {
+    "overlap": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "samples": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "halves": {
+     "ok": true,
+     "difference": 0.22944741629185827,
+     "warning": null,
+     "reason": null
+    },
+    "estimators": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    }
+   }
+  },
+  "short": {
+   "delta_g": 4.613077712217194,
+   "delta_g_error": 0.875195778642532,
+   "delta_g_error_from": "analytical upper bound",
+   "delta_g_mbar": 2.4839523735459776,
+   "delta_g_mbar_error": 0.433454591842643,
+   "correction": -2.1291253386712166,
+   "first_half": [
+    NaN,
+    NaN
+   ],
+   "second_half": [
+    NaN,
+    NaN
+   ],
+   "forward": [
+    [
+     0.5833333333333334,
+     4.456719530749104,
+     1.165611856366368
+    ],
+    [
+     0.7083333333333334,
+     4.7931818804126785,
+     0.577053700648077
+    ],
+    [
+     0.7916666666666666,
+     4.873408982133627,
+     0.8047689040325888
+    ],
+    [
+     0.9166666666666666,
+     4.56464014742949,
+     0.5499416909187724
+    ],
+    [
+     1.0,
+     4.613077712217194,
+     0.875195778642532
+    ]
+   ],
+   "reverse": [
+    [
+     0.7083333333333334,
+     4.4050927536032845,
+     1.1517771752062353
+    ],
+    [
+     0.7916666666666666,
+     4.342469523025992,
+     1.0973303673585646
+    ],
+    [
+     0.9166666666666666,
+     4.4334856704371255,
+     0.8653802684636087
+    ],
+    [
+     1.0,
+     4.613077712217194,
+     0.875195778642532
+    ]
+   ],
+   "blocks": [],
+   "delta_g_error_blocks": {
+    "1000": null
+   },
+   "parts_not_determined": [
+    "forward point 0.08 (iterations 0-2 of the production): lambda window 1 keeps 1 sample(s) there; 4 are needed for an estimate",
+    "reverse point 0.08 (iterations 22-24 of the production): lambda window 1 keeps 1 sample(s) there; 4 are needed for an estimate",
+    "forward point 0.21 (iterations 0-5 of the production): lambda window 1 keeps 3 sample(s) there; 4 are needed for an estimate",
+    "reverse point 0.21 (iterations 19-24 of the production): lambda window 1 keeps 2 sample(s) there; 4 are needed for an estimate",
+    "forward point 0.29 (iterations 0-7 of the production): 2 tail energies were recorded in these iterations; 4 are needed for the tail correction",
+    "reverse point 0.29 (iterations 17-24 of the production): lambda window 1 keeps 3 sample(s) there; 4 are needed for an estimate",
+    "forward point 0.42 (iterations 0-10 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction",
+    "reverse point 0.42 (iterations 14-24 of the production): 2 tail energies were recorded in these iterations; 4 are needed for the tail correction",
+    "forward point 0.50 (iterations 0-12 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction",
+    "reverse point 0.50 (iterations 12-24 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction",
+    "reverse point 0.58 (iterations 10-24 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction",
+    "block 1 of 5 (iterations 0-5 of the production): lambda window 1 keeps 3 sample(s) there; 4 are needed for an estimate",
+    "block 2 of 5 (iterations 5-10 of the production): lambda window 1 keeps 2 sample(s) there; 4 are needed for an estimate",
+    "block 3 of 5 (iterations 10-14 of the production): lambda window 1 keeps 2 sample(s) there; 4 are needed for an estimate",
+    "block 4 of 5 (iterations 14-19 of the production): lambda window 1 keeps 3 sample(s) there; 4 are needed for an estimate",
+    "block 5 of 5 (iterations 19-24 of the production): lambda window 1 keeps 2 sample(s) there; 4 are needed for an estimate"
+   ],
+   "parts_below_level": [],
+   "convergence_note": "the first half (iterations 0-12 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction; the second half (iterations 12-24 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction",
+   "halves_warning": "",
+   "quality": {
+    "overlap": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "samples": {
+     "ok": false,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "halves": {
+     "ok": null,
+     "difference": null,
+     "warning": null,
+     "reason": "the first half (iterations 0-12 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction; the second half (iterations 12-24 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction"
+    },
+    "estimators": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    }
+   }
+  },
+  "below the level": {
+   "delta_g": 12.421871010196837,
+   "delta_g_error": 0.4311750116908058,
+   "delta_g_error_from": "time blocks",
+   "delta_g_mbar": 12.421871010196837,
+   "delta_g_mbar_error": 0.3244589713439695,
+   "correction": 0.0,
+   "first_half": [
+    12.15899260977548,
+    0.4661468029653824
+   ],
+   "second_half": [
+    12.671333732690044,
+    0.5669745979768698
+   ],
+   "forward": [
+    [
+     0.1,
+     12.6637698273219,
+     1.2433329990346955
+    ],
+    [
+     0.2,
+     12.286087910478352,
+     0.7151912338266244
+    ],
+    [
+     0.3,
+     12.659436829151486,
+     0.7459846266524581
+    ],
+    [
+     0.4,
+     12.384496277559366,
+     0.7242398596431479
+    ],
+    [
+     0.5,
+     12.15899260977548,
+     0.4661468029653824
+    ],
+    [
+     0.6,
+     12.347323615867536,
+     0.484611389810374
+    ],
+    [
+     0.7,
+     12.509713884378762,
+     0.39643651559008136
+    ],
+    [
+     0.8,
+     12.562667101585918,
+     0.5687891353246931
+    ],
+    [
+     0.9,
+     12.309061938134553,
+     0.34022379918269197
+    ],
+    [
+     1.0,
+     12.421871010196837,
+     0.4311750116908058
+    ]
+   ],
+   "reverse": [
+    [
+     0.1,
+     13.511694675692624,
+     1.0553006746052993
+    ],
+    [
+     0.2,
+     11.75554171652769,
+     0.8560115747837422
+    ],
+    [
+     0.3,
+     12.221808140365125,
+     0.8527184788291364
+    ],
+    [
+     0.4,
+     12.531604384632326,
+     0.6884081664340906
+    ],
+    [
+     0.5,
+     12.671333732690044,
+     0.5669745979768698
+    ],
+    [
+     0.6,
+     12.448589789994035,
+     0.42607164426385347
+    ],
+    [
+     0.7,
+     12.306967858549532,
+     0.39619410147107276
+    ],
+    [
+     0.8,
+     12.459829406566012,
+     0.3679370113510581
+    ],
+    [
+     0.9,
+     12.392760210497665,
+     0.40640154478437707
+    ],
+    [
+     1.0,
+     12.421871010196837,
+     0.4311750116908058
+    ]
+   ],
+   "blocks": [
+    [
+     0.0,
+     0.2,
+     12.286087910478352,
+     0.7151912338266244
+    ],
+    [
+     0.2,
+     0.4,
+     12.492914888255735,
+     0.7492213219541624
+    ],
+    [
+     0.4,
+     0.6,
+     12.26071835406741,
+     0.9882052075724402
+    ],
+    [
+     0.6,
+     0.8,
+     13.11745994025866,
+     1.0051123754808602
+    ],
+    [
+     0.8,
+     1.0,
+     11.75554171652769,
+     0.8560115747837422
+    ]
+   ],
+   "delta_g_error_blocks": {
+    "40": 0.3322967893716849,
+    "20": 0.4311750116908058,
+    "10": 0.3551646860614277,
+    "5": 0.23030427174775642
+   },
+   "parts_not_determined": [],
+   "parts_below_level": [
+    "reverse point 0.10 (iterations 540-600 of the production): lambda windows 0 and 1 overlap by 0.078 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "reverse point 0.20 (iterations 480-600 of the production): lambda windows 0 and 1 overlap by 0.071 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "forward point 0.50 (iterations 0-300 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "forward point 0.60 (iterations 0-360 of the production): lambda windows 0 and 1 overlap by 0.081 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "reverse point 0.60 (iterations 240-600 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "forward point 0.70 (iterations 0-420 of the production): lambda windows 0 and 1 overlap by 0.081 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "reverse point 0.70 (iterations 180-600 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "reverse point 0.80 (iterations 120-600 of the production): lambda windows 0 and 1 overlap by 0.080 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "reverse point 0.90 (iterations 60-600 of the production): lambda windows 0 and 1 overlap by 0.081 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "the first half (iterations 0-300 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "block 2 of 5 (iterations 120-240 of the production): lambda windows 0 and 1 overlap by 0.081 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "block 3 of 5 (iterations 240-360 of the production): lambda windows 0 and 1 overlap by 0.073 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+    "block 5 of 5 (iterations 480-600 of the production): lambda windows 0 and 1 overlap by 0.071 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate"
+   ],
+   "convergence_note": "",
+   "halves_warning": "the first half (iterations 0-300 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+   "quality": {
+    "overlap": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "samples": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "halves": {
+     "ok": true,
+     "difference": 0.5123411229145649,
+     "warning": "the first half (iterations 0-300 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+     "reason": null
+    },
+    "estimators": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    }
+   }
+  },
+  "hardly connected": {
+   "delta_g": 16.97114538071349,
+   "delta_g_error": 79.83864797398941,
+   "delta_g_error_from": "analytical",
+   "delta_g_mbar": 16.97114538071349,
+   "delta_g_mbar_error": 79.83864797398941,
+   "correction": 0.0,
+   "first_half": [
+    NaN,
+    NaN
+   ],
+   "second_half": [
+    NaN,
+    NaN
+   ],
+   "forward": [
+    [
+     0.8,
+     16.97114538071349,
+     86.21059177247429
+    ],
+    [
+     0.9,
+     16.97114538071349,
+     86.27761409438632
+    ],
+    [
+     1.0,
+     16.97114538071349,
+     79.83864797398941
+    ]
+   ],
+   "reverse": [
+    [
+     0.4,
+     17.12361926478404,
+     89.5668235772365
+    ],
+    [
+     0.5,
+     17.1234331190937,
+     87.4174639642064
+    ],
+    [
+     0.6,
+     16.98140712957505,
+     87.23616038369326
+    ],
+    [
+     0.7,
+     16.97114538071349,
+     85.3590911465071
+    ],
+    [
+     0.8,
+     16.97114538071349,
+     86.60083492370529
+    ],
+    [
+     0.9,
+     16.97114538071349,
+     85.30812214059324
+    ],
+    [
+     1.0,
+     16.97114538071349,
+     79.83864797398941
+    ]
+   ],
+   "blocks": [
+    [
+     0.6,
+     0.8,
+     17.123908739040626,
+     89.57252682491117
+    ]
+   ],
+   "delta_g_error_blocks": {
+    "40": null,
+    "20": null,
+    "10": null,
+    "5": null
+   },
+   "parts_not_determined": [
+    "forward point 0.10 (iterations 0-40 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 4.1 kT (standard error 2.7e+03 kT), more than 0.01 kT, so it is not determined",
+    "reverse point 0.10 (iterations 360-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 5.8 kT (standard error 3.2e+03 kT), more than 0.01 kT, so it is not determined",
+    "forward point 0.20 (iterations 0-80 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 8.1 kT (standard error 2.7e+03 kT), more than 0.01 kT, so it is not determined",
+    "reverse point 0.20 (iterations 320-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 11 kT (standard error 3.2e+03 kT), more than 0.01 kT, so it is not determined",
+    "forward point 0.30 (iterations 0-120 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 12 kT (standard error 2.6e+03 kT), more than 0.01 kT, so it is not determined",
+    "reverse point 0.30 (iterations 280-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.13 kT (standard error 2.8e+02 kT), more than 0.01 kT, so it is not determined",
+    "forward point 0.40 (iterations 0-160 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 1.7 kT (standard error 8.8e+02 kT), more than 0.01 kT, so it is not determined",
+    "forward point 0.50 (iterations 0-200 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.067 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined",
+    "forward point 0.60 (iterations 0-240 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.081 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined",
+    "forward point 0.70 (iterations 0-280 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.034 kT (standard error 93 kT), more than 0.01 kT, so it is not determined",
+    "block 1 of 5 (iterations 0-80 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 8.1 kT (standard error 2.7e+03 kT), more than 0.01 kT, so it is not determined",
+    "block 2 of 5 (iterations 80-160 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 2.4 kT (standard error 1.4e+03 kT), more than 0.01 kT, so it is not determined",
+    "block 3 of 5 (iterations 160-240 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.028 kT (standard error 1.6e+02 kT), more than 0.01 kT, so it is not determined",
+    "block 5 of 5 (iterations 320-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 11 kT (standard error 3.2e+03 kT), more than 0.01 kT, so it is not determined"
+   ],
+   "parts_below_level": [
+    "reverse point 0.40 (iterations 240-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "reverse point 0.50 (iterations 200-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "reverse point 0.60 (iterations 160-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "reverse point 0.70 (iterations 120-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "forward point 0.80 (iterations 0-320 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "reverse point 0.80 (iterations 80-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "forward point 0.90 (iterations 0-360 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "reverse point 0.90 (iterations 40-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "the second half (iterations 200-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
+    "block 4 of 5 (iterations 240-320 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+   ],
+   "convergence_note": "the first half (iterations 0-200 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.067 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined",
+   "halves_warning": "",
+   "quality": {
+    "overlap": {
+     "ok": false,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "samples": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    },
+    "halves": {
+     "ok": null,
+     "difference": null,
+     "warning": null,
+     "reason": "the first half (iterations 0-200 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.067 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined"
+    },
+    "estimators": {
+     "ok": true,
+     "difference": null,
+     "warning": null,
+     "reason": null
+    }
+   }
+  }
+ }
+}
