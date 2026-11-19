@@ -113,13 +113,22 @@ class LegStorage:
         differing = []
         for key, old in stored.items():
             new = current.get(key)
+            if key == "lrc" and isinstance(old, dict) and "env" in old:
+                # samples of a version that stored all parameters of the tail: compared as their summary
+                from cufep.sampling.worker import tail_summary
+                old = tail_summary(old)
             if not _same(old, new):
                 if key == "states":
                     differing.append("the lambda states")
                 elif key == "system_sha256":
                     differing.append("the System (force field, restraint or REST2 region)")
+                elif key == "lrc" and isinstance(old, dict) and isinstance(new, dict):
+                    radii = [f"{name}: {old.get(name)} -> {new.get(name)}" for name in ("cutoff_nm", "long_cutoff_nm")
+                             if not _same(old.get(name), new.get(name))]
+                    differing += [f"the tail correction ({'; '.join(radii)})"] if radii else \
+                        ["the Lennard-Jones parameters of the ligand's dispersion tail"]
                 elif key == "lrc":
-                    differing.append("the Lennard-Jones parameters of the ligand's dispersion tail")
+                    differing.append("the tail correction (recorded with the samples or not)")
                 elif key == "settings" and isinstance(old, dict) and isinstance(new, dict):
                     differing += [f"{name}: {old.get(name)} -> {new.get(name)}"
                                   for name in sorted(set(old) | set(new)) if not _same(old.get(name), new.get(name))]

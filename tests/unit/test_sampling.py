@@ -661,6 +661,51 @@ def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tm
 
 
 
+def test_the_tail_correction_is_recorded_with_the_samples_as_a_summary(tmp_path, tiny_leg):
+    """The conditions of the samples held every parameter of every environment atom of the tail
+    correction: 0.6 MB for a kinase and 1.7 MB for a receptor in a bilayer, in one attribute. They hold
+    its summary now; samples that hold the parameters are compared as their summary."""
+    import dataclasses
+
+    import h5py
+
+    from cufep.alchemy.lrc import TailEnergy
+    from cufep.config.schema import AnalysisConfig
+    from cufep.sampling.storage import ConditionsError
+    from cufep.sampling.worker import tail_summary
+    from cufep.workflow import leg_result_from_samples
+
+    spec, _pos, _box = tiny_leg
+    rng = np.random.default_rng(9)
+    tail = TailEnergy(ligand=np.arange(3), lig_sigma=np.full(3, 0.3), lig_epsilon=np.full(3, 0.4), env=np.arange(3, 30003),
+                      env_sigma=rng.uniform(0.2, 0.4, 30000), env_epsilon=rng.uniform(0.1, 0.8, 30000),
+                      cutoff_nm=0.9, long_cutoff_nm=2.0)
+    with_tail = dataclasses.replace(spec, lrc=tail.to_dict())
+    conditions = with_tail.conditions()
+    assert conditions["lrc"] == tail.summary() == tail_summary(tail.summary()) and conditions["lrc"]["n_environment"] == 30000
+    assert len(json.dumps(conditions["lrc"])) < 400 < 1_000_000 < len(json.dumps(tail.to_dict()))
+    assert spec.conditions()["lrc"] is None
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    synthetic_leg(leg)
+    with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:                # as the version before wrote it
+        h5.attrs["conditions"] = json.dumps(dict(conditions, lrc=tail.to_dict()))
+    storage = LegStorage(leg / "hrex", 4, 4)
+    assert storage.check_conditions(conditions) == "same"
+    other_radius = dataclasses.replace(with_tail, lrc=dataclasses.replace(tail, long_cutoff_nm=1.5).to_dict())
+    with pytest.raises(ConditionsError, match="the tail correction .long_cutoff_nm: 2.0 -> 1.5."):
+        storage.check_conditions(other_radius.conditions())
+    other_atoms = dataclasses.replace(with_tail, lrc=dataclasses.replace(tail, env_epsilon=tail.env_epsilon * 1.01).to_dict())
+    with pytest.raises(ConditionsError, match="the Lennard-Jones parameters of the ligand's dispersion tail"):
+        storage.check_conditions(other_atoms.conditions())
+    with pytest.raises(ConditionsError, match="the tail correction .recorded with the samples or not."):
+        storage.check_conditions(spec.conditions())
+    storage.close()
+    # the result of a leg says to which radius its tail energies were recorded
+    run = {"ligand": "lig", "leg": "solvent", "repeat": 0, "backend": "openmm", "notes": []}
+    assert leg_result_from_samples(leg, AnalysisConfig(lrc="none"), run)["lrc_long_cutoff_nm"] == 2.0
+
+
 def test_samples_of_unrecorded_conditions_are_read_but_not_continued(tmp_path, tiny_leg, water_ligand_system):
     """Review of PR 1: six iterations written by an earlier version with a soft-core alpha of 0.5 were
     continued with 0.8, and all ten rows were then labelled with the hash of the 0.8 System.

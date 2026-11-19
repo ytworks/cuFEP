@@ -93,6 +93,19 @@ class TailEnergy:
         total += (16.0 * np.pi / volume) * (self._s12 / (9.0 * r_long ** 9) - self._s6 / (3.0 * r_long ** 3))
         return total
 
+    def summary(self) -> dict:
+        """What identifies this tail correction, small enough to be stored with the samples: the two
+        radii, the numbers of atoms, the two sums of the dispersion terms and a checksum of the
+        arrays. (All parameters of all environment atoms are megabytes for a protein system.)"""
+        import hashlib
+
+        digest = hashlib.sha256()
+        for array in (self.ligand, self.lig_sigma, self.lig_epsilon, self.env, self.env_sigma, self.env_epsilon):
+            digest.update(np.ascontiguousarray(array).tobytes())
+        return {"cutoff_nm": float(self.cutoff_nm), "long_cutoff_nm": float(self.long_cutoff_nm),
+                "n_ligand": int(self.ligand.size), "n_environment": int(self.env.size),
+                "s6": self._s6, "s12": self._s12, "sha256": digest.hexdigest()}
+
     def to_dict(self) -> dict:
         return {"ligand": self.ligand.tolist(), "lig_sigma": self.lig_sigma.tolist(),
                 "lig_epsilon": self.lig_epsilon.tolist(), "env": self.env.tolist(),

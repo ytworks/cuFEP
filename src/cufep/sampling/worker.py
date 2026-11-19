@@ -82,7 +82,7 @@ class LegSpec:
                 "steps_per_iteration": int(self.steps_per_iteration), "backend": self.backend,
                 "precision": self.precision, "integrator": self.integrator, "n_atoms": int(self.n_atoms),
                 "system_sha256": hashlib.sha256(self.system_xml.encode()).hexdigest(),
-                "lrc": None if self.lrc is None else dict(self.lrc),
+                "lrc": None if self.lrc is None else tail_summary(self.lrc),
                 **({"settings": dict(self.settings)} if self.settings else {})}
 
 
@@ -146,6 +146,16 @@ class SharedArrays:
         if self.owner and self.directory:
             shutil.rmtree(self.directory, ignore_errors=True)
             self.directory = None
+
+
+def tail_summary(lrc: dict) -> dict:
+    """The record of a tail correction in the conditions of the samples: its summary
+    (:meth:`cufep.alchemy.lrc.TailEnergy.summary`), also for a record that is one already."""
+    if "sha256" in lrc and "env" not in lrc:
+        return dict(lrc)
+    from cufep.alchemy.lrc import TailEnergy
+
+    return TailEnergy.from_dict(lrc).summary()
 
 
 #: what a random stream of a worker is for

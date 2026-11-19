@@ -319,7 +319,8 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
                                                        **fields)))
 
     usual = {"temperature_K": 298.15, "lrc_method": "reweight"}
-    whole = dict(usual, pressure_bar=1.0, prepared_systems_sha256="abc")       # all that a result of today records
+    # all that a result of today records
+    whole = dict(usual, pressure_bar=1.0, prepared_systems_sha256="abc", lrc_long_cutoff_nm=2.0)
     write(tmp_path / "a", 0, "solvent", **usual)
     write(tmp_path / "a", 0, "complex", temperature_K=315.0, lrc_method="reweight")
     out = combine_ligand(tmp_path / "a", "lig", 1)
@@ -343,6 +344,25 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     assert combine_ligand(tmp_path / "p", "lig", 1)["inconsistent_legs"] == [
         "pressure (bar): complex leg 2.0, solvent leg 1.0",
         "prepared systems (input, force field, solvation): complex leg xyz, solvent leg abc"]
+
+    # review of PR 1: two legs corrected by reweighting whose tail energies were recorded to different
+    # outer radii were combined (the stored energies cannot be turned into those of another radius)
+    write(tmp_path / "t", 0, "solvent", **dict(whole, lrc_long_cutoff_nm=1.5))
+    write(tmp_path / "t", 0, "complex", **whole)
+    out = combine_ligand(tmp_path / "t", "lig", 1)
+    assert "dg_bind" not in out
+    assert out["inconsistent_legs"] == ["outer radius of the tail correction (nm): complex leg 2.0, solvent leg 1.5"]
+    # the isotropic correction does not depend on that radius, and neither does none
+    for method in ("isotropic", "none"):
+        write(tmp_path / method, 0, "solvent", **dict(whole, lrc_method=method, lrc_long_cutoff_nm=1.5))
+        write(tmp_path / method, 0, "complex", **dict(whole, lrc_method=method))
+        out = combine_ligand(tmp_path / method, "lig", 1)
+        assert "dg_bind" in out and out["inconsistent_legs"] == [] and out["not_compared"] == []
+    # a reweighted leg whose result does not record the radius is named
+    write(tmp_path / "u", 0, "solvent", **dict(whole, lrc_long_cutoff_nm=None))
+    write(tmp_path / "u", 0, "complex", **whole)
+    assert combine_ligand(tmp_path / "u", "lig", 1)["not_compared"] == [
+        "outer radius of the tail correction (nm): not recorded for the solvent leg"]
 
     # two repeats, each consistent in itself, at two temperatures: they are not repeats of one calculation
     for repeat, temperature in ((0, 298.15), (1, 315.0)):
@@ -392,6 +412,20 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     check_partner_legs(tmp_path / "f", "lig", {(0, "complex"), (0, "solvent")}, 1, config(315.0))  # its own samples decide
     with pytest.raises(WorkflowError, match="the solvent leg of repeat 0"):                        # a further repeat
         check_partner_legs(tmp_path / "f", "lig", {(1, "complex"), (1, "solvent")}, 2, config(315.0))
+    # the outer radius of the tail: what the samples of the finished leg hold against what this run asks for
+    from cufep.sampling.storage import LegStorage
+    storage = LegStorage(tmp_path / "f" / "repeat_0" / "solvent" / "hrex", 2, 2)
+    storage.check_conditions({"temperature_K": 298.15, "lrc": {"cutoff_nm": 0.9, "long_cutoff_nm": 1.0}})
+    storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+    storage.close()
+    with pytest.raises(WorkflowError, match="outer radius of the tail correction .nm.: the solvent leg of repeat 0, "
+                                            "which is finished and not part of this run, recorded its tail energies "
+                                            "to 1; this run uses 2.*Nothing was run"):
+        check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))
+    shorter = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc_cutoff_nm": 1.0}})
+    check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, shorter)                         # the same radius
+    isotropic = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "isotropic"}})
+    check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, isotropic)                       # does not use it
 
 
 def test_a_leg_whose_analysis_gave_no_free_energy_is_a_failed_leg(tmp_path):

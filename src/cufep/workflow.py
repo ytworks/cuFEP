@@ -1438,6 +1438,9 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
     pressure = conditions.get("pressure_bar")
     release, release_analytical = restraint_release_of(leg_dir, attrs, temperature)
+    # the outer radius to which the tail energy of these samples was recorded; the energies cannot
+    # be turned into those of another radius
+    tail = conditions.get("lrc") if isinstance(conditions.get("lrc"), dict) else {}
     result = {
         "ligand": run.get("ligand"), "leg": run.get("leg"), "repeat": run.get("repeat"), "backend": run.get("backend"),
         "temperature_K": temperature, "pressure_bar": pressure,
@@ -1446,7 +1449,8 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
         "delta_g_decouple": res.delta_g - correction,          # decoupling with the full LJ range
         "delta_g_mbar": res.delta_g, "delta_g_mbar_error": res.delta_g_error,
-        "lrc": correction, "lrc_method": a.lrc, "lrc_reweight": res.lrc_delta_g,
+        "lrc": correction, "lrc_method": a.lrc, "lrc_long_cutoff_nm": tail.get("long_cutoff_nm"),
+        "lrc_reweight": res.lrc_delta_g,
         "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.lrc_error, "structure": structure,
         "restraint_release": release, "restraint_release_analytical": release_analytical,
         "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
@@ -1568,7 +1572,11 @@ def run_leg_safe(job: LegJob) -> dict:
 #: barostat may differ between the legs and are not listed.
 CYCLE_CONDITIONS = (("temperature_K", "temperature (K)"), ("pressure_bar", "pressure (bar)"),
                     ("prepared_systems_sha256", "prepared systems (input, force field, solvation)"),
-                    ("lrc_method", "correction for the dispersion tail"))
+                    ("lrc_method", "correction for the dispersion tail"),
+                    ("lrc_long_cutoff_nm", "outer radius of the tail correction (nm)"))
+#: conditions that count only for some legs: the outer radius enters the correction by
+#: reweighting alone (the isotropic correction and no correction do not depend on it)
+CYCLE_CONDITION_APPLIES = {"lrc_long_cutoff_nm": lambda result: result.get("lrc_method") == "reweight"}
 
 
 def record_digest(record: dict | None) -> str | None:
@@ -1627,12 +1635,13 @@ def analysis_differences(result: dict, analysis) -> str:
 
 def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: int, cfg: Config) -> None:
     """Before a leg is sampled: the finished legs it will be combined with and that this run does
-    not sample must have been made under the temperature and pressure this run uses.
+    not sample must have been made under the temperature and pressure this run uses, and, with
+    the tail correction by reweighting, with the outer radius this run uses.
 
     ``selected`` holds the (repeat, leg) of this ligand that the run samples. Raises WorkflowError
     with what differs, before any time is spent on a leg whose result could not be used.
     """
-    from cufep.sampling.storage import _same
+    from cufep.sampling.storage import _same, stored_conditions
 
     asked = {"temperature_K": float(cfg.thermodynamics.temperature_K), "pressure_bar": float(cfg.thermodynamics.pressure_bar)}
     names = dict(CYCLE_CONDITIONS)
@@ -1641,13 +1650,21 @@ def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: 
         for leg in ("complex", "solvent"):
             if (r, leg) in selected:
                 continue
-            state, data = leg_state(lig_dir / f"repeat_{r}" / leg)
+            leg_dir = lig_dir / f"repeat_{r}" / leg
+            state, data = leg_state(leg_dir)
             if state != "finished":
                 continue
+            where = f"the {leg} leg of repeat {r}, which is finished and not part of this run,"
             for key, value in asked.items():
                 if data.get(key) is not None and not _same(data[key], value):
-                    differing.append(f"{names[key]}: the {leg} leg of repeat {r}, which is finished and not part of "
-                                     f"this run, was made at {data[key]}; this run uses {value}")
+                    differing.append(f"{names[key]}: {where} was made at {data[key]}; this run uses {value}")
+            if cfg.analysis.lrc == "reweight":
+                # what its samples hold, whatever its result says
+                tail = (stored_conditions(leg_dir / "hrex")[1] or {}).get("lrc") or {}
+                radius = tail.get("long_cutoff_nm")
+                if radius is not None and not _same(float(radius), float(cfg.analysis.lrc_cutoff_nm)):
+                    differing.append(f"{names['lrc_long_cutoff_nm']}: {where} recorded its tail energies to "
+                                     f"{float(radius):g}; this run uses {float(cfg.analysis.lrc_cutoff_nm):g}")
     if differing and selected:
         raise WorkflowError(
             f"{ligand_name}: the legs this run would sample could not be combined with the legs the ligand already "
@@ -1659,17 +1676,20 @@ def cycle_differences(legs: list[tuple[str, dict]]) -> tuple[list[str], list[str
     """What differs among leg results that are to be combined, and what could not be compared.
 
     ``legs`` holds (name of the leg in a message, its result). Returns two lists of sentences;
-    the second names conditions that a result of an earlier version does not record.
+    the second names conditions that a result of an earlier version does not record. A condition
+    of :data:`CYCLE_CONDITION_APPLIES` is compared among the legs it counts for.
     """
     from cufep.sampling.storage import _same
 
     differing, not_compared = [], []
     for key, name in CYCLE_CONDITIONS:
-        known = [(where, result[key]) for where, result in legs if result.get(key) is not None]
-        missing = [where for where, result in legs if result.get(key) is None]
+        applies = CYCLE_CONDITION_APPLIES.get(key, lambda _result: True)
+        concerned = [(where, result) for where, result in legs if applies(result)]
+        known = [(where, result[key]) for where, result in concerned if result.get(key) is not None]
+        missing = [where for where, result in concerned if result.get(key) is None]
         if any(not _same(value, known[0][1]) for _where, value in known[1:]):
             differing.append(f"{name}: " + ", ".join(f"{where} {value}" for where, value in known))
-        if missing and legs:
+        if missing:
             not_compared.append(f"{name}: not recorded for the {', the '.join(missing)}")
     return differing, not_compared
 
