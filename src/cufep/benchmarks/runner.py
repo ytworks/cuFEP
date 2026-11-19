@@ -60,23 +60,57 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
     return Config.model_validate(data)
 
 
+#: what a ligand's result can say about its legs: key in the summary and how the report names it.
+#: The same list is behind the flags of the report, the columns of summary.csv and the result line.
+LEG_FLAGS = (("failed_legs", "FAILED"), ("inconsistent_legs", "LEGS MADE UNDER DIFFERENT CONDITIONS"),
+             ("not_reliable", "NOT RELIABLE (overlap)"), ("old_analysis", "old analysis"),
+             ("few_samples", "few independent samples"), ("halves_differ", "halves differ"),
+             ("halves_not_compared", "halves not compared"), ("estimators_disagree", "BAR and MBAR differ"),
+             ("origin_not_recorded", "origin of files not recorded"))
+
+
+def flags_of(ligand_summary: dict) -> list[str]:
+    """The flags of one ligand, in the order of :data:`LEG_FLAGS`."""
+    out = []
+    for key, name in LEG_FLAGS:
+        items = ligand_summary.get(key) or []
+        if items:
+            out.append(f"{name}: " + ", ".join(str(item).split(":")[0] if key in ("old_analysis", "origin_not_recorded")
+                                               else str(item) for item in items))
+    return out
+
+
+#: the columns of benchmark_report.csv
+REPORT_COLUMNS = ("ligand", "exp", "fepplus", "cufep", "cufep_std", "n_repeats", "windows_complex", "windows_solvent",
+                  "windows_added_complex", "windows_added_solvent", "lowest_overlap", "lowest_overlap_used", "flags",
+                  "warnings")
+
+
 def report(name: str, run_dir: str | Path, write: bool = True) -> str:
-    """Compare a finished run with experiment and with FEP+; returns Markdown."""
+    """Compare a run with experiment and with FEP+; returns Markdown.
+
+    The report, its table (``benchmark_report.csv``) and its figure are those of the run as it
+    is now: ligands without a binding free energy are listed with the reason, and a report with
+    no ligand at all is written as such, so that the files of an earlier, better state of the
+    directory are not left to be read as the current result.
+    """
     run_dir = Path(run_dir)
     reference = read_reference(name)
     summary = json.loads((run_dir / "summary.json").read_text())
-    rows = []
+    rows, without = [], []
     for s in summary:
         ref = reference.get(s["ligand"])
-        if ref is None or "dg_bind" not in s:
+        if ref is None:
+            continue
+        if "dg_bind" not in s:
+            without.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": None,
+                            "cufep_std": None, "n_repeats": s.get("n_repeats", 0),
+                            "flags": "; ".join(flags_of(s) or ["no complete repeat"]),
+                            "warnings": len(s.get("warnings", []))})
             continue
         first = (s.get("repeats") or [{}])[0]
         added = first.get("lambda_windows_added") or {}
-        flags = (["FAILED: " + ", ".join(s["failed_legs"])] if s.get("failed_legs") else []) \
-            + (["NOT RELIABLE (overlap): " + ", ".join(s["not_reliable"])] if s.get("not_reliable") else []) \
-            + (["few independent samples: " + ", ".join(s["few_samples"])] if s.get("few_samples") else []) \
-            + (["halves differ: " + ", ".join(s["halves_differ"])] if s.get("halves_differ") else []) \
-            + (["halves not compared: " + ", ".join(s["halves_not_compared"])] if s.get("halves_not_compared") else [])
+        flags = flags_of(s)
         rows.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": s["dg_bind"],
                      "cufep_std": s.get("dg_bind_std"), "n_repeats": s["n_repeats"],
                      "windows_complex": (first.get("lambda_windows") or {}).get("complex"),
@@ -89,9 +123,28 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     title = load_registry()[name]["title"]
     lines = [f"# cuFEP benchmark report: {name}", "", title, "",
              f"Ligands with a result: {len(rows)} of {len(summary)} run ({len(reference)} in the set).", ""]
+    if without:
+        lines += ["## Ligands without a binding free energy", "", "| ligand | experiment | why |", "|---|---|---|"]
+        lines += [f"| {r['ligand']} | {r['exp']:.2f} | {r['flags']} |" for r in sorted(without, key=lambda r: r["exp"])]
+        lines.append("")
+
+    def save(text: str) -> None:
+        (run_dir / "benchmark_report.md").write_text(text)
+        with open(run_dir / "benchmark_report.csv", "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(REPORT_COLUMNS), restval="")
+            w.writeheader()
+            w.writerows(rows + without)
+        figure = run_dir / "benchmark_report.png"
+        figure.unlink(missing_ok=True)                 # never the figure of an earlier state of the run
+        if rows:
+            _plot(rows, figure, name)
+
     if not rows:
-        lines.append("No finished ligand yet.")
-        return "\n".join(lines) + "\n"
+        lines.append("No ligand has a binding free energy.")
+        text = "\n".join(lines) + "\n"
+        if write:
+            save(text)
+        return text
     lines += ["## Per ligand (kcal/mol)", "", "| ligand | experiment | cuFEP | SD over repeats | repeats | FEP+ |",
               "|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: r["exp"]):
@@ -149,12 +202,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         lines += ["", f"Only {len(rows)} ligands: the intervals are wide and rank statistics are indicative at best."]
     text = "\n".join(lines) + "\n"
     if write:
-        (run_dir / "benchmark_report.md").write_text(text)
-        with open(run_dir / "benchmark_report.csv", "w", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=list(rows[0]))
-            w.writeheader()
-            w.writerows(rows)
-        _plot(rows, run_dir / "benchmark_report.png", name)
+        save(text)
     return text
 
 

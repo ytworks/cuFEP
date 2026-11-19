@@ -11,6 +11,7 @@ from cufep.config.auto import AutoReport, resolve
 from cufep.config.schema import Config, dump_config, read_settings
 from cufep import mps
 from cufep.analysis.plots import plot_repeat
+from cufep.benchmarks.runner import LEG_FLAGS, flags_of
 from cufep.scheduler import GpuMonitor, run_jobs
 from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_leg_reuse, check_partner_legs, check_prepared,
                             combine_ligand, prepare_ligand, refresh_leg_result, safe_name, settings_differences)
@@ -195,33 +196,31 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
             except Exception as exc:  # noqa: BLE001  a figure never fails a run
                 log(f"WARNING: no analysis figure for {lig.name}, repeat {r}: {type(exc).__name__}: {exc}")
     for s in summary:
-        if "dg_bind" in s:
-            if s.get("dg_bind_std") is not None:
-                err = f" ± {s['dg_bind_std']:.2f} kcal/mol (standard deviation over {s['n_repeats']} repeats)"
-            else:
-                err = f" ± {s['dg_bind_mbar_error']:.2f} kcal/mol (MBAR uncertainty, 1 repeat)"
-            # a pair of neighbouring windows without overlap leaves the free energy undefined,
-            # whatever the MBAR uncertainty says; say so next to the number
-            lowest = [v for v in (s.get("min_overlap"), s.get("min_overlap_used")) if v is not None]
-            unreliable = (f"; NOT RELIABLE: neighbouring lambda windows overlap by only {min(lowest):.3f} "
-                          f"({', '.join(s['not_reliable'])})") if s.get("not_reliable") and lowest else ""
-            log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}"
-                + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
-                + unreliable
-                + (f"; OLD ANALYSIS: {', '.join(item.split(':')[0] for item in s['old_analysis'])}"
-                   if s.get("old_analysis") else "")
-                + (f"; few independent samples: {', '.join(s['few_samples'])}" if s.get("few_samples") else "")
-                + (f"; halves of the production differ: {', '.join(s['halves_differ'])}" if s.get("halves_differ") else "")
-                + (f"; halves not compared: {', '.join(s['halves_not_compared'])}" if s.get("halves_not_compared") else "")
-                + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
-        else:
-            log(f"RESULT {s['ligand']}: " + ("no binding free energy: the legs were made under different conditions"
-                                             if s.get("inconsistent_legs") else "no complete repeat")
-                + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
-                + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
+        log(result_line(s))
         for w in s.get("warnings", []):
             log(f"  warning: {w}")
     return summary
+
+
+def result_line(s: dict) -> str:
+    """The line of the log that gives a ligand's binding free energy and everything its result
+    says about its legs (:data:`cufep.benchmarks.runner.LEG_FLAGS`)."""
+    flags = flags_of(s)
+    warnings = f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""
+    if "dg_bind" not in s:
+        return (f"RESULT {s['ligand']}: no binding free energy" + "".join(f"; {flag}" for flag in flags)
+                + ("" if flags else "; no complete repeat") + warnings)
+    if s.get("dg_bind_std") is not None:
+        err = f" ± {s['dg_bind_std']:.2f} kcal/mol (standard deviation over {s['n_repeats']} repeats)"
+    else:
+        err = f" ± {s['dg_bind_mbar_error']:.2f} kcal/mol (MBAR uncertainty, 1 repeat)"
+    # a pair of neighbouring windows without overlap leaves the free energy undefined, whatever the
+    # MBAR uncertainty says; say so next to the number
+    lowest = [v for v in (s.get("min_overlap"), s.get("min_overlap_used")) if v is not None]
+    if s.get("not_reliable") and lowest:
+        flags = [f"{flag} (neighbouring lambda windows overlap by only {min(lowest):.3f})"
+                 if flag.startswith("NOT RELIABLE") else flag for flag in flags]
+    return f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}" + "".join(f"; {flag}" for flag in flags) + warnings
 
 
 def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print) -> None:
@@ -271,19 +270,16 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
                     pass
     with open(out_dir / "summary.csv", "w", newline="") as fh:
         w = csv.writer(fh)
+        # one column for each thing a ligand's result can say about its legs (LEG_FLAGS)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
-                    "lowest_overlap", "lowest_overlap_of_the_samples_used", "failed_legs", "inconsistent_legs",
-                    "old_analysis", "not_reliable", "few_samples", "halves_differ", "halves_not_compared", "warnings"])
+                    "lowest_overlap", "lowest_overlap_of_the_samples_used"] + [key for key, _name in LEG_FLAGS]
+                   + ["warnings"])
         for s in summary:
             w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
-                        _fmt(s.get("min_overlap")), _fmt(s.get("min_overlap_used")),
-                        "; ".join(s.get("failed_legs", [])), "; ".join(s.get("inconsistent_legs", [])),
-                        "; ".join(item.split(":")[0] for item in s.get("old_analysis", [])),
-                        "; ".join(s.get("not_reliable", [])),
-                        "; ".join(s.get("few_samples", [])), "; ".join(s.get("halves_differ", [])),
-                        "; ".join(s.get("halves_not_compared", [])),
-                        len(s.get("warnings", []))])
+                        _fmt(s.get("min_overlap")), _fmt(s.get("min_overlap_used"))]
+                       + ["; ".join(str(item) for item in s.get(key) or []) for key, _name in LEG_FLAGS]
+                       + [len(s.get("warnings", []))])
     (out_dir / "summary.json").write_text(jsonio.dumps(summary, indent=1))
 
 

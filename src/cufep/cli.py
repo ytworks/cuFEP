@@ -303,6 +303,7 @@ def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
     failed = driver.failed_legs(summary)
     if failed:
         click.echo("failed: " + "; ".join(failed), err=True)
+    if failed or not any("dg_bind" in s for s in summary):
         sys.exit(1)
 
 

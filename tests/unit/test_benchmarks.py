@@ -125,3 +125,77 @@ def test_structural_analysis_ignores_tumbling_and_flags_a_leaving_ligand():
     gone = structural_analysis(_samples(np.array([1.2, 0.0, 0.0])))
     assert gone["ligand_com_drift_last_half_A"] > 5.0 and len(gone["warnings"]) == 2
     assert structural_analysis({"attrs": {}}) is None
+
+
+def test_a_report_is_that_of_the_run_as_it_is_now(tmp_path):
+    """Review of PR 1: after every extension had failed, the report, table and figure of the earlier,
+    successful state still showed the old binding free energy."""
+    ref = read_reference("tyk2")
+    good = {"ligand": "jmc_23", "dg_bind": -12.34, "dg_bind_std": None, "n_repeats": 1, "warnings": []}
+    (tmp_path / "summary.json").write_text(json.dumps([good]))
+    assert "-12.34" in report("tyk2", tmp_path)
+    assert "-12.34" in (tmp_path / "benchmark_report.csv").read_text()
+    (tmp_path / "benchmark_report.png").write_text("the figure of that state")      # also where no figure can be made
+
+    failed = {"ligand": "jmc_23", "n_repeats": 0, "failed_legs": ["complex leg"],
+              "warnings": ["repeat 0 complex: FAILED: the GPU was lost.", "repeat 0 is incomplete"]}
+    (tmp_path / "summary.json").write_text(json.dumps([failed]))
+    text = report("tyk2", tmp_path)
+    assert "Ligands with a result: 0 of 1 run" in text and "No ligand has a binding free energy." in text
+    assert f"| jmc_23 | {ref['jmc_23']['exp']:.2f} | FAILED: complex leg |" in text
+    assert (tmp_path / "benchmark_report.md").read_text() == text and "-12.34" not in text
+    with open(tmp_path / "benchmark_report.csv") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1 and rows[0]["cufep"] == "" and rows[0]["flags"] == "FAILED: complex leg"
+    assert not (tmp_path / "benchmark_report.png").exists()
+
+    # some ligands with a result and some without: both are in the report and in the table
+    (tmp_path / "summary.json").write_text(json.dumps([
+        failed, dict(good, ligand="jmc_30"), {"ligand": "ejm_45", "n_repeats": 0, "warnings": []}]))
+    text = report("tyk2", tmp_path)
+    assert "Ligands with a result: 1 of 3 run" in text and "## Ligands without a binding free energy" in text
+    assert "| ejm_45 |" in text and "no complete repeat" in text
+    with open(tmp_path / "benchmark_report.csv") as fh:
+        assert [row["ligand"] for row in csv.DictReader(fh)] == ["jmc_30", "jmc_23", "ejm_45"]
+
+
+def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path):
+    """Review of PR 1: a leg whose only failed check was BAR against MBAR was named in summary.json and
+    nowhere a person looks: not in the flags of the report, not in summary.csv, not in the result line."""
+    from types import SimpleNamespace
+
+    from cufep.benchmarks.runner import LEG_FLAGS, flags_of
+    from cufep.run import result_line, write_summary
+
+    only_estimators = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3,
+                       "n_repeats": 1, "warnings": ["repeat 0 complex: BAR between neighbouring lambda windows gives ..."],
+                       "failed_legs": [], "not_reliable": [], "few_samples": [], "halves_differ": [],
+                       "halves_not_compared": [], "estimators_disagree": ["complex leg"], "min_overlap": 0.08}
+    assert flags_of(only_estimators) == ["BAR and MBAR differ: complex leg"]
+    (tmp_path / "summary.json").write_text(json.dumps([only_estimators]))
+    assert "| BAR and MBAR differ: complex leg |" in report("tyk2", tmp_path)
+    with open(tmp_path / "benchmark_report.csv") as fh:
+        assert list(csv.DictReader(fh))[0]["flags"] == "BAR and MBAR differ: complex leg"
+    assert result_line(only_estimators) == ("RESULT jmc_23: dG_bind = -11.00 ± 0.30 kcal/mol (MBAR uncertainty, 1 repeat)"
+                                            "; BAR and MBAR differ: complex leg; 1 warning(s):")
+    write_summary(tmp_path, [only_estimators], [SimpleNamespace(name="jmc_23", properties={})])
+    with open(tmp_path / "summary.csv") as fh:
+        row = list(csv.DictReader(fh))[0]
+    assert row["estimators_disagree"] == "complex leg" and row["few_samples"] == ""
+    assert all(key in row for key, _name in LEG_FLAGS)                       # one column per thing that can be said
+
+    # all of them at once, in the order of their weight; the overlap is given with the number
+    everything = dict(only_estimators, failed_legs=["solvent leg of repeat 1"], not_reliable=["complex leg"],
+                      inconsistent_legs=[], old_analysis=["solvent leg: version 2 of the analysis; this run uses version 3"],
+                      few_samples=["complex leg"], halves_differ=["complex leg"], halves_not_compared=["solvent leg"],
+                      origin_not_recorded=["complex leg: the samples"], min_overlap=0.02, min_overlap_used=0.012)
+    assert flags_of(everything) == [
+        "FAILED: solvent leg of repeat 1", "NOT RELIABLE (overlap): complex leg", "old analysis: solvent leg",
+        "few independent samples: complex leg", "halves differ: complex leg", "halves not compared: solvent leg",
+        "BAR and MBAR differ: complex leg", "origin of files not recorded: complex leg"]
+    assert "; NOT RELIABLE (overlap): complex leg (neighbouring lambda windows overlap by only 0.012);" in result_line(everything)
+    nothing = {"ligand": "x", "n_repeats": 0, "warnings": []}
+    assert result_line(nothing) == "RESULT x: no binding free energy; no complete repeat"
+    assert result_line(dict(nothing, inconsistent_legs=["temperature (K): complex leg 315.0, solvent leg 298.15"])) \
+        == ("RESULT x: no binding free energy; LEGS MADE UNDER DIFFERENT CONDITIONS: temperature (K): complex leg "
+            "315.0, solvent leg 298.15")
