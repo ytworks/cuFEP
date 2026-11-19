@@ -247,9 +247,10 @@ of at least 5 % everywhere.
 with 13 to 34 windows per leg. In the solvent leg the free energy follows the orientation of
 the ligand's acetamide group relative to its pyridine ring, which turns over only once in a
 few nanoseconds: about 20.0 kcal/mol in runs where it stays as in the bound pose, about 20.9
-where it has turned (13 runs, correlation 0.8). In the complex leg it follows the rotamers
-of ILE960 and VAL981. These are limits of the sampling, not of the lambda windows; see
-"Limits of version 0.1".
+where it has turned (13 runs, correlation 0.8). The complex leg (38.9 to 43.6 kcal/mol over
+21 runs, standard deviation 1.3) is correlated with the chi1 rotamers of ILE960 and VAL981
+(0.4 to 0.5), which explain part of its spread. These are limits of the sampling, not of the
+lambda windows; see "Limits of version 0.1".
 
 ## Long-range dispersion
 
