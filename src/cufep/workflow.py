@@ -1018,6 +1018,8 @@ def run_leg(job: LegJob) -> dict:
         "ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "backend": backend_name, "timestep_fs": timestep_fs,
         "restraint_release": release_dg, "restraint_release_analytical": release_dg_analytical,
         "ligand_symmetry_number": symmetry, "notes": list(notes), "origin_not_recorded": list(origin_not_recorded),
+        "pressure_bar": float(cfg.thermodynamics.pressure_bar),
+        "prepared_systems_sha256": record_digest(prep_info.get("made_from")),
         "rest2": {"scale": float(rest2.scale) if rest2_on else 1.0, "hot_protein_atoms": len(hot_atoms),
                   "hot_residues": hot_residues, "torsion_terms_scaled": alch.rest2_torsions,
                   "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}}
@@ -1140,7 +1142,7 @@ _ANALYSIS_NOTES = ("NOT RELIABLE", "NOT CONVERGED", "convergence not assessed", 
                    "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record")
 #: what the run of a leg knows and its samples do not hold
 _RUN_KEYS = ("ligand", "leg", "repeat", "backend", "timestep_fs", "restraint_release", "restraint_release_analytical",
-             "ligand_symmetry_number", "rest2", "origin_not_recorded")
+             "ligand_symmetry_number", "rest2", "origin_not_recorded", "pressure_bar", "prepared_systems_sha256")
 
 
 def run_record_of(result: dict | None, leg_dir: Path | None = None) -> dict:
@@ -1196,9 +1198,14 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     notes = list(run.get("notes") or [])
     notes += [n for n in (structure or {}).get("warnings", []) if n not in notes]
     origin_not_recorded = list(run.get("origin_not_recorded") or [])
+    # the pressure: what the run recorded, or what the samples were made under
+    conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
+    pressure = run.get("pressure_bar", conditions.get("pressure_bar"))
     result = {
         "ligand": run.get("ligand"), "leg": run.get("leg"), "repeat": run.get("repeat"), "backend": run.get("backend"),
-        "temperature_K": temperature, "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
+        "temperature_K": temperature, "pressure_bar": pressure,
+        "prepared_systems_sha256": run.get("prepared_systems_sha256"),
+        "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
         "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
         "delta_g_decouple": res.delta_g - correction,          # decoupling with the full LJ range
         "delta_g_mbar": res.delta_g, "delta_g_mbar_error": res.delta_g_error,
@@ -1323,7 +1330,93 @@ def run_leg_safe(job: LegJob) -> dict:
 #: thermodynamic cycle only under the same temperature and with the same correction for the
 #: dispersion tail. Backend, time step, number of lambda windows, lengths, REST2 and the kind of
 #: barostat may differ between the legs and are not listed.
-CYCLE_CONDITIONS = (("temperature_K", "temperature (K)"), ("lrc_method", "correction for the dispersion tail"))
+CYCLE_CONDITIONS = (("temperature_K", "temperature (K)"), ("pressure_bar", "pressure (bar)"),
+                    ("prepared_systems_sha256", "prepared systems (input, force field, solvation)"),
+                    ("lrc_method", "correction for the dispersion tail"))
+
+
+def record_digest(record: dict | None) -> str | None:
+    """A short digest of a record of settings (None for none), to compare two of them."""
+    import hashlib
+
+    if record is None:
+        return None
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def refresh_leg_result(leg_dir: Path, analysis, log=print) -> str:
+    """Make the result of a finished leg again from its samples if it was analysed otherwise than
+    this run analyses: by another version of the method or with other settings.
+
+    A leg that this run did not sample keeps the result of an earlier run, and that must not be
+    combined with a leg analysed in another way. Returns "current", "reanalysed", "stale" (the
+    result could not be made again; it is left as it is and :func:`combine_ligand` says so) or
+    "not finished". The result that is replaced is kept as ``result.replaced.json``.
+    """
+    state, data = leg_state(leg_dir)
+    if state != "finished":
+        return "not finished"
+    if data.get("analysis_record") == analysis_record(analysis):
+        return "current"
+    where = "/".join(leg_dir.parts[-3:])
+    try:
+        if not (leg_dir / "hrex" / "samples.h5").exists():
+            raise WorkflowError("its samples are not there")
+        result = leg_result_from_samples(leg_dir, analysis, run_record_of(data, leg_dir))
+    except Exception as exc:  # noqa: BLE001  whatever keeps the samples from being analysed
+        log(f"{where}: the result of this leg is of another analysis ({analysis_differences(data, analysis)}) and "
+            f"could not be made again from its samples: {type(exc).__name__}: {exc}")
+        return "stale"
+    (leg_dir / "result.json").replace(leg_dir / "result.replaced.json")
+    _write_json(leg_dir / "result.json", result)
+    log(f"{where}: the result of this leg was of another analysis ({analysis_differences(data, analysis)}); it has "
+        "been made again from the samples, and the one it replaces is kept as result.replaced.json")
+    return "reanalysed"
+
+
+def analysis_differences(result: dict, analysis) -> str:
+    """How the analysis behind a leg's result differs from the one of this run, in words ("" if not)."""
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+
+    stored, current = result.get("analysis_record"), analysis_record(analysis)
+    if stored == current:
+        return ""
+    if not stored:
+        return f"made before the version of the analysis was recorded; this run uses version {ANALYSIS_VERSION}"
+    if stored.get("version") != current["version"]:
+        return f"version {stored.get('version')} of the analysis; this run uses version {current['version']}"
+    return "; ".join(settings_differences({k: v for k, v in stored.items() if k != "version"},
+                                          {k: v for k, v in current.items() if k != "version"}))
+
+
+def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: int, cfg: Config) -> None:
+    """Before a leg is sampled: the finished legs it will be combined with and that this run does
+    not sample must have been made under the temperature and pressure this run uses.
+
+    ``selected`` holds the (repeat, leg) of this ligand that the run samples. Raises WorkflowError
+    with what differs, before any time is spent on a leg whose result could not be used.
+    """
+    from cufep.sampling.storage import _same
+
+    asked = {"temperature_K": float(cfg.thermodynamics.temperature_K), "pressure_bar": float(cfg.thermodynamics.pressure_bar)}
+    names = dict(CYCLE_CONDITIONS)
+    differing = []
+    for r in range(repeats):
+        for leg in ("complex", "solvent"):
+            if (r, leg) in selected:
+                continue
+            state, data = leg_state(lig_dir / f"repeat_{r}" / leg)
+            if state != "finished":
+                continue
+            for key, value in asked.items():
+                if data.get(key) is not None and not _same(data[key], value):
+                    differing.append(f"{names[key]}: the {leg} leg of repeat {r}, which is finished and not part of "
+                                     f"this run, was made at {data[key]}; this run uses {value}")
+    if differing and selected:
+        raise WorkflowError(
+            f"{ligand_name}: the legs this run would sample could not be combined with the legs the ligand already "
+            f"has ({'; '.join(differing)}). Nothing was run. Use the conditions of the finished legs, or run all "
+            "legs of the ligand under the new ones in a new output.dir.")
 
 
 def cycle_differences(legs: list[tuple[str, dict]]) -> tuple[list[str], list[str]]:
@@ -1345,12 +1438,14 @@ def cycle_differences(legs: list[tuple[str, dict]]) -> tuple[list[str], list[str
     return differing, not_compared
 
 
-def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
+def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None) -> dict:
     """Binding free energy from the finished legs of one ligand.
 
     The legs of all complete repeats must have been made under the same conditions
     (:data:`CYCLE_CONDITIONS`); if they were not, the ligand gets no binding free energy and the
-    result says what differs.
+    result says what differs. ``analysis`` is the ``analysis`` section of the run: a leg whose
+    result is of another analysis (:func:`refresh_leg_result` could not make it again) is combined
+    as it is and named under ``old_analysis`` with the checks its result does not hold.
     """
     per_repeat = []
     complete: list[tuple[str, dict]] = []      # the legs of the complete repeats
@@ -1419,9 +1514,21 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
     # legs that used files of an earlier version whose origin is not recorded
     unrecorded = [f"{where}: {', '.join(result['origin_not_recorded'])}" for where, result in complete
                   if result.get("origin_not_recorded")]
+    # legs whose result is of another analysis than this run's and could not be made again
+    old_analysis = []
+    if analysis is not None:
+        checks = {"samples": "independent samples", "halves": "halves of the production", "estimators": "BAR against MBAR"}
+        for where, result in complete:
+            differs = analysis_differences(result, analysis)
+            if differs:
+                quality = result.get("quality") or {}
+                not_made = [name for key, name in checks.items()
+                            if "halves" not in quality or (quality.get(key) or {}).get("ok") is None]
+                old_analysis.append(f"{where}: {differs}" + (f"; not checked: {', '.join(not_made)}" if not_made else ""))
+        warnings += [f"the result of the {item}. Its free energy and uncertainty are combined as they are" for item in old_analysis]
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
                  "failed_legs": failed_legs, "inconsistent_legs": inconsistent, "not_compared": not_compared,
-                 "origin_not_recorded": unrecorded,
+                 "origin_not_recorded": unrecorded, "old_analysis": old_analysis,
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
                  "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,
                  "estimators_disagree": flagged["estimators"]}

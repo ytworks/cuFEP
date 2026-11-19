@@ -741,6 +741,70 @@ def test_analyze_says_what_the_run_said(tmp_path):
     assert shown["quality"]["overlap"]["threshold"] == 0.03 and shown["notes"] == ["a note of the run"]
 
 
+def test_a_result_of_another_analysis_is_made_again_before_the_legs_are_combined(tmp_path):
+    """Review of PR 1: when only one leg was run again, its new analysis was combined with the free energy
+    and the uncertainty that an earlier method of analysis had given the other leg."""
+    import shutil
+
+    from cufep import jsonio
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+    from cufep.config.schema import AnalysisConfig
+    from cufep.workflow import (analysis_record, combine_ligand, leg_result_from_samples, refresh_leg_result,
+                                write_leg_result)
+
+    lig, settings, results = tmp_path / "lig", AnalysisConfig(lrc="none"), {}
+    for leg in ("complex", "solvent"):
+        synthetic_leg(lig / "repeat_0" / leg)
+        run = {"ligand": "lig", "leg": leg, "repeat": 0, "backend": "openmm", "timestep_fs": 4.0,
+               "notes": ["a note of the run"], "pressure_bar": 1.0, "prepared_systems_sha256": "abc"}
+        results[leg] = leg_result_from_samples(lig / "repeat_0" / leg, settings, run)
+        write_leg_result(lig / "repeat_0" / leg, results[leg])
+    solvent = lig / "repeat_0" / "solvent"
+    current = (results["solvent"]["delta_g_decouple"] - results["complex"]["delta_g_decouple"]) / 4.184
+
+    # the solvent leg has a result as an earlier version wrote it: other numbers, the checks of that
+    # version, no record of the analysis
+    earlier = {k: v for k, v in results["solvent"].items() if k not in ("analysis_record", "run")}
+    earlier.update(delta_g_decouple=results["solvent"]["delta_g_decouple"] + 2.0 * 4.184, delta_g_mbar_error=0.01,
+                   quality={"overlap": {"ok": True}, "convergence": {"ok": False}},
+                   notes=["a note of the run", "NOT CONVERGED: the first half of the production gives ..."])
+    (solvent / "result.json").write_text(jsonio.dumps(earlier))
+    named = (f"solvent leg: made before the version of the analysis was recorded; this run uses version "
+             f"{ANALYSIS_VERSION}; not checked: independent samples, halves of the production, BAR against MBAR")
+    mixed = combine_ligand(lig, "lig", 1, settings)
+    assert mixed["dg_bind"] == pytest.approx(current + 2.0) and mixed["old_analysis"] == [named]
+
+    messages = []
+    assert refresh_leg_result(solvent, settings, messages.append) == "reanalysed"
+    assert refresh_leg_result(lig / "repeat_0" / "complex", settings, messages.append) == "current"
+    assert len(messages) == 1 and "kept as result.replaced.json" in messages[0]
+    assert json.loads((solvent / "result.replaced.json").read_text())["delta_g_mbar_error"] == 0.01
+    again = json.loads((solvent / "result.json").read_text())
+    assert again["analysis_record"] == analysis_record(settings)
+    assert again["delta_g_decouple"] == pytest.approx(results["solvent"]["delta_g_decouple"])
+    assert again["notes"][0] == "a note of the run" and not any(n.startswith("NOT CONVERGED") for n in again["notes"])
+    assert refresh_leg_result(solvent, settings, messages.append) == "current" and len(messages) == 1   # once is enough
+    out = combine_ligand(lig, "lig", 1, settings)
+    assert out["dg_bind"] == pytest.approx(current) and out["old_analysis"] == []
+
+    # other settings of the analysis are another analysis as well
+    fewer = AnalysisConfig(lrc="none", convergence_points=4)
+    assert refresh_leg_result(solvent, fewer, messages.append) == "reanalysed"
+    assert "convergence_points: 10 -> 4" in messages[-1]
+    assert len(json.loads((solvent / "result.json").read_text())["analysis"]["forward"]) == 4
+
+    # without its samples a result cannot be made again: it is combined as it is, and the ligand's
+    # result names the leg and the checks its result does not hold
+    (solvent / "result.json").write_text(jsonio.dumps(earlier))
+    shutil.rmtree(solvent / "hrex")
+    assert refresh_leg_result(solvent, settings, messages.append) == "stale"
+    assert "its samples are not there" in messages[-1] and not (solvent / "result.json.tmp").exists()
+    out = combine_ligand(lig, "lig", 1, settings)
+    assert out["dg_bind"] == pytest.approx(current + 2.0) and out["old_analysis"] == [named]
+    assert any("solvent leg" in w and "combined as they are" in w for w in out["warnings"])
+    assert refresh_leg_result(lig / "repeat_0" / "nothing", settings, messages.append) == "not finished"
+
+
 def test_an_interruption_before_the_first_checkpoint_does_not_leave_samples_twice(tmp_path, tiny_leg):
     """Review of PR 1: two iterations before the first checkpoint stayed in front of the rerun's six."""
     spec, pos, box = tiny_leg

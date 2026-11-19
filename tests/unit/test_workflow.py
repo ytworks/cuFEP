@@ -319,6 +319,7 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
                                                        **fields)))
 
     usual = {"temperature_K": 298.15, "lrc_method": "reweight"}
+    whole = dict(usual, pressure_bar=1.0, prepared_systems_sha256="abc")       # all that a result of today records
     write(tmp_path / "a", 0, "solvent", **usual)
     write(tmp_path / "a", 0, "complex", temperature_K=315.0, lrc_method="reweight")
     out = combine_ligand(tmp_path / "a", "lig", 1)
@@ -336,6 +337,13 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     assert "dg_bind" not in out
     assert out["inconsistent_legs"] == ["correction for the dispersion tail: complex leg isotropic, solvent leg reweight"]
 
+    # pressure and the prepared systems are part of the cycle as well, where a result records them
+    write(tmp_path / "p", 0, "solvent", pressure_bar=1.0, prepared_systems_sha256="abc", **usual)
+    write(tmp_path / "p", 0, "complex", pressure_bar=2.0, prepared_systems_sha256="xyz", **usual)
+    assert combine_ligand(tmp_path / "p", "lig", 1)["inconsistent_legs"] == [
+        "pressure (bar): complex leg 2.0, solvent leg 1.0",
+        "prepared systems (input, force field, solvation): complex leg xyz, solvent leg abc"]
+
     # two repeats, each consistent in itself, at two temperatures: they are not repeats of one calculation
     for repeat, temperature in ((0, 298.15), (1, 315.0)):
         for leg in ("complex", "solvent"):
@@ -346,9 +354,9 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     assert "solvent leg of repeat 1 315.0" in out["inconsistent_legs"][0]
 
     # what may differ between the legs of one calculation does not stop the combination
-    write(tmp_path / "d", 0, "solvent", backend="cupotential", timestep_fs=4.0, n_states=14, **usual)
+    write(tmp_path / "d", 0, "solvent", backend="cupotential", timestep_fs=4.0, n_states=14, **whole)
     write(tmp_path / "d", 0, "complex", backend="openmm", timestep_fs=2.0, n_states=19, rest2={"scale": 1.5},
-          origin_not_recorded=["the prepared systems", "the samples"], **usual)
+          origin_not_recorded=["the prepared systems", "the samples"], **whole)
     out = combine_ligand(tmp_path / "d", "lig", 1)
     assert out["dg_bind"] == pytest.approx((80.0 - 160.0) / 4.184) and out["inconsistent_legs"] == []
     # a leg that used files of an earlier version whose origin is not recorded is named in the ligand's result
@@ -360,9 +368,30 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     write(tmp_path / "e", 0, "complex", temperature_K=298.15)
     out = combine_ligand(tmp_path / "e", "lig", 1)
     assert "dg_bind" in out and out["inconsistent_legs"] == []
-    assert out["not_compared"] == ["temperature (K): not recorded for the solvent leg",
-                                   "correction for the dispersion tail: not recorded for the complex leg, the solvent leg"]
-    assert sum("could not be compared between the legs" in w for w in out["warnings"]) == 2
+    assert out["not_compared"] == [
+        "temperature (K): not recorded for the solvent leg",
+        "pressure (bar): not recorded for the complex leg, the solvent leg",
+        "prepared systems (input, force field, solvation): not recorded for the complex leg, the solvent leg",
+        "correction for the dispersion tail: not recorded for the complex leg, the solvent leg"]
+    assert sum("could not be compared between the legs" in w for w in out["warnings"]) == 4
+
+    # before anything is sampled: a leg is not run under other conditions than the finished legs that
+    # this run does not sample and that it would be combined with
+    from cufep.config.schema import Config
+    from cufep.workflow import WorkflowError, check_partner_legs
+
+    def config(temperature):
+        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                      "thermodynamics": {"temperature_K": temperature}})
+
+    write(tmp_path / "f", 0, "solvent", pressure_bar=1.0, **usual)
+    with pytest.raises(WorkflowError, match="temperature .K.: the solvent leg of repeat 0, which is finished and not "
+                                            "part of this run, was made at 298.15; this run uses 315.0.*Nothing was run"):
+        check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(315.0))
+    check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))                 # the same conditions
+    check_partner_legs(tmp_path / "f", "lig", {(0, "complex"), (0, "solvent")}, 1, config(315.0))  # its own samples decide
+    with pytest.raises(WorkflowError, match="the solvent leg of repeat 0"):                        # a further repeat
+        check_partner_legs(tmp_path / "f", "lig", {(1, "complex"), (1, "solvent")}, 2, config(315.0))
 
 
 def test_a_leg_whose_analysis_gave_no_free_energy_is_a_failed_leg(tmp_path):

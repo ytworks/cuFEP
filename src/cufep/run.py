@@ -12,7 +12,8 @@ from cufep.config.schema import Config, dump_config
 from cufep import mps
 from cufep.analysis.plots import plot_repeat
 from cufep.scheduler import GpuMonitor, run_jobs
-from cufep.workflow import KCAL, LegJob, WorkflowError, _Log, combine_ligand, prepare_ligand, safe_name
+from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_partner_legs, combine_ligand, prepare_ligand,
+                            refresh_leg_result, safe_name)
 
 
 def plan(cfg: Config, log=print) -> tuple[Config, AutoReport, object, list]:
@@ -118,16 +119,20 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     gpus = list(resolved.resources.gpus) if resolved.resources.gpus else [None]
     cfg_dict = resolved.model_dump(mode="json")
 
-    lig_dirs = {}
+    lig_dirs = {lig.name: out_dir / safe_name(lig.name) for lig in ligands}
     to_run = {name for name, _, _ in selected}
+    repeats = resolved.sampling.repeats
+    # before anything is sampled: the finished legs that are not part of this run must be legs of
+    # the same calculation
     for lig in ligands:
-        lig_dir = out_dir / safe_name(lig.name)
         if lig.name in to_run:
-            prepare_ligand(resolved, lig, protein, lig_dir, membrane, resolved.solvation.box_shape, log)
-        lig_dirs[lig.name] = lig_dir
+            check_partner_legs(lig_dirs[lig.name], lig.name, {(r, leg) for name, r, leg in selected if name == lig.name},
+                               repeats, resolved)
+    for lig in ligands:
+        if lig.name in to_run:
+            prepare_ligand(resolved, lig, protein, lig_dirs[lig.name], membrane, resolved.solvation.box_shape, log)
 
     t_prepared = time.time()
-    repeats = resolved.sampling.repeats
     sizes = {name: json.loads((lig_dirs[name] / "prep" / "prep.json").read_text()) for name in to_run}
     jobs = [LegJob(ligand=name, leg=leg, repeat=r, lig_dir=str(lig_dirs[name]), devices=[], config=cfg_dict,
                    production_ns=resolved.sampling.production(leg), reschedule=reschedule,
@@ -156,7 +161,13 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, daemon is not None, log,
                  file_name="timing_rerun.json" if partial else "timing.json")
 
-    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats) if lig_dirs[lig.name].exists()
+    # legs that this run did not sample keep the result of an earlier run: where that is of
+    # another analysis (version of the method, settings), it is made again from the samples
+    for lig in ligands:
+        for r in range(repeats):
+            for leg in ("complex", "solvent"):
+                refresh_leg_result(lig_dirs[lig.name] / f"repeat_{r}" / leg, resolved.analysis, log)
+    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats, resolved.analysis) if lig_dirs[lig.name].exists()
                else {"ligand": lig.name, "units": "kcal/mol", "n_repeats": 0, "warnings": ["not run"]}
                for lig in ligands]
     for s in summary:
@@ -183,6 +194,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
             log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}"
                 + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
                 + unreliable
+                + (f"; OLD ANALYSIS: {', '.join(item.split(':')[0] for item in s['old_analysis'])}"
+                   if s.get("old_analysis") else "")
                 + (f"; few independent samples: {', '.join(s['few_samples'])}" if s.get("few_samples") else "")
                 + (f"; halves of the production differ: {', '.join(s['halves_differ'])}" if s.get("halves_differ") else "")
                 + (f"; halves not compared: {', '.join(s['halves_not_compared'])}" if s.get("halves_not_compared") else "")
@@ -218,12 +231,13 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
         w = csv.writer(fh)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
                     "lowest_overlap", "lowest_overlap_of_the_samples_used", "failed_legs", "inconsistent_legs",
-                    "not_reliable", "few_samples", "halves_differ", "halves_not_compared", "warnings"])
+                    "old_analysis", "not_reliable", "few_samples", "halves_differ", "halves_not_compared", "warnings"])
         for s in summary:
             w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
                         _fmt(s.get("min_overlap")), _fmt(s.get("min_overlap_used")),
                         "; ".join(s.get("failed_legs", [])), "; ".join(s.get("inconsistent_legs", [])),
+                        "; ".join(item.split(":")[0] for item in s.get("old_analysis", [])),
                         "; ".join(s.get("not_reliable", [])),
                         "; ".join(s.get("few_samples", [])), "; ".join(s.get("halves_differ", [])),
                         "; ".join(s.get("halves_not_compared", [])),
