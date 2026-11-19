@@ -148,10 +148,30 @@ class SharedArrays:
             self.directory = None
 
 
+#: what a random stream of a worker is for
+INTEGRATOR_STREAM, BAROSTAT_STREAM = 0, 1
+
+
+def stream_seed(seed: int, start: int, worker_id: int, purpose: int = INTEGRATOR_STREAM) -> int:
+    """The seed of one random stream of a leg, in 1 ... 2**31 - 1.
+
+    A stream belongs to one worker of one start of the leg: ``start`` counts how often the leg
+    has been started (0 for a new run, one more each time it is resumed or continued from a
+    checkpoint), ``worker_id`` is never used twice within a start, ``purpose`` separates the
+    integrator from the barostat. A worker that is created again therefore never draws the
+    numbers an earlier one drew: a seed made of the leg's seed and the worker's number alone
+    repeated the thermal noise of a leg from its beginning whenever the leg was resumed. Zero is
+    avoided because the cuPotential plugin reads it as "a new seed every time".
+    """
+    entropy = [int(seed) & 0x7FFFFFFF, int(start), int(worker_id), int(purpose)]
+    return int(np.random.SeedSequence(entropy).generate_state(1)[0] & 0x7FFFFFFF) or 1
+
+
 class ReplicaWorker:
     """Owns one Context and advances replicas on request."""
 
-    def __init__(self, spec: LegSpec, device: int | None, arrays: SharedArrays, worker_id: int = 0) -> None:
+    def __init__(self, spec: LegSpec, device: int | None, arrays: SharedArrays, worker_id: int = 0,
+                 start: int = 0) -> None:
         import openmm as mm
         import openmm.unit as u
 
@@ -168,15 +188,17 @@ class ReplicaWorker:
         self.backend = get_backend(spec.backend, **kwargs)
         system = self.backend.prepare_system(mm.XmlSerializer.deserialize(spec.system_xml))
         temperature = spec.temperature_K * u.kelvin
-        seed = int(spec.seed) + 1000003 * (worker_id + 1)
+        self.start = int(start)
+        seed = stream_seed(spec.seed, start, worker_id, INTEGRATOR_STREAM)
+        barostat_seed = stream_seed(spec.seed, start, worker_id, BAROSTAT_STREAM)
         if spec.pressure_bar is not None and spec.barostat != "none":
             pressure = spec.pressure_bar * u.bar
             if spec.barostat == "membrane":
                 system.addForce(self.backend.make_membrane_barostat(pressure, temperature,
-                                                                    spec.barostat_frequency, seed=seed + 1))
+                                                                    spec.barostat_frequency, seed=barostat_seed))
             else:
                 system.addForce(self.backend.make_isotropic_barostat(pressure, temperature,
-                                                                     spec.barostat_frequency, seed=seed + 1))
+                                                                     spec.barostat_frequency, seed=barostat_seed))
         self.integrator = self.backend.make_integrator(temperature, spec.friction_per_ps / u.picosecond,
                                                        spec.timestep_fs * u.femtoseconds, seed=seed)
         self.context = self.backend.make_context(system, self.integrator, device)
@@ -249,7 +271,7 @@ class ReplicaWorker:
         del self.integrator
 
 
-def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker_id: int) -> None:
+def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker_id: int, start: int = 0) -> None:
     """Entry point of a worker process."""
     os.environ["OPENMM_CPU_THREADS"] = str(spec.cpu_threads)
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
@@ -263,7 +285,7 @@ def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker
     try:
         if shm_names:                                    # none for workers that only run single windows
             arrays = SharedArrays(len(spec.states), spec.n_atoms, len(spec.states), names=shm_names)
-        worker = ReplicaWorker(spec, device, arrays, worker_id)
+        worker = ReplicaWorker(spec, device, arrays, worker_id, start)
         conn.send(("ready", worker.describe()))
         while True:
             msg = conn.recv()

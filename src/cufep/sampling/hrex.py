@@ -70,12 +70,13 @@ def mix_replicas(u: np.ndarray, state_of_replica: np.ndarray, rng: np.random.Gen
 class _Process:
     """A worker in its own process."""
 
-    def __init__(self, ctx, spec: LegSpec, device, shm_names: dict, worker_id: int) -> None:
+    def __init__(self, ctx, spec: LegSpec, device, shm_names: dict, worker_id: int, start: int = 0) -> None:
         self.parent, child = ctx.Pipe()
-        self.proc = ctx.Process(target=worker_main, args=(child, spec, device, shm_names, worker_id), daemon=True)
+        self.proc = ctx.Process(target=worker_main, args=(child, spec, device, shm_names, worker_id, start),
+                                daemon=True)
         self.proc.start()
         child.close()
-        self.device, self.worker_id = device, worker_id
+        self.device, self.worker_id, self.start = device, worker_id, start
 
     def wait_ready(self, timeout: float) -> str:
         if not self.parent.poll(timeout):
@@ -175,9 +176,9 @@ class WindowPool:
 class _Inline:
     """A worker in the controller's own process (tests, CPU platforms)."""
 
-    def __init__(self, spec: LegSpec, device, arrays: SharedArrays, worker_id: int) -> None:
-        self.worker = ReplicaWorker(spec, device, arrays, worker_id)
-        self.device, self.worker_id = device, worker_id
+    def __init__(self, spec: LegSpec, device, arrays: SharedArrays, worker_id: int, start: int = 0) -> None:
+        self.worker = ReplicaWorker(spec, device, arrays, worker_id, start)
+        self.device, self.worker_id, self.start = device, worker_id, start
         self._pending = None
 
     def wait_ready(self, timeout: float) -> str:
@@ -224,6 +225,9 @@ class ReplicaExchangeSampler:
             self._write_meta()
         self.workers: list = []
         self._next_worker_id = 0
+        #: how often this leg has been started: 0 for a new run, one more with every resume from a
+        #: checkpoint (stored in the checkpoint). Part of the seed of every worker, see stream_seed
+        self.start_number = 0
         self._iter_seconds: float | None = None
         #: seconds the workers were busy, summed, and (iteration, devices) whenever the workers changed
         self.busy_seconds = 0.0
@@ -239,10 +243,11 @@ class ReplicaExchangeSampler:
         n = min(len(self.devices), self.k)
         self.devices = self.devices[:n]
         if self.inline:
-            self.workers = [_Inline(self.spec, self.devices[w], self.arrays, w) for w in range(n)]
+            self.workers = [_Inline(self.spec, self.devices[w], self.arrays, w, self.start_number) for w in range(n)]
         else:
             ctx = mp.get_context("spawn")
-            self.workers = [_Process(ctx, self.spec, self.devices[w], self.arrays.names, w) for w in range(n)]
+            self.workers = [_Process(ctx, self.spec, self.devices[w], self.arrays.names, w, self.start_number)
+                            for w in range(n)]
         self._next_worker_id = n
         for w in self.workers:
             described = w.wait_ready(600.0)
@@ -293,7 +298,7 @@ class ReplicaExchangeSampler:
         new = []
         for d, n in wanted.items():
             for _ in range(n):
-                new.append(_Process(ctx, self.spec, d, self.arrays.names, self._next_worker_id))
+                new.append(_Process(ctx, self.spec, d, self.arrays.names, self._next_worker_id, self.start_number))
                 self._next_worker_id += 1
         for w in new:
             w.wait_ready(600.0)
@@ -341,7 +346,9 @@ class ReplicaExchangeSampler:
         """
         if self.unrecorded:
             self.storage.refuse_unrecorded()
+        self._refuse_with_workers("initialize")
         self.iteration = 0
+        self.start_number = 0
         self.state_of_replica = np.arange(self.k)
         self.storage.truncate(0)
         self.storage.clear_plan()
@@ -363,6 +370,7 @@ class ReplicaExchangeSampler:
         """Resume from the checkpoint in the storage directory, if there is one."""
         if self.unrecorded:
             self.storage.refuse_unrecorded()
+        self._refuse_with_workers("restore")
         ckpt = self.storage.read_checkpoint()
         if ckpt is None:
             return False
@@ -373,12 +381,19 @@ class ReplicaExchangeSampler:
         self.arrays.box[self.cur] = ckpt["boxes"]
         self.state_of_replica = ckpt["state_of_replica"].astype(int)
         self.iteration = ckpt["iteration"]
+        # one more start of this leg: its workers get random streams that no earlier start used
+        self.start_number = int((ckpt.get("extra") or {}).get("start", 0)) + 1
         self.storage.truncate(self.iteration)
         return True
 
+    def _refuse_with_workers(self, what: str) -> None:
+        if self.workers:
+            raise SamplerError(f"{what}() after the workers of this sampler were started: their random streams "
+                               "belong to the start they were created for; create a new sampler")
+
     def checkpoint(self) -> None:
         self.storage.write_checkpoint(self.arrays.pos[self.cur], self.arrays.vel[self.cur], self.arrays.box[self.cur],
-                                      self.state_of_replica, self.iteration)
+                                      self.state_of_replica, self.iteration, extra={"start": self.start_number})
 
     def current_configurations(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Copies of (positions, boxes, state_of_replica)."""
@@ -399,8 +414,13 @@ class ReplicaExchangeSampler:
         except Exception:  # noqa: BLE001
             pass
         ctx = mp.get_context("spawn")
-        self.workers[w] = _Process(ctx, self.spec, old.device, self.arrays.names, old.worker_id)
-        self.log(f"[{self.spec.name}] worker {old.worker_id} restarted: {self.workers[w].wait_ready(600.0)}")
+        # a new number, and with it a new random stream: with the old one the worker would draw the
+        # thermal noise of its first iterations again
+        self.workers[w] = _Process(ctx, self.spec, old.device, self.arrays.names, self._next_worker_id,
+                                   self.start_number)
+        self._next_worker_id += 1
+        self.log(f"[{self.spec.name}] worker {old.worker_id} restarted as worker {self.workers[w].worker_id}: "
+                 f"{self.workers[w].wait_ready(600.0)}")
 
     def _advance(self, record: bool, steps: int | None) -> list[dict]:
         """One iteration on every worker.

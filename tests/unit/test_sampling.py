@@ -520,6 +520,101 @@ def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
     assert min(res.window_kept_samples) >= 1 and max(res.window_kept_samples) <= 10
 
 
+def test_a_resumed_leg_does_not_repeat_its_thermal_noise(tmp_path, monkeypatch):
+    """Review of PR 1: a leg resumed from its checkpoint drew the Langevin noise of its first steps again.
+
+    The seed of a worker was made of the seed of the leg and the number of the worker, and a resumed leg
+    numbers its workers from 0 again. Particles without forces show the noise directly: with the
+    LangevinMiddle integrator v(t + dt) = exp(-gamma dt) v(t) + noise.
+    """
+    import shutil
+
+    import cufep.sampling.hrex as hrex
+    from cufep.sampling.hrex import SamplerError
+    from cufep.sampling.states import AlchemicalState
+    from cufep.sampling.worker import BAROSTAT_STREAM, stream_seed
+
+    system = mm.System()
+    for _ in range(4):
+        system.addParticle(12.0)
+    spec = LegSpec(name="free", system_xml=mm.XmlSerializer.serialize(system),
+                   states=[AlchemicalState().to_dict(), AlchemicalState(lambda_sterics=0.5).to_dict()], n_atoms=4,
+                   backend="openmm", platform="CPU", precision="mixed", temperature_K=298.15, pressure_bar=None,
+                   barostat="none", friction_per_ps=1.0, timestep_fs=2.0, steps_per_iteration=1, seed=11)
+    decay = np.exp(-1.0 * 0.002)
+
+    def sampler(directory):
+        return ReplicaExchangeSampler(spec, directory, devices=[None], inline=True, exchange=False, log=lambda m: None)
+
+    def noise_of_steps(s, n):
+        v = [s.arrays.vel[s.cur].copy()]
+        for _ in range(n):
+            s.run(1, record_stride=0, checkpoint_stride=1000)       # one step, and a checkpoint at its end
+            v.append(s.arrays.vel[s.cur].copy())
+        v = np.array(v)
+        return v[1:] - decay * v[:-1]
+
+    def fresh(directory):
+        with sampler(directory) as s:
+            s.initialize(np.zeros((4, 3)), 3.0 * np.eye(3), velocities=np.zeros((4, 3)))
+            assert s.start_number == 0
+            noise = noise_of_steps(s, 10)
+            assert s.storage.read_checkpoint()["extra"] == {"start": 0}
+            with pytest.raises(SamplerError, match="after the workers of this sampler were started"):
+                s.restore()
+            return noise
+
+    def resumed(directory, start):
+        with sampler(directory) as s:
+            assert s.restore() and s.start_number == start
+            noise = noise_of_steps(s, 10)
+            assert s.storage.read_checkpoint()["extra"] == {"start": start}
+            return noise
+
+    def correlation(a, b):
+        return abs(float(np.corrcoef(a.ravel(), b.ravel())[0, 1]))
+
+    first = fresh(tmp_path / "a")
+    assert np.array_equal(first, fresh(tmp_path / "b"))             # the same seed gives the same run
+    # it is the thermal noise: sqrt(1 - decay^2) * sqrt(kT / m) = 0.029 nm/ps for 12 Da at 298 K
+    assert first.std() == pytest.approx(np.sqrt(1 - decay ** 2) * np.sqrt(8.31446e-3 * 298.15 / 12.0), rel=0.25)
+    shutil.copytree(tmp_path / "a", tmp_path / "c")
+    second = resumed(tmp_path / "a", 1)
+    assert np.array_equal(second, resumed(tmp_path / "c", 1))       # a resume from the same checkpoint too
+    assert correlation(first, second) < 0.3                         # it was 1.000: the same numbers again
+    third = resumed(tmp_path / "a", 2)                              # and every further start has its own
+    assert correlation(first, third) < 0.3 and correlation(second, third) < 0.3
+    # a checkpoint of a version that did not count the starts: the leg has started once before
+    with sampler(tmp_path / "b") as s:
+        s.storage.write_checkpoint(s.arrays.pos[0], s.arrays.vel[0], s.arrays.box[0], np.arange(2), 10)
+        assert s.restore() and s.start_number == 1
+
+    # the seeds: within the range of OpenMM and of the plugin, never zero, one per start, worker and purpose
+    seeds = {stream_seed(11, start, worker, purpose) for start in range(3) for worker in range(40)
+             for purpose in (0, BAROSTAT_STREAM)}
+    assert len(seeds) == 240 and all(1 <= value < 2 ** 31 for value in seeds)
+    assert 1 <= stream_seed(-5, 0, 0) < 2 ** 31                     # a negative seed in the configuration
+
+    # a worker that is started again in the middle of a run gets a new number, and with it a new stream
+    class Fake:
+        def __init__(self, ctx, spec, device, names, worker_id, start=0):
+            self.device, self.worker_id, self.start = device, worker_id, start
+
+        def wait_ready(self, timeout):
+            return "ready"
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(hrex, "_Process", Fake)
+    with ReplicaExchangeSampler(spec, tmp_path / "r", devices=[None, None], inline=False, log=lambda m: None) as s:
+        s.start_number = 3
+        s.workers, s._next_worker_id = [Fake(None, spec, None, None, 0, 3), Fake(None, spec, None, None, 1, 3)], 2
+        s._restart_worker(0)
+        assert (s.workers[0].worker_id, s.workers[0].start, s._next_worker_id) == (2, 3, 3)
+        assert s.workers[1].worker_id == 1
+
+
 def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tmp_path, tiny_leg):
     """Review of PR 1: a leg ended at 300 K was reopened at 315 K and analysed as if nothing had changed."""
     import dataclasses
