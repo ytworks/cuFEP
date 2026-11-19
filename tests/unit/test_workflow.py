@@ -824,6 +824,121 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
                         prep_info, 0.01)
 
 
+def test_samples_without_a_record_of_their_settings_are_checked_before_anything_is_written(tmp_path, monkeypatch, ligands):
+    """Review of PR 1: one version of cuFEP recorded the conditions of the samples with a checksum of the
+    System and without the settings behind it. A run with another soft-core passed the checks before the
+    run; the sampler then found the other System, when resolved_config.yaml was already rewritten, the
+    finished result moved away and the leg marked as failed."""
+    import hashlib
+    from pathlib import Path
+
+    import openmm as mm
+    import openmm.app as app
+    import openmm.unit as unit
+
+    import cufep.run as driver
+    from cufep.alchemy.factory import make_alchemical_system
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.config.auto import AutoReport
+    from cufep.config.schema import Config
+    from cufep.sampling.storage import ConditionsError, LegStorage
+    from cufep.workflow import (WorkflowError, _write_system, alchemical_leg, check_leg_reuse, conditions_of_this_run,
+                                equil_made_with, leg_seed, leg_spec, load_prepared, prep_made_from)
+
+    lig = ligands[0]
+    out = tmp_path / "out"
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": str(tmp_path / "p.pdb"), "ligand": "l.sdf"},
+                                      "output": {"dir": str(out)}, "resources": {"gpus": []},
+                                      "solvation": {"box_shape": "dodecahedron"}, **sections})
+
+    first, other = config(), config(alchemy={"softcore_alpha": 0.8})
+    assert first.alchemy.softcore_alpha == 0.5
+    # the prepared solvent system of the ligand: a small water box in which one molecule is the ligand
+    ff = app.ForceField("amber14/tip3p.xml")
+    mod = app.Modeller(app.Topology(), [])
+    mod.addSolvent(ff, boxSize=mm.Vec3(2.0, 2.0, 2.0) * unit.nanometer)
+    system = ff.createSystem(mod.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * unit.nanometer,
+                             constraints=app.HBonds, rigidWater=True)
+    ligand_atoms = [a.index for a in list(mod.topology.residues())[10].atoms()]
+    lig_dir = out / lig.name
+    (lig_dir / "prep").mkdir(parents=True)
+    _write_system(lig_dir / "prep", "solvent", mod, system, ligand_atoms)
+    prep_info = {"ligand": lig.name, "complex_barostat": "isotropic", "membrane": False, "box_shape": "dodecahedron",
+                 "made_from": prep_made_from(first, lig, False, "dodecahedron")}
+    (lig_dir / "prep" / "prep.json").write_text(json.dumps(prep_info))
+    # what an earlier run of the leg left: pre-equilibration, lambda windows, samples and a result
+    leg_dir = lig_dir / "repeat_0" / "solvent"
+    leg_dir.mkdir(parents=True)
+    box = np.diag([1.9, 1.9, 1.9])
+    np.savez(leg_dir / "equil.npz", box=box, timestep_fs=2.0, simulated_ns=0.2,
+             made_with=json.dumps(equil_made_with(first, "solvent", False, leg_seed(first, 0, "solvent"))))
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 2}, rest2_scale=first.sampling.rest2.scale)
+    schedule.save(leg_dir / "schedule.yaml", leg="solvent")
+    states = [state.to_dict() for state in schedule.states]
+
+    # the System as the run of a leg made it before the function existed: box, alchemical System, XML
+    prep = load_prepared(lig_dir / "prep", "solvent")
+    by_hand = mm.XmlSerializer.deserialize(prep["system_xml"])
+    by_hand.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])
+    alch = make_alchemical_system(by_hand, prep["ligand"], 0.5, rest2=True, rest2_atoms=[],
+                                  bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()])
+    checksum = hashlib.sha256(mm.XmlSerializer.serialize(alch.system).encode()).hexdigest()
+    built = alchemical_leg(first, mm.XmlSerializer.deserialize(prep["system_xml"]), prep, box, None, False)
+    assert hashlib.sha256(built.xml.encode()).hexdigest() == checksum and built.rest2_on and built.hot_atoms == []
+    assert built.tail["long_cutoff_nm"] == 2.0                    # analysis.lrc: reweight is the default
+    spec = leg_spec(first, built, states, "isotropic", 2.0, "openmm", 7, name="a leg", frame_atoms=[1, 2])
+    assert spec.name == "a leg" and spec.seed == 7 and spec.frame_atoms == [1, 2] and spec.steps_per_iteration == 1250
+    assert spec.settings["alchemy"]["softcore_alpha"] == 0.5 and spec.conditions()["system_sha256"] == checksum
+    current = conditions_of_this_run(first, lig_dir, "solvent", 0, prep_info, "openmm", 6)
+    assert current == spec.conditions()
+
+    # the samples of that version: all conditions, the tail with all its parameters, no settings
+    conditions = dict(current, lrc=built.tail)
+    del conditions["settings"]
+    storage = LegStorage(leg_dir / "hrex", len(states), len(states))
+    assert storage.check_conditions(conditions) == "new"
+    for _ in range(6):
+        storage.append(np.zeros((len(states), len(states))), np.arange(len(states)), np.ones(len(states)))
+    storage.close()
+    (leg_dir / "result.json").write_text(json.dumps({"leg": "solvent", "delta_g_decouple": 1.0}))
+
+    check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)                # the run that made them
+    refusal = "made under other conditions than this run asks for .the System .force field, soft-core, restraint or " \
+              "REST2 region.*They are left as they are"
+    with pytest.raises(ConditionsError, match=refusal):
+        check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0)
+    # another temperature is refused by the pre-equilibration already, before a System is built
+    with pytest.raises(WorkflowError, match="the pre-equilibration of this leg.*temperature_K: 298.15 -> 310.0"):
+        check_leg_reuse(config(thermodynamics={"temperature_K": 310.0}), lig_dir, "solvent", 0, prep_info, 10.0)
+    check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0, reschedule=True)      # the leg starts anew
+
+    # a run with the other soft-core is refused before anything is written
+    class Protein:
+        def write_pdb(self, path):
+            Path(path).write_text("ATOM")
+
+    monkeypatch.setattr(driver, "plan", lambda cfg, log: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
+    monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: pytest.fail("the run was not refused"))
+    (out / "resolved_config.yaml").write_text("the record of the run that made the samples")
+    before = {path: path.read_bytes() for path in (out / "resolved_config.yaml", leg_dir / "result.json",
+                                                   leg_dir / "hrex" / "samples.h5")}
+    log = []
+    with pytest.raises(ConditionsError, match=refusal):
+        driver._run(other, out, False, log.append)
+    assert all(path.read_bytes() == content for path, content in before.items())
+    assert not (leg_dir / "started.json").exists() and not (leg_dir / "result.previous.json").exists()
+    assert (out / "resolved_config.refused.yaml").exists() and any(line.startswith("refused: ") for line in log)
+
+    # without a file from which the System is built, nothing shows that the conditions are the same
+    (leg_dir / "schedule.yaml").rename(leg_dir / "schedule.kept")
+    with pytest.raises(ConditionsError, match="recorded a checksum of their System and not the settings behind it.*"
+                                              "the lambda schedule .schedule.yaml. of this leg is not there. Nothing "
+                                              "was changed"):
+        check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
+
+
 def test_a_run_can_be_restricted_to_ligands_and_legs():
     from cufep.run import select_jobs
     from cufep.workflow import WorkflowError

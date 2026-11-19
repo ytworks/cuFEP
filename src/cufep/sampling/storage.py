@@ -40,6 +40,49 @@ def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
         return n, json.loads(h5.attrs["conditions"])
 
 
+def conditions_differences(stored: dict, current: dict) -> list[str]:
+    """What differs between the conditions stored with samples and those of a run, in words.
+
+    Everything the samples record is compared; what they do not record (a key of a later
+    version) is not.
+    """
+    differing = []
+    for key, old in stored.items():
+        new = current.get(key)
+        if key == "lrc" and isinstance(old, dict) and "env" in old:
+            # samples of a version that stored all parameters of the tail: compared as their summary
+            from cufep.sampling.worker import tail_summary
+            old = tail_summary(old)
+        if _same(old, new):
+            continue
+        if key == "states":
+            differing.append("the lambda states")
+        elif key == "system_sha256":
+            differing.append("the System (force field, soft-core, restraint or REST2 region)")
+        elif key == "lrc" and isinstance(old, dict) and isinstance(new, dict):
+            radii = [f"{name}: {old.get(name)} -> {new.get(name)}" for name in ("cutoff_nm", "long_cutoff_nm")
+                     if not _same(old.get(name), new.get(name))]
+            differing += [f"the tail correction ({'; '.join(radii)})"] if radii else \
+                ["the Lennard-Jones parameters of the ligand's dispersion tail"]
+        elif key == "lrc":
+            differing.append("the tail correction (recorded with the samples or not)")
+        elif key == "settings" and isinstance(old, dict) and isinstance(new, dict):
+            differing += [f"{name}: {old.get(name)} -> {new.get(name)}"
+                          for name in sorted(set(old) | set(new)) if not _same(old.get(name), new.get(name))]
+        else:
+            differing.append(f"{key}: {old} -> {new}")
+    return differing
+
+
+def other_conditions(n_iterations: int, directory, differing: list[str]) -> "ConditionsError":
+    """The refusal to continue samples under other conditions than they were made under."""
+    return ConditionsError(
+        f"the {n_iterations} iterations of samples in {directory} were made under other conditions than "
+        f"this run asks for ({'; '.join(differing)}). They are left as they are. A calculation under other "
+        "conditions needs a new output.dir; only the lambda windows of a leg can be determined again in "
+        "place, with --reschedule.")
+
+
 def stored_backend(directory: str | Path) -> str | None:
     """Backend with which the samples in ``directory`` were made, or None if there are none."""
     path = Path(directory) / "samples.h5"
@@ -108,39 +151,10 @@ class LegStorage:
             return "new"
         if "conditions" not in self.h5.attrs:
             return "unrecorded"
-        stored, kind = json.loads(self.h5.attrs["conditions"]), "same"
-        current = conditions
-        differing = []
-        for key, old in stored.items():
-            new = current.get(key)
-            if key == "lrc" and isinstance(old, dict) and "env" in old:
-                # samples of a version that stored all parameters of the tail: compared as their summary
-                from cufep.sampling.worker import tail_summary
-                old = tail_summary(old)
-            if not _same(old, new):
-                if key == "states":
-                    differing.append("the lambda states")
-                elif key == "system_sha256":
-                    differing.append("the System (force field, restraint or REST2 region)")
-                elif key == "lrc" and isinstance(old, dict) and isinstance(new, dict):
-                    radii = [f"{name}: {old.get(name)} -> {new.get(name)}" for name in ("cutoff_nm", "long_cutoff_nm")
-                             if not _same(old.get(name), new.get(name))]
-                    differing += [f"the tail correction ({'; '.join(radii)})"] if radii else \
-                        ["the Lennard-Jones parameters of the ligand's dispersion tail"]
-                elif key == "lrc":
-                    differing.append("the tail correction (recorded with the samples or not)")
-                elif key == "settings" and isinstance(old, dict) and isinstance(new, dict):
-                    differing += [f"{name}: {old.get(name)} -> {new.get(name)}"
-                                  for name in sorted(set(old) | set(new)) if not _same(old.get(name), new.get(name))]
-                else:
-                    differing.append(f"{key}: {old} -> {new}")
+        differing = conditions_differences(json.loads(self.h5.attrs["conditions"]), conditions)
         if differing:
-            raise ConditionsError(
-                f"the {self.n_iterations} iterations of samples in {self.dir} were made under other conditions than "
-                f"this run asks for ({'; '.join(differing)}). They are left as they are. A calculation under other "
-                "conditions needs a new output.dir; only the lambda windows of a leg can be determined again in "
-                "place, with --reschedule.")
-        return kind
+            raise other_conditions(self.n_iterations, self.dir, differing)
+        return "same"
 
     def refuse_unrecorded(self) -> None:
         """Raise: samples whose conditions were not recorded are not continued."""

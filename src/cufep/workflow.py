@@ -284,6 +284,110 @@ def samples_settings(cfg: Config) -> dict:
             "tail": None if cfg.analysis.lrc == "none" else {"cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}}
 
 
+def alchemical_leg(cfg: Config, system, prep: dict, box, restraint, is_complex: bool):
+    """The alchemical System of a leg as its samples are made with it, and what belongs to it.
+
+    One function for the run of a leg (:func:`run_leg`) and for the check before a run
+    (:func:`check_leg_reuse`), so that both get the same System to the byte of its XML, which is
+    what the checksum in the conditions of the samples is taken of. The order is part of that:
+    the equilibrated ``box`` is set on the prepared ``system`` of the leg (which is changed), the
+    alchemical System is made from it, the force of the ``restraint`` (None for the solvent leg)
+    is added, and the result is serialised. Needs no GPU.
+
+    Returns a namespace: ``alch`` (:func:`cufep.alchemy.factory.make_alchemical_system`), ``xml``,
+    ``tail`` (the record of the tail correction, None with ``analysis.lrc: none``), ``rest2_on``,
+    ``hot_atoms`` and ``hot_residues`` (the protein part of the REST2 region).
+    """
+    from types import SimpleNamespace
+
+    import openmm as mm
+
+    from cufep.alchemy.factory import make_alchemical_system
+    from cufep.alchemy.lrc import TailEnergy
+
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])      # the equilibrated box
+    rest2 = cfg.sampling.rest2
+    rest2_on = rest2.scale > 1.0
+    hot_atoms, hot_residues = ([], [])
+    if rest2_on and is_complex:
+        hot_atoms, hot_residues = rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"],
+                                               prep["protein"])
+    alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha, rest2=rest2_on,
+                                  rest2_atoms=hot_atoms,
+                                  bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()])
+    if restraint is not None:
+        alch.system.addForce(restraint.create_force())
+    xml = mm.XmlSerializer.serialize(alch.system)
+    tail = None
+    if cfg.analysis.lrc in ("reweight", "isotropic"):
+        tail = TailEnergy.from_system(system, prep["ligand"], alch.ligand_parameters, cfg.dynamics.cutoff_nm,
+                                      cfg.analysis.lrc_cutoff_nm).to_dict()
+    return SimpleNamespace(alch=alch, xml=xml, tail=tail, rest2_on=rest2_on, hot_atoms=hot_atoms,
+                           hot_residues=hot_residues)
+
+
+def leg_spec(cfg: Config, built, states: list[dict], barostat: str, timestep_fs: float, backend_name: str, seed: int,
+             **more):
+    """What the workers of a leg are given (:class:`cufep.sampling.worker.LegSpec`), from the
+    configuration and the alchemical System of the leg (:func:`alchemical_leg`).
+
+    Its ``conditions()`` are what the samples record, so the run of a leg and the check before a
+    run make it here, in one place. ``timestep_fs`` is the time step that was used in the
+    pre-equilibration, ``more`` what only a run needs (name, frame atoms, MPS share).
+    """
+    from cufep.sampling.worker import LegSpec
+
+    iteration_ps = cfg.sampling.time_per_iteration_ps
+    return LegSpec(
+        name=more.pop("name", "leg"), system_xml=built.xml, states=states, n_atoms=built.alch.system.getNumParticles(), backend=backend_name,
+        precision=_precision(cfg, backend_name), platform=cfg.backend.platform,
+        temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
+        barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
+        steps_per_iteration=max(1, int(round(iteration_ps * 1000.0 / timestep_fs))), seed=seed,
+        cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=built.tail, settings=samples_settings(cfg),
+        box_safety=1.3 if barostat == "membrane" else None, **more)
+
+
+def conditions_of_this_run(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info: dict, backend_name: str,
+                           n_stored: int) -> dict:
+    """The conditions under which this run would sample a leg that has files, made from those
+    files as :func:`run_leg` makes them, without a GPU and without writing anything.
+
+    For samples that record their conditions and not the settings behind them (one version of
+    cuFEP wrote such): nothing but the checksum of the System says what soft-core, restraint or
+    REST2 region they were made with, so the System of this run is built to compare it. Raises
+    ConditionsError if a file that is needed for that is not there.
+    """
+    import openmm as mm
+
+    from cufep.alchemy.restraints import BoreschRestraint
+    from cufep.alchemy.schedule import Schedule
+    from cufep.sampling.storage import ConditionsError
+
+    leg_dir = lig_dir / f"repeat_{repeat}" / leg
+    is_complex = leg == "complex"
+    needed = {"the prepared system": lig_dir / "prep" / f"{leg}_system.xml",
+              "the pre-equilibration": leg_dir / "equil.npz", "the lambda schedule": leg_dir / "schedule.yaml"}
+    if is_complex:
+        needed["the restraint"] = leg_dir / "restraint.json"
+    missing = [f"{name} ({path.name})" for name, path in needed.items() if not path.exists()]
+    if missing:
+        raise ConditionsError(
+            f"the {n_stored} iterations of samples in {leg_dir / 'hrex'} were written by a version of cuFEP that "
+            "recorded a checksum of their System and not the settings behind it. To see whether this run would "
+            f"continue them under the same conditions the System has to be built again, and {', '.join(missing)} "
+            "of this leg is not there. Nothing was changed. The samples can be analysed (cufep analyze); to sample "
+            "the leg anew, use --reschedule.")
+    prep = load_prepared(lig_dir / "prep", leg)
+    eq = np.load(leg_dir / "equil.npz")
+    restraint = BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]) \
+        if is_complex else None
+    built = alchemical_leg(cfg, mm.XmlSerializer.deserialize(prep["system_xml"]), prep, eq["box"], restraint, is_complex)
+    states = [state.to_dict() for state in Schedule.load(leg_dir / "schedule.yaml").states]
+    barostat = prep_info["complex_barostat"] if is_complex else "isotropic"
+    return leg_spec(cfg, built, states, barostat, float(eq["timestep_fs"]), backend_name, 0).conditions()
+
+
 def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info: dict, production_ns: float,
                     reschedule: bool = False, log=print) -> None:
     """Before a run writes or samples anything: what the leg directory holds must be usable by it.
@@ -294,7 +398,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     or ConditionsError.
     """
     from cufep.alchemy.schedule import Schedule
-    from cufep.sampling.storage import ConditionsError, _same, stored_conditions
+    from cufep.sampling.storage import _same, conditions_differences, other_conditions, stored_conditions
 
     leg_dir = lig_dir / f"repeat_{repeat}" / leg
     is_complex = leg == "complex"
@@ -343,12 +447,14 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
                  if key in conditions and not _same(conditions[key], value)]
     if isinstance(conditions.get("settings"), dict):
         differing += settings_differences(conditions["settings"], samples_settings(cfg))
+    elif not differing:
+        # samples that record their conditions without the settings behind them: all their conditions,
+        # with the checksum of the System, against those this run would sample under
+        current = conditions_of_this_run(cfg, lig_dir, leg, repeat, prep_info,
+                                         str(conditions.get("backend") or cfg.backend.name), n_stored)
+        differing = conditions_differences(conditions, current)
     if differing:
-        raise ConditionsError(
-            f"the {n_stored} iterations of samples in {leg_dir / 'hrex'} were made under other conditions than this "
-            f"run asks for ({'; '.join(differing)}). They are left as they are. A calculation under other conditions "
-            "needs a new output.dir; only the lambda windows of a leg can be determined again in place, with "
-            "--reschedule.")
+        raise other_conditions(n_stored, leg_dir / "hrex", differing)
 
 
 def check_prepared(cfg: Config, ligand, lig_dir: Path, membrane: bool, box_shape: str, log=print) -> dict | None:
@@ -771,8 +877,6 @@ def run_leg(job: LegJob) -> dict:
     import openmm as mm
     import openmm.unit as u
 
-    from cufep.alchemy.factory import make_alchemical_system
-    from cufep.alchemy.lrc import TailEnergy
     from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, find_boresch_restraint,
                                           ligand_symmetry_number, with_force_constants_from_fluctuations)
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
@@ -936,28 +1040,15 @@ def run_leg(job: LegJob) -> dict:
     timed("restraint", t_restraint)
 
     # ---- 3. alchemical System ------------------------------------------------------------------
-    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])      # the equilibrated box
+    built = alchemical_leg(cfg, system, prep, eq["box"], restraint, is_complex)
+    alch, alch_xml, tail = built.alch, built.xml, built.tail
     rest2 = cfg.sampling.rest2
-    rest2_on = rest2.scale > 1.0
-    hot_atoms, hot_residues = ([], [])
-    if rest2_on and is_complex:
-        hot_atoms, hot_residues = rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"],
-                                               prep["protein"])
-    alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha, rest2=rest2_on,
-                                  rest2_atoms=hot_atoms,
-                                  bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()])
+    rest2_on, hot_atoms, hot_residues = built.rest2_on, built.hot_atoms, built.hot_residues
     if rest2_on:
         log(f"REST2: hot region = ligand ({len(prep['ligand'])} atoms)"
             + (f" and {len(hot_atoms)} atoms of {len(hot_residues)} protein residues ({' '.join(hot_residues)})"
                if hot_atoms else "")
             + f"; {alch.rest2_torsions} torsion terms scaled; {rest2.scale:g} times the temperature in the middle of the leg")
-    if restraint is not None:
-        alch.system.addForce(restraint.create_force())
-    alch_xml = mm.XmlSerializer.serialize(alch.system)
-    tail = None
-    if cfg.analysis.lrc in ("reweight", "isotropic"):
-        tail = TailEnergy.from_system(system, prep["ligand"], alch.ligand_parameters, cfg.dynamics.cutoff_nm,
-                                      cfg.analysis.lrc_cutoff_nm).to_dict()
     backend_name, bnotes = _choose_backend(cfg, alch.system, log)
     notes += bnotes
     # samples of two backends are never mixed: a leg that has samples goes on with their backend
@@ -1068,16 +1159,9 @@ def run_leg(job: LegJob) -> dict:
                 f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a new one")
 
         # ---- 5. replica exchange -----------------------------------------------------------------
-        spec = LegSpec(
-            name=job.tag, system_xml=alch_xml, states=[s.to_dict() for s in schedule.states],
-            n_atoms=alch.system.getNumParticles(), backend=backend_name,
-            precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
-            pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
-            timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 17,
-            cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail, settings=samples_settings(cfg),
-            frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
-            box_safety=1.3 if barostat == "membrane" else None,
-            mps_thread_percentage=thread_percentage(job.oversubscription))
+        spec = leg_spec(cfg, built, [s.to_dict() for s in schedule.states], barostat, timestep_fs, backend_name,
+                        seed + 17, name=job.tag, frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
+                        mps_thread_percentage=thread_percentage(job.oversubscription))
         n_windows, total = len(schedule.states), n_equil + n_prod
         control = job.control
         # seconds one replica needs per iteration: a guess until the first iterations were timed
