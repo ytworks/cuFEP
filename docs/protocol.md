@@ -295,6 +295,12 @@ the candidates of adaptive lambda scheduling have it too: the precalculation run
 compares windows with their REST2 scaling, and adds windows where the scaling lowers the
 overlap.
 
+Only the free energy of a whole leg is a physical quantity then. The scale is not 1 where one
+stage ends and the next begins, so the free energies of the single stages in the results
+(`stage_delta_g`) contain the free energy of scaling the hot region up and down again: the
+restrain stage of a TYK2 complex leg reads about 59 kcal/mol with the default scale, the three
+stages together the 38 kcal/mol of the leg.
+
 How FEP+ differs: Desmond takes the temperatures of the windows from a ladder predicted for
 an exchange probability of 0.3 between neighbours (the predictor of Patriksson and van der
 Spoel on the atoms of the hot region), rising over the first half of the windows and falling
