@@ -491,6 +491,13 @@ def test_a_leg_too_short_for_time_blocks_reports_the_error_of_mbar(monkeypatch):
     assert whole.delta_g_error_n_blocks in (10, 5) and whole.delta_g_error_note == ""
     assert whole.delta_g_error_blocks["40"] is None and whole.delta_g_error == max(
         value for value in whole.delta_g_error_blocks.values() if value is not None)
+    # the numbers of blocks are settings of the analysis (analysis.error_blocks, halves_error_blocks)
+    three = analyze_leg({"u": u, "states": states}, 298.15, error_blocks=[6, 3, 3], halves_error_blocks=3)
+    assert list(three.delta_g_error_blocks) == ["6", "3"] and three.delta_g_error_n_blocks in (6, 3)
+    # a half holds six iterations: three blocks of two leave four samples, two blocks of three do not
+    assert three.halves_error_blocks == [3, 3] and three.delta_g == whole.delta_g
+    assert analyze_leg({"u": u, "states": states}, 298.15, halves_error_blocks=2).halves_error_blocks == [None, None]
+    assert three.delta_g_error == max(three.delta_g_error_blocks.values())
 
 
 def test_the_samples_check_counts_what_mbar_gets(monkeypatch):
@@ -1174,6 +1181,7 @@ def test_a_leg_whose_first_run_was_interrupted_is_judged_by_the_levels_of_that_r
                                  "membrane": {"area_tolerance": 0.02}, "restraints": {"pose_rmsd_warning_nm": 0.2}})
     record = analysis_record(cfg)
     assert record["min_overlap"] == 0.45 and record["membrane_area_tolerance"] == 0.02
+    assert record["error_blocks"] == [40, 20, 10, 5] and record["halves_error_blocks"] == 5
     assert record["membrane_pocket_water_tolerance"] == 1.5 and record["pose_rmsd_warning_nm"] == 0.2
     # the settings a record describes give the same record, and an analysis section alone the default levels
     assert analysis_record(analysis_settings_of(record)) == record and analysis_settings(cfg) is cfg

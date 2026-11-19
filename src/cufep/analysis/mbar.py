@@ -23,7 +23,7 @@ ANALYSIS_VERSION = 4
 #: they give is the one reported (:func:`block_standard_error`). The numbers are cuFEP's choice:
 #: the literature asks for blocks longer than the correlation time and for a standard error that
 #: no longer grows with the length of the blocks (Grossfield et al. 2018, section 7.3.2), and
-#: gives no numbers.
+#: gives no numbers. Defaults of ``analysis.error_blocks`` and ``analysis.halves_error_blocks``.
 BLOCK_COUNTS = (40, 20, 10, 5)
 #: number of time blocks for the standard error of one half of the production
 HALF_BLOCK_COUNT = 5
@@ -68,8 +68,8 @@ class LegAnalysis:
     delta_g_error: float
     #: the standard error MBAR gives for these samples; it takes them as independent
     delta_g_error_mbar: float = float("nan")
-    #: the standard error by the delete-one-block jackknife for every number of time blocks of
-    #: BLOCK_COUNTS (key: the number as text; None where that number cannot be used, with the
+    #: the standard error by the delete-one-block jackknife for every number of time blocks that
+    #: was asked for (key: the number as text; None where that number cannot be used, with the
     #: reason in delta_g_error_blocks_note), and the number whose error is reported
     delta_g_error_blocks: dict[str, float | None] = field(default_factory=dict)
     delta_g_error_blocks_note: dict[str, str] = field(default_factory=dict)
@@ -117,7 +117,7 @@ class LegAnalysis:
     forward: list[tuple[float, float, float]] = field(default_factory=list)
     reverse: list[tuple[float, float, float]] = field(default_factory=list)
     #: (dG, error) from the first half and from the second half of the production alone; the
-    #: halves do not share an iteration. The error is that of HALF_BLOCK_COUNT time blocks within
+    #: halves do not share an iteration. The error is that of a number of time blocks within
     #: the half, or MBAR's own where they cannot be used: halves_error_blocks holds the number of
     #: blocks behind each of the two errors (None: MBAR's own)
     first_half: tuple[float, float] = (float("nan"), float("nan"))
@@ -658,15 +658,17 @@ def stage_boundaries(state_dicts: list[dict]) -> dict[str, tuple[int, int]]:
 
 
 def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None = None,
-                n_fractions: int = 10, n_blocks: int = 5) -> LegAnalysis:
+                n_fractions: int = 10, n_blocks: int = 5, error_blocks=BLOCK_COUNTS,
+                halves_error_blocks: int = HALF_BLOCK_COUNT) -> LegAnalysis:
     """Analyse samples loaded with :func:`cufep.sampling.storage.read_samples`.
 
     The free energy comes from samples that are decorrelated window by window
     (:func:`neighbour_inefficiencies`, :func:`decorrelated`), as Klimovich, Shirts and Mobley
     2015 and alchemlyb do. Its standard error comes from time blocks common to all windows
-    (:func:`block_standard_error`, for each number of ``BLOCK_COUNTS``; the largest is reported),
-    and so do the errors of the two halves. The points of the forward and reverse series and the
-    consecutive blocks carry the error MBAR gives for their samples.
+    (:func:`block_standard_error`, for each number of ``error_blocks``; the largest is reported),
+    and so do the errors of the two halves (``halves_error_blocks`` blocks each). The points of
+    the forward and reverse series and the consecutive blocks carry the error MBAR gives for
+    their samples.
     ``n_fractions`` is the number of points of the forward and reverse
     series, ``n_blocks`` the number of consecutive blocks with an estimate of their own. A part
     of the production gets an estimate only if every window holds ``MIN_INDEPENDENT_SAMPLES``
@@ -719,7 +721,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     iteration = kept_sample_iterations(n, g)
     block_errors: dict[str, float | None] = {}
     block_notes: dict[str, str] = {}
-    for count in BLOCK_COUNTS:
+    for count in dict.fromkeys(int(count) for count in error_blocks):
         value, why = block_standard_error(reduced, n_k, iteration, 0, n, count, f_k, longest)
         block_errors[str(count)] = None if value is None else float(value * kt)
         if why:
@@ -771,7 +773,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         reverse.append((m / n, *rev))
     # the halves: split in the middle of the time series, no iteration in both
     mid = n // 2
-    first_half, second_half = partial(0, mid, HALF_BLOCK_COUNT), partial(mid, n, HALF_BLOCK_COUNT)
+    first_half, second_half = partial(0, mid, int(halves_error_blocks)), partial(mid, n, int(halves_error_blocks))
     convergence_note = ""
     if first_half is None or second_half is None:
         first_half = second_half = (float("nan"), float("nan"))

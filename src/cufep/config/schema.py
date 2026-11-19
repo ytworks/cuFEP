@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -376,6 +376,12 @@ class AnalysisConfig(_Section):
     halves_tolerance_kT: float = Field(default=1.0, gt=0.0)
     #: ... if BAR between neighbouring windows and MBAR differ by more than this (Mey et al. 2020)
     estimators_tolerance_kcal_mol: float = Field(default=1.0, gt=0.0)
+    #: numbers of time blocks, common to all lambda windows, with which the standard error of a
+    #: leg is computed (delete-one-block jackknife); the largest of the errors they give is the
+    #: one reported
+    error_blocks: list[Annotated[int, Field(ge=2)]] = Field(default=[40, 20, 10, 5], min_length=1)
+    #: number of time blocks for the standard error of each half of the production
+    halves_error_blocks: int = Field(default=5, ge=2)
 
 
 class ResourcesConfig(_Section):

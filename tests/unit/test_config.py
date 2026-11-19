@@ -217,6 +217,23 @@ def test_round_trip(tmp_path):
     assert again.model_dump(mode="json") == cfg.model_dump(mode="json")
 
 
+def test_the_numbers_of_time_blocks_for_the_standard_error_are_settings(tmp_path):
+    from cufep.analysis.mbar import BLOCK_COUNTS, HALF_BLOCK_COUNT
+    from cufep.workflow import analysis_record, analysis_settings_of
+
+    cfg = load_config(write(tmp_path, BASE))
+    assert tuple(cfg.analysis.error_blocks) == BLOCK_COUNTS == (40, 20, 10, 5)
+    assert cfg.analysis.halves_error_blocks == HALF_BLOCK_COUNT == 5
+    other = load_config(write(tmp_path, {**BASE, "analysis": {"error_blocks": [20, 8], "halves_error_blocks": 4}}))
+    record = analysis_record(other)
+    assert record["error_blocks"] == [20, 8] and record["halves_error_blocks"] == 4
+    assert record != analysis_record(cfg)                       # a result made with others is made again
+    assert analysis_settings_of(record).analysis.error_blocks == [20, 8]
+    for bad in ({"error_blocks": []}, {"error_blocks": [10, 1]}, {"halves_error_blocks": 1}):
+        with pytest.raises(Exception):
+            load_config(write(tmp_path, {**BASE, "analysis": bad}))
+
+
 def test_documented_defaults_are_the_defaults_of_the_code(repo):
     """docs/configuration.md lists every setting with its default; it must not drift."""
     text = (repo / "docs" / "configuration.md").read_text()

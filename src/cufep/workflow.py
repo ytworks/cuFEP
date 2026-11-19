@@ -1382,6 +1382,7 @@ def analysis_record(cfg) -> dict:
             "min_effective_samples": float(a.min_effective_samples), "halves_tolerance_kT": float(a.halves_tolerance_kT),
             "estimators_tolerance_kcal_mol": float(a.estimators_tolerance_kcal_mol),
             "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
+            "error_blocks": [int(count) for count in a.error_blocks], "halves_error_blocks": int(a.halves_error_blocks),
             "membrane_area_tolerance": float(settings.membrane.area_tolerance),
             "membrane_pocket_water_tolerance": float(settings.membrane.pocket_water_tolerance),
             "pose_rmsd_warning_nm": float(settings.restraints.pose_rmsd_warning_nm)}
@@ -1578,7 +1579,8 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     if schedule is None and (leg_dir / "schedule.yaml").exists():
         schedule = Schedule.load(leg_dir / "schedule.yaml")
     res = analyze_leg(samples, temperature, n_equilibration=n_equilibration, n_fractions=a.convergence_points,
-                      n_blocks=a.convergence_blocks)
+                      n_blocks=a.convergence_blocks, error_blocks=a.error_blocks,
+                      halves_error_blocks=a.halves_error_blocks)
     correction = {"reweight": res.lrc_delta_g, "isotropic": res.lrc_isotropic, "none": 0.0}[a.lrc]
     structure = structural_analysis(samples, n_equilibration)
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
