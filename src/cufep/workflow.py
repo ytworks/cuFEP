@@ -456,34 +456,96 @@ def archive_leg(leg_dir: Path) -> Path | None:
     return dest
 
 
-def begin_leg(leg_dir: Path) -> None:
+#: written when a leg starts and removed when it has written its result or its error: a leg that
+#: holds only this file was interrupted (the process was killed, the machine stopped, Ctrl-C)
+STARTED_FILE = "started.json"
+
+
+def _write_json(path: Path, data: dict) -> None:
+    """Write a file in one step, so that a process that dies while writing leaves no half of it."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(jsonio.dumps(data, indent=1))
+    tmp.replace(path)
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _leg_identity(leg_dir: Path, job=None) -> dict:
+    """Ligand, repeat and leg of a leg directory ``<ligand>/repeat_<n>/<leg>``."""
+    if job is not None:
+        return {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat}
+    repeat = leg_dir.parent.name.removeprefix("repeat_")
+    return {"ligand": leg_dir.parent.parent.name, "leg": leg_dir.name, "repeat": int(repeat) if repeat.isdigit() else 0}
+
+
+def begin_leg(leg_dir: Path, job=None) -> None:
     """Called before a leg runs (again): from here on it has a result only if this run finishes.
 
     The result the leg had is kept as ``result.previous.json``: what it gave before this run,
     for instance at 10 ns when it is continued to 20 ns. It is a record and is never used for
-    a binding free energy: if this run fails, the leg counts as failed.
+    a binding free energy: if this run fails, the leg counts as failed. A marker says that the
+    leg has started; it goes when the leg has written its result or its error.
     """
     leg_dir.mkdir(parents=True, exist_ok=True)
     result = leg_dir / "result.json"
     if result.exists():
         result.replace(leg_dir / "result.previous.json")
     (leg_dir / "error.json").unlink(missing_ok=True)
+    _write_json(leg_dir / STARTED_FILE, dict(_leg_identity(leg_dir, job), started=time.strftime("%Y-%m-%d %H:%M:%S")))
+
+
+def write_leg_result(leg_dir: Path, result: dict) -> None:
+    """The result of a leg that has finished."""
+    _write_json(leg_dir / "result.json", result)
+    (leg_dir / STARTED_FILE).unlink(missing_ok=True)
+
+
+def write_leg_error(leg_dir: Path, message: str, job=None, trace: str | None = None) -> dict:
+    """Record that a leg has failed; returns what was written to ``error.json``."""
+    leg_dir.mkdir(parents=True, exist_ok=True)
+    err = dict(_leg_identity(leg_dir, job), error=message)
+    if trace:
+        err["traceback"] = trace
+    before = _read_json(leg_dir / "result.previous.json")
+    if before is not None:
+        err["previous_result"] = {"file": "result.previous.json", "production_ns": before.get("production_ns"),
+                                  "delta_g_decouple_kJ_mol": before.get("delta_g_decouple")}
+    (leg_dir / "result.json").unlink(missing_ok=True)       # no result of a run that failed
+    _write_json(leg_dir / "error.json", err)
+    (leg_dir / STARTED_FILE).unlink(missing_ok=True)
+    return err
 
 
 def leg_state(leg_dir: Path) -> tuple[str, dict | None]:
     """What a leg directory holds: ("finished", result), ("failed", error) or ("missing", None).
 
-    A directory written before results were set aside at the start of a run can hold a result
-    and a later error; the later file counts.
+    A leg that has started and written neither a result nor an error was interrupted and is
+    "failed"; so is one whose result file cannot be read. A directory written before results
+    were set aside at the start of a run can hold a result and a later error; the later file
+    counts.
     """
     result, error = leg_dir / "result.json", leg_dir / "error.json"
     if result.exists() and error.exists():
         newer = result if result.stat().st_mtime >= error.stat().st_mtime else error
-        return ("finished" if newer is result else "failed"), json.loads(newer.read_text())
-    if result.exists():
-        return "finished", json.loads(result.read_text())
-    if error.exists():
-        return "failed", json.loads(error.read_text())
+    else:
+        newer = result if result.exists() else error if error.exists() else None
+    if newer is not None:
+        data = _read_json(newer)
+        if data is None:
+            return "failed", dict(_leg_identity(leg_dir), error=f"{newer.name} of this leg cannot be read (the file "
+                                                                 "is incomplete)")
+        return ("finished" if newer is result else "failed"), data
+    started = _read_json(leg_dir / STARTED_FILE) if (leg_dir / STARTED_FILE).exists() else None
+    if (leg_dir / STARTED_FILE).exists():
+        when = "" if not started or not started.get("started") else f" (it had started at {started['started']})"
+        return "failed", dict(_leg_identity(leg_dir), interrupted=True,
+                              error=f"the run of this leg was interrupted before it wrote a result{when}")
     return "missing", None
 
 
@@ -505,9 +567,23 @@ def read_result(job: LegJob) -> dict:
     """The result of a finished job, or its error."""
     state, data = leg_state(job.leg_dir)
     if data is not None:
-        return data
+        return dict(_leg_identity(job.leg_dir, job), **data) if state == "failed" else data
     return {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat,
             "error": "the job process ended without writing a result (killed?)"}
+
+
+def record_ended_job(job: LegJob, exit_code: int | None) -> dict:
+    """What a job process that has ended left behind; if it left neither a result nor an error,
+    that it died is written to ``error.json`` (with its exit code), so that the files of the leg
+    say the same as the scheduler that saw it."""
+    state, data = leg_state(job.leg_dir)
+    if state == "finished":
+        return data
+    if not (job.leg_dir / "error.json").exists():
+        signal = "" if exit_code is None or exit_code >= 0 else f", killed by signal {-exit_code}"
+        return write_leg_error(job.leg_dir, f"the job process ended without a result (exit code {exit_code}{signal})",
+                               job)
+    return read_result(job)
 
 
 def _choose_backend(cfg: Config, system, log) -> tuple[str, list[str]]:
@@ -978,7 +1054,7 @@ def run_leg(job: LegJob) -> dict:
     timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
                   ligand=job.ligand, leg=job.leg, repeat=job.repeat)
     (leg_dir / "timing.json").write_text(json.dumps(timing, indent=1))
-    (leg_dir / "result.json").write_text(jsonio.dumps(result, indent=1))
+    write_leg_result(leg_dir, result)
     log(f"dG(decouple) = {total / KCAL:.2f} kcal/mol (MBAR {analysis.delta_g / KCAL:.2f} ± "
         f"{analysis.delta_g_error / KCAL:.2f}, tail {-correction / KCAL:+.2f}); "
         f"min overlap {analysis.min_overlap:.3f} (among the samples of the estimate {analysis.min_overlap_used:.3f}), "
@@ -1138,20 +1214,11 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
 
 def run_leg_safe(job: LegJob) -> dict:
     """``run_leg`` that records failures instead of raising (for worker processes)."""
-    begin_leg(job.leg_dir)
+    begin_leg(job.leg_dir, job)
     try:
         return run_leg(job)
     except Exception as exc:  # noqa: BLE001
-        err = {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "error": f"{type(exc).__name__}: {exc}",
-               "traceback": traceback.format_exc(limit=12)}
-        job.leg_dir.mkdir(parents=True, exist_ok=True)
-        before = job.leg_dir / "result.previous.json"
-        if before.exists():
-            old = json.loads(before.read_text())
-            err["previous_result"] = {"file": before.name, "production_ns": old.get("production_ns"),
-                                   "delta_g_decouple_kJ_mol": old.get("delta_g_decouple")}
-        (job.leg_dir / "result.json").unlink(missing_ok=True)       # no result of a run that failed
-        (job.leg_dir / "error.json").write_text(json.dumps(err, indent=1))
+        err = write_leg_error(job.leg_dir, f"{type(exc).__name__}: {exc}", job, traceback.format_exc(limit=12))
         print(f"[{job.tag}] FAILED: {err['error']}", flush=True)
         return err
 

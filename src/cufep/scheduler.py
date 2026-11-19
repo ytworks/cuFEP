@@ -31,7 +31,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from cufep.workflow import JobControl, LegJob, begin_leg, read_result, run_leg_safe
+from cufep.workflow import JobControl, LegJob, begin_leg, read_result, record_ended_job, run_leg_safe
 
 
 def detect_gpus(max_utilization: int = 50) -> list[int]:
@@ -244,7 +244,7 @@ def run_jobs(jobs: list[LegJob], gpus: list, log=print, oversubscription="auto",
             job.devices, job.inline = [device], False
             # set the leg's earlier result aside here, before the process starts: if the process
             # dies at once, the leg must not be read as finished
-            begin_leg(job.leg_dir)
+            begin_leg(job.leg_dir, job)
             parent, child = ctx.Pipe()
             proc = ctx.Process(target=_entry, args=(job, child))
             proc.start()
@@ -276,7 +276,8 @@ def run_jobs(jobs: list[LegJob], gpus: list, log=print, oversubscription="auto",
                 proc.join()
                 running[i]["conn"].close()
                 del running[i]
-                res = read_result(jobs[i])
+                # a process that was killed wrote nothing: record that in the leg's files
+                res = record_ended_job(jobs[i], proc.exitcode)
                 state = "FAILED: " + res["error"] if "error" in res else "finished"
                 log(f"{jobs[i].tag} {state} ({(time.time() - t0) / 60:.1f} min since start)")
                 if running:

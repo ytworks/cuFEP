@@ -415,7 +415,7 @@ def test_a_leg_that_fails_while_it_is_continued_does_not_count_with_its_old_resu
 
     # the leg runs again and finishes: the error is gone and the new result counts
     begin_leg(leg_dir)
-    assert leg_state(leg_dir) == ("missing", None)
+    assert leg_state(leg_dir)[0] == "failed" and leg_state(leg_dir)[1]["interrupted"]      # started, nothing written yet
     (leg_dir / "result.json").write_text(json.dumps(_leg_result(164.184, production_ns=10.0)))
     out = combine_ligand(lig, "lig", 1)
     assert out["failed_legs"] == [] and out["repeats"][0]["production_ns"] == {"complex": 10.0, "solvent": 5.0}
@@ -431,6 +431,53 @@ def test_a_leg_that_fails_while_it_is_continued_does_not_count_with_its_old_resu
     (leg_dir / "schedule.yaml").write_text("windows")
     previous = archive_leg(leg_dir)
     assert (previous / "result.json").exists() and not (previous / "result.previous.json").exists()
+
+
+def test_a_leg_whose_process_was_killed_is_a_failed_leg(tmp_path):
+    """Review of PR 1: a job process killed before it wrote error.json left a leg that read as never run:
+    the command ended with an error, but result, summary and report listed no failed leg."""
+    from cufep.workflow import STARTED_FILE, begin_leg, leg_state, read_result, record_ended_job, write_leg_result
+
+    lig = tmp_path / "lig"
+    for repeat in (0, 1):
+        for leg in ("complex", "solvent"):
+            d = lig / f"repeat_{repeat}" / leg
+            d.mkdir(parents=True)
+            (d / "result.json").write_text(json.dumps(_leg_result(160.0 if leg == "complex" else 80.0, leg=leg)))
+    job = LegJob(ligand="lig", leg="complex", repeat=1, lig_dir=str(lig), devices=[], config={}, production_ns=10.0)
+    begin_leg(job.leg_dir, job)                                 # the scheduler starts the job ...
+    assert (job.leg_dir / STARTED_FILE).exists() and not (job.leg_dir / "result.json").exists()
+    # ... and nothing more is written: the process was killed, and so was the scheduler (or Ctrl-C)
+    state, data = leg_state(job.leg_dir)
+    assert state == "failed" and data["interrupted"] and (data["ligand"], data["leg"], data["repeat"]) == ("lig", "complex", 1)
+    assert read_result(job)["error"].startswith("the run of this leg was interrupted before it wrote a result")
+    out = combine_ligand(lig, "lig", 2)
+    assert out["failed_legs"] == ["complex leg of repeat 1"] and out["n_repeats"] == 1 and "dg_bind" in out
+    assert any("interrupted before it wrote a result" in w for w in out["warnings"])
+
+    # the scheduler sees the dead process: what it knows goes into the files of the leg
+    err = record_ended_job(job, -9)
+    assert err["error"] == "the job process ended without a result (exit code -9, killed by signal 9)"
+    assert err["previous_result"]["delta_g_decouple_kJ_mol"] == 160.0 and (err["leg"], err["repeat"]) == ("complex", 1)
+    assert json.loads((job.leg_dir / "error.json").read_text())["error"] == err["error"]
+    assert not (job.leg_dir / STARTED_FILE).exists()
+    assert combine_ligand(lig, "lig", 2)["failed_legs"] == ["complex leg of repeat 1"]
+
+    # a process that ended after it had written its result is not turned into a failure
+    begin_leg(job.leg_dir, job)
+    write_leg_result(job.leg_dir, _leg_result(161.0))
+    assert record_ended_job(job, -9)["delta_g_decouple"] == 161.0 and not (job.leg_dir / "error.json").exists()
+    assert leg_state(job.leg_dir)[0] == "finished" and not (job.leg_dir / STARTED_FILE).exists()
+    assert not list(job.leg_dir.glob("*.tmp"))                  # written in one step
+
+    # a result file that is cut off is a failed leg, not an exception while the legs are combined
+    (job.leg_dir / "result.json").write_text('{"leg": "complex", "delta_g_dec')
+    state, data = leg_state(job.leg_dir)
+    assert state == "failed" and "cannot be read" in data["error"]
+    assert combine_ligand(lig, "lig", 2)["failed_legs"] == ["complex leg of repeat 1"]
+
+    # a leg that never started is still only missing
+    assert leg_state(lig / "repeat_2" / "complex") == ("missing", None)
 
 
 def test_commands_end_with_an_error_when_a_leg_failed(tmp_path, monkeypatch):
