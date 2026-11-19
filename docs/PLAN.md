@@ -39,7 +39,7 @@ precalculation だけで window を決める。解析で収束を判定する。
 | 3 | production の後に、1 つの leg だけを window を増やすか時間を延ばして走らせ直す手段 | 済 (`cufep run --ligand --leg` と `--production-ns` または `--reschedule`。protocol.md の "When a leg is flagged") |
 | 4 | REST2 の既定値を、ベンチマークの数値で判断する | 済。数値は protocol.md の REST2 の "What was measured"。オーナーの判断で scale 1.5 のまま |
 | 5 | イメージの凍結、GPU テスト、TYK2 example の所要時間 (GPU 8 個と 1 個) | 済。GPU 8 個でも 1 個でも完走し、所要時間の目標を満たした |
-| 6 | 確認: TYK2 の 5 リガンドで、window が足されないことと、overlap と収束が保たれることの関係を調べる | 済 (protocol.md の "What was measured on TYK2")。complex leg では 50 ps の precalculation だと window が足されないまま overlap が 0.03 を下回る。オーナーの判断で complex leg の precalculation を長くした (下記)。その設定での 5 リガンドの確認を実行中 |
+| 6 | 確認: TYK2 の 5 リガンドで、window が足されないことと、overlap と収束が保たれることの関係を調べる | 済 (protocol.md の "What was measured on TYK2")。complex leg では 50 ps の precalculation だと window が足されないまま overlap が 0.03 を下回る。オーナーの判断で complex leg の precalculation を長くした (下記)。その設定で同じ 5 リガンドを走らせると、complex leg 5 本中 4 本で window が足され (production の最小 overlap 0.038〜0.105)、足されなかった 1 本は 0.024 だった |
 | 7 | A2A example | 済。完走し、膜の検査に警告なし。dG_bind -12.55 ± 0.34 kcal/mol (実験 -12.07、FEP+ -11.01)。ただし complex leg は NOT CONVERGED (production の前半 36.17、後半 31.61 kcal/mol)。complex leg の precalculation が 50 ps だった版での実行 |
 | 8 | ベンチマーク: TYK2 16 リガンド、A2A 17 リガンド。1 リガンド 1 回 | 実行しない (オーナーの指示、2026-11-19)。smoke と 5 リガンドの subset は動作を確認済み |
 | 9 | 文書、PR、CI、公式イメージ | 未 |
@@ -53,7 +53,8 @@ lambda scheduling が 88 leg のうち 1 leg でしか window を足さず、実
 
 手順 6 の確認を受けたオーナーの判断 (2026-11-19): complex leg は precalculation を長くする
 (規則は論文のまま、1 window あたり equilibration 500 ps + 記録 500 ps。solvent leg は論文の
-50 ps)。REST2 は scale 1.5 のまま。この設定で同じ 5 リガンドを走らせて確かめる。
+50 ps)。REST2 は scale 1.5 のまま。この設定で同じ 5 リガンドを走らせた結果は上の表の手順 6 と
+protocol.md にある。
 
 ## 改訂 7 までの手順と状態
 

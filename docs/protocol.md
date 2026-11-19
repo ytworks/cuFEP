@@ -240,16 +240,24 @@ So the rule is the paper's in both legs, and the complex leg gives each new wind
 equilibration and 500 ps of recorded MD (`lambda_schedule.adaptive.equilibration_ps` and
 `window_ps`, one value per leg).
 
+The five ligands again with this precalculation (one run each): four of the five complex legs
+got a window, each in the stretch 0.62-0.88 of the vanish stage, where the first iteration
+read 0.011 to 0.035, and their lowest overlap in the production was 0.038 to 0.105. In the
+fifth leg the precalculation read 0.061 for the pair 0.75-0.88 and added nothing, and the
+production had 0.024 there, so that result was `NOT RELIABLE`. The longer precalculation
+finds the region in most legs, not in all.
+
 If a pair of windows still ends below the warning level in the production, the result says
 `NOT RELIABLE` and names the pair, and the remedy is the one of Flare: more windows in that
 stage (`lambda_schedule.adaptive.initial_windows`, or `lambda_schedule.windows` with
-`mode: fixed`) and a new run of that leg ("When a leg is flagged"). For orientation, with a
-precalculation of 50 ps per window in the complex leg:
+`mode: fixed`) and a new run of that leg ("When a leg is flagged"). For orientation (50 ps
+per window in the precalculation unless stated):
 
-| TYK2, complex leg, 50 ps per window | windows | lowest overlap in production |
+| TYK2, complex leg | windows | lowest overlap in production |
 |---|---|---|
 | start 3 / 5 / 9, ejm_31, four runs | 15 | 0.022, 0.041, 0.055, 0.070 |
 | start 3 / 5 / 9, five other ligands | 15 | 0.008-0.031 |
+| start 3 / 5 / 9 with the default precalculation of 500 + 500 ps, five ligands | 15-16 | 0.024 (no window added), 0.038-0.105 (one window added) |
 | start 3 / 5 / 13, ejm_31, four runs | 19 | 0.092-0.145 |
 | start 3 / 5 / 13, four other ligands | 19 | 0.067-0.139 |
 | fixed windows (`lambda_schedule.windows`), ejm_31, three runs | 30 | 0.119-0.127 |
