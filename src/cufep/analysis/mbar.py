@@ -18,15 +18,20 @@ KCAL = 4.184
 #:      the samples check counts what MBAR gets
 #:   4  standard error from time blocks common to all windows (delete-one-block jackknife), also
 #:      for the halves; the samples check counts what that error leaves of the samples
-ANALYSIS_VERSION = 4
+#:   5  the standard error, the halves and every other part of the production are estimated for
+#:      the free energy that is reported (MBAR minus the tail correction of the same iterations);
+#:      a part counts only if its estimate is determined; the reported standard error is never
+#:      smaller than the analytical one
+ANALYSIS_VERSION = 5
 #: numbers of time blocks the standard error of a leg is computed with; the largest of the errors
-#: they give is the one reported (:func:`block_standard_error`). The numbers are cuFEP's choice:
+#: they give is the one reported (:meth:`TimeRangeEstimator.part`). The numbers are cuFEP's choice:
 #: the literature asks for blocks longer than the correlation time and for a standard error that
 #: no longer grows with the length of the blocks (Grossfield et al. 2018, section 7.3.2), and
-#: gives no numbers. Defaults of ``analysis.error_blocks`` and ``analysis.halves_error_blocks``.
+#: gives no numbers. Defaults of ``analysis.error_blocks`` and ``analysis.part_error_blocks``.
 BLOCK_COUNTS = (40, 20, 10, 5)
-#: number of time blocks for the standard error of one half of the production
-HALF_BLOCK_COUNT = 5
+#: number of time blocks for the standard error of a part of the production (a half, a point
+#: of the forward and reverse series, a consecutive block); default of analysis.part_error_blocks
+PART_BLOCK_COUNT = 5
 #: a part of the production gets a free energy estimate of its own only if it holds at least this
 #: many statistically independent samples per lambda window
 MIN_INDEPENDENT_SAMPLES = 4
@@ -34,6 +39,10 @@ MIN_INDEPENDENT_SAMPLES = 4
 
 class NoProduction(ValueError):
     """The samples hold no production to analyse (yet)."""
+
+
+class NoCorrection(ValueError):
+    """The tail correction that was asked for cannot be estimated from these samples."""
 
 
 def _pymbar():
@@ -60,19 +69,33 @@ class LegAnalysis:
     #: independent samples, as estimated, in the lambda window that has the fewest
     #: (see window_effective_samples and window_kept_samples)
     effective_samples_per_state: float
-    #: free energy of the last state relative to the first, kJ/mol, by MBAR from samples that are
-    #: decorrelated window by window, and its standard error: the largest of delta_g_error_blocks,
-    #: or MBAR's own (delta_g_error_mbar) where no number of blocks can be used
-    #: (delta_g_error_note says why)
+    #: the free energy of decoupling that is reported, kJ/mol: that of the last state relative to
+    #: the first by MBAR, minus the tail correction (correction), both from the same iterations;
+    #: and its standard error (see delta_g_error_from)
     delta_g: float
     delta_g_error: float
-    #: the standard error MBAR gives for these samples; it takes them as independent
-    delta_g_error_mbar: float = float("nan")
-    #: the standard error by the delete-one-block jackknife for every number of time blocks that
-    #: was asked for (key: the number as text; None where that number cannot be used, with the
-    #: reason in delta_g_error_blocks_note), and the number whose error is reported
+    #: the MBAR part alone (samples decorrelated window by window) and the standard error MBAR
+    #: gives for it, which takes the samples as independent
+    delta_g_mbar: float = float("nan")
+    delta_g_mbar_error: float = float("nan")
+    #: the tail correction of the coupled state (correction_method: reweight, isotropic or none),
+    #: its standard error for independent samples, and the number of observations it rests on
+    correction_method: str = "none"
+    correction: float = 0.0
+    correction_error: float = 0.0
+    correction_samples: int = 0
+    #: the standard error of delta_g by the delete-one-block jackknife over time blocks common to
+    #: all windows, for every number of blocks that was asked for (key: the number as text; None
+    #: where that number cannot be used, with the reason in delta_g_error_blocks_note), and the
+    #: same for the MBAR part alone
     delta_g_error_blocks: dict[str, float | None] = field(default_factory=dict)
+    delta_g_mbar_error_blocks: dict[str, float | None] = field(default_factory=dict)
     delta_g_error_blocks_note: dict[str, str] = field(default_factory=dict)
+    #: where delta_g_error comes from: "time blocks" (the largest of delta_g_error_blocks, from
+    #: delta_g_error_n_blocks blocks) or "analytical" (MBAR and the correction for independent
+    #: samples, where that is larger or no number of blocks can be used; delta_g_error_note
+    #: says why none can)
+    delta_g_error_from: str = ""
     delta_g_error_n_blocks: int | None = None
     delta_g_error_note: str = ""
     #: statistical inefficiency of every lambda window, in iterations: the larger of those of its
@@ -112,35 +135,40 @@ class LegAnalysis:
     #: numbers of samples O[i][j] and O[j][i] differ by the ratio of the numbers. For the record;
     #: no level is applied to it
     overlap_used_weighted_by_number: list[list[float]] = field(default_factory=list)
-    #: free energy from growing parts of the production, counted from its start (forward) and
-    #: from its end (reverse): (fraction of the production, dG, error)
+    #: delta_g from growing parts of the production, counted from its start (forward) and from its
+    #: end (reverse): (fraction of the production, dG, error). Every part is estimated as the
+    #: whole is (MBAR minus the correction of its own iterations, its error from time blocks
+    #: within it or the analytical one, whichever is larger)
     forward: list[tuple[float, float, float]] = field(default_factory=list)
     reverse: list[tuple[float, float, float]] = field(default_factory=list)
-    #: (dG, error) from the first half and from the second half of the production alone; the
-    #: halves do not share an iteration. The error is that of a number of time blocks within
-    #: the half, or MBAR's own where they cannot be used: halves_error_blocks holds the number of
-    #: blocks behind each of the two errors (None: MBAR's own)
+    #: (dG, error) of delta_g from the first half and from the second half of the production
+    #: alone; the halves do not share an iteration. halves_error_blocks holds the number of time
+    #: blocks behind each of the two errors (None: the analytical one)
     first_half: tuple[float, float] = (float("nan"), float("nan"))
     second_half: tuple[float, float] = (float("nan"), float("nan"))
     halves_error_blocks: list[int | None] = field(default_factory=list)
-    #: why the halves have no estimate, if the production is too short for them
+    #: why the halves have no estimate (too few samples, a pair of windows without overlap in a
+    #: half, no tail samples in a half), if they have none
     convergence_note: str = ""
     #: difference between the two halves
     forward_reverse_gap: float = 0.0
-    #: free energy from consecutive blocks of the production that do not overlap:
+    #: delta_g from consecutive blocks of the production that do not overlap:
     #: (start, end as fractions of the production, dG, error)
     blocks: list[tuple[float, float, float, float]] = field(default_factory=list)
+    #: the points of the forward and reverse series and the consecutive blocks that have no
+    #: estimate, and why (the free energy of their samples is not determined)
+    parts_not_determined: list[str] = field(default_factory=list)
     #: sum of BAR between neighbouring windows, a second estimator on the same data
     bar_delta_g: float = float("nan")
     bar_delta_g_error: float = float("nan")
     #: why BAR has no estimate, if it has none
     bar_note: str = ""
-    lrc_delta_g: float = 0.0
-    lrc_error: float = 0.0
-    lrc_samples: int = 0
-    #: the same correction in the homogeneous (isotropic) approximation that OpenMM's
-    #: long-range correction and OpenFE use; reported for comparison
-    lrc_isotropic: float = 0.0
+    #: the tail correction of the whole production by both methods, where the samples hold what
+    #: it needs (None otherwise): by reweighting the recorded tail energies, and in the
+    #: homogeneous (isotropic) approximation that OpenMM's long-range correction and OpenFE
+    #: use. For comparison; the one that is used is ``correction``
+    lrc_reweight: float | None = None
+    lrc_isotropic: float | None = None
     temperature_K: float = 298.15
 
     def to_dict(self) -> dict:
@@ -328,63 +356,227 @@ def free_energies_from(u_kn: np.ndarray, n_k: np.ndarray, f_k: np.ndarray, toler
     return None
 
 
-def block_standard_error(u_kn: np.ndarray, n_k: np.ndarray, iteration: np.ndarray, start: int, stop: int,
-                         n_blocks: int, f_k: np.ndarray, longest_interval: int) -> tuple[float | None, str]:
-    """Standard error (kT) of the free energy of the last state relative to the first by the
-    delete-one-block jackknife over blocks of time: (error, "") or (None, why this number of
-    blocks cannot be used).
+@dataclass
+class TailSeries:
+    """What the tail correction of a selection of the production is computed from.
 
-    The iterations [start, stop) are divided into ``n_blocks`` consecutive blocks of the same
-    length, the same for all lambda windows. The free energy is estimated ``n_blocks`` times,
-    each time without the samples of one block; the standard error is
-    sqrt((B - 1) / B * sum_b (dG_b - mean)^2).
-
-    Why blocks of time and not the standard error MBAR gives: in replica exchange a configuration
-    that changes slowly travels from window to window. Each window then looks decorrelated on
-    its own (its statistical inefficiency is short), and the samples of different windows are
-    still correlated with each other, which MBAR's error does not see: for eight harmonic windows
-    and a correlation of 0.97 from iteration to iteration it was a quarter of the scatter of
-    independent runs (review of PR 1). A block of time holds what all windows sampled in it, so
-    the correlation between the windows stays inside the blocks. "For correlated data, blocks
-    that are uncorrelated are the unit that is resampled"; with few of them the jackknife is the
-    method of choice; and the ensemble of a replica-exchange simulation "is constructed from"
-    correlated trajectories that return many times (Grossfield et al. 2018, sections 7.6 and 8).
-
-    ``iteration`` is the iteration of every sample (:func:`kept_sample_iterations`), ``f_k`` the
-    solution for all of them, ``longest_interval`` the largest interval at which a window keeps
-    its samples. A number of blocks is not used if a block is shorter than that interval (a
-    block must hold a sample of every window) or if, without a block, a window keeps fewer than
-    ``MIN_INDEPENDENT_SAMPLES`` samples.
+    ``times`` is the iteration of every observation counted from the start of the production;
+    ``values`` are the recorded tail energy differences of the coupled state (kJ/mol, method
+    reweight) or the box volumes of the replica in the coupled state (nm^3, method isotropic).
+    The method none has no observations and a correction of zero.
     """
-    n_k = np.asarray(n_k)
-    k = len(n_k)
-    edges = np.array([start + int(round(b * (stop - start) / n_blocks)) for b in range(n_blocks + 1)])
-    shortest = int(np.diff(edges).min())
-    if shortest < max(1, int(longest_interval)):
-        return None, (f"a block of {shortest} iteration(s) is shorter than the interval of {int(longest_interval)} "
-                      "iterations at which the slowest lambda window keeps its samples")
-    window = np.repeat(np.arange(k), n_k)
-    block = np.searchsorted(edges, iteration, side="right") - 1
-    inside = np.zeros((n_blocks, k), dtype=int)
-    np.add.at(inside, (block, window), 1)
-    left = n_k[None, :] - inside
-    if left.min() < MIN_INDEPENDENT_SAMPLES:
-        b, j = np.unravel_index(int(np.argmin(left)), left.shape)
-        return None, (f"without block {b + 1} lambda window {j} keeps {int(left[b, j])} sample(s); "
-                      f"{MIN_INDEPENDENT_SAMPLES} are needed for an estimate")
-    estimates = np.empty(n_blocks)
-    for b in range(n_blocks):
-        keep = block != b
-        f = free_energies_from(u_kn[:, keep], left[b], f_k)
-        if f is None:
+    method: str
+    times: np.ndarray
+    values: np.ndarray
+    temperature_K: float
+    s6: float = 0.0
+    s12: float = 0.0
+    cutoff_nm: float = 0.0
+
+    def estimate(self, select) -> tuple[float | None, float | None, int, str]:
+        """(correction in kJ/mol, its standard error for independent observations, number of
+        observations, why there is none) of the observations ``select`` picks."""
+        if self.method == "none":
+            return 0.0, 0.0, 0, ""
+        values = self.values[select]
+        what = "tail energies" if self.method == "reweight" else "volumes of the coupled state"
+        if values.size < MIN_INDEPENDENT_SAMPLES:
+            return None, None, int(values.size), (f"{values.size} {what} were recorded in these iterations; "
+                                                   f"{MIN_INDEPENDENT_SAMPLES} are needed for the tail correction")
+        if self.method == "reweight":
+            from cufep.alchemy.lrc import tail_free_energy
+
+            value, error = tail_free_energy(values, self.temperature_K)
+            return float(value), float(error), int(values.size), ""
+        volume = float(values.mean())
+        value = (16.0 * np.pi / volume) * (self.s12 / (9.0 * self.cutoff_nm ** 9) - self.s6 / (3.0 * self.cutoff_nm ** 3))
+        error = abs(value) * float(values.std(ddof=1)) / (volume * np.sqrt(values.size))
+        return float(value), float(error), int(values.size), ""
+
+
+def tail_series(samples: dict, method: str, n_equilibration: int, n: int, temperature_K: float) -> TailSeries:
+    """The observations for the tail correction ``method`` in the production [n_equilibration,
+    n_equilibration + n) of ``samples``. Raises NoCorrection if the samples hold none of them."""
+    attrs = samples.get("attrs", {})
+    empty = np.zeros(0)
+    if method == "none":
+        return TailSeries("none", empty, empty, temperature_K)
+    if method == "reweight":
+        iterations = np.asarray(samples.get("lrc_iter", empty), dtype=int)
+        values = np.asarray(samples.get("lrc_du", empty), dtype=float)
+        if values.size == 0:
+            raise NoCorrection("the samples hold no tail energies (they were made with analysis.lrc: none); the "
+                               "correction by reweighting needs them")
+        times = iterations - int(n_equilibration)
+        inside = (times >= 0) & (times < n)
+        return TailSeries("reweight", times[inside], values[inside], temperature_K)
+    if method == "isotropic":
+        if not all(key in attrs for key in ("lrc_s6", "lrc_s12", "lrc_cutoff_nm")):
+            raise NoCorrection("the samples hold no Lennard-Jones sums of the ligand (they were made with analysis.lrc: "
+                               "none); the isotropic correction needs them")
+        states = np.asarray(samples["states"][n_equilibration:n_equilibration + n])
+        coupled = np.argsort(states, axis=1)[:, 0]                    # the replica in state 0
+        volumes = np.asarray(samples["volume"][n_equilibration:n_equilibration + n], dtype=float)
+        return TailSeries("isotropic", np.arange(n), volumes[np.arange(n), coupled], temperature_K,
+                          float(attrs["lrc_s6"]), float(attrs["lrc_s12"]), float(attrs["lrc_cutoff_nm"]))
+    raise ValueError(f"unknown tail correction {method!r}")
+
+
+@dataclass
+class PartEstimate:
+    """The free energy of a selection of the samples of a leg, or why it is not determined."""
+    reason: str = ""
+    f: np.ndarray | None = None            # MBAR free energies, kT, relative to the first state
+    mbar: float | None = None              # kJ/mol
+    mbar_error: float | None = None        # analytical, kJ/mol (None where it was not computed)
+    correction: float | None = None        # kJ/mol
+    correction_error: float | None = None
+    correction_samples: int = 0
+    value: float | None = None             # mbar - correction
+    lowest_overlap: float | None = None
+
+    @property
+    def determined(self) -> bool:
+        return not self.reason
+
+
+class TimeRangeEstimator:
+    """The free energy of decoupling of a leg from any selection of the iterations of its
+    production: MBAR on the samples of those iterations minus the tail correction of the same
+    iterations. The whole production, every replicate of the jackknife, the halves, the points of
+    the forward and reverse series and the consecutive blocks are all estimated here, so that an
+    error or a check is always one of the quantity that is reported.
+
+    A selection is used only if its free energy is determined: every window keeps at least
+    ``MIN_INDEPENDENT_SAMPLES`` samples in it, the MBAR equations converge, the neighbouring
+    windows overlap among its samples by at least ``min_overlap`` (the level of Klimovich, Shirts
+    and Mobley 2015, section 3.5, below which an estimate "will likely be substantially
+    incorrect"), and the tail correction has its observations in it. Without samples that connect
+    two windows the MBAR equations hold for any difference of their free energies (the gradient
+    is zero), so a solver started from a value returns that value; the overlap of such samples is
+    zero whatever the free energies, which is how it is found.
+    """
+
+    def __init__(self, u_kn: np.ndarray, n_k: np.ndarray, iteration: np.ndarray, tail: TailSeries, kt: float,
+                 min_overlap: float, longest_interval: int, f_whole: np.ndarray) -> None:
+        self.u_kn = np.asarray(u_kn, dtype=float)
+        # as pymbar gets them (see _mbar): shifted and capped, the same for every selection
+        self.reduced = np.minimum(self.u_kn - np.min(self.u_kn), 1.0e6)
+        self.n_k = np.asarray(n_k)
+        self.window = np.repeat(np.arange(len(self.n_k)), self.n_k)
+        self.iteration = np.asarray(iteration)
+        self.tail, self.kt, self.min_overlap = tail, float(kt), float(min_overlap)
+        self.longest = max(1, int(longest_interval))
+        self.f_whole = np.asarray(f_whole, dtype=float)
+
+    def estimate(self, columns: np.ndarray, observations: np.ndarray, f_start: np.ndarray, analytic: bool = False,
+                 require_overlap: bool = True) -> PartEstimate:
+        """The estimate from the samples ``columns`` and the tail observations ``observations``
+        (boolean masks), solved from ``f_start``; with ``analytic`` also MBAR's standard error."""
+        k = len(self.n_k)
+        counts = np.bincount(self.window[columns], minlength=k)
+        if counts.min() < MIN_INDEPENDENT_SAMPLES:
+            j = int(np.argmin(counts))
+            return PartEstimate(reason=f"lambda window {j} keeps {int(counts[j])} sample(s) there; "
+                                       f"{MIN_INDEPENDENT_SAMPLES} are needed for an estimate")
+        f = free_energies_from(self.reduced[:, columns], counts, f_start)
+        df = None
+        if f is None or analytic:
             try:
-                f, _df = solve_decorrelated(u_kn[:, keep], left[b], initial_f_k=f_k, max_iterations=30)
-            except Exception:  # noqa: BLE001
-                f = None
-        if f is None or not np.isfinite(f[-1]):
-            return None, f"the samples without block {b + 1} gave no estimate"
-        estimates[b] = f[-1]
-    return float(np.sqrt((n_blocks - 1) / n_blocks * np.sum((estimates - estimates.mean()) ** 2))), ""
+                solved, df = solve_decorrelated(self.u_kn[:, columns], counts, max_iterations=30,
+                                                initial_f_k=f_start if f is None else f)
+                f = solved if f is None else f
+            except Exception:  # noqa: BLE001  no solution of the MBAR equations
+                df = None
+        if f is None or not np.all(np.isfinite(f)):
+            return PartEstimate(reason="the MBAR equations of these samples have no solution")
+        try:
+            overlap = overlap_with_equal_weights(self.u_kn[:, columns], counts, f)
+            neighbour = np.array([overlap[i, i + 1] for i in range(k - 1)])
+        except Exception:  # noqa: BLE001
+            neighbour = np.array([np.nan])
+        lowest = float(np.min(neighbour)) if neighbour.size else 1.0
+        if require_overlap and not (np.isfinite(lowest) and lowest >= self.min_overlap):
+            i = int(np.nanargmin(neighbour)) if np.isfinite(neighbour).any() else 0
+            shown = "not defined" if not np.isfinite(lowest) else f"{lowest:.3f}"
+            return PartEstimate(reason=f"lambda windows {i} and {i + 1} overlap by {shown} among these samples, below "
+                                       f"{self.min_overlap:g}: their free energy is not determined", lowest_overlap=lowest)
+        correction, correction_error, n_obs, why = self.tail.estimate(observations)
+        if correction is None:
+            return PartEstimate(reason=why, correction_samples=n_obs)
+        mbar = float(f[-1] * self.kt)
+        mbar_error = None if df is None or not np.isfinite(df[-1]) else float(df[-1] * self.kt)
+        return PartEstimate(f=f, mbar=mbar, mbar_error=mbar_error, correction=correction,
+                            correction_error=correction_error, correction_samples=n_obs, value=mbar - correction,
+                            lowest_overlap=lowest)
+
+    def masks(self, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
+        """The samples and the tail observations of the iterations [a, b) of the production."""
+        return ((self.iteration >= a) & (self.iteration < b),
+                (self.tail.times >= a) & (self.tail.times < b))
+
+    def jackknife(self, a: int, b: int, n_blocks: int, base: PartEstimate) -> tuple[float | None, float | None, str]:
+        """Standard errors (kJ/mol) of the value and of its MBAR part from the iterations [a, b) by
+        the delete-one-block jackknife over ``n_blocks`` consecutive time blocks of the same length,
+        common to all windows: sqrt((B - 1) / B * sum_b (x_b - mean)^2) with x_b the estimate
+        without block b. (None, None, why) if this number of blocks cannot be used: a block is
+        shorter than the interval at which the slowest window keeps its samples, or the estimate
+        without a block is not determined.
+        """
+        edges = np.array([a + int(round(i * (b - a) / n_blocks)) for i in range(n_blocks + 1)])
+        shortest = int(np.diff(edges).min())
+        if shortest < self.longest:
+            return None, None, (f"a block of {shortest} iteration(s) is shorter than the interval of {self.longest} "
+                                "iterations at which the slowest lambda window keeps its samples")
+        columns, observations = self.masks(a, b)
+        values, mbars = [], []
+        for i in range(n_blocks):
+            in_block, observed_in_block = self.masks(int(edges[i]), int(edges[i + 1]))
+            without = self.estimate(columns & ~in_block, observations & ~observed_in_block, base.f)
+            if not without.determined:
+                return None, None, f"without block {i + 1}: {without.reason}"
+            values.append(without.value)
+            mbars.append(without.mbar)
+
+        def spread(x) -> float:
+            x = np.asarray(x)
+            return float(np.sqrt((n_blocks - 1) / n_blocks * np.sum((x - x.mean()) ** 2)))
+
+        return spread(values), spread(mbars), ""
+
+    def part(self, a: int, b: int, block_counts, base: PartEstimate | None = None) -> dict:
+        """The estimate of the iterations [a, b) with its standard error.
+
+        The error is the largest of the jackknife errors of ``block_counts`` that can be used, or
+        the analytical one (MBAR and the correction for independent samples) if that is larger
+        or none can be used. Returns a dict with ``estimate`` (PartEstimate), ``error``,
+        ``error_from``, ``n_blocks``, the jackknife errors per number of blocks (``blocks``,
+        ``mbar_blocks``), ``block_notes`` and ``note``.
+        """
+        if base is None:
+            columns, observations = self.masks(a, b)
+            base = self.estimate(columns, observations, self.f_whole, analytic=True)
+        out = {"estimate": base, "error": None, "error_from": "", "n_blocks": None, "blocks": {}, "mbar_blocks": {},
+               "block_notes": {}, "note": ""}
+        if not base.determined:
+            return out
+        for count in dict.fromkeys(int(c) for c in block_counts):
+            value, mbar, why = self.jackknife(a, b, count, base)
+            out["blocks"][str(count)], out["mbar_blocks"][str(count)] = value, mbar
+            if why:
+                out["block_notes"][str(count)] = why
+        usable = {count: value for count, value in out["blocks"].items() if value is not None}
+        analytic = (None if base.mbar_error is None
+                    else float(np.hypot(base.mbar_error, base.correction_error or 0.0)))
+        best = max(usable, key=usable.get) if usable else None
+        if best is not None and (analytic is None or usable[best] >= analytic):
+            out.update(error=usable[best], error_from="time blocks", n_blocks=int(best))
+        elif analytic is not None:
+            out.update(error=analytic, error_from="analytical")
+        if not usable:
+            out["note"] = ("no number of time blocks could be used: "
+                           + "; ".join(f"{count} blocks: {why}" for count, why in out["block_notes"].items()))
+        return out
 
 
 def solve_decorrelated(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None, max_iterations: int = 1000,
@@ -500,8 +692,9 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
                  al. 2020, section 8.2). Both the estimate (iterations / statistical inefficiency,
                  ``fewest``) and the number of samples MBAR really gets from that window
                  (``kept``) must reach it, and so must what the standard error leaves of them
-                 (``independent``): where the standard error from time blocks is ``error_ratio``
-                 times the one MBAR gives for the kept samples, the samples carry the
+                 (``independent``): where the standard error of the MBAR part from time blocks
+                 (the largest that could be used) is ``error_ratio`` times the one MBAR gives for
+                 the kept samples, the samples carry the
                  information of 1 / error_ratio^2 as many independent ones (the variance of an
                  estimate falls as one over their number). The windows are decorrelated one by
                  one; this is the correlation that is left between them. A ratio below 1 counts
@@ -512,7 +705,8 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
                  a relative perturbation; here to the leg). A difference is an indication, not a
                  proof, and a converged estimate still fluctuates: the difference is also given
                  in units of its own standard error.
-    estimators   BAR between neighbouring windows and MBAR differ by at most
+    estimators   BAR between neighbouring windows and MBAR (both on the same samples and without
+                 the tail correction) differ by at most
                  ``estimators_tolerance_kcal`` (differences "larger than 1 kcal/mol ... would
                  indicate poor convergence", Mey et al. 2020, section 8.4; the literature compares
                  TI with BAR-type estimators, cuFEP records no dU/dlambda).
@@ -523,10 +717,19 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
     """
     kt = R_GAS * float(analysis.get("temperature_K", 298.15))
     final, error = _number(analysis.get("delta_g")), _number(analysis.get("delta_g_error"))
+    # the MBAR part alone: before version 5 delta_g was that
+    mbar_value = _number(analysis.get("delta_g_mbar", analysis.get("delta_g")))
     kept = analysis.get("window_kept_samples") or []
-    # standard error from time blocks / standard error of MBAR (None: no blocks, or a result without)
-    mbar_error = _number(analysis.get("delta_g_error_mbar"))
-    ratio = error / mbar_error if analysis.get("delta_g_error_n_blocks") and error is not None and mbar_error else None
+    # the correlation left between the windows: standard error of the MBAR part from time blocks /
+    # standard error MBAR gives for it (None: no number of blocks could be used)
+    if "delta_g_mbar_error_blocks" in analysis:
+        blocks = [_number(x) for x in (analysis.get("delta_g_mbar_error_blocks") or {}).values()]
+        blocks = [x for x in blocks if x is not None]
+        mbar_error = _number(analysis.get("delta_g_mbar_error"))
+        ratio = max(blocks) / mbar_error if blocks and mbar_error else None
+    else:                                        # version 4
+        mbar_error = _number(analysis.get("delta_g_error_mbar"))
+        ratio = error / mbar_error if analysis.get("delta_g_error_n_blocks") and error is not None and mbar_error else None
 
     neighbour = [_number(x) for x in analysis.get("overlap_neighbour", [])]
     lowest = _number(analysis["min_overlap"]) if "min_overlap" in analysis else 1.0
@@ -588,11 +791,12 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
             conv["ok"] = False       # half of the data does not determine the free energy
     out["halves"] = conv
 
+    # BAR and MBAR on the same samples, both without the tail correction
     bar = _number(analysis.get("bar_delta_g"))
     tolerance = estimators_tolerance_kcal * KCAL
-    est = {"ok": None, "tolerance": tolerance, "mbar": final}
-    if per_window and bar is not None and final is not None:
-        est.update(bar=bar, ok=bool(abs(bar - final) <= tolerance))
+    est = {"ok": None, "tolerance": tolerance, "mbar": mbar_value}
+    if per_window and bar is not None and mbar_value is not None:
+        est.update(bar=bar, ok=bool(abs(bar - mbar_value) <= tolerance))
     elif analysis.get("bar_note"):
         est["reason"] = str(analysis["bar_note"])
     out["estimators"] = est
@@ -659,24 +863,22 @@ def stage_boundaries(state_dicts: list[dict]) -> dict[str, tuple[int, int]]:
 
 def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None = None,
                 n_fractions: int = 10, n_blocks: int = 5, error_blocks=BLOCK_COUNTS,
-                halves_error_blocks: int = HALF_BLOCK_COUNT) -> LegAnalysis:
+                part_error_blocks: int = PART_BLOCK_COUNT, tail: str = "none",
+                min_overlap: float = 0.03) -> LegAnalysis:
     """Analyse samples loaded with :func:`cufep.sampling.storage.read_samples`.
 
-    The free energy comes from samples that are decorrelated window by window
-    (:func:`neighbour_inefficiencies`, :func:`decorrelated`), as Klimovich, Shirts and Mobley
-    2015 and alchemlyb do. Its standard error comes from time blocks common to all windows
-    (:func:`block_standard_error`, for each number of ``error_blocks``; the largest is reported),
-    and so do the errors of the two halves (``halves_error_blocks`` blocks each). The points of
-    the forward and reverse series and the consecutive blocks carry the error MBAR gives for
-    their samples.
-    ``n_fractions`` is the number of points of the forward and reverse
-    series, ``n_blocks`` the number of consecutive blocks with an estimate of their own. A part
-    of the production gets an estimate only if every window holds ``MIN_INDEPENDENT_SAMPLES``
-    independent samples in it; a point or block that does not is left out, and halves that do
-    not are reported with the reason.
+    The free energy that is reported is that of decoupling, MBAR minus the tail correction
+    ``tail`` (reweight, isotropic or none), and every part of the analysis is of that quantity
+    (:class:`TimeRangeEstimator`): the standard error of the whole from time blocks common to all
+    windows (for each number of ``error_blocks``), the two halves, the ``n_fractions`` points of
+    the forward and reverse series and the ``n_blocks`` consecutive blocks, each with the error
+    of ``part_error_blocks`` time blocks within it. MBAR is solved on samples that are
+    decorrelated window by window (:func:`neighbour_inefficiencies`, :func:`decorrelated`), as
+    Klimovich, Shirts and Mobley 2015 and alchemlyb do. A part whose free energy is not
+    determined (``min_overlap``, see TimeRangeEstimator) is left out with the reason; halves that
+    are not determined are reported as not compared. BAR between neighbouring windows is
+    compared with the MBAR part, on the same samples. Raises NoProduction and NoCorrection.
     """
-    from cufep.alchemy.lrc import tail_free_energy
-
     kt = R_GAS * temperature_K
     attrs = samples.get("attrs", {})
     if n_equilibration is None:
@@ -691,14 +893,15 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
             + ("" if planned is None else f" (the run was planned for {int(planned)})")
             + f": {max(0, stored - n_equilibration)} iteration(s) of production, and 4 are the least for an analysis")
     n, n_states = u.shape[0], u.shape[2]
+    series = tail_series(samples, tail, n_equilibration, n, temperature_K)
     # the overlap matrix: equal numbers of samples per window, so that its elements mean the
     # same for every window (statistical inefficiency of the summed reduced potential)
     g_sum = statistical_inefficiency(u, states)
     stride = max(1, int(np.ceil(g_sum)))
     f_start, _df, overlap = solve_mbar(u[::stride], states[::stride])
     neighbour = [float(overlap[i, i + 1]) for i in range(n_states - 1)]
-    # the free energy and its uncertainty: every window decorrelated on its own, by the slower of
-    # its energy differences to the two neighbours
+    # the free energy: every window decorrelated on its own, by the slower of its energy
+    # differences to the two neighbours
     table = neighbour_inefficiencies(u, states)
     g = np.array([np.nanmax(row) if np.isfinite(row).any() else 1.0 for row in table])
     towards = [1 if np.isfinite(row[1]) and not row[0] > row[1] else -1 for row in table]
@@ -714,80 +917,61 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     used_neighbour = [] if used is None else [float(used[i, i + 1]) for i in range(n_states - 1)]
     effective = n / g
     slowest = int(np.argmin(np.minimum(effective, n_k)))
-    # the standard error: time blocks common to all windows, for each number of blocks
-    longest = int(np.ceil(g.max()))
-    lowest = float(np.min(u_kn))                               # as pymbar gets them, see _mbar
-    reduced = np.minimum(u_kn - lowest, 1.0e6)
-    iteration = kept_sample_iterations(n, g)
-    block_errors: dict[str, float | None] = {}
-    block_notes: dict[str, str] = {}
-    for count in dict.fromkeys(int(count) for count in error_blocks):
-        value, why = block_standard_error(reduced, n_k, iteration, 0, n, count, f_k, longest)
-        block_errors[str(count)] = None if value is None else float(value * kt)
-        if why:
-            block_notes[str(count)] = why
-    mbar_error = float(df_k[-1] * kt)
-    usable = {count: value for count, value in block_errors.items() if value is not None}
-    if usable:
-        n_blocks_used = int(max(usable, key=usable.get))
-        error, error_note = usable[str(n_blocks_used)], ""
-    else:
-        n_blocks_used, error = None, mbar_error
-        error_note = ("no number of time blocks could be used: "
-                      + "; ".join(f"{count} blocks: {why}" for count, why in block_notes.items()))
-    half_blocks: dict[tuple[int, int], int] = {}
 
-    def partial(a: int, b: int, n_time_blocks: int = 0):
-        """(dG, error) of the iterations [a, b), or None if a window has too few independent samples there.
+    estimator = TimeRangeEstimator(u_kn, n_k, kept_sample_iterations(n, g), series, kt, min_overlap,
+                                   int(np.ceil(g.max())), f_k)
+    # the whole production: its MBAR solution is the one above; the overlap of its windows is a
+    # check of its own (NOT RELIABLE), so it is not required here
+    everything, everything_obs = estimator.masks(0, n)
+    correction, correction_error, n_obs, why = series.estimate(everything_obs)
+    if correction is None:
+        raise NoCorrection(f"the tail correction ({tail}) cannot be estimated from the production: {why}")
+    mbar, mbar_error = float(f_k[-1] * kt), float(df_k[-1] * kt)
+    base = PartEstimate(f=f_k, mbar=mbar, mbar_error=mbar_error, correction=correction, correction_error=correction_error,
+                        correction_samples=n_obs, value=mbar - correction)
+    whole = estimator.part(0, n, error_blocks, base=base)
 
-        The error is MBAR's; with ``n_time_blocks`` it is that of so many time blocks within
-        the part where they can be used (``half_blocks`` then holds the number for the part).
-        """
-        part_kn, part_n = decorrelated(u, states, g, a, b)
-        if part_n.min() < MIN_INDEPENDENT_SAMPLES:
-            return None
-        try:
-            # starts from the solution of all data and then converges in a few iterations; a
-            # part that needs more has a window without overlap and no defined answer
-            f, df = solve_decorrelated(part_kn, part_n, initial_f_k=f_k, max_iterations=30)
-        except Exception:  # noqa: BLE001
-            return float("nan"), float("nan")
-        part_error = float(df[-1])
-        if n_time_blocks and np.isfinite(f[-1]):
-            value, _why = block_standard_error(np.minimum(part_kn - lowest, 1.0e6), part_n,
-                                               kept_sample_iterations(n, g, a, b), a, b, n_time_blocks, f, longest)
-            if value is not None:
-                part_error = value
-                half_blocks[(a, b)] = n_time_blocks
-        return float(f[-1] * kt), float(part_error * kt)
+    parts_not_determined: list[str] = []
+
+    def part(a: int, b: int, label: str):
+        """(dG, error, number of time blocks behind the error) of the iterations [a, b), or a reason."""
+        if (a, b) == (0, n):
+            return whole["estimate"].value, whole["error"], whole["n_blocks"]
+        result = estimator.part(a, b, [part_error_blocks])
+        if not result["estimate"].determined:
+            return f"{label} (iterations {a}-{b} of the production): {result['estimate'].reason}"
+        if result["error"] is None:
+            return f"{label} (iterations {a}-{b} of the production): no standard error could be computed"
+        return result["estimate"].value, result["error"], result["n_blocks"]
 
     forward, reverse = [], []
-    everything = (float(f_k[-1] * kt), float(df_k[-1] * kt))
     for i in range(1, n_fractions + 1):
         m = int(round(i * n / n_fractions))
-        fwd, rev = (everything, everything) if m >= n else (partial(0, m), partial(n - m, n))
-        if fwd is None or rev is None:
-            continue
+        fwd, rev = part(0, m, f"forward point {m / n:.2f}"), part(n - m, n, f"reverse point {m / n:.2f}")
         # the fraction that is really used is the one that is stored and plotted
-        forward.append((m / n, *fwd))
-        reverse.append((m / n, *rev))
+        for out, got in ((forward, fwd), (reverse, rev)):
+            if isinstance(got, str):
+                parts_not_determined.append(got)
+            else:
+                out.append((m / n, float(got[0]), float(got[1])))
     # the halves: split in the middle of the time series, no iteration in both
     mid = n // 2
-    first_half, second_half = partial(0, mid, int(halves_error_blocks)), partial(mid, n, int(halves_error_blocks))
-    convergence_note = ""
-    if first_half is None or second_half is None:
+    halves = [part(0, mid, "the first half"), part(mid, n, "the second half")]
+    convergence_note = "; ".join(h for h in halves if isinstance(h, str))
+    if convergence_note:
         first_half = second_half = (float("nan"), float("nan"))
-        half_blocks.clear()
-        in_half = min(len(kept_iterations(0, mid, g[slowest])), len(kept_iterations(mid, n, g[slowest])))
-        convergence_note = (f"lambda window {slowest} holds {in_half} independent sample(s) in a half of the production "
-                            f"(statistical inefficiency {g[slowest]:.0f} of {n} iterations); "
-                            f"{MIN_INDEPENDENT_SAMPLES} are needed for an estimate")
+        half_blocks = [None, None]
+    else:
+        first_half, second_half = ((float(h[0]), float(h[1])) for h in halves)
+        half_blocks = [halves[0][2], halves[1][2]]
     gap = abs(first_half[0] - second_half[0])
     blocks = []
     edges = [int(round(k * n / n_blocks)) for k in range(n_blocks + 1)] if n_blocks >= 2 else []
-    parts = [partial(a, b) for a, b in zip(edges[:-1], edges[1:])]
-    if parts and all(part is not None for part in parts):
-        blocks = [(a / n, b / n, *part) for a, b, part in zip(edges[:-1], edges[1:], parts)]
+    consecutive = [part(a, b, f"block {i + 1} of {n_blocks}") for i, (a, b) in enumerate(zip(edges[:-1], edges[1:]))]
+    missing = [c for c in consecutive if isinstance(c, str)]
+    if consecutive and not missing:
+        blocks = [(a / n, b / n, float(c[0]), float(c[1])) for a, b, c in zip(edges[:-1], edges[1:], consecutive)]
+    parts_not_determined += missing
     bar_note = ""
     try:
         bar, bar_error = bar_between_neighbours(u_kn, n_k)
@@ -804,29 +988,23 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         for name, (a, b) in stage_boundaries(state_dicts).items():
             stages[name] = float((f_k[b] - f_k[a]) * kt)
 
-    lrc_dg = lrc_se = 0.0
-    lrc_n = 0
-    if "lrc_du" in samples and len(samples["lrc_du"]):
-        mask = samples["lrc_iter"] >= n_equilibration
-        du = samples["lrc_du"][mask]
-        lrc_n = int(du.size)
-        lrc_dg, lrc_se = tail_free_energy(du, temperature_K)
-
-    lrc_iso = 0.0
-    if "lrc_s6" in attrs:
-        rc = float(attrs.get("lrc_cutoff_nm", 0.9))
-        coupled = states == 0
-        volume = float(samples["volume"][n_equilibration:][coupled].mean()) if coupled.any() else float("nan")
-        if np.isfinite(volume) and volume > 0:
-            lrc_iso = float((16.0 * np.pi / volume) * (float(attrs["lrc_s12"]) / (9.0 * rc ** 9)
-                                                       - float(attrs["lrc_s6"]) / (3.0 * rc ** 3)))
+    def whole_correction(method: str) -> float | None:
+        """The correction of the whole production by another method, for comparison."""
+        try:
+            value = tail_series(samples, method, n_equilibration, n, temperature_K).estimate(slice(None))[0]
+        except NoCorrection:
+            return None
+        return None if value is None else float(value)
 
     return LegAnalysis(
         n_states=n_states, n_iterations_used=int(n), statistical_inefficiency=float(g_sum),
-        effective_samples_per_state=float(effective[slowest]), delta_g=float(f_k[-1] * kt),
-        delta_g_error=float(error), delta_g_error_mbar=mbar_error, delta_g_error_blocks=block_errors,
-        delta_g_error_blocks_note=block_notes, delta_g_error_n_blocks=n_blocks_used, delta_g_error_note=error_note,
-        halves_error_blocks=[half_blocks.get((0, mid)), half_blocks.get((mid, n))],
+        effective_samples_per_state=float(effective[slowest]), delta_g=float(base.value),
+        delta_g_error=float(whole["error"]), delta_g_mbar=mbar, delta_g_mbar_error=mbar_error,
+        correction_method=tail, correction=float(correction), correction_error=float(correction_error),
+        correction_samples=int(n_obs), delta_g_error_blocks=whole["blocks"],
+        delta_g_mbar_error_blocks=whole["mbar_blocks"], delta_g_error_blocks_note=whole["block_notes"],
+        delta_g_error_from=whole["error_from"], delta_g_error_n_blocks=whole["n_blocks"],
+        delta_g_error_note=whole["note"], halves_error_blocks=half_blocks,
         window_statistical_inefficiency=[float(x) for x in g],
         window_inefficiency_previous=[float(x) for x in table[:, 0]],
         window_inefficiency_next=[float(x) for x in table[:, 1]], window_inefficiency_neighbour=towards,
@@ -842,6 +1020,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         min_overlap_used=float(min(used_neighbour)) if used_neighbour else float("nan"),
         forward=forward, reverse=reverse, first_half=first_half, second_half=second_half,
         convergence_note=convergence_note, forward_reverse_gap=float(gap), blocks=blocks,
+        parts_not_determined=parts_not_determined,
         bar_delta_g=float(bar), bar_delta_g_error=float(bar_error), bar_note=bar_note,
-        lrc_delta_g=lrc_dg, lrc_error=lrc_se, lrc_samples=lrc_n, lrc_isotropic=lrc_iso,
+        lrc_reweight=whole_correction("reweight"), lrc_isotropic=whole_correction("isotropic"),
         temperature_K=temperature_K)

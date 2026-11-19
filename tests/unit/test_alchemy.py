@@ -249,4 +249,6 @@ def test_tail_free_energy_limits():
     assert tail_free_energy(np.full(50, -3.0), 298.15)[0] == pytest.approx(-3.0)
     dg, se = tail_free_energy(np.array([-2.0, -4.0]), 298.15)
     assert -4.0 < dg < -3.0 and se > 0
-    assert tail_free_energy(np.array([]), 298.15) == (0.0, 0.0)
+    # review of PR 1: no tail energy is no estimate (it was a correction of 0 with an error of 0)
+    with pytest.raises(ValueError, match="needs at least one recorded tail energy"):
+        tail_free_energy(np.array([]), 298.15)

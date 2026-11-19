@@ -73,7 +73,7 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
             verdict += (", " if verdict else "") + f"fewest independent samples {samples['fewest']:.0f} (window {samples['window']})"
         ax.set_title(f"{leg} leg: {final:.2f} ± {error:.2f} kcal/mol" + (f"\n{verdict}" if verdict else ""), fontsize=9)
         ax.set_xlabel("fraction of the production (diamonds: its two halves)")
-        ax.set_ylabel("free energy of the leg (kcal/mol)")
+        ax.set_ylabel("free energy of decoupling, with the tail correction (kcal/mol)")
         ax.legend(frameon=False, fontsize=8)
 
         ax = axes[row][1]

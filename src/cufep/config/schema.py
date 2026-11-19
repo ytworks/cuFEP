@@ -378,10 +378,11 @@ class AnalysisConfig(_Section):
     estimators_tolerance_kcal_mol: float = Field(default=1.0, gt=0.0)
     #: numbers of time blocks, common to all lambda windows, with which the standard error of a
     #: leg is computed (delete-one-block jackknife); the largest of the errors they give is the
-    #: one reported
+    #: one reported, unless the analytical one is larger
     error_blocks: list[Annotated[int, Field(ge=2)]] = Field(default=[40, 20, 10, 5], min_length=1)
-    #: number of time blocks for the standard error of each half of the production
-    halves_error_blocks: int = Field(default=5, ge=2)
+    #: number of time blocks for the standard error of every part of the production: each half,
+    #: each point of the forward and reverse series, each consecutive block
+    part_error_blocks: int = Field(default=5, ge=2)
 
 
 class ResourcesConfig(_Section):
@@ -435,6 +436,11 @@ REMOVED_SETTINGS = {
         "analysis.estimators_tolerance_kcal_mol (BAR and MBAR within 1 kcal/mol)",
         "A multiple of the standard error cannot be turned into kT or kcal/mol: remove the line and set those "
         "three where their defaults do not suit (docs/configuration.md)"),
+    ("analysis", "halves_error_blocks"): (
+        5.0,
+        "The number of time blocks for the standard error of a half of the production is now that of every "
+        "part of the production (the halves, the forward and reverse series, the consecutive blocks)",
+        "Use analysis.part_error_blocks"),
     ("lambda_schedule", "adaptive", "equilibration_check_ps"): (
         250.0,
         "Adaptive lambda scheduling chooses the lambda windows in its precalculation only and no longer adds "

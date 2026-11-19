@@ -118,11 +118,14 @@ class TailEnergy:
 
 
 def tail_free_energy(du_kj: np.ndarray, temperature_K: float) -> tuple[float, float]:
-    """``-kT ln <exp(-dU/kT)>`` and a bootstrap-free standard error estimate (kJ/mol)."""
+    """``-kT ln <exp(-dU/kT)>`` and its standard error for independent observations (kJ/mol).
+
+    Raises ValueError without observations: no observation is no estimate, not a correction of 0.
+    """
     kt = 8.31446261815324e-3 * temperature_K
     x = -np.asarray(du_kj, dtype=float) / kt
     if x.size == 0:
-        return 0.0, 0.0
+        raise ValueError("the tail correction needs at least one recorded tail energy")
     shift = x.max()
     w = np.exp(x - shift)
     dg = -kt * (shift + np.log(w.mean()))

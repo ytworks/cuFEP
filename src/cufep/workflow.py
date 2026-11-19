@@ -1320,10 +1320,10 @@ def run_leg(job: LegJob) -> dict:
 
     slowest = analysis_dict["slowest_window"]
     blocks = analysis_dict.get("delta_g_error_n_blocks")
-    error_from = (f"standard error from {blocks} time blocks; MBAR's own "
-                  f"{number(analysis_dict['delta_g_error_mbar'], 2, KCAL)}" if blocks else "MBAR's own standard error")
-    log(f"dG(decouple) = {number(total, 2, KCAL)} kcal/mol (MBAR {number(analysis_dict['delta_g'], 2, KCAL)} ± "
-        f"{number(analysis_dict['delta_g_error'], 2, KCAL)}, {error_from}; tail {number(-correction, 2, KCAL)}); "
+    error_from = f"from {blocks} time blocks" if analysis_dict.get("delta_g_error_from") == "time blocks" else "analytical"
+    log(f"dG(decouple) = {number(total, 2, KCAL)} ± {number(analysis_dict['delta_g_error'], 2, KCAL)} kcal/mol "
+        f"(standard error {error_from}; MBAR {number(analysis_dict['delta_g_mbar'], 2, KCAL)} ± "
+        f"{number(analysis_dict['delta_g_mbar_error'], 2, KCAL)}, tail {number(-correction, 2, KCAL)}); "
         f"min overlap {number(analysis_dict['min_overlap'], 3)} (among the samples of the estimate "
         f"{number(analysis_dict['min_overlap_used'], 3)}), round trips {analysis_dict['round_trips']}, fewest "
         f"independent samples in a window {analysis_dict['effective_samples_per_state']:.0f}, of which MBAR gets "
@@ -1432,7 +1432,7 @@ def analysis_record(cfg) -> dict:
             "min_effective_samples": float(a.min_effective_samples), "halves_tolerance_kT": float(a.halves_tolerance_kT),
             "estimators_tolerance_kcal_mol": float(a.estimators_tolerance_kcal_mol),
             "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
-            "error_blocks": [int(count) for count in a.error_blocks], "halves_error_blocks": int(a.halves_error_blocks),
+            "error_blocks": [int(count) for count in a.error_blocks], "part_error_blocks": int(a.part_error_blocks),
             "membrane_area_tolerance": float(settings.membrane.area_tolerance),
             "membrane_pocket_water_tolerance": float(settings.membrane.pocket_water_tolerance),
             "pose_rmsd_warning_nm": float(settings.restraints.pose_rmsd_warning_nm)}
@@ -1487,7 +1487,8 @@ def notes_of_leg_files(leg_dir: Path, settings, conditions: dict) -> tuple[list[
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
 #: samples gets them anew
 _ANALYSIS_NOTES = ("NOT RELIABLE", "NOT CONVERGED", "convergence not assessed", "few independent samples",
-                   "the standard error of this leg is the one MBAR gives",
+                   "the standard error of this leg is the one MBAR gives", "the standard error of this leg is the "
+                   "analytical one", "parts of the production without an estimate",
                    "the two halves of the production", "half of the production does not",
                    "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record")
 #: what the run of a leg knows and its samples do not hold
@@ -1606,7 +1607,7 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     the analysis have changed.
     """
     from cufep.alchemy.schedule import Schedule
-    from cufep.analysis.mbar import analyze_leg
+    from cufep.analysis.mbar import NoCorrection, analyze_leg
     from cufep.analysis.structure import structural_analysis
     from cufep.sampling.storage import equilibration_boundary, read_samples
 
@@ -1628,10 +1629,13 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
                             f"tail (analysis.lrc: none) and cannot be analysed with analysis.lrc: {a.lrc}")
     if schedule is None and (leg_dir / "schedule.yaml").exists():
         schedule = Schedule.load(leg_dir / "schedule.yaml")
-    res = analyze_leg(samples, temperature, n_equilibration=n_equilibration, n_fractions=a.convergence_points,
-                      n_blocks=a.convergence_blocks, error_blocks=a.error_blocks,
-                      halves_error_blocks=a.halves_error_blocks)
-    correction = {"reweight": res.lrc_delta_g, "isotropic": res.lrc_isotropic, "none": 0.0}[a.lrc]
+    try:
+        res = analyze_leg(samples, temperature, n_equilibration=n_equilibration, n_fractions=a.convergence_points,
+                          n_blocks=a.convergence_blocks, error_blocks=a.error_blocks,
+                          part_error_blocks=a.part_error_blocks, tail=a.lrc, min_overlap=a.min_overlap)
+    except NoCorrection as exc:
+        raise WorkflowError(f"the samples in {leg_dir}: {exc}") from exc
+    correction = res.correction
     structure = structural_analysis(samples, n_equilibration)
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
     # the notes of the pre-equilibration and the restraint, with the verdicts on the bilayer and the
@@ -1652,13 +1656,13 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "prepared_systems_sha256": run.get("prepared_systems_sha256"),
         "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
         "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
-        "delta_g_decouple": res.delta_g - correction,          # decoupling with the full LJ range
-        # the standard error of the leg (time blocks; cufep.analysis.mbar.block_standard_error) and
-        # the one MBAR gives for the same samples
-        "delta_g_mbar": res.delta_g, "delta_g_error": res.delta_g_error, "delta_g_mbar_error": res.delta_g_error_mbar,
+        # decoupling with the full LJ range (MBAR minus the tail correction of the same iterations),
+        # its standard error (cufep.analysis.mbar.TimeRangeEstimator), and the MBAR part alone
+        "delta_g_decouple": res.delta_g, "delta_g_error": res.delta_g_error,
+        "delta_g_mbar": res.delta_g_mbar, "delta_g_mbar_error": res.delta_g_mbar_error,
         "lrc": correction, "lrc_method": a.lrc, "lrc_long_cutoff_nm": tail.get("long_cutoff_nm"),
-        "lrc_reweight": res.lrc_delta_g,
-        "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.lrc_error, "structure": structure,
+        "lrc_reweight": res.lrc_reweight,
+        "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.correction_error, "structure": structure,
         "restraint_release": release, "restraint_release_analytical": release_analytical,
         "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
         "analysis_record": analysis_record(settings), "run": run,
@@ -1744,9 +1748,13 @@ def quality_warnings(result: dict, cfg) -> list[str]:
                    f"{left} The free energy, its uncertainty and the comparison of the halves rest on these samples. "
                    f"A longer production gives more: {longer}")
     if a.get("delta_g_error_note"):
-        out.append("the standard error of this leg is the one MBAR gives, which takes the samples as independent of "
-                   f"each other ({a['delta_g_error_note']}). A longer production allows the error from time blocks: "
-                   f"{longer}")
+        out.append("the standard error of this leg is the analytical one of MBAR and the tail correction, which takes "
+                   f"the samples as independent of each other ({a['delta_g_error_note']}). A longer production allows "
+                   f"the error from time blocks: {longer}")
+    if a.get("parts_not_determined"):
+        shown = a["parts_not_determined"]
+        out.append(f"parts of the production without an estimate ({len(shown)}; they are not shown in analysis.png): "
+                   + "; ".join(shown[:3]) + ("; ..." if len(shown) > 3 else ""))
     halves = q["halves"]
     if halves["ok"] is False:
         if halves.get("difference") is not None:
@@ -1890,6 +1898,14 @@ def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: 
             "legs of the ligand under the new ones in a new output.dir.")
 
 
+def error_from_time_blocks(result: dict) -> bool:
+    """Whether the standard error of a leg's result is the one from time blocks."""
+    a = result.get("analysis") or {}
+    if "delta_g_error_from" in a:
+        return a["delta_g_error_from"] == "time blocks"
+    return isinstance(result.get("delta_g_error"), (int, float)) and bool(a.get("delta_g_error_n_blocks"))  # version 4
+
+
 def cycle_differences(legs: list[tuple[str, dict]]) -> tuple[list[str], list[str]]:
     """What differs among leg results that are to be combined, and what could not be compared.
 
@@ -1959,8 +1975,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
         per_repeat.append({
             "repeat": r, "dg_bind": dg, "error": float(np.hypot(*reported)),
             "mbar_error": float(np.hypot(c["delta_g_mbar_error"], s["delta_g_mbar_error"])),
-            "error_from_time_blocks": all(isinstance(leg.get("delta_g_error"), (int, float))
-                                          and (leg.get("analysis") or {}).get("delta_g_error_n_blocks") for leg in (c, s)),
+            "error_from_time_blocks": all(error_from_time_blocks(leg) for leg in (c, s)),
             "dg_complex": c["delta_g_decouple"],
             "dg_solvent": s["delta_g_decouple"], "restraint_release": c["restraint_release"],
             "lrc_complex": c["lrc"], "lrc_solvent": s["lrc"], "backend_complex": c["backend"],
