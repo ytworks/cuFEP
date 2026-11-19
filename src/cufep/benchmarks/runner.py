@@ -128,17 +128,17 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         return text
 
     lines += ["", "## Agreement with experiment", "",
-              "Values in brackets are 95 % bootstrap intervals over ligands. FEP+ values come from relative "
-              "calculations shifted to the experimental mean, so only the rows below the first three compare "
-              "the two methods like for like.", "",
+              "Values in brackets are 95 % bootstrap intervals over ligands. All numbers are for the ligands "
+              "of this report. FEP+ values come from relative calculations that were shifted as a whole to the "
+              "experimental mean of the published set; over a part of that set their mean signed error is not "
+              "zero. Only the rows below the first three compare the two methods like for like.", "",
               "| statistic | cuFEP | FEP+ |", "|---|---|---|"]
     labels = [("mean_signed_error", "mean signed error (kcal/mol)"), ("rmse", "RMSE, raw (kcal/mol)"),
               ("mue", "MUE, raw (kcal/mol)"), ("centred_rmse", "RMSE after removing the mean error (kcal/mol)"),
               ("pairwise_rmse", "pairwise ddG RMSE (kcal/mol)"), ("kendall_tau", "Kendall tau"),
               ("spearman", "Spearman rho"), ("pearson_r2", "Pearson R^2")]
     for key, label in labels:
-        fep = "0 by construction" if key == "mean_signed_error" else cell("FEP+", key)
-        lines.append(f"| {label} | {cell('cuFEP', key)} | {fep} |")
+        lines.append(f"| {label} | {cell('cuFEP', key)} | {cell('FEP+', key)} |")
     if len(rows) < 8:
         lines += ["", f"Only {len(rows)} ligands: the intervals are wide and rank statistics are indicative at best."]
     text = "\n".join(lines) + "\n"

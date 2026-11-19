@@ -85,7 +85,19 @@ def test_report_from_a_synthetic_run(tmp_path):
     (tmp_path / "summary.json").write_text(json.dumps(summary))
     text = report("tyk2", tmp_path)
     assert "Ligands with a result: 16 of 17 run (16 in the set)." in text
-    assert "| mean signed error (kcal/mol) | -1." in text and "0 by construction" in text
+    assert "| mean signed error (kcal/mol) | -1." in text and "0 by construction" not in text
+    # over the whole curated TYK2 set the FEP+ values have no mean error ...
+    assert [line.split("|")[3].split("[")[0].strip() for line in text.splitlines() if line.startswith("| mean signed")] == ["0.00"]
+    # ... over the five ligands of the subset they have (review of PR 1: the table said "0 by construction")
+    subset = {"jmc_23", "jmc_30", "ejm_45", "ejm_48", "ejm_44"}
+    part = tmp_path / "subset"
+    part.mkdir()
+    (part / "summary.json").write_text(json.dumps([s for s in summary if s["ligand"] in subset]))
+    text = report("tyk2", part)
+    expected = np.mean([ref[name]["fepplus"] - ref[name]["exp"] for name in subset])
+    assert expected == pytest.approx(0.244, abs=0.001)
+    assert [line.split("|")[3].split("[")[0].strip() for line in text.splitlines() if line.startswith("| mean signed")] == ["0.24"]
+    assert "over a part of that set their mean signed error is not zero" in text
     assert (tmp_path / "benchmark_report.md").exists() and (tmp_path / "benchmark_report.csv").exists()
     with open(tmp_path / "benchmark_report.csv") as fh:
         assert len(list(csv.DictReader(fh))) == 16
