@@ -75,8 +75,9 @@ class PreparedProtein:
         return np.asarray(self.positions.value_in_unit(unit.nanometer), dtype=float)
 
     def write_pdb(self, path: str | Path) -> None:
-        with open(path, "w") as fh:
-            app.PDBFile.writeFile(self.topology, self.positions, fh, keepIds=True)
+        from cufep.files import publish_with
+
+        publish_with(path, lambda fh: app.PDBFile.writeFile(self.topology, self.positions, fh, keepIds=True))
 
 
 # --------------------------------------------------------------------------- helpers

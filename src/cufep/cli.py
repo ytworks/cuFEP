@@ -46,7 +46,9 @@ def init(protein: str, ligand: str, output: str, full: bool) -> None:
     else:
         text = ("# cuFEP configuration. Everything not listed here uses its default or is chosen\n"
                 "# automatically; `cufep init --full` writes all settings.\n" + yaml.safe_dump(data, sort_keys=False))
-    out.write_text(text)
+    from cufep.files import publish_text
+
+    publish_text(out, text)
     click.echo(f"wrote {out}")
 
 

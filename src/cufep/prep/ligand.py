@@ -131,4 +131,7 @@ def assign_partial_charges(ligand: Ligand, method: str = "am1bcc", cache_dir: st
     q += (ligand.formal_charge - q.sum()) / len(q)
     mol.partial_charges = q * off_unit.elementary_charge
     if cache_file is not None:
-        cache_file.write_text(json.dumps({"ligand": ligand.name, "method": method, "charges": q.tolist()}))
+        from cufep.files import publish_text
+
+        # used again whenever it exists, so it is never seen half written
+        publish_text(cache_file, json.dumps({"ligand": ligand.name, "method": method, "charges": q.tolist()}))

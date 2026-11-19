@@ -2,7 +2,6 @@
 replaced manifest, restart state in an atomically written NPZ."""
 from __future__ import annotations
 
-import errno
 import json
 import os
 import time
@@ -208,31 +207,8 @@ SEGMENT_PATTERN = "segment_{:06d}.h5"
 WRITING = ".writing"
 
 
-#: what a system says when it cannot make a directory durable: passed over for directories only
-_NO_DIRECTORY_SYNC = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EBADF, errno.EISDIR, errno.EACCES}
-
-
-def _fsync_path(path: Path) -> None:
-    """Make what was written to ``path`` (a file, or a directory and its entries) durable.
-
-    An error of a file is raised (review of PR 1: an EIO of the fsync of a part was passed over, and
-    the checkpoint that named it replaced the one before). A directory that the system cannot sync
-    (EINVAL, ENOTSUP ...) is passed over; any other error of a directory is raised too."""
-    path = Path(path)
-    directory = path.is_dir()
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError as exc:
-        if directory and exc.errno in _NO_DIRECTORY_SYNC:
-            return
-        raise
-    try:
-        os.fsync(fd)
-    except OSError as exc:
-        if not (directory and exc.errno in _NO_DIRECTORY_SYNC):
-            raise
-    finally:
-        os.close(fd)
+# one way to make a file or a directory durable, for the samples and for every other file (cufep.files)
+from cufep.files import _NO_DIRECTORY_SYNC, fsync_path as _fsync_path  # noqa: E402,F401
 
 
 def _replace(source: Path, target: Path) -> None:

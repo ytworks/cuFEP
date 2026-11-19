@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from cufep import jsonio
+from cufep.files import publish, publish_npz, publish_text, publish_with
 from cufep.config.schema import Config, WindowsConfig
 
 KCAL = 4.184
@@ -224,12 +225,11 @@ def _write_system(prep_dir: Path, name: str, modeller, system, ligand_atoms: lis
     box = np.array([[float(v) for v in vec.value_in_unit(unit.nanometer)] for vec in top.getPeriodicBoxVectors()])
     protein = [a.index for a in top.atoms() if a.residue.name in AMINO_ACIDS or a.residue.name in CAPS]
     solute = sorted(set(protein) | set(ligand_atoms))
-    (prep_dir / f"{name}_system.xml").write_text(mm.XmlSerializer.serialize(system))
-    (prep_dir / f"{name}_topology.json").write_text(json.dumps(topology_to_dict(top)))
-    np.savez(prep_dir / f"{name}.npz", positions=pos, box=box, ligand=np.array(ligand_atoms, dtype=int),
-             solute=np.array(solute, dtype=int), protein=np.array(protein, dtype=int))
-    with open(prep_dir / f"{name}.pdb", "w") as fh:
-        app.PDBFile.writeFile(top, modeller.positions, fh, keepIds=True)
+    publish_text(prep_dir / f"{name}_system.xml", mm.XmlSerializer.serialize(system))
+    publish_text(prep_dir / f"{name}_topology.json", json.dumps(topology_to_dict(top)))
+    publish_npz(prep_dir / f"{name}.npz", positions=pos, box=box, ligand=np.array(ligand_atoms, dtype=int),
+                solute=np.array(solute, dtype=int), protein=np.array(protein, dtype=int))
+    publish_with(prep_dir / f"{name}.pdb", lambda fh: app.PDBFile.writeFile(top, modeller.positions, fh, keepIds=True))
     _ = LIGAND_RESNAME
 
 
@@ -839,7 +839,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
                                                 ionic_strength_M=ionic, min_edge_nm=min_edge))
     system = create_system(forcefield, modeller.topology, sysspec)
     _write_system(prep_dir, "solvent", modeller, system, ligand_atom_indices(modeller.topology))
-    (prep_dir / "ligand.json").write_text(ligand.offmol.to_json())
+    publish_text(prep_dir / "ligand.json", ligand.offmol.to_json())
     info = {"ligand": ligand.name, "n_atoms_complex": n_complex, "n_atoms_solvent": system.getNumParticles(),
             "complex_barostat": barostat, "membrane": membrane, "box_shape": box_shape,
             "solvent_box_shape": solvent_shape, "membrane_info": membrane_info, "warnings": warnings,
@@ -847,7 +847,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
             "box_built_for_backend": cfg.backend.name, "made_from": made_from,
             # the chain of the input PDB of every chain of the prepared protein
             "input_chains": dict(protein.input_chains)}
-    done.write_text(json.dumps(info, indent=1))
+    publish_text(done, json.dumps(info, indent=1))       # last: the mark that the preparation is complete
     log(f"{ligand.name}: complex {n_complex} atoms, solvent leg {system.getNumParticles()} atoms"
         + (f"; warnings: {'; '.join(warnings)}" if warnings else ""))
     return info
@@ -1013,9 +1013,7 @@ def archive_leg(leg_dir: Path) -> Path | None:
     # gets copies (leg_files), each written whole under another name first
     for name in LEG_INPUT_FILES:
         if (leg_dir / name).exists() and not (stage / name).exists():
-            part = stage / f"{name}.copying"
-            shutil.copy2(leg_dir / name, part)
-            os.replace(part, stage / name)
+            publish(stage / name, lambda tmp, source=leg_dir / name: shutil.copy2(source, tmp))
     for f in present:
         f.rename(stage / f.name)
     # a leg that is being run again has had its result set aside by begin_leg: in the archive
@@ -1033,9 +1031,7 @@ STARTED_FILE = "started.json"
 
 def _write_json(path: Path, data: dict) -> None:
     """Write a file in one step, so that a process that dies while writing leaves no half of it."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(jsonio.dumps(data, indent=1))
-    tmp.replace(path)
+    publish_text(path, jsonio.dumps(data, indent=1))
 
 
 def _read_json(path: Path) -> dict | None:
@@ -1270,15 +1266,13 @@ def run_leg(job: LegJob) -> dict:
             if in_membrane else [])
         t0 = time.perf_counter()
         eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device0, log)
-        tmp = leg_dir / "equil.tmp.npz"
         # the restraint search uses the last pre_equilibration md_ns of the trajectory
         n_keep = max(2, int(round(pre.md_ns * 1000.0 / settings.frame_interval_ps)))
-        np.savez(tmp, positions=eq.positions, velocities=eq.velocities, box=eq.box, frames=eq.frames[-n_keep:],
-                 frame_boxes=eq.frame_boxes[-n_keep:], frame_atoms=np.array(eq.frame_atoms),
-                 timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes), simulated_ns=eq.simulated_ns,
-                 pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2, made_with=json.dumps(equil_from),
-                 membrane_settled=json.dumps(eq.settled))
-        tmp.replace(equil_file)
+        publish_npz(equil_file, positions=eq.positions, velocities=eq.velocities, box=eq.box,
+                    frames=eq.frames[-n_keep:], frame_boxes=eq.frame_boxes[-n_keep:],
+                    frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
+                    simulated_ns=eq.simulated_ns, pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
+                    made_with=json.dumps(equil_from), membrane_settled=json.dumps(eq.settled))
         timed("pre_equilibration", t0)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)
@@ -1345,8 +1339,8 @@ def run_leg(job: LegJob) -> dict:
                 log("restraint: host " + ", ".join(label(i) for i in restraint.host_atoms) + " | guest "
                     + ", ".join(label(i) for i in restraint.guest_atoms)
                     + f" | r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * found.ligand_rmsd_nm:.2f} A")
-            rfile.write_text(json.dumps({"restraint": restraint.to_dict(), "info": info,
-                                         "ligand_symmetry_number": symmetry, "made_with": restraint_from}, indent=1))
+            publish_text(rfile, json.dumps({"restraint": restraint.to_dict(), "info": info,
+                                            "ligand_symmetry_number": symmetry, "made_with": restraint_from}, indent=1))
         if symmetry > 1:
             notes.append(f"the ligand has {symmetry} heavy-atom graph symmetries; no symmetry correction is applied")
 
@@ -1399,7 +1393,7 @@ def run_leg(job: LegJob) -> dict:
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
             _schedule_of_this_leg(src, job.leg, stages)          # before it is taken over
-            shutil.copy(src, sched_file)
+            publish(sched_file, lambda tmp: shutil.copy(src, tmp))
         if sched_file.exists() and start_file.exists():
             schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
             start = np.load(start_file)
@@ -1463,7 +1457,7 @@ def run_leg(job: LegJob) -> dict:
                           backend=backend_name)
             del ctx, integ
             configs = (np.array([c[0] for c in cfgs]), np.array([c[1] for c in cfgs]), np.array([c[2] for c in cfgs]))
-            np.savez(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2])
+            publish_npz(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2])
             timed("lambda_schedule", t0)
             log(f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows in {time.perf_counter() - t0:.0f} s: "
                 + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items()))
@@ -1589,7 +1583,7 @@ def run_leg(job: LegJob) -> dict:
     timed("analysis", t_analysis)
     timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
                   ligand=job.ligand, leg=job.leg, repeat=job.repeat)
-    (leg_dir / "timing.json").write_text(json.dumps(timing, indent=1))
+    publish_text(leg_dir / "timing.json", json.dumps(timing, indent=1))
     write_leg_result(leg_dir, result)
 
     def number(value, digits: int = 2, scale: float = 1.0) -> str:
@@ -2565,5 +2559,5 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                 q[k] = {name: value / KCAL for name, value in p[k].items()}
             converted.append(q)
         out["repeats"] = converted
-    (lig_dir / "result.json").write_text(jsonio.dumps(out, indent=1))
+    publish_text(lig_dir / "result.json", jsonio.dumps(out, indent=1))
     return out

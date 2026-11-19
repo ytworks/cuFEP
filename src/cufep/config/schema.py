@@ -633,6 +633,8 @@ def dump_config(cfg: Config, path: str | Path | None = None) -> str:
     """Serialize a configuration to YAML (and write it if ``path`` is given)."""
     text = yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False, default_flow_style=False)
     if path is not None:
+        from cufep.files import publish_text
+
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(text)
+        publish_text(path, text)
     return text

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from cufep import jsonio
+from cufep.files import publish_text, publish_with
 from cufep.config.auto import AutoReport, resolve
 from cufep.config.schema import Config, check_configuration, dump_config, read_settings
 from cufep import mps
@@ -256,7 +257,7 @@ def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print
             f"resolved_config.previous_{n}.yaml")
     dump_config(resolved, path)
     (out_dir / "resolved_config.refused.yaml").unlink(missing_ok=True)
-    (out_dir / "auto_report.md").write_text(report.to_markdown())
+    publish_text(out_dir / "auto_report.md", report.to_markdown())
     protein.write_pdb(out_dir / "protein_prepared.pdb")
 
 
@@ -277,7 +278,7 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
                     exp[lig.name] = float(lig.properties[key])
                 except ValueError:
                     pass
-    with open(out_dir / "summary.csv", "w", newline="") as fh:
+    def table(fh) -> None:
         w = csv.writer(fh)
         # one column for each thing a ligand's result can say about its legs (LEG_FLAGS)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "standard_error", "mbar_error", "n_repeats",
@@ -290,7 +291,9 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
                         _fmt(s.get("min_overlap")), _fmt(s.get("min_overlap_used"))]
                        + ["; ".join(str(item) for item in s.get(key) or []) for key, _name in LEG_FLAGS]
                        + [len(s.get("warnings", []))])
-    (out_dir / "summary.json").write_text(jsonio.dumps(summary, indent=1))
+
+    publish_with(out_dir / "summary.csv", table, newline="")
+    publish_text(out_dir / "summary.json", jsonio.dumps(summary, indent=1))
 
 
 def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, mps_used: bool, log,
@@ -313,7 +316,7 @@ def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, 
             "jobs_seconds": now - t_prepared, "mps": mps_used, "gpus": list(monitor.gpus),
             "gpu_utilization_percent": {"whole_run": monitor.mean(), "while_sampling": monitor.mean_over(intervals)},
             "phase_seconds_summed_over_jobs": phases, "jobs": legs}
-    (out_dir / file_name).write_text(json.dumps(data, indent=1))
+    publish_text(out_dir / file_name, json.dumps(data, indent=1))
     log(f"timing: {data['wall_seconds'] / 60:.1f} min in total; preparation {data['preparation_seconds'] / 60:.1f} min; "
         + "; ".join(f"{name} {seconds / 60:.1f} min" for name, seconds in phases.items()) + " (summed over jobs)")
     util = data["gpu_utilization_percent"]["while_sampling"]

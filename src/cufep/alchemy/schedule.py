@@ -116,7 +116,9 @@ class Schedule:
     def save(self, path: str | Path, **meta) -> None:
         data = self.to_dict()
         data.update(meta)
-        Path(path).write_text(yaml.safe_dump(data, sort_keys=False))
+        from cufep.files import publish_text
+
+        publish_text(path, yaml.safe_dump(data, sort_keys=False))
 
     @classmethod
     def load(cls, path: str | Path) -> "Schedule":

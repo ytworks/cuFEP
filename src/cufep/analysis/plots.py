@@ -114,6 +114,8 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
     fig.suptitle(f"{legs[0][1].get('ligand', '')}  (repeat {legs[0][1].get('repeat', 0)})", fontsize=11)
     fig.tight_layout()
     out = Path(path) if path is not None else repeat_dir / "analysis.png"
-    fig.savefig(out)
+    from cufep.files import publish_with
+
+    publish_with(out, lambda fh: fig.savefig(fh, format=Path(out).suffix.lstrip(".") or "png"), mode="wb")
     plt.close(fig)
     return out

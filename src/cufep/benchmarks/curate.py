@@ -70,11 +70,16 @@ def curate(set_dir: Path, sdf_name: str, results_name: str, rule: str) -> list[d
         out_records.append("\n".join(lines))
         rows.append({"compound": cid, "sdf_record": name, "formal_charge": charge, "exp_dg_kcal_mol": f"{exp:.3f}",
                      "fepplus_dg_kcal_mol": f"{pred:.3f}", "selection_rule": rule})
-    (set_dir / "ligands.sdf").write_text("".join(r + "$$$$\n" for r in out_records))
-    with open(set_dir / "ligands.csv", "w", newline="") as fh:
+    from cufep.files import publish_text, publish_with
+
+    publish_text(set_dir / "ligands.sdf", "".join(r + "$$$$\n" for r in out_records))
+
+    def table(fh) -> None:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
+
+    publish_with(set_dir / "ligands.csv", table, newline="")
     return rows
 
 

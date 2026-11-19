@@ -167,11 +167,16 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         lines.append("")
 
     def save(text: str) -> None:
-        (run_dir / "benchmark_report.md").write_text(text)
-        with open(run_dir / "benchmark_report.csv", "w", newline="") as fh:
+        from cufep.files import publish_text, publish_with
+
+        publish_text(run_dir / "benchmark_report.md", text)
+
+        def table(fh) -> None:
             w = csv.DictWriter(fh, fieldnames=list(REPORT_COLUMNS), restval="")
             w.writeheader()
             w.writerows(rows + without)
+
+        publish_with(run_dir / "benchmark_report.csv", table, newline="")
         figure = run_dir / "benchmark_report.png"
         figure.unlink(missing_ok=True)                 # never the figure of an earlier state of the run
         if rows:
@@ -292,7 +297,11 @@ def _plot(rows: list[dict], path: Path, name: str) -> None:
     ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
     ax.set_xlabel("experiment (kcal/mol)"); ax.set_ylabel("calculated (kcal/mol)")
     ax.set_title(f"{name}: binding free energies"); ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout(); fig.savefig(path); plt.close(fig)
+    from cufep.files import publish_with
+
+    fig.tight_layout()
+    publish_with(path, lambda fh: fig.savefig(fh, format=Path(path).suffix.lstrip(".") or "png"), mode="wb")
+    plt.close(fig)
 
 
 def freeze_schedules(name: str, run_dir: str | Path, dest: str | Path | None = None) -> Path:
@@ -303,6 +312,8 @@ def freeze_schedules(name: str, run_dir: str | Path, dest: str | Path | None = N
     """
     import shutil
 
+    from cufep.files import publish
+
     run_dir = Path(run_dir)
     dest = Path(dest) if dest else data_root() / "benchmarks" / name / "schedules"
     n = 0
@@ -310,7 +321,7 @@ def freeze_schedules(name: str, run_dir: str | Path, dest: str | Path | None = N
         leg, repeat, ligand = sched.parent.name, sched.parent.parent.name.split("_")[1], sched.parent.parent.parent.name
         target = dest / ligand / f"{leg}_r{repeat}.yaml"
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(sched, target)
+        publish(target, lambda tmp: shutil.copy(sched, tmp))
         n += 1
     if n == 0:
         raise FileNotFoundError(f"no schedule.yaml found under {run_dir}")
