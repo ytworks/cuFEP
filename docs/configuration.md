@@ -111,6 +111,11 @@ sampling:
   repeats: 1
   seed: 20261118
   checkpoint_interval_ps: 250.0
+  rest2:
+    scale: 1.0                    # temperature of the hot region / temperature of the run, mid-leg; 1.0 = off
+    region: ligand                # ligand | pocket (also protein residues near the ligand)
+    pocket_cutoff_nm: 0.4
+    residues: []                  # protein residues added to the hot region, e.g. ["960", "A:981"]
 analysis:
   estimator: mbar
   lrc: reweight                   # reweight | isotropic | none

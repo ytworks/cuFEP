@@ -479,7 +479,20 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 3. alchemical System ------------------------------------------------------------------
     system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])      # the equilibrated box
-    alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha)
+    rest2 = cfg.sampling.rest2
+    rest2_on = rest2.scale > 1.0
+    hot_atoms, hot_residues = ([], [])
+    if rest2_on and is_complex:
+        hot_atoms, hot_residues = rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"],
+                                               prep["protein"])
+    alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha, rest2=rest2_on,
+                                  rest2_atoms=hot_atoms,
+                                  bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()])
+    if rest2_on:
+        log(f"REST2: hot region = ligand ({len(prep['ligand'])} atoms)"
+            + (f" and {len(hot_atoms)} atoms of {len(hot_residues)} protein residues ({' '.join(hot_residues)})"
+               if hot_atoms else "")
+            + f"; {alch.rest2_torsions} torsion terms scaled; {rest2.scale:g} times the temperature in the middle of the leg")
     if restraint is not None:
         alch.system.addForce(restraint.create_force())
     alch_xml = mm.XmlSerializer.serialize(alch.system)
@@ -544,7 +557,7 @@ def run_leg(job: LegJob) -> dict:
                     schedule = Schedule.load(sched_file)
                 else:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
-                                                     WindowsConfig().for_leg(job.leg))
+                                                     WindowsConfig().for_leg(job.leg), rest2.scale)
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.adaptive.window_ps, timestep_fs)
             else:
                 a_ = ls.adaptive
@@ -552,7 +565,8 @@ def run_leg(job: LegJob) -> dict:
                                   initial_windows=a_.initial_windows.for_leg(job.leg), window_ps=a_.window_ps,
                                   equilibration_ps=a_.equilibration_ps, sample_interval_ps=a_.sample_interval_ps,
                                   walk_ps=a_.walk_ps,
-                                  max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent)
+                                  max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent,
+                                  rest2_scale=rest2.scale)
                 # the windows of an iteration run at the same time on the GPUs the scheduler grants
                 n_first = sum(als.initial_windows[st] for st in stages) - (len(stages) - 1)
                 devices = list(job.devices)
@@ -583,6 +597,11 @@ def run_leg(job: LegJob) -> dict:
             timed("lambda_schedule", t0)
             log(f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows in {time.perf_counter() - t0:.0f} s: "
                 + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items()))
+
+        if abs(schedule.rest2_scale - (rest2.scale if rest2_on else 1.0)) > 1e-9:
+            raise WorkflowError(
+                f"the lambda schedule of this leg was made with a REST2 scale of {schedule.rest2_scale:g} but "
+                f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a new one")
 
         # ---- 5. replica exchange -----------------------------------------------------------------
         spec = LegSpec(
@@ -682,6 +701,9 @@ def run_leg(job: LegJob) -> dict:
     }
     result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
     result["lambda_windows"] = schedule.windows()
+    result["rest2"] = {"scale": float(rest2.scale) if rest2_on else 1.0, "hot_protein_atoms": len(hot_atoms),
+                       "hot_residues": hot_residues, "torsion_terms_scaled": alch.rest2_torsions,
+                       "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}
     timed("analysis", t_analysis)
     timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
                   ligand=job.ligand, leg=job.leg, repeat=job.repeat)
@@ -692,6 +714,39 @@ def run_leg(job: LegJob) -> dict:
         f"min overlap {analysis.min_overlap:.3f}, round trips {analysis.round_trips}, "
         f"N_eff/state {analysis.effective_samples_per_state:.0f}")
     return result
+
+
+def rest2_region(rest2, topology, positions_nm, ligand, protein) -> tuple[list[int], list[str]]:
+    """Protein atoms of the REST2 hot region (whole residues) and the names of their residues.
+
+    ``region: pocket`` takes the residues with a heavy atom within ``pocket_cutoff_nm`` of a
+    heavy atom of the ligand in the prepared structure; ``residues`` adds residues by number.
+    """
+    atoms = list(topology.atoms())
+    protein = set(int(i) for i in protein)
+    positions = np.asarray(positions_nm)
+
+    def heavy(i: int) -> bool:
+        return atoms[i].element is not None and atoms[i].element.symbol != "H"
+
+    chosen: set[int] = set()
+    if rest2.region == "pocket":
+        ligand_heavy = positions[[i for i in ligand if heavy(i)]]
+        for i in sorted(protein):
+            if heavy(i) and atoms[i].residue.index not in chosen:
+                if np.min(np.linalg.norm(ligand_heavy - positions[i], axis=1)) < rest2.pocket_cutoff_nm:
+                    chosen.add(atoms[i].residue.index)
+    protein_residues = {atoms[i].residue.index: atoms[i].residue for i in protein}
+    for spec in rest2.residues:
+        chain, _, number = str(spec).rpartition(":")
+        found = [r.index for r in protein_residues.values()
+                 if str(r.id).strip() == number.strip() and (not chain or r.chain.id == chain)]
+        if not found:
+            raise WorkflowError(f"sampling.rest2.residues: no protein residue '{spec}'")
+        chosen.update(found)
+    hot = sorted(i for i in protein if atoms[i].residue.index in chosen)
+    names = [f"{protein_residues[k].name}{protein_residues[k].id}" for k in sorted(chosen)]
+    return hot, names
 
 
 def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs: float) -> list:

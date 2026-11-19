@@ -20,6 +20,23 @@ backends can run unchanged ("split" layout):
 
 The cuPotential backend replaces only the NonbondedForce; the soft-core force stays on
 the stock CUDA kernels in the same System.
+
+REST2 (``rest2=True``)
+    Replica exchange with solute scaling (Wang, Friesner, Berne, J. Phys. Chem. B 2011, 115,
+    9431): the energy inside a hot region is scaled by s = T / T_hot and its interaction with
+    the rest by sqrt(s). The region is the ligand plus the environment atoms in
+    ``rest2_atoms``. As in Sire / SOMD2 this is done by
+
+    * charges of hot atoms times sqrt(s), their Lennard-Jones epsilon times s (pairs of two
+      hot atoms then scale by s, pairs of a hot and a cold atom by sqrt(s));
+    * 1-4 and other exception pairs times s if both atoms are hot, sqrt(s) if one is;
+    * proper torsions whose four atoms are all hot times s. Impropers, bonds and angles
+      are not scaled.
+
+    Two global parameters carry it, ``rest2_dq`` = sqrt(s) - 1 and ``rest2_ds`` = s - 1; both
+    are zero in the physical state, so the base parameters of the System stay the physical
+    ones. The ligand charges, which are already offsets scaled by ``lambda_electrostatics``,
+    get the factor sqrt(s) through that parameter (see ``sampling/states.py``).
 """
 from __future__ import annotations
 
@@ -44,9 +61,15 @@ SOFTCORE_FORCE_NAME = "cufep_softcore_lj"
 #:   group 1  soft-core LJ (depends only on lambda_sterics; a small ligand x environment
 #:            kernel that is cheap to re-evaluate)
 #:   group 2  restraints (linear in lambda_restraints)
+#:   group 3  REST2: the proper torsions inside the hot region (linear in s)
 MAIN_GROUP = 0
 SOFTCORE_GROUP = 1
 RESTRAINT_GROUP = 2
+REST2_GROUP = 3
+
+REST2_DQ = "rest2_dq"            # sqrt(s) - 1
+REST2_DS = "rest2_ds"            # s - 1
+REST2_TORSION_FORCE_NAME = "cufep_rest2_torsions"
 
 _E = unit.elementary_charge
 _NM = unit.nanometer
@@ -61,6 +84,11 @@ SOFTCORE_ENERGY = (
 )
 
 
+#: the same with the REST2 factor of each atom: sqrt(s) for a hot atom, 1 otherwise
+SOFTCORE_ENERGY_REST2 = "(1+hot1*rest2_dq)*(1+hot2*rest2_dq)*" + SOFTCORE_ENERGY
+REST2_TORSION_ENERGY = "(1+rest2_ds)*k*(1+cos(periodicity*theta-phase))"
+
+
 class AlchemyError(ValueError):
     """The System cannot be made alchemical as requested."""
 
@@ -72,14 +100,39 @@ class AlchemicalSystem:
     softcore_alpha: float
     #: original (charge [e], sigma [nm], epsilon [kJ/mol]) of the ligand atoms
     ligand_parameters: tuple[tuple[float, float, float], ...]
+    #: REST2: whether the System carries the scaling, the hot environment atoms (the ligand is
+    #: always hot) and the number of torsion terms that are scaled
+    rest2: bool = False
+    rest2_atoms: tuple[int, ...] = ()
+    rest2_torsions: int = 0
 
     @property
     def lambda_parameters(self) -> tuple[str, ...]:
         return (LAMBDA_ELECTROSTATICS, LAMBDA_STERICS)
 
 
-def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: float = 0.5) -> AlchemicalSystem:
-    """Return an alchemical copy of ``system`` in which ``ligand_atoms`` can be decoupled."""
+def bonded_pairs(system: mm.System) -> set[tuple[int, int]]:
+    """Pairs of atoms joined by a bond term or a constraint (bonds to hydrogen are constraints)."""
+    pairs: set[tuple[int, int]] = set()
+    for force in system.getForces():
+        if isinstance(force, mm.HarmonicBondForce):
+            for k in range(force.getNumBonds()):
+                i, j, _r, _k = force.getBondParameters(k)
+                pairs.add((min(i, j), max(i, j)))
+    for k in range(system.getNumConstraints()):
+        i, j, _d = system.getConstraintParameters(k)
+        pairs.add((min(i, j), max(i, j)))
+    return pairs
+
+
+def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: float = 0.5, rest2: bool = False,
+                           rest2_atoms=(), bonds=None) -> AlchemicalSystem:
+    """Return an alchemical copy of ``system`` in which ``ligand_atoms`` can be decoupled.
+
+    With ``rest2`` the System also carries the REST2 scaling of the hot region: the ligand and
+    the environment atoms ``rest2_atoms``. ``bonds`` (pairs of atom indices) tells proper
+    torsions from impropers; by default it is taken from the bond terms and constraints.
+    """
     ligand = tuple(sorted(int(i) for i in ligand_atoms))
     if not ligand:
         raise AlchemyError("no ligand atoms given")
@@ -133,16 +186,45 @@ def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: floa
         if q != 0.0:
             nb.addParticleParameterOffset(LAMBDA_ELECTROSTATICS, i, q, 0.0, 0.0)
 
+    # -- REST2: hot environment atoms and exception pairs in the NonbondedForce ----
+    hot_env = tuple(sorted({int(i) for i in rest2_atoms}))
+    if hot_env and not rest2:
+        raise AlchemyError("rest2_atoms given without rest2")
+    if any(i in ligand_set for i in hot_env) or (hot_env and (hot_env[0] < 0 or hot_env[-1] >= n)):
+        raise AlchemyError("rest2_atoms must be environment atoms of the System")
+    region = ligand_set | set(hot_env)
+    n_rest2_torsions = 0
+    if rest2:
+        nb.addGlobalParameter(REST2_DQ, 0.0)
+        nb.addGlobalParameter(REST2_DS, 0.0)
+        for i in hot_env:
+            q, _sig, eps = params[i]
+            if q != 0.0:
+                nb.addParticleParameterOffset(REST2_DQ, i, q, 0.0, 0.0)
+            if eps != 0.0:
+                nb.addParticleParameterOffset(REST2_DS, i, 0.0, 0.0, eps)
+        for k in range(nb.getNumExceptions()):
+            i, j, qq, _sig, eps = nb.getExceptionParameters(k)
+            n_hot = (i in region) + (j in region)
+            qq, eps = qq.value_in_unit(_E * _E), eps.value_in_unit(_KJ)
+            if n_hot and (qq != 0.0 or eps != 0.0):
+                nb.addExceptionParameterOffset(REST2_DS if n_hot == 2 else REST2_DQ, k, qq, 0.0, eps)
+        n_rest2_torsions = _move_hot_torsions(out, region, bonded_pairs(out) if bonds is None else
+                                              {(min(i, j), max(i, j)) for i, j in bonds})
+
     # -- soft-core LJ: ligand x environment --------------------------------------
-    sc = mm.CustomNonbondedForce(SOFTCORE_ENERGY)
+    sc = mm.CustomNonbondedForce(SOFTCORE_ENERGY_REST2 if rest2 else SOFTCORE_ENERGY)
     sc.setName(SOFTCORE_FORCE_NAME)
     sc.addGlobalParameter(LAMBDA_STERICS, 1.0)
     sc.addGlobalParameter("softcore_alpha", float(softcore_alpha))
     sc.addPerParticleParameter("sigma")
     sc.addPerParticleParameter("epsilon")
-    for q, sig, eps in params:
+    if rest2:
+        sc.addGlobalParameter(REST2_DQ, 0.0)
+        sc.addPerParticleParameter("hot")
+    for i, (q, sig, eps) in enumerate(params):
         # sigma is irrelevant when epsilon is zero; keep it finite to avoid r/0.
-        sc.addParticle([sig if sig > 0.0 else 0.3, eps])
+        sc.addParticle([sig if sig > 0.0 else 0.3, eps] + ([1.0 if i in region else 0.0] if rest2 else []))
     sc.setNonbondedMethod(mm.CustomNonbondedForce.CutoffPeriodic)
     sc.setCutoffDistance(nb.getCutoffDistance())
     sc.setUseSwitchingFunction(nb.getUseSwitchingFunction())
@@ -160,7 +242,40 @@ def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: floa
     out.addForce(sc)
 
     return AlchemicalSystem(system=out, ligand_atoms=ligand, softcore_alpha=float(softcore_alpha),
-                            ligand_parameters=tuple(params[i] for i in ligand))
+                            ligand_parameters=tuple(params[i] for i in ligand), rest2=bool(rest2),
+                            rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions)
+
+
+def _move_hot_torsions(system: mm.System, region: set[int], bonds: set[tuple[int, int]]) -> int:
+    """Move the proper torsions inside ``region`` into a force that REST2 scales by s.
+
+    A torsion is proper if its four atoms form a chain of three bonds; impropers stay as they
+    are. Returns the number of torsion terms moved.
+    """
+    def bonded(i: int, j: int) -> bool:
+        return (min(i, j), max(i, j)) in bonds
+
+    hot = mm.CustomTorsionForce(REST2_TORSION_ENERGY)
+    hot.setName(REST2_TORSION_FORCE_NAME)
+    hot.addGlobalParameter(REST2_DS, 0.0)
+    for name in ("k", "periodicity", "phase"):
+        hot.addPerTorsionParameter(name)
+    hot.setForceGroup(REST2_GROUP)
+    for force in system.getForces():
+        if type(force) is not mm.PeriodicTorsionForce:
+            continue
+        hot.setUsesPeriodicBoundaryConditions(force.usesPeriodicBoundaryConditions())
+        for t in range(force.getNumTorsions()):
+            i, j, k, l, periodicity, phase, kval = force.getTorsionParameters(t)
+            kval = kval.value_in_unit(_KJ)
+            if kval == 0.0 or not all(x in region for x in (i, j, k, l)):
+                continue
+            if not (bonded(i, j) and bonded(j, k) and bonded(k, l)):
+                continue
+            hot.addTorsion(i, j, k, l, [kval, float(periodicity), phase.value_in_unit(unit.radian)])
+            force.setTorsionParameters(t, i, j, k, l, periodicity, phase, 0.0)
+    system.addForce(hot)
+    return hot.getNumTorsions()
 
 
 def set_lambdas(context: mm.Context, lambdas: dict[str, float]) -> None:

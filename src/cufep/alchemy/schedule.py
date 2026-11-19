@@ -44,10 +44,9 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from cufep.alchemy.factory import (LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS, MAIN_GROUP,
-                                   RESTRAINT_GROUP, SOFTCORE_GROUP)
-from cufep.sampling.states import (R_GAS, STAGE_ALIASES, AlchemicalState, canonical_stage, set_state, stage_state,
-                                   validate_states)
+from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS
+from cufep.sampling.states import (R_GAS, STAGE_ALIASES, AlchemicalState, StateEnergyEvaluator, canonical_stage,
+                                   set_state, stage_state, validate_states)
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
            "bad_sections", "choose_section", "redistribute", "als_step", "adaptive_schedule", "run_window",
@@ -65,6 +64,9 @@ class Schedule:
     #: how the schedule was obtained: for adaptive schedules the threshold and one record per iteration
     provenance: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    #: REST2: temperature scale of the hot region in the middle of the leg (1 = no REST2); the
+    #: scale of each window is in its state
+    rest2_scale: float = 1.0
 
     def windows(self) -> dict[str, list[float]]:
         """Lambda values per stage, both ends included."""
@@ -79,8 +81,8 @@ class Schedule:
     def to_dict(self) -> dict:
         return {"mode": self.mode, "stages": self.stages, "windows": self.windows(),
                 "states": [s.to_dict() for s in self.states], "stage_of_state": self.stage_of_state,
-                "stage_lambda": [float(v) for v in self.stage_lambda], "provenance": self.provenance,
-                "notes": self.notes}
+                "stage_lambda": [float(v) for v in self.stage_lambda], "rest2_scale": float(self.rest2_scale),
+                "provenance": self.provenance, "notes": self.notes}
 
     def save(self, path: str | Path, **meta) -> None:
         data = self.to_dict()
@@ -97,7 +99,7 @@ class Schedule:
                    stage_of_state=list(d.get("stage_of_state", [0] * n)),
                    stage_lambda=list(d.get("stage_lambda", d.get("progress", [0.0] * n))),
                    mode=str(d.get("mode", "fixed")), provenance=dict(d.get("provenance", {})),
-                   notes=list(d.get("notes", [])))
+                   notes=list(d.get("notes", [])), rest2_scale=float(d.get("rest2_scale", 1.0)))
 
 
 def stage_values(spec, recommended) -> list[float]:
@@ -123,30 +125,32 @@ def stage_values(spec, recommended) -> list[float]:
     return [float(v) for v in values]
 
 
-def _assemble(stages: list[str], values: dict[str, list[float]], mode: str, **extra) -> Schedule:
+def _assemble(stages: list[str], values: dict[str, list[float]], mode: str, rest2_scale: float = 1.0,
+              **extra) -> Schedule:
     states, stage_of, lam = [], [], []
     for k, name in enumerate(stages):
         for j, v in enumerate(values[name]):
             if k > 0 and j == 0:
                 continue                                   # shared with the end of the previous stage
-            states.append(stage_state(name, v)); stage_of.append(k); lam.append(float(v))
+            states.append(stage_state(name, v, stages, rest2_scale)); stage_of.append(k); lam.append(float(v))
     validate_states(states)
-    return Schedule(stages=list(stages), states=states, stage_of_state=stage_of, stage_lambda=lam, mode=mode, **extra)
+    return Schedule(stages=list(stages), states=states, stage_of_state=stage_of, stage_lambda=lam, mode=mode,
+                    rest2_scale=float(rest2_scale), **extra)
 
 
-def schedule_from_windows(stages: list[str], windows: dict, recommended: dict) -> Schedule:
+def schedule_from_windows(stages: list[str], windows: dict, recommended: dict, rest2_scale: float = 1.0) -> Schedule:
     """Fixed schedule from the ``lambda_schedule.windows`` section of the configuration."""
     stages = [canonical_stage(s) for s in stages]
     values = {name: stage_values(windows[name], recommended[name]) for name in stages}
-    return _assemble(stages, values, "fixed")
+    return _assemble(stages, values, "fixed", rest2_scale)
 
 
-def fixed_schedule(stages: list[str], n_per_stage: dict[str, int]) -> Schedule:
+def fixed_schedule(stages: list[str], n_per_stage: dict[str, int], rest2_scale: float = 1.0) -> Schedule:
     """Evenly spaced schedule with ``n`` intervals per stage (tests and diagnostics)."""
     stages = [canonical_stage(s) for s in stages]
     counts = {canonical_stage(k): int(v) for k, v in n_per_stage.items()}
     values = {name: [float(v) for v in np.linspace(0.0, 1.0, max(1, counts.get(name, 4)) + 1)] for name in stages}
-    return _assemble(stages, values, "fixed")
+    return _assemble(stages, values, "fixed", rest2_scale)
 
 
 # ============================================================================ ALS: the rule
@@ -246,37 +250,21 @@ class AlsSettings:
     #: through the initial windows that gives each of them a start configuration
     walk_ps: float = 5.0
     max_windows: int = 48
+    #: REST2: temperature scale of the hot region in the middle of the leg (1 = no REST2). The
+    #: windows of the precalculation carry the scale of their place along the leg, and so do
+    #: the candidates whose energies are recorded.
+    rest2_scale: float = 1.0
 
 
-def _group(context, group: int) -> float:
-    import openmm.unit as unit
-    return context.getState(getEnergy=True, groups={group}).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
-
-
-def candidate_energies(context, stage: str, grid: np.ndarray, beta: float) -> np.ndarray:
+def candidate_energies(context, stage: str, grid: np.ndarray, beta: float, leg_stages=None,
+                       rest2_scale: float = 1.0) -> np.ndarray:
     """Reduced energy of the current configuration at every candidate lambda of ``stage``.
 
-    Terms that are the same for all candidates are left out; they cancel in the overlap.
+    The Context is left at the last state that was evaluated; the caller sets its own state
+    again. With REST2 the stages of the leg are needed (``leg_stages``).
     """
-    if stage == "restrain":                               # linear in lambda
-        context.setParameter(LAMBDA_RESTRAINTS, 1.0)
-        return beta * grid * _group(context, RESTRAINT_GROUP)
-    if stage == "discharge":                              # quadratic in lambda_electrostatics = 1 - lambda
-        g = []
-        for le in (0.0, 0.5, 1.0):
-            context.setParameter(LAMBDA_ELECTROSTATICS, le)
-            g.append(_group(context, MAIN_GROUP))
-        a2 = 2.0 * (g[2] - 2.0 * g[1] + g[0])
-        a1 = g[2] - g[0] - a2
-        le = 1.0 - grid
-        return beta * (g[0] + a1 * le + a2 * le * le)
-    if stage == "vanish":
-        out = np.empty(len(grid))
-        for i, lam in enumerate(grid):
-            context.setParameter(LAMBDA_STERICS, float(1.0 - lam))
-            out[i] = _group(context, SOFTCORE_GROUP)
-        return beta * out
-    raise ValueError(f"unknown stage '{stage}'")
+    states = [stage_state(stage, lam, leg_stages, rest2_scale) for lam in grid]
+    return StateEnergyEvaluator(context, states, 1.0 / (R_GAS * beta), None).reduced_potentials()[0]
 
 
 def stage_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
@@ -319,10 +307,12 @@ def run_window(context, integrator, task: dict) -> dict:
     ``equilibration_steps``, ``n_samples`` and ``steps_per_sample``.
     Returns the energies per stage, shape (samples, candidates), and the last configuration.
     """
-    beta = 1.0 / (R_GAS * task["temperature_K"])
     grid = np.linspace(0.0, 1.0, int(task["candidates"]))
     state = AlchemicalState(**task["state"])
-    has_softcore = LAMBDA_STERICS in context.getParameters()
+    leg_stages, peak = task.get("leg_stages"), float(task.get("rest2_scale", 1.0))
+    # one evaluator per stage over its candidates; terms common to all candidates cancel in the overlap
+    evaluators = {name: StateEnergyEvaluator(context, [stage_state(name, lam, leg_stages, peak) for lam in grid],
+                                             task["temperature_K"], None) for name in task["stages"]}
     _load(context, task["config"])
     set_state(context, state)
     if task["equilibration_steps"] > 0:
@@ -330,11 +320,8 @@ def run_window(context, integrator, task: dict) -> dict:
     energies = {name: np.empty((int(task["n_samples"]), len(grid))) for name in task["stages"]}
     for i in range(int(task["n_samples"])):
         integrator.step(int(task["steps_per_sample"]))
-        if has_softcore:
-            context.getState(getEnergy=True)              # see StateEnergyEvaluator.reduced_potentials
         for name in task["stages"]:
-            energies[name][i] = candidate_energies(context, name, grid, beta)
-            set_state(context, state)                     # the evaluation moved the stage's lambda
+            energies[name][i] = evaluators[name].reduced_potentials(restore=state)[0]
     return {"energies": energies, "config": _snapshot(context)}
 
 
@@ -355,15 +342,12 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     import openmm.unit as unit
 
     s = settings or AlsSettings()
-    beta = 1.0 / (R_GAS * temperature_K)
     params = context.getParameters()
     present = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS}
     stages = [st for st in (canonical_stage(x) for x in stages) if present[st] in params]
     if not stages:
         raise ValueError("the Context has no alchemical parameters")
-    has_softcore = LAMBDA_STERICS in params
     top = s.candidates - 1
-    grid = np.linspace(0.0, 1.0, s.candidates)
     steps_per_sample = max(1, int(round(s.sample_interval_ps * 1000.0 / timestep_fs)))
     n_samples = max(2, int(round(s.window_ps / s.sample_interval_ps)))
     equilibration_steps = int(round(s.equilibration_ps * 1000.0 / timestep_fs))
@@ -376,7 +360,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         return nd[0] + nd[1] / top
 
     def state_of(nd: tuple[int, int]) -> AlchemicalState:
-        return stage_state(stages[nd[0]], nd[1] / top)
+        return stage_state(stages[nd[0]], nd[1] / top, stages, s.rest2_scale)
 
     windows = {k: initial_indices(int(s.initial_windows.get(name, 3)), s.candidates) for k, name in enumerate(stages)}
     runs: dict[tuple[int, int], dict] = {}
@@ -386,7 +370,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         member = [stages[k] for k in range(len(stages)) if nd in (node(k, 0), node(k, top)) or nd[0] == k]
         return {"state": state_of(nd).to_dict(), "config": config, "stages": member, "candidates": s.candidates,
                 "temperature_K": temperature_K, "equilibration_steps": equilibration_steps, "n_samples": n_samples,
-                "steps_per_sample": steps_per_sample}
+                "steps_per_sample": steps_per_sample, "leg_stages": list(stages), "rest2_scale": s.rest2_scale}
 
     def nearest(nd: tuple[int, int]):
         return runs[min(runs, key=lambda other: abs(path(other) - path(nd)))]["config"] if runs else start
@@ -450,7 +434,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             notes.append(f"adaptive lambda scheduling stopped in the {name} stage at the limit of "
                          f"{s.max_windows} windows with neighbouring windows still below the overlap threshold")
     values = {name: [i / top for i in windows[k]] for k, name in enumerate(stages)}
-    schedule = _assemble(stages, values, "adaptive", notes=notes,
+    schedule = _assemble(stages, values, "adaptive", s.rest2_scale, notes=notes,
                          provenance={"method": "adaptive lambda scheduling", "overlap_threshold": s.overlap_threshold,
                                      "candidates": s.candidates, "window_ps": s.window_ps,
                                      "equilibration_ps": s.equilibration_ps,

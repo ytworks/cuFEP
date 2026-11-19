@@ -250,8 +250,29 @@ class LegLengths(_Section):
     solvent: float = Field(gt=0.0)
 
 
+class Rest2Config(_Section):
+    """REST2, replica exchange with solute scaling (Wang, Friesner, Berne 2011), as FEP+ and SOMD2 use it.
+
+    The energy inside a hot region is scaled so that the region behaves as if it were at a
+    higher temperature in the lambda windows in the middle of a leg; the first and the last
+    window are unscaled. The ligand is always in the hot region.
+    """
+
+    #: temperature of the hot region relative to that of the run in the middle of a leg (the
+    #: meaning of SOMD2's rest2_scale); 1 switches REST2 off
+    scale: float = Field(default=1.0, ge=1.0)
+    #: complex leg: ligand = the ligand only; pocket = also the protein residues that have a
+    #: heavy atom within pocket_cutoff_nm of a heavy atom of the ligand in the prepared structure
+    region: Literal["ligand", "pocket"] = "ligand"
+    pocket_cutoff_nm: float = Field(default=0.4, gt=0.0)
+    #: protein residues added to the hot region: residue numbers as in the PDB file, "960" or
+    #: with the chain "A:960"
+    residues: list[str] = Field(default_factory=list)
+
+
 class SamplingConfig(_Section):
     pre_equilibration: PreEquilibrationConfig = Field(default_factory=PreEquilibrationConfig)
+    rest2: Rest2Config = Field(default_factory=Rest2Config)
     #: hrex = Hamiltonian replica exchange between the lambda windows; none = independent windows
     exchange: Literal["hrex", "none"] = "hrex"
     time_per_iteration_ps: float = Field(default=2.5, gt=0.0)

@@ -238,3 +238,84 @@ def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend)
     last = {rec["stage"]: rec for rec in result.provenance["iterations"]}
     assert set(last) == {"discharge", "vanish"}
     assert all(rec["status"] in ("converged", "saturated", "max_windows") for rec in last.values())
+
+
+# ------------------------------------------------------------------------------------- REST2
+@pytest.fixture(scope="module")
+def rest2_leg():
+    """Two dipeptides in a 3.2 nm water box; one is the ligand, part of the other is hot too."""
+    from conftest import build_dipeptides_in_water
+
+    system, top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    alch = make_alchemical_system(system, ligand, rest2=True, rest2_atoms=other[:12])
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 3, "vanish": 4}, rest2_scale=3.0)
+    return alch, schedule, pos, box, ligand
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_rest2_state_energies_match_setting_each_state(rest2_leg, backend):
+    """The polynomial evaluation of all REST2 state energies equals switching the Context to each state."""
+    import openmm.unit as u
+
+    from cufep.sampling.states import set_state
+
+    alch, schedule, pos, box, _ = rest2_leg
+    assert max(s.rest2_scale for s in schedule.states) == 3.0
+    be = get_backend(backend)
+    integ = be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=3)
+    ctx = be.make_context(be.prepare_system(alch.system), integ, 0)
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300 * u.kelvin, 5)
+    k = len(schedule.states) // 2
+    set_state(ctx, schedule.states[k])
+    integ.step(250)                                    # dynamics in a scaled state
+    red = StateEnergyEvaluator(ctx, schedule.states, 300.0, None).reduced_potentials(restore=schedule.states[k])[0]
+    kt = 8.31446261815324e-3 * 300.0
+    direct = []
+    for state in schedule.states:
+        set_state(ctx, state)
+        direct.append(ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole) / kt)
+    direct = np.array(direct)
+    error = (red - red[0]) - (direct - direct[0])
+    assert np.max(np.abs(error)) < 0.02, error         # kT, single-precision energies of a 3,300-atom box
+
+
+@needs_plugin
+def test_rest2_backends_agree(rest2_leg):
+    import openmm.unit as u
+
+    alch, schedule, pos, box, _ = rest2_leg
+    rows = {}
+    for name in ("openmm", "cupotential"):
+        backend = get_backend(name)
+        ctx = backend.make_context(backend.prepare_system(alch.system),
+                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        rows[name] = StateEnergyEvaluator(ctx, schedule.states, 300.0, 1.0).reduced_potentials()[0]
+        del ctx
+    diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
+    assert np.max(np.abs(diff)) < 0.1, diff            # kT, as without REST2 (the fixture has no dispersion correction)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_replica_exchange_with_rest2(tmp_path, rest2_leg, backend):
+    alch, schedule, pos, box, ligand = rest2_leg
+    devices = [0, 1] if _gpu_count() >= 2 else [0]
+    spec = LegSpec(name="gpu-rest2", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=alch.system.getNumParticles(),
+                   backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=4.0,
+                   steps_per_iteration=50, seed=3, frame_atoms=list(ligand))
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=devices, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(10, record_stride=2, checkpoint_stride=5)
+    data = read_samples(tmp_path / "hrex")
+    k = len(schedule.states)
+    assert data["u"].shape == (10, k, k)
+    own = data["u"][np.arange(10)[:, None], np.arange(k), data["states"]]
+    assert np.all(np.isfinite(own)) and np.all(np.isfinite(data["u"][:, :, [0, k - 1]]))
+    assert all(sorted(row.tolist()) == list(range(k)) for row in data["states"])
+    assert np.any(data["states"][1:] != data["states"][:-1])               # replicas exchange
