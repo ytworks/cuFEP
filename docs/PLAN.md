@@ -39,7 +39,7 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 | 7 | 文書を仕様と用語に合わせる。`docs/configuration.md` を新設 | 済 |
 | 8 | TYK2 example を既定設定で GPU 8 個と 1 個で走らせ、所要時間を測る | GPU 1 個と 5 個で実測済み。GPU 8 個は OpenFE の参照計算 (GPU 3 個を使用中) が終わってから測る |
 | 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。adaptive の開始 window 数を実測で確定 (protocol.md)。restraint の強さ (固定と自動) と pre-equilibration (5 ns と 1 ns) は TYK2 で差が出ず、既定は変えない (configuration.md)。T4 リゾチーム/トルエンは 9 本中 6 本が -4.2〜-5.2 (実験 -5.52)、3 本は対称なリガンドの反転で無効 (下記) |
-| 10 | A2A example (`membrane: {enabled: true}`) | 未 |
+| 10 | A2A example (`membrane: {enabled: true}`) | 済。既定設定で完走し、dG_bind -12.03 ± 0.23 kcal/mol (1 回。実験 -12.07、FEP+ -11.01)。全ての隣り合う window の overlap は 0.08 以上、警告は対称数の注記のみ |
 | 11 | OpenFE との照合 (TYK2 ejm_31、jmc_23、T4 リゾチーム/トルエン) | 参照計算を実行中 |
 | 12 | ベンチマーク (smoke、subset、full)。1 リガンド 1 回 | 未 |
 | 13 | 公式イメージの作り直しと確認 | 未 |
