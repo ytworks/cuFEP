@@ -394,7 +394,7 @@ def begin_leg(leg_dir: Path) -> None:
     """Called before a leg runs (again): from here on it has a result only if this run finishes.
 
     The result the leg had is kept as ``result.previous.json``: what it gave before this run,
-    for instance at 5 ns when it is continued to 10 ns. It is a record and is never used for
+    for instance at 10 ns when it is continued to 20 ns. It is a record and is never used for
     a binding free energy: if this run fails, the leg counts as failed.
     """
     leg_dir.mkdir(parents=True, exist_ok=True)

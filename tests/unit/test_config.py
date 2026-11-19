@@ -18,7 +18,9 @@ def test_minimal_config_only_needs_protein_and_ligand(tmp_path):
     assert cfg.membrane.enabled is False and cfg.membrane.orientation == "auto"
     assert cfg.resources.gpus == "auto"
     assert cfg.sampling.repeats == 1                       # one run, as FEP+ and Flare
-    assert cfg.sampling.equilibration("complex") == 1.0 and cfg.sampling.production("solvent") == 5.0
+    # 1 ns of equilibration and 10 ns of production per lambda window, as OpenFE's ABFE protocol
+    assert cfg.sampling.equilibration("complex") == 1.0 and cfg.sampling.production("solvent") == 10.0
+    assert cfg.sampling.production("complex") == 10.0
     assert cfg.sampling.time_per_iteration_ps == 2.5
     assert cfg.dynamics.timestep_fs == 4.0 and cfg.dynamics.constraints == "hbonds"
     assert cfg.resources.oversubscription_factor == "auto"

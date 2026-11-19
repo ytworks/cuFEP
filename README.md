@@ -85,9 +85,9 @@ No check can show that one run is converged: a slow change that does not occur d
 is invisible in it. Independent runs (`sampling.repeats`) show the spread.
 
 ```bash
-# longer: the complex leg of one ligand goes on from 5 to 10 ns per lambda window
+# longer: the complex leg of one ligand goes on from 10 to 20 ns per lambda window
 # (--production-ns is the length in total, not what is added)
-cufep run config.yaml --ligand ejm_31 --leg complex --production-ns 10
+cufep run config.yaml --ligand ejm_31 --leg complex --production-ns 20
 
 # more lambda windows: change lambda_schedule in config.yaml (for example
 # adaptive.initial_windows.complex.vanish: 13), then start that leg anew
@@ -122,7 +122,7 @@ system:
 membrane: {enabled: false}           # true builds a POPC bilayer around the protein
 backend: {name: cupotential}         # or openmm (stock); falls back to openmm if needed
 sampling:
-  production_ns: 5                   # per lambda window; or {complex: 10, solvent: 5}
+  production_ns: 10                  # per lambda window; or {complex: 20, solvent: 10}
   repeats: 1                         # independent repeats of the whole calculation
 lambda_schedule:
   mode: adaptive                     # adaptive lambda scheduling; or fixed:

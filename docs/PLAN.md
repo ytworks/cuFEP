@@ -60,6 +60,10 @@ analysis" にある。
 | 収束の判定に、出典のない自作の基準 (前半と後半が全体から標準誤差の 2 倍以内) を使い、外れた leg を `NOT CONVERGED` と断定していた | 判定は出典のある 4 つ: overlap 0.03 (Klimovich 2015。これが第一で、`NOT RELIABLE` はこれだけ)、一番遅い window の独立サンプル 50 (Mey 2020)、前半と後半の差 1 kT (Mey 2020 の図 9)、BAR と MBAR の差 1 kcal/mol (Mey 2020)。overlap 以外は「追加のサンプリングを勧める」という報告で、数値と基準を示す |
 | 「REST2 の scale 1.5 が complex leg を 1.0 kcal/mol 押し上げた」と、実行間のばらつきに対する重みを示さずに書いた | 同じ leg の実行間の標準偏差 1.8 kcal/mol に対して標準誤差の約 1.5 倍で、示唆にとどまる |
 
+production の既定を 1 window あたり 5 ns から 10 ns にした (オーナーの承認、2026-11-19。OpenFE の
+既定値)。5 ns では、TYK2 の complex leg 55 本のうち、一番遅い window の独立サンプルが推奨の 50 に
+届いたのは 12 本だった。
+
 1 回の実行の検査で収束は証明できない (Grossfield 2018)。同じ complex leg を 3 回走らせたときの
 標準偏差 (0.5〜3.0 kcal/mol) は、直した後の 1 回の標準誤差 (0.2〜0.6) より大きい。
 

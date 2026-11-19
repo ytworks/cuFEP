@@ -127,7 +127,7 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    a warning: it is then the free energy of the pose the ligand moved to.
 3. Lambda windows: adaptive lambda scheduling, or the windows given in the configuration.
 4. Hamiltonian replica exchange, one replica per lambda window, 2.5 ps per iteration: 1 ns
-   equilibration and 5 ns production per window.
+   equilibration and 10 ns production per window.
 5. MBAR on samples that are decorrelated lambda window by lambda window ("Checks of the
    analysis").
 
@@ -513,6 +513,13 @@ of the vanish stage is correlated over 126 to 217 iterations (0.3 to 0.5 ns), so
 independent samples and 10 ns give 32; the bilayer of that system had also not settled when
 the alchemical run began (`membrane_settled`).
 
+Why the default production is 10 ns per window. It is the default of OpenFE's ABFE protocol;
+FEP+ uses 5 ns. Of 55 TYK2 complex legs with 5 ns, 12 had 50 independent samples in their
+slowest window; the statistical inefficiencies of that window (quartiles 44, 68 and 116
+iterations) put 33 of them there with 10 ns, if they stay as they are, and 46 with 20 ns. Of
+54 solvent legs, 33 had 50 with 5 ns. A longer run can also show a slower change, as the
+ejm_31 leg above did, so 10 ns do not guarantee the 50.
+
 `analysis.png` in each repeat directory shows, for both legs, the forward and reverse series
 (the free energy from growing parts of the production, counted from its start and from its
 end, at up to `analysis.convergence_points` points, each drawn at the fraction of the
@@ -536,10 +543,10 @@ together again.
   windows determined again; the windows, samples and result it had are moved to
   `previous_<n>/` in the leg directory.
 - Few independent samples, halves that differ, or halves that could not be compared: a
-  longer production. `cufep run CONFIG --ligand NAME --leg complex --production-ns 10` (or a
+  longer production. `cufep run CONFIG --ligand NAME --leg complex --production-ns 20` (or a
   larger `sampling.production_ns`) continues the replica-exchange run of that leg from its
   last iteration; the analysis then covers the whole production. The number is the length of
-  the production in total, not what is added: a leg that has 5 ns runs 5 ns more.
+  the production in total, not what is added: a leg that has 10 ns runs 10 ns more.
 
 A run restricted with `--ligand` or `--leg` writes its timing to `timing_rerun.json` and
 leaves `timing.json` of the whole run in place.
@@ -549,7 +556,7 @@ leaves `timing.json` of the whole run in place.
 A leg that runs again goes on from what it has. So that this cannot give a wrong number:
 
 - What a leg gave before is set aside as `result.previous.json` when it runs again, for
-  instance its result at 5 ns when it is continued to 10 ns. If the run fails, the leg is
+  instance its result at 10 ns when it is continued to 20 ns. If the run fails, the leg is
   `FAILED`: it has no result, the ligand has no binding free energy from it, and the command
   ends with an error. The earlier result is a record and is never used in its place.
 - A leg gets a result only if it has reached the length that was asked for, with every
@@ -619,7 +626,7 @@ source code and papers (see "Sources").
 |---|---|---|---|---|
 | lambda windows are given as | a number | a number per stage and side | lambda values | a number or lambda values, per leg and stage |
 | default windows | complex 80, solvent 68 | presets Quick / Normal / Accurate; adaptive optional | complex 30, solvent 14 | adaptive; fixed mode: complex 30, solvent 14 |
-| time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 5 ns |
+| time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 10 ns |
 | runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
 | reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | MBAR standard error on samples decorrelated window by window; standard deviation over repeats if more than one |
 | checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03, independent samples per window, the two halves of the production, BAR against MBAR; messages in the result |

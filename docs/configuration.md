@@ -114,7 +114,7 @@ sampling:
   exchange: hrex                  # hrex | none
   time_per_iteration_ps: 2.5
   equilibration_ns: 1.0           # a number, or {complex: ..., solvent: ...}
-  production_ns: 5.0              # a number, or {complex: ..., solvent: ...}
+  production_ns: 10.0             # a number, or {complex: ..., solvent: ...}
   repeats: 1
   seed: 20261118
   checkpoint_interval_ps: 250.0
@@ -180,7 +180,7 @@ the schedule in fixed mode.
 |---|---|---|
 | force fields, AM1-BCC charges, 4 fs with hydrogen mass repartitioning, 0.9 nm cutoff, 298.15 K, 1 bar, 0.15 M | as listed | defaults of OpenFE's ABFE protocol |
 | `sampling.pre_equilibration`, `equilibration_ns`, `time_per_iteration_ps`, `exchange` | 0.25 + 0.5 + 5 ns; 1 ns; 2.5 ps; replica exchange | defaults of OpenFE's ABFE protocol. With 1 ns of MD instead of 5 ns (as FEP+ and SOMD2 use) TYK2 ejm_31 gave -11.2 ± 1.5 kcal/mol over three repeats against -10.6 ± 1.9, the same within the spread; 5 ns is kept |
-| `sampling.production_ns` | 5 ns per lambda window | default of Schrödinger's absolute binding FEP+; also used by A3FE and Boltz-ABFE. OpenFE uses 10 ns |
+| `sampling.production_ns` | 10 ns per lambda window | default of OpenFE's ABFE protocol. Schrödinger's absolute binding FEP+, A3FE and Boltz-ABFE use 5 ns. With 5 ns the lambda window with the fewest independent samples of a TYK2 complex leg held about 27 (12 of 55 legs reached the 50 that Mey et al. 2020 recommend for MBAR); see protocol.md, "Checks of the analysis" |
 | `sampling.repeats` | 1 | FEP+ and Flare run a calculation once. OpenFE's default is 3; more than one repeat makes the reported uncertainty the standard deviation over repeats |
 | `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol. `force_constants: auto` takes kT / sigma^2 of each restrained coordinate in the pre-equilibration instead, as A3FE and SOMD2 do. On TYK2 ejm_31 (three repeats each) the two gave the same binding free energy within the spread of the repeats (-10.6 ± 1.9 and -10.8 ± 1.2 kcal/mol), so the fixed values of OpenFE stay the default |
 | `restraints.pose_rmsd_warning_nm` | 0.3 nm | cuFEP's own choice: 2 A is the usual limit for calling two poses the same, and thermal motion adds to it. OpenFE reports the ligand RMSD without a limit; like OpenFE, cuFEP does not stop |
