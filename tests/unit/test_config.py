@@ -28,6 +28,53 @@ def test_minimal_config_only_needs_protein_and_ligand(tmp_path):
     assert cfg.restraints.k_r_kcal_per_A2 == 10.0 and cfg.restraints.k_angle_kcal_per_rad2 == 80.0
 
 
+def test_files_of_earlier_versions_are_read(tmp_path, capsys):
+    """Review of PR 1: every full configuration and resolved_config.yaml of the previous version holds
+    analysis.convergence_tolerance_sigma, which this version does not have."""
+    import copy
+
+    from cufep import cli
+    from cufep.config.schema import load_config_with_notices, read_settings
+
+    base = {"system": {"protein": "p.pdb", "ligand": "l.sdf"}}
+    full = Config.model_validate(base).model_dump(mode="json")
+    old = copy.deepcopy(full)
+    old["analysis"]["convergence_tolerance_sigma"] = 2.0                    # the default of that version
+    cfg, notices = load_config_with_notices(write(tmp_path, old))
+    assert cfg.analysis.halves_tolerance_kT == 1.0 and "convergence_tolerance_sigma" not in cfg.analysis.model_dump()
+    assert len(notices) == 1 and notices[0].startswith(
+        "analysis.convergence_tolerance_sigma: 2.0 is a setting of an earlier version and is not used")
+    new_settings = ("analysis.min_effective_samples", "analysis.halves_tolerance_kT",
+                    "analysis.estimators_tolerance_kcal_mol")
+    assert all(name in notices[0] for name in new_settings)
+    assert load_config(write(tmp_path, old)).analysis.min_overlap == 0.03   # the plain loader reads it as well
+    cli._load(str(write(tmp_path, old)))                                    # the commands print the notice
+    assert "note: " in capsys.readouterr().err
+
+    # a value the user had chosen cannot be carried over: stop and say what the settings are now
+    old["analysis"]["convergence_tolerance_sigma"] = 3.0
+    with pytest.raises(ValueError, match="cannot be turned into kT or kcal/mol") as stopped:
+        load_config(write(tmp_path, old))
+    assert all(name in str(stopped.value) for name in new_settings)
+
+    # the other setting that an earlier version wrote and this one does not have
+    older = copy.deepcopy(full)
+    older["lambda_schedule"]["adaptive"]["equilibration_check_ps"] = 250.0
+    cfg, notices = load_config_with_notices(write(tmp_path, older))
+    assert len(notices) == 1 and "equilibration_check_ps" in notices[0]
+    older["lambda_schedule"]["adaptive"]["equilibration_check_ps"] = 100.0
+    with pytest.raises(ValueError, match="no longer adds windows during the equilibration"):
+        load_config(write(tmp_path, older))
+
+    # a key that no version had is still an error, and a file of this version gives no notice
+    with pytest.raises(Exception):
+        load_config(write(tmp_path, {**base, "analysis": {"convergence_tolerance": 2.0}}))
+    assert load_config_with_notices(write(tmp_path, full))[1] == []
+    # a record of an earlier run is read as it is written, whatever it holds
+    assert read_settings(write(tmp_path, old))["analysis"]["convergence_tolerance_sigma"] == 3.0
+    assert read_settings(tmp_path / "nothing.yaml") is None
+
+
 def test_unknown_keys_are_rejected(tmp_path):
     with pytest.raises(Exception):
         load_config(write(tmp_path, {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "sampling": {"repeat": 2}}))

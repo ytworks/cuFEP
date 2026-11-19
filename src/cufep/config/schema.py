@@ -13,6 +13,7 @@ results.
 """
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Literal
 
@@ -415,12 +416,71 @@ class Config(_Section):
     output: OutputConfig = Field(default_factory=OutputConfig)
 
 
-def load_config(path: str | Path) -> Config:
-    """Read a YAML file. Relative input paths are resolved against the YAML's directory."""
+#: Settings that earlier versions wrote (``cufep init --full``, ``resolved_config.yaml``) and
+#: this one does not have: the value a file holds if the user never touched the setting, and
+#: what replaced it. A file with that value is read and the line is ignored, with a notice. Any
+#: other value was a choice of the user that cannot be carried over, so reading stops there.
+REMOVED_SETTINGS = {
+    ("analysis", "convergence_tolerance_sigma"): (
+        2.0,
+        "The checks of the analysis no longer use a multiple of the standard error. Their levels are "
+        "analysis.min_effective_samples (50 independent samples in the lambda window with the fewest), "
+        "analysis.halves_tolerance_kT (the two halves of the production within 1 kT) and "
+        "analysis.estimators_tolerance_kcal_mol (BAR and MBAR within 1 kcal/mol)",
+        "A multiple of the standard error cannot be turned into kT or kcal/mol: remove the line and set those "
+        "three where their defaults do not suit (docs/configuration.md)"),
+    ("lambda_schedule", "adaptive", "equilibration_check_ps"): (
+        250.0,
+        "Adaptive lambda scheduling chooses the lambda windows in its precalculation only and no longer adds "
+        "windows during the equilibration",
+        "Remove the line; lambda_schedule.adaptive.window_ps and equilibration_ps set the lengths of the "
+        "precalculation"),
+}
+
+
+def migrate_settings(data: dict) -> tuple[dict, list[str]]:
+    """``data`` of a configuration file as this version reads it, and notices about what was changed.
+
+    Raises ValueError for a setting of an earlier version that the user had changed and that has
+    no equivalent now.
+    """
+    data = copy.deepcopy(data)
+    notices: list[str] = []
+    for path, (default, now, to_do) in REMOVED_SETTINGS.items():
+        block = data
+        for name in path[:-1]:
+            block = block.get(name) if isinstance(block, dict) else None
+        if not isinstance(block, dict) or path[-1] not in block:
+            continue
+        key, value = ".".join(path), block.pop(path[-1])
+        untouched = isinstance(value, (int, float)) and not isinstance(value, bool) and float(value) == default
+        if not untouched:
+            raise ValueError(f"{key}: {value} is a setting of an earlier version of cuFEP that this version does "
+                             f"not have. {now}. {to_do}.")
+        notices.append(f"{key}: {value} is a setting of an earlier version and is not used; it holds the default "
+                       f"of that version and is ignored. {now}.")
+    return data, notices
+
+
+def read_settings(path: str | Path) -> dict | None:
+    """The mapping in a YAML file as it is written, without validation; None if it cannot be read.
+
+    For records of earlier runs (``resolved_config.yaml``), which may come from another version.
+    """
+    try:
+        data = yaml.safe_load(Path(path).read_text())
+    except (OSError, yaml.YAMLError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def load_config_with_notices(path: str | Path) -> tuple[Config, list[str]]:
+    """:func:`load_config`, and the notices about settings of earlier versions in the file."""
     path = Path(path)
     data = yaml.safe_load(path.read_text()) or {}
     if not isinstance(data, dict):
         raise ValueError(f"{path}: the top level of the configuration must be a mapping")
+    data, notices = migrate_settings(data)
     cfg = Config.model_validate(data)
     base = path.resolve().parent
 
@@ -432,7 +492,17 @@ def load_config(path: str | Path) -> Config:
     cfg.system.cofactors = [resolve(p) for p in cfg.system.cofactors]
     if cfg.lambda_schedule.file is not None:
         cfg.lambda_schedule.file = resolve(cfg.lambda_schedule.file)
-    return cfg
+    return cfg, notices
+
+
+def load_config(path: str | Path) -> Config:
+    """Read a YAML file. Relative input paths are resolved against the YAML's directory.
+
+    A file written by an earlier version is read as far as its settings still exist or held their
+    defaults (:func:`migrate_settings`); :func:`load_config_with_notices` also returns what was
+    ignored or converted.
+    """
+    return load_config_with_notices(path)[0]
 
 
 def dump_config(cfg: Config, path: str | Path | None = None) -> str:

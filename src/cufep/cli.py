@@ -51,11 +51,14 @@ def init(protein: str, ligand: str, output: str, full: bool) -> None:
 
 
 def _load(config: str):
-    from cufep.config.schema import load_config
+    from cufep.config.schema import load_config_with_notices
     try:
-        return load_config(config)
+        cfg, notices = load_config_with_notices(config)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"{config}: {exc}") from exc
+    for notice in notices:
+        click.echo(f"note: {config}: {notice}", err=True)
+    return cfg
 
 
 def _apply_overrides(cfg, repeats, production_ns, gpus, output, backend):
