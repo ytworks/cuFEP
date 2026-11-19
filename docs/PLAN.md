@@ -59,6 +59,9 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 | `1145e14` | production 全体にも最少標本数。BAR の和の誤差を時間ブロックで、決まらない BAR の組を使わない (解析の版 7、版 6 の固定入力の数値は不変)。終了コード、validate の REST2 と比較件数、統計の N/A。再開テストを決定的に |
 | `7332a0e` | 依存パッケージの無い環境での skip (CI では止める)。`benchmark freeze` の既定の保存先 |
 | `844ab2f` | 差分全体の独立な検証で見つかった 5 件: SIGTERM・SIGHUP でもジョブを止めてからロックを解放し、スケジューラが kill されてもジョブは親の終了を知って止まり、生きているジョブの leg には次の run が入らない (P1)。止める途中の 2 度目の Ctrl-C。旧版の準備と REST2 の残基などを job の前に拒否。walk は 1 本の軌跡なので barostat の照合から外す。リガンド名の照合を出力先を作る前に |
+| `cbd319c` | 評価 B1 の確認で見つかった欠陥: `CUDA_VISIBLE_DEVICES` を付けたまま cuFEP の MPS デーモンにつなぐとクライアントが GPU を見つけられない (実測)。デーモンの稼働中はマスクを外し、GPU の監視は開始前の対応表を使う |
+
+評価 (2026-11-20): B1 は凍結イメージ `cufep:844ab2f` で、check-env と GPU テスト 17 件が合格し、短い実計算の連鎖 (再開、拒否、実行中の解析、kill、旧版の出力先、reschedule とそのアーカイブ、Ctrl-C と SIGTERM による停止と再開、`benchmark freeze` を uid 1000 で、barostat の拒否、REST2 込みの validate) はすべて想定どおりだった。`CUDA_VISIBLE_DEVICES=2` の確認だけが上の欠陥で失敗し、修正後のイメージ `cufep:cbd319c` で GPU 2 だけを使って完走した。B2 は保存済みの 120 leg を版 7 で読み直し、版 6 と比べて数値と判定の変化は 0 件。BAR の和の誤差 (時間ブロック) は中央値 0.31 kcal/mol。B3〜B5 は `cufep:cbd319c` で実行中。
 
 修正の後: 差分全体の独立な検証、CPU と GPU のテストの全件、CI。続いて評価 (オーナーの承認済み):
 凍結イメージでの確認、保存済みの leg の版 7 での読み直し、TYK2 / ejm_31 (complex 20 ns、solvent

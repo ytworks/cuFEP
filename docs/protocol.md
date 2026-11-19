@@ -625,7 +625,13 @@ independent replica-exchange runs. The guides' way to measure the precision of a
 ### What the checks say about TYK2 and A2A
 
 86 legs of earlier TYK2 runs with 5 ns of production per window (most with 19 and 21
-windows), read again with version 6 of this analysis (about 20 s per leg, eight at a time):
+windows), read again with version 6 of this analysis (about 20 s per leg, eight at a time).
+Read again with version 7, these 86 legs and the 34 legs of the runs of 2026-11-19 give the
+same free energies, standard errors, halves, overlaps, numbers of samples and verdicts as with
+version 6 (every window of every leg keeps at least four samples in the whole production); the
+standard error of the sum of BAR, now from time blocks, is 0.10-1.22 kcal/mol (median 0.31),
+1.39 times the analytical error of MBAR in the median, for 119 of the 120 legs (one leg is too
+short for blocks):
 
 | | complex legs (43) | solvent legs (43) |
 |---|---|---|
