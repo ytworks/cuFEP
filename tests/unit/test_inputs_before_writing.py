@@ -38,6 +38,7 @@ def written(out: Path) -> list[str]:
     return sorted(str(p.relative_to(out)) for p in out.rglob("*")) if out.exists() else []
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 @pytest.mark.parametrize("titles,why", [
     (["."], "cannot have a directory of its own"),
     ([".."], "cannot have a directory of its own"),
@@ -87,6 +88,7 @@ def test_every_name_cufep_writes_at_the_output_root_is_reserved(repo):
     assert names <= OUTPUT_ROOT_NAMES, sorted(names - OUTPUT_ROOT_NAMES)
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_the_ligand_named_on_the_command_line_must_exist(tmp_path, repo, monkeypatch):
     """Review of PR 1 (P2): a mistyped `cufep validate --ligand` took the first record of the SDF and could end
     with success for another ligand. The first ligand is the default only when no name is given."""

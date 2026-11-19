@@ -8,6 +8,44 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 
+#: the packages of the preparation of proteins and ligands; a test that uses them is marked
+#: ``@pytest.mark.needs(*PREPARATION)`` (or with the ones it uses)
+PREPARATION = ("openff.toolkit", "rdkit", "pdbfixer")
+
+
+def _missing(packages) -> list[str]:
+    import importlib.util
+
+    out = []
+    for name in packages:
+        try:
+            found = importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            out.append(name)
+    return out
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "needs(*packages): the test needs these packages")
+
+
+def pytest_collection_modifyitems(config, items):
+    """A test whose packages are not installed is skipped and says which ones; under CI (the variable
+    CI is set) a missing package stops the run instead, so that no test is skipped there unseen
+    (review of PR 1: without OpenFF, PDBFixer and RDKit 21 tests failed or errored locally)."""
+    import os
+
+    for item in items:
+        for mark in item.iter_markers("needs"):
+            missing = _missing(mark.args)
+            if not missing:
+                continue
+            if os.environ.get("CI"):
+                raise pytest.UsageError(f"{item.nodeid} needs {', '.join(missing)}, which this CI does not have")
+            item.add_marker(pytest.mark.skip(reason=f"needs {', '.join(missing)}"))
+
 
 @pytest.fixture(scope="session")
 def repo() -> Path:

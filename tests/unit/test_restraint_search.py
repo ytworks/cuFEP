@@ -10,6 +10,9 @@ from cufep.prep.protein import prepare_protein
 from cufep.prep.solvate import combine, ligand_atom_indices
 
 
+pytestmark = pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
+
+
 @pytest.fixture(scope="module")
 def tyk2_complex(repo):
     protein = prepare_protein(repo / "benchmarks/tyk2/inputs/tyk2_protein.pdb")

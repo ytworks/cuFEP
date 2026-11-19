@@ -6,6 +6,9 @@ import pytest
 from cufep.prep.protein import ProteinError, infer_variant, prepare_protein
 
 
+pytestmark = pytest.mark.needs("pdbfixer")
+
+
 def heavy_coordinates(path):
     pdb = app.PDBFile(str(path))
     pos = np.array(pdb.positions.value_in_unit(u.nanometer))

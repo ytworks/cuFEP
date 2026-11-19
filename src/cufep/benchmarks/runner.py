@@ -307,17 +307,20 @@ def _plot(rows: list[dict], path: Path, name: str) -> None:
 
 
 def freeze_schedules(name: str, run_dir: str | Path, dest: str | Path | None = None) -> Path:
-    """Copy the lambda schedules of a finished run to ``benchmarks/<name>/schedules``.
+    """Copy the lambda schedules of a finished run to ``dest``, by default ``RUN_DIR/frozen_schedules``.
 
     A later run with ``lambda_schedule: {mode: fixed, file: <that directory>}`` then uses
-    exactly these states instead of searching again.
+    exactly these states instead of searching again. The default lies in the run directory, which
+    the user can write; the data of the official image (``CUFEP_DATA=/opt/cufep``) belong to root
+    and are read only (review of PR 1: the default under ``benchmarks/<name>/`` there could not be
+    written by the user of the image).
     """
     import shutil
 
     from cufep.files import publish
 
     run_dir = Path(run_dir)
-    dest = Path(dest) if dest else data_root() / "benchmarks" / name / "schedules"
+    dest = Path(dest) if dest else run_dir / "frozen_schedules"
     n = 0
     for sched in sorted(run_dir.glob("*/repeat_*/*/schedule.yaml")):
         leg, repeat, ligand = sched.parent.name, sched.parent.parent.name.split("_")[1], sched.parent.parent.parent.name

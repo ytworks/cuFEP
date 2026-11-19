@@ -21,6 +21,7 @@ def ligands(repo):
     return load_ligands(repo / "benchmarks/tyk2/inputs/tyk2_ligands.sdf")
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_ligands_load_with_names_and_experimental_values(ligands):
     assert len(ligands) == 16
     lig = next(l for l in ligands if l.name == "ejm_31")
@@ -28,6 +29,7 @@ def test_ligands_load_with_names_and_experimental_values(ligands):
     assert float(lig.properties["r_exp_dg"]) == pytest.approx(-9.54)
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_bound_pose_passes_and_displaced_pose_stops(tyk2, ligands):
     lig = ligands[0]
     assert check_ligand(lig, tyk2.topology, tyk2.positions_nm()) == []
@@ -38,6 +40,7 @@ def test_bound_pose_passes_and_displaced_pose_stops(tyk2, ligands):
         check_ligand(moved, tyk2.topology, tyk2.positions_nm())
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_charged_ligand_stops(repo, tyk2):
     ligs = load_ligands(repo / "benchmarks/a2a/inputs/a2a_hip278_ligands.sdf")
     charged = next(l for l in ligs if l.formal_charge != 0)
@@ -45,6 +48,7 @@ def test_charged_ligand_stops(repo, tyk2):
         check_ligand(charged, tyk2.topology, tyk2.positions_nm())
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_ligand_without_hydrogens_stops(tmp_path):
     from rdkit import Chem
     from rdkit.Chem import AllChem
@@ -57,6 +61,7 @@ def test_ligand_without_hydrogens_stops(tmp_path):
         load_ligands(tmp_path / "noh.sdf")
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_membrane_orientation_methods_agree_for_a_gpcr(repo):
     a2a = prepare_protein(repo / "benchmarks/a2a/inputs/a2a_hip278_protein.pdb")
     pos = a2a.positions_nm()
@@ -615,6 +620,7 @@ def test_commands_end_with_an_error_when_a_leg_failed(tmp_path, monkeypatch):
     assert result.exit_code == 1 and "failed: b: complex leg failed or has no free energy" in result.output
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings(repo, tmp_path, ligands):
     """Review of PR 1: with membrane.enabled changed, the solvated system of the earlier run was used again."""
     import shutil
@@ -741,6 +747,7 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_path, monkeypatch, ligands):
     """Review of PR 1: a run stopped because its configuration did not fit the directory had already
     overwritten resolved_config.yaml, which then described a configuration that made none of the results."""
@@ -839,6 +846,7 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
                         prep_info, 0.01)
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_samples_without_a_record_of_their_settings_are_checked_before_anything_is_written(tmp_path, monkeypatch, ligands):
     """Review of PR 1: one version of cuFEP recorded the conditions of the samples with a checksum of the
     System and without the settings behind it. A run with another soft-core passed the checks before the
@@ -1283,6 +1291,7 @@ def test_an_archive_that_failed_half_way_is_completed_and_never_read_half(tmp_pa
     assert archive_leg(leg) is None
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_a_leg_is_not_continued_from_a_checkpoint_that_does_not_record_its_rows(tmp_path, ligands):
     """Review of PR 1: such a checkpoint (earlier versions) is refused before anything is run when the leg is
     still to be continued; a leg that holds all its iterations is analysed as it is."""

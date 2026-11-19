@@ -37,6 +37,7 @@ def test_bootstrap_interval_brackets_the_estimate():
         assert ci[key][0] <= m[key] <= ci[key][1]
 
 
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_registry_and_curated_files_are_consistent():
     registry = load_registry()
     assert set(registry) == {"tyk2", "a2a"}
@@ -307,3 +308,27 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
     assert result_line(dict(nothing, inconsistent_legs=["temperature (K): complex leg 315.0, solvent leg 298.15"])) \
         == ("RESULT x: no binding free energy; LEGS MADE UNDER DIFFERENT CONDITIONS: temperature (K): complex leg "
             "315.0, solvent leg 298.15")
+
+
+def test_frozen_schedules_go_to_the_run_directory_by_default(tmp_path, monkeypatch):
+    """Review of PR 1 (P2): in the official image CUFEP_DATA=/opt/cufep belongs to root and the user of the image
+    could not write the default benchmarks/<name>/schedules there. The default is the run directory."""
+    from cufep.benchmarks.runner import freeze_schedules
+
+    data = tmp_path / "data"
+    (data / "benchmarks").mkdir(parents=True)
+    (data / "benchmarks").chmod(0o555)                 # read only, as in the image
+    monkeypatch.setenv("CUFEP_DATA", str(data))
+    run = tmp_path / "run"
+    for leg in ("complex", "solvent"):
+        d = run / "ejm_31" / "repeat_0" / leg
+        d.mkdir(parents=True)
+        (d / "schedule.yaml").write_text(f"leg: {leg}\n")
+    try:
+        dest = freeze_schedules("tyk2", run)
+    finally:
+        (data / "benchmarks").chmod(0o755)
+    assert dest == run / "frozen_schedules"
+    assert sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*.yaml")) == ["ejm_31/complex_r0.yaml",
+                                                                                     "ejm_31/solvent_r0.yaml"]
+    assert not list((data / "benchmarks").iterdir())
