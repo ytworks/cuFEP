@@ -38,11 +38,43 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 | 6 | adaptive lambda scheduling を実装する | 済 |
 | 7 | 文書を仕様と用語に合わせる。`docs/configuration.md` を新設 | 済 |
 | 8 | TYK2 example を既定設定で GPU 8 個と 1 個で走らせ、所要時間を測る | GPU 1 個と 5 個で実測済み。GPU 8 個は OpenFE の参照計算 (GPU 3 個を使用中) が終わってから測る |
-| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。adaptive の開始 window 数を実測で確定 (protocol.md)。restraint の強さ (固定と自動) と pre-equilibration (5 ns と 1 ns) は TYK2 で差が出ず、既定は変えない (configuration.md)。T4 リゾチームは restraint の基準値を最終フレームに直して再実行中 (下記) |
+| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。adaptive の開始 window 数を実測で確定 (protocol.md)。restraint の強さ (固定と自動) と pre-equilibration (5 ns と 1 ns) は TYK2 で差が出ず、既定は変えない (configuration.md)。T4 リゾチーム/トルエンは 9 本中 6 本が -4.2〜-5.2 (実験 -5.52)、3 本は対称なリガンドの反転で無効 (下記) |
 | 10 | A2A example (`membrane: {enabled: true}`) | 未 |
 | 11 | OpenFE との照合 (TYK2 ejm_31、jmc_23、T4 リゾチーム/トルエン) | 参照計算を実行中 |
 | 12 | ベンチマーク (smoke、subset、full)。1 リガンド 1 回 | 未 |
 | 13 | 公式イメージの作り直しと確認 | 未 |
+
+## T4 リゾチーム L99A / トルエン (手順 9)
+
+実験値は -5.52 kcal/mol。3 repeats、production 5 ns。
+
+| 実行 | dG_bind (kcal/mol)。括弧内は restrain stage の最初の 2 つの window の overlap |
+|---|---|
+| adaptive (既定)。restraint の基準値が軌跡の平均だった版 | -5.2 (0.03)、-4.2 (0.02)、-5.0 (0.10) |
+| adaptive (既定)。restraint の基準値を最終フレームにした版 | -4.5 (0.13)、-4.7 (0.10)、無効 (0.00) |
+| fixed (30 / 14 windows)。基準値が軌跡の平均だった版 | -4.3 (0.15)、無効 (0.00)、無効 (0.00) |
+
+無効と書いた 3 本は、その overlap が 0 で、出てきた値 (-44.8、-16.5、-20.2) に意味が無い。
+overlap が 0.03 を下回る実行では、cuFEP は結果の行に `NOT RELIABLE` と警告を出す。
+
+この系で見つけて直したもの:
+
+- Boresch restraint の基準値 (距離と角度) を軌跡の平均から取っていた。空洞の中で位置を変える
+  リガンドでは、平均は実際には取らない構造になる。OpenFE と同じく最終フレームの値にした。
+- どの window とも重ならない window があると MBAR が収束判定に達せず、解析が 14 分と 53 分
+  かかった。反復回数の上限が実際に効くようにし、10〜15 秒になった。
+
+残っている制約:
+
+- トルエンは空洞の中で向きを変える (対称な反転を含む)。restraint を掛けていない window
+  (restrain stage の lambda 0) がいったん別の向きに移ると、restraint のエネルギーが 100〜660 kT
+  になり、restraint を掛けた window と重ならなくなる。complex leg 9 本のうち 7 本で実行の
+  12 分の 1 以上の時間にわたって起き、うち 3 本は戻らずに無効になった。対称な小さいリガンドに Boresch restraints を
+  使うときの既知の問題 (Mobley, Chodera, Dill, J. Chem. Phys. 2006, 125, 084902) で、OpenFE の
+  方式にも同じ制約がある。TYK2 の ejm_31 では起きていない (全ての実行で restrain stage の
+  overlap は 0.2 以上)。
+- 対策の候補 (未決定。オーナーが決める): リガンドの対称な原子の入れ替えを考慮した restraint と
+  対称性の補正を実装する。または、検証の系を対称でないリガンドに替える。
 
 ## 2b の調査結果
 

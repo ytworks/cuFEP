@@ -102,8 +102,14 @@ def run(cfg: Config, reschedule: bool = False, log=None) -> list[dict]:
                 err = f" ± {s['dg_bind_std']:.2f} kcal/mol (standard deviation over {s['n_repeats']} repeats)"
             else:
                 err = f" ± {s['dg_bind_mbar_error']:.2f} kcal/mol (MBAR uncertainty, 1 repeat)"
+            # a pair of neighbouring windows without overlap leaves the free energy undefined,
+            # whatever the MBAR uncertainty says; say so next to the number
+            low = s.get("min_overlap", 1.0) < cfg.analysis.min_overlap
             log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}"
-                + (f"; {len(s['warnings'])} warning(s), see summary.json" if s.get("warnings") else ""))
+                + (f"; NOT RELIABLE: neighbouring lambda windows overlap by only {s['min_overlap']:.3f}" if low else "")
+                + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
+            for w in s.get("warnings", []):
+                log(f"  warning: {w}")
         else:
             log(f"RESULT {s['ligand']}: no complete repeat")
     return summary

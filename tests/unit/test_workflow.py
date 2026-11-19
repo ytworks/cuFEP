@@ -150,7 +150,8 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
         d.mkdir(parents=True)
         (d / "result.json").write_text(json.dumps({
             "leg": name, "delta_g_decouple": dg, "delta_g_mbar_error": 0.4, "restraint_release": release,
-            "lrc": -1.0, "backend": "openmm", "analysis": {"stage_delta_g": {"vanish": dg}},
+            "lrc": -1.0, "backend": "openmm",
+            "analysis": {"stage_delta_g": {"vanish": dg}, "min_overlap": 0.02 if (r, name) == (1, "complex") else 0.2},
             "n_states": 14, "production_ns": 5.0, "notes": ["a note"] if r == 0 and name == "complex" else []}))
     for r, (c, s) in enumerate([(160.0, 80.0), (164.184, 80.0)]):
         leg(r, "complex", c, release=-40.0)
@@ -160,6 +161,8 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
     assert out["n_repeats"] == 2 and "repeat 2 is incomplete" in out["warnings"]
     assert "repeat 0 complex: a note" in out["warnings"]
     assert out["repeats"][0]["lambda_windows"] == {"complex": 14, "solvent": 14}
+    # the lowest overlap of any leg is carried into the summary, where the result line reads it
+    assert out["min_overlap"] == 0.02 and out["repeats"][0]["min_overlap"] == {"complex": 0.2, "solvent": 0.2}
     assert out["repeats"][0]["dg_bind"] == pytest.approx((80.0 - 160.0 + 40.0) / 4.184)
     assert out["dg_bind"] == pytest.approx((-40.0 - 44.184) / 2 / 4.184)
     assert out["dg_bind_std"] == pytest.approx(np.std([-40.0, -44.184], ddof=1) / 4.184)

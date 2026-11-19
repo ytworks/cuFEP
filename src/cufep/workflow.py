@@ -757,6 +757,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             "backend_solvent": s["backend"], "stage_complex": c["analysis"]["stage_delta_g"],
             "stage_solvent": s["analysis"]["stage_delta_g"],
             "lambda_windows": {"complex": c["n_states"], "solvent": s["n_states"]},
+            "min_overlap": {"complex": c["analysis"]["min_overlap"], "solvent": s["analysis"]["min_overlap"]},
             "production_ns": {"complex": c["production_ns"], "solvent": s["production_ns"]}})
         for leg_result in (c, s):
             warnings += [f"repeat {r} {leg_result['leg']}: {n}" for n in leg_result.get("notes", [])]
@@ -766,6 +767,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
         out["dg_bind"] = float(vals.mean())
         out["dg_bind_std"] = float(vals.std(ddof=1)) if len(vals) > 1 else None
         out["dg_bind_mbar_error"] = float(np.sqrt(np.mean([(p["mbar_error"] / KCAL) ** 2 for p in per_repeat])))
+        out["min_overlap"] = float(min(min(p["min_overlap"].values()) for p in per_repeat))
         energy_keys = ("dg_bind", "mbar_error", "dg_complex", "dg_solvent", "restraint_release", "lrc_complex",
                        "lrc_solvent")
         converted = []
