@@ -1175,10 +1175,8 @@ def run_leg(job: LegJob) -> dict:
             if sampler.unrecorded:
                 # samples of an earlier version, whose conditions are not recorded: a leg that has
                 # all its iterations is analysed as it is; nothing is added to such samples
-                from cufep.sampling.storage import decoded_attributes
-
                 problems = unrecorded_samples_problems(
-                    decoded_attributes(sampler.storage.h5), sampler.storage.n_iterations, leg_dir, cfg, job.leg,
+                    sampler.storage.attributes(), sampler.storage.n_iterations, leg_dir, cfg, job.leg,
                     job.production_ns, [s.to_dict() for s in schedule.states], timestep_fs)
                 if problems:
                     refuse_unrecorded_samples(leg_dir, sampler.storage.n_iterations, problems)

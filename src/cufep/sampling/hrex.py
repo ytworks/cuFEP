@@ -364,7 +364,7 @@ class ReplicaExchangeSampler:
         else:
             v = np.asarray(velocities, dtype=float)
             self.arrays.vel[self.cur] = np.broadcast_to(v, (self.k, *v.shape)) if v.ndim == 2 else v
-        self.checkpoint()
+        self.checkpoint(must=True)
 
     def restore(self) -> bool:
         """Resume from the checkpoint in the storage directory, if there is one."""
@@ -391,9 +391,27 @@ class ReplicaExchangeSampler:
             raise SamplerError(f"{what}() after the workers of this sampler were started: their random streams "
                                "belong to the start they were created for; create a new sampler")
 
-    def checkpoint(self) -> None:
-        self.storage.write_checkpoint(self.arrays.pos[self.cur], self.arrays.vel[self.cur], self.arrays.box[self.cur],
-                                      self.state_of_replica, self.iteration, extra={"start": self.start_number})
+    def checkpoint(self, must: bool = False) -> bool:
+        """Store the samples that are in memory and the state to restart from.
+
+        The samples file is open only for that. If another process is reading it just then (an
+        analysis of the running leg), an ordinary checkpoint waits a short while and is then
+        postponed to the next one: the samples stay in memory and the run goes on. With ``must``
+        (the start and the end of a run) it waits long and raises if the file stays held.
+        """
+        from cufep.sampling.storage import CHECKPOINT_WAIT_S, WRITE_WAIT_S
+
+        wait = WRITE_WAIT_S if must else CHECKPOINT_WAIT_S
+        written = self.storage.write_checkpoint(
+            self.arrays.pos[self.cur], self.arrays.vel[self.cur], self.arrays.box[self.cur], self.state_of_replica,
+            self.iteration, extra={"start": self.start_number}, wait_s=wait)
+        if not written and must:
+            raise SamplerError(f"the samples of iteration {self.iteration} could not be stored: another process held "
+                               f"{self.storage.h5_path} open for {wait:g} s")
+        if not written:
+            self.log(f"[{self.spec.name}] the checkpoint at iteration {self.iteration} is postponed to the next one: "
+                     f"another process holds {self.storage.h5_path.name} open; the samples stay in memory")
+        return written
 
     def current_configurations(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Copies of (positions, boxes, state_of_replica)."""
@@ -504,5 +522,5 @@ class ReplicaExchangeSampler:
                 self.log(f"[{self.spec.name}] iteration {self.iteration}: {self._iter_seconds:.2f} s/iteration, "
                          f"{100 * frac:.0f}% of replicas changed state")
         if store:
-            self.checkpoint()
+            self.checkpoint(must=True)
         return stats

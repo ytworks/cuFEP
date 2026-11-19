@@ -619,6 +619,134 @@ def test_storage_append_truncate_and_checkpoint(tmp_path):
         LegStorage(tmp_path / "leg", 4, 4)
 
 
+HOLD_SAMPLES = ("import sys, h5py\n"
+                "handle = h5py.File(sys.argv[1], sys.argv[2])\n"
+                "print('open', flush=True)\n"
+                "sys.stdin.readline()\n")
+
+
+def hold_samples(path, mode):
+    """Another process that has a samples file open in ``mode`` until its standard input is closed."""
+    import subprocess
+    import sys
+
+    holder = subprocess.Popen([sys.executable, "-c", HOLD_SAMPLES, str(path), mode], stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline().strip() == "open"
+    return holder
+
+
+def release(holder):
+    holder.stdin.close()
+    holder.wait(timeout=60)
+
+
+def test_another_process_reads_the_samples_of_a_leg_that_is_being_sampled(tmp_path):
+    """Review of PR 1: `cufep analyze` of a leg whose sampler was alive ended with "unable to lock file":
+    the sampler held samples.h5 open for writing from its first to its last iteration."""
+    import subprocess
+    import sys
+    import time
+
+    from cufep.sampling.storage import open_samples
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    u, states, _ = harmonic_samples(107, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12))
+    storage = LegStorage(leg / "hrex", 4, 4, n_frame_atoms=2)
+    storage.set_meta(temperature_K=310.0, iteration_ps=2.5, backend="openmm", leg="solvent")
+    storage.set_plan(4, 400)
+    state = (np.zeros((4, 5, 3)), np.zeros((4, 5, 3)), np.zeros((4, 3, 3)), np.arange(4))
+    for it in range(107):
+        storage.append(u[it], states[it], np.ones(4))
+        if it % 4 == 0:
+            storage.append_record(it, {"lrc_du": -0.1 * it, "frame": np.full((2, 3), it, np.float32),
+                                       "box": np.eye(3, dtype=np.float32)})
+        if it == 99:
+            assert storage.write_checkpoint(*state, 100) is True
+    # the sampler is alive: 100 iterations are in the file, 7 more in its memory
+    assert storage.n_iterations == 107
+    read = "import sys; from cufep.sampling.storage import read_samples; d = read_samples(sys.argv[1]); " \
+           "print(d['u'].shape[0], d['states'].shape[0], d['lrc_iter'].tolist()[-1], d['frames'].shape[0])"
+    other = subprocess.run([sys.executable, "-c", read, str(leg / "hrex")], capture_output=True, text=True, timeout=120)
+    assert other.returncode == 0 and other.stdout.split() == ["100", "100", "96", "25"], other.stderr
+    analyze = subprocess.run([sys.executable, "-m", "cufep.cli", "analyze", str(leg)], capture_output=True, text=True,
+                             timeout=300)
+    assert analyze.returncode == 0, analyze.stderr
+    shown = json.loads(analyze.stdout)
+    assert shown["n_iterations_stored"] == 100 and shown["n_iterations_used"] == 96 and shown["n_planned_iterations"] == 400
+    assert read_samples(leg / "hrex")["u"].shape[0] == 100                  # and this process too
+    assert np.array_equal(read_samples(leg / "hrex")["u"], u[:100])
+
+    # another process is reading the file just when a checkpoint is due: the checkpoint is postponed, the
+    # samples stay in memory, and the next one stores them all
+    reader = hold_samples(leg / "hrex" / "samples.h5", "r")
+    t0 = time.monotonic()
+    assert storage.write_checkpoint(*state, 107, wait_s=0.3) is False and 0.25 < time.monotonic() - t0 < 30.0
+    assert storage.read_checkpoint()["iteration"] == 100 and storage.n_iterations == 107
+    assert storage.flush(wait_s=0.0) is False
+    release(reader)
+    assert storage.write_checkpoint(*state, 107, wait_s=30.0) is True
+    assert storage.read_checkpoint()["iteration"] == 107 and storage.n_iterations == 107
+    data = read_samples(leg / "hrex")
+    assert np.array_equal(data["u"], u) and np.array_equal(data["states"], states) and data["lrc_iter"].tolist()[-1] == 104
+    assert data["frames"].shape == (27, 2, 3) and data["frame_iter"].tolist() == list(range(0, 107, 4))
+    assert storage.flush() is True                                          # nothing is left in memory
+
+    # a reader waits for the sampler that is storing a checkpoint, as long as it is told to
+    writer = hold_samples(leg / "hrex" / "samples.h5", "a")
+    with pytest.raises(OSError, match="unable to lock file"):
+        open_samples(leg / "hrex" / "samples.h5", "r", wait_s=0.3)
+    import threading
+    threading.Timer(1.0, release, args=(writer,)).start()
+    t0 = time.monotonic()
+    assert read_samples(leg / "hrex")["u"].shape[0] == 107 and time.monotonic() - t0 > 0.5
+
+    # rows that are dropped before they were stored, and rows of a file whose datasets differ in length
+    storage.append(u[0], states[0], np.ones(4))
+    storage.append_record(107, {"lrc_du": 1.0})
+    storage.truncate(107)
+    assert storage.n_iterations == 107
+    storage.close()
+    assert read_samples(leg / "hrex")["lrc_iter"].tolist()[-1] == 104
+    import h5py
+    with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:                # as if killed while storing
+        h5["u"].resize(110, axis=0)
+        h5["lrc_iter"].resize(28, axis=0)
+        h5["lrc_iter"][27] = 108
+        h5["lrc_du"].resize(28, axis=0)
+    data = read_samples(leg / "hrex")
+    assert data["u"].shape[0] == data["states"].shape[0] == data["volume"].shape[0] == 107
+    assert len(data["lrc_iter"]) == len(data["lrc_du"]) == 27
+
+
+def test_a_checkpoint_that_meets_a_reader_is_postponed_and_the_run_goes_on(tmp_path, tiny_leg, monkeypatch):
+    """The sampler of a leg does not stop, and loses nothing, when its samples file is held by a reader at
+    the moment of a checkpoint; the end of the run waits for the file."""
+    import cufep.sampling.storage as storage_module
+
+    spec, pos, box = tiny_leg
+    monkeypatch.setattr(storage_module, "CHECKPOINT_WAIT_S", 0.2)
+    held, log = [], []
+
+    def note(message):
+        log.append(message)
+        if "postponed" in message and held:
+            release(held.pop())                   # the reader goes away after the first postponed checkpoint
+
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=note) as s:
+        s.initialize(pos, box)
+        held.append(hold_samples(tmp_path / "hrex" / "samples.h5", "r"))
+        s.run(6, record_stride=2, checkpoint_stride=2)
+        assert s.iteration == 6 and s.storage.n_iterations == 6
+        assert s.storage.read_checkpoint()["iteration"] == 6
+    postponed = [message for message in log if "postponed" in message]
+    assert len(postponed) == 1 and postponed[0] == (
+        "[tiny] the checkpoint at iteration 2 is postponed to the next one: another process holds samples.h5 open; "
+        "the samples stay in memory")
+    data = read_samples(tmp_path / "hrex")
+    assert data["u"].shape[0] == 6 and data["frame_iter"].tolist() == [0, 2, 4]
+
+
 @pytest.fixture(scope="module")
 def tiny_leg(water_ligand_system):
     system, pos, box, ligand = water_ligand_system
