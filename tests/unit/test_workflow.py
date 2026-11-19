@@ -207,6 +207,19 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
                                 "is 0.020")
     assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[2]
     assert staged[1].startswith("few independent samples: lambda window 1 (vanish stage) has 12")
+    # the overlap among the samples of the estimate, and what MBAR gets from the slowest window
+    thinned = dict(steady, overlap_used_neighbour=[0.2, 0.012], window_kept_samples=[400, 12, 300],
+                   window_inefficiency_neighbour=[1, -1, -1], window_effective_samples=[400.0, 12.4, 300.0],
+                   window_statistical_inefficiency=[6.0, 200.0, 8.0])
+    notes_thinned = quality_warnings({"analysis": thinned, "leg": "complex"}, cfg)
+    assert len(notes_thinned) == 2
+    assert notes_thinned[0].startswith(
+        "NOT RELIABLE: among the samples the free energy is estimated from, the overlap between lambda windows 1 "
+        "and 2 is 0.012, below 0.03; window 1 gives it 12 samples and window 2 gives 300.")
+    assert "--leg complex --production-ns" in notes_thinned[0] and "--reschedule" in notes_thinned[0]
+    assert notes_thinned[1].startswith(
+        "few independent samples: lambda window 1 has 12 and gives MBAR 12 samples (its energy difference to the "
+        "previous window is correlated over 200 iterations); 50 are recommended for MBAR")
     # the levels are settings
     lenient = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
                                      "analysis": {"min_overlap": 0.01, "min_effective_samples": 10,
@@ -292,6 +305,27 @@ def _leg_result(dg, production_ns=5.0, leg="complex"):
     return {"leg": leg, "delta_g_decouple": dg, "delta_g_mbar_error": 0.4, "restraint_release": 0.0, "lrc": 0.0,
             "backend": "openmm", "analysis": {"stage_delta_g": {"vanish": dg}, "min_overlap": 0.2}, "n_states": 15,
             "production_ns": production_ns, "notes": []}
+
+
+def test_a_leg_whose_analysis_gave_no_free_energy_is_a_failed_leg(tmp_path):
+    """Windows without any overlap: the result file holds null, and the ligand gets no number from it."""
+    from cufep import jsonio
+
+    for name, dg in (("complex", float("nan")), ("solvent", 80.0)):
+        d = tmp_path / "repeat_0" / name
+        d.mkdir(parents=True)
+        result = dict(_leg_result(dg, leg=name), delta_g_mbar_error=0.4)
+        result["analysis"] = dict(result["analysis"], min_overlap_used=0.05)
+        (d / "result.json").write_text(jsonio.dumps(result))
+    assert json.loads((tmp_path / "repeat_0" / "complex" / "result.json").read_text())["delta_g_decouple"] is None
+    out = combine_ligand(tmp_path, "lig", 1)
+    assert "dg_bind" not in out and out["failed_legs"] == ["complex leg"]
+    assert any("the analysis gave no free energy" in w for w in out["warnings"])
+    (tmp_path / "repeat_0" / "complex" / "result.json").write_text(
+        jsonio.dumps(dict(result, leg="complex", delta_g_decouple=160.0, restraint_release=-40.0)))
+    out = combine_ligand(tmp_path, "lig", 1)
+    assert out["failed_legs"] == [] and out["min_overlap_used"] == 0.05
+    assert out["repeats"][0]["min_overlap_used"] == {"complex": 0.05, "solvent": 0.05}
 
 
 def test_a_leg_that_fails_while_it_is_continued_does_not_count_with_its_old_result(tmp_path, monkeypatch):

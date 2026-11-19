@@ -30,6 +30,15 @@ def harmonic_samples(n_iter, k_spring, x0, rng, exchange=True):
     return u, states, xs
 
 
+def ar1(n, rho, rng):
+    """A stationary series of unit variance whose correlation from one step to the next is ``rho``."""
+    z = np.empty(n)
+    z[0] = rng.normal()
+    for i in range(1, n):
+        z[i] = rho * z[i - 1] + np.sqrt(1 - rho ** 2) * rng.normal()
+    return z
+
+
 def test_mixing_is_a_permutation_and_accepts_downhill_swaps():
     rng = np.random.default_rng(0)
     u = rng.normal(size=(6, 6))
@@ -190,6 +199,7 @@ def test_each_lambda_window_is_decorrelated_on_its_own():
     q = quality_checks(res.to_dict())
     assert q["samples"]["ok"] and q["samples"]["window"] == 2 and q["samples"]["fewest"] == pytest.approx(n / g[2])
     assert q["samples"]["statistical_inefficiency"] == pytest.approx(g[2]) and q["samples"]["threshold"] == 50.0
+    assert q["samples"]["kept"] == n_k[2] == res.window_kept_samples[2]
     few = quality_checks(res.to_dict(), min_effective_samples=1000.0)["samples"]
     assert few["ok"] is False and few["window"] == 2
 
@@ -238,7 +248,8 @@ def test_checks_of_a_leg_use_the_levels_of_the_literature():
     assert quality_checks(steady.to_dict(), min_overlap=0.9)["overlap"]["ok"] is False
     old = {"delta_g": 10.0, "delta_g_error": 0.5, "min_overlap": 0.2, "overlap_neighbour": [0.2, 0.3]}
     q = quality_checks(old)
-    assert q["overlap"] == {"ok": True, "lowest": 0.2, "windows": [0, 1], "threshold": 0.03}
+    assert q["overlap"] == {"ok": True, "lowest": 0.2, "windows": [0, 1], "threshold": 0.03, "all_ok": True,
+                            "used": None, "below": []}
     assert q["samples"]["ok"] is None and q["halves"]["ok"] is None and q["estimators"]["ok"] is None
     # an analysis made before every window was decorrelated on its own: its halves carry no verdict
     assert quality_checks(dict(old, first_half=[12.0, 0.1], second_half=[8.0, 0.1], bar_delta_g=20.0))["halves"]["ok"] is None
@@ -265,7 +276,7 @@ def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_n
     kt = 8.31446261815324e-3 * 298.15
 
     # correlated samples (statistical inefficiency 2.125 -> every third iteration): a half holds two
-    monkeypatch.setattr(mbar, "window_inefficiencies", lambda u, states: np.full(u.shape[2], 2.125))
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.full((u.shape[2], 2), 2.125))
     short = analyze_leg(samples, 298.15)
     assert np.isnan(short.first_half[0]) and np.isnan(short.second_half[0]) and np.isnan(short.forward_reverse_gap)
     assert "lambda window 0 holds 2 independent sample(s) in a half of the production" in short.convergence_note
@@ -277,7 +288,7 @@ def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_n
     assert verdict["ok"] is None and verdict["reason"] == short.convergence_note
 
     # independent samples: each half is estimated from its own six iterations
-    monkeypatch.setattr(mbar, "window_inefficiencies", lambda u, states: np.ones(u.shape[2]))
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
     res = analyze_leg(samples, 298.15, n_blocks=3)
     first = solve_mbar(samples["u"][:6], samples["states"][:6])[0][-1] * kt
     second = solve_mbar(samples["u"][6:], samples["states"][6:])[0][-1] * kt
@@ -291,6 +302,151 @@ def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_n
     assert res.forward[2][1] == pytest.approx(first, abs=1e-6) and res.reverse[2][1] == pytest.approx(second, abs=1e-6)
     assert [(b[0], b[1]) for b in res.blocks] == [(0.0, 4 / 12), (4 / 12, 8 / 12), (8 / 12, 1.0)]
     assert res.blocks[0][2] == pytest.approx(solve_mbar(samples["u"][:4], samples["states"][:4])[0][-1] * kt, abs=1e-6)
+
+
+def test_a_window_is_decorrelated_by_the_slower_of_its_two_neighbours():
+    """Review of PR 1: a motion that is slow only in the energy difference to the previous window was missed.
+
+    Three windows of the same curvature at (0, 0), (1.5, 0) and (1.5, 0.8), no exchange. In the middle
+    window x is correlated from one iteration to the next by 0.98: its energy difference to the next
+    window depends on y alone and looks independent, that to the previous window does not.
+    """
+    from cufep.analysis.mbar import decorrelated, neighbour_inefficiencies, quality_checks, solve_decorrelated
+
+    centres = np.array([[0.0, 0.0], [1.5, 0.0], [1.5, 0.8]])
+
+    def leg(seed, n=600):
+        rng = np.random.default_rng(seed)
+        xy = rng.normal(size=(n, 3, 2)) + centres[None]
+        xy[:, 1, 0] = 1.5 + ar1(n, 0.98, rng)
+        return 0.5 * ((xy[:, :, None, :] - centres[None, None]) ** 2).sum(axis=-1), np.tile(np.arange(3), (n, 1))
+
+    u, states = leg(0)
+    table = neighbour_inefficiencies(u, states)
+    assert np.isnan(table[0, 0]) and np.isnan(table[2, 1])                  # no such neighbour
+    assert table[1, 0] > 40.0 and table[1, 1] < 1.5                          # slow towards window 0 only
+    res = analyze_leg({"u": u, "states": states}, 298.15)
+    assert res.window_inefficiency_neighbour == [1, -1, -1]
+    assert res.window_statistical_inefficiency[1] == pytest.approx(table[1, 0])
+    assert res.window_kept_samples[1] == int(np.ceil(600 / np.ceil(table[1, 0]))) and res.slowest_window == 1
+    stored = res.to_dict()
+    assert stored["window_inefficiency_previous"][0] is None
+    assert stored["window_inefficiency_previous"][1] == pytest.approx(table[1, 0])
+    assert stored["window_inefficiency_next"][1] == pytest.approx(table[1, 1])
+    samples = quality_checks(stored)["samples"]
+    assert samples["window"] == 1 and samples["neighbour"] == -1 and samples["kept"] == res.window_kept_samples[1]
+
+    # the end states have the same free energy. Over independent runs the reported standard error must
+    # be about as large as the scatter of the estimates; from the next window alone it is a third of it
+    both, next_only = [], []
+    for seed in range(24):
+        u, states = leg(seed)
+        table = neighbour_inefficiencies(u, states)
+        for store, g in ((both, np.nanmax(table, axis=1)),
+                         (next_only, np.where(np.isfinite(table[:, 1]), table[:, 1], table[:, 0]))):
+            f, df = solve_decorrelated(*decorrelated(u, states, g))
+            store.append((f[-1], df[-1]))
+    both, next_only = np.array(both), np.array(next_only)
+    scatter, reported = both[:, 0].std(ddof=1), np.sqrt((both[:, 1] ** 2).mean())
+    assert reported > 0.7 * scatter and abs(both[:, 0].mean()) < 3 * scatter / np.sqrt(len(both))
+    assert np.sqrt((next_only[:, 1] ** 2).mean()) < 0.5 * next_only[:, 0].std(ddof=1)
+
+
+def test_the_samples_check_counts_what_mbar_gets(monkeypatch):
+    """Review of PR 1: 65 iterations with statistical inefficiencies 1.209 and 1.038 give MBAR 33 samples
+    per window (every second iteration), not the 53.8 the check counted."""
+    import cufep.analysis.mbar as mbar
+    from cufep.analysis.mbar import quality_checks
+
+    u, states, _ = harmonic_samples(65, np.array([1.0, 1.3]), np.array([0.0, 0.2]), np.random.default_rng(8))
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies",
+                        lambda u, states: np.array([[np.nan, 1.209], [1.038, np.nan]]))
+    res = analyze_leg({"u": u, "states": states}, 298.15)
+    assert res.window_kept_samples == [33, 33]
+    assert res.window_effective_samples == pytest.approx([65 / 1.209, 65 / 1.038])
+    samples = quality_checks(res.to_dict())["samples"]
+    assert samples["ok"] is False and samples["kept"] == 33 and samples["window"] == 0
+    assert samples["fewest"] == pytest.approx(53.76, abs=0.01)                # the estimate alone would pass
+    assert quality_checks(res.to_dict(), min_effective_samples=33.0)["samples"]["ok"] is True
+
+
+def test_the_overlap_is_also_taken_from_the_samples_of_the_estimate():
+    """Review of PR 1: the overlap that was checked came from other samples than the free energy.
+
+    Two windows 4.25 standard deviations apart, each correlated by 0.7 from one iteration to the next. A
+    noise of 20 kT that both energies of a configuration share hides the correlation from the summed
+    potential, so the matrix of all iterations uses every second one and the estimate every seventh.
+    """
+    from cufep.analysis.mbar import decorrelated, overlap_with_equal_weights, quality_checks, solve_decorrelated
+
+    rng = np.random.default_rng(298)
+    n = 700
+    x = np.stack([ar1(n, 0.7, rng), 4.25 + ar1(n, 0.7, rng)], axis=1)
+    noise = rng.normal(scale=20.0, size=(n, 2))
+    u = 0.5 * (x[:, :, None] - np.array([0.0, 4.25])[None, None]) ** 2 + noise[:, :, None]
+    res = analyze_leg({"u": u, "states": np.tile(np.arange(2), (n, 1))}, 298.15)
+    assert res.window_kept_samples == [100, 100]
+    assert res.min_overlap == pytest.approx(0.0337, abs=5e-4)                # passes the level of 0.03
+    assert res.min_overlap_used == pytest.approx(0.0247, abs=5e-4)           # the samples of the estimate do not
+    # with equal numbers of samples the normalisation of equal numbers is pymbar's own matrix
+    assert np.allclose(res.overlap_used_matrix, res.overlap_used_weighted_by_number, atol=2e-4)
+    overlap = quality_checks(res.to_dict())["overlap"]
+    assert overlap["all_ok"] is True and overlap["used"]["ok"] is False and overlap["ok"] is False
+    assert overlap["below"] == ["the samples of the estimate"]
+    assert overlap["used"]["windows"] == [0, 1] and overlap["used"]["samples"] == [100, 100]
+
+    # different numbers of samples: pymbar's matrix follows the numbers, the normalisation of equal
+    # numbers stays where the overlap of the windows is
+    u3, s3, _ = harmonic_samples(2000, np.array([1.0, 1.5, 2.2]), np.array([0.0, 0.5, 1.0]),
+                                 np.random.default_rng(5), exchange=False)
+    equal_kn, equal_n = decorrelated(u3, s3, np.ones(3))
+    f_equal, _df, o_equal = solve_decorrelated(equal_kn, equal_n, overlap=True)
+    assert np.allclose(overlap_with_equal_weights(equal_kn, equal_n, f_equal), o_equal, atol=1e-6)
+    thin_kn, thin_n = decorrelated(u3, s3, np.array([1.0, 100.0, 1.0]))
+    assert thin_n.tolist() == [2000, 20, 2000]
+    f_thin, _df, o_thin = solve_decorrelated(thin_kn, thin_n, overlap=True)
+    normalised = overlap_with_equal_weights(thin_kn, thin_n, f_thin)
+    assert np.allclose(normalised, normalised.T) and np.allclose(normalised.sum(axis=1), 1.0, atol=0.1)
+    assert normalised[0, 1] == pytest.approx(o_equal[0, 1], rel=0.25)
+    assert o_thin[0, 1] < 0.05 * o_equal[0, 1] and o_thin[1, 0] > o_equal[1, 0]     # 20 samples next to 2000
+
+
+def test_results_are_json_that_every_parser_reads():
+    """Review of PR 1: a production too short for its halves wrote NaN, and identical halves Infinity."""
+    import json
+
+    from cufep import jsonio
+    from cufep.analysis.mbar import quality_checks
+
+    u, states, _ = harmonic_samples(4, np.array([1.0, 1.3]), np.array([0.0, 0.2]), np.random.default_rng(2))
+    res = analyze_leg({"u": u, "states": states}, 298.15)
+    assert np.isnan(res.first_half[0]) and np.isnan(res.forward_reverse_gap)        # in memory
+    stored = res.to_dict()
+    assert stored["first_half"] == [None, None] and stored["forward_reverse_gap"] is None
+    assert "4 are needed" in stored["convergence_note"]
+
+    def not_json(token):
+        raise ValueError(f"{token} is not JSON")
+
+    back = json.loads(jsonio.dumps({"analysis": stored, "quality": quality_checks(stored)}), parse_constant=not_json)
+    assert back["quality"]["halves"]["ok"] is None and back["quality"]["halves"]["reason"] == stored["convergence_note"]
+    assert jsonio.clean({"a": float("inf"), "b": np.float64("nan"), "c": np.int64(3), "d": (1.0, np.array([2.0, np.nan])),
+                         "e": np.bool_(True)}) == {"a": None, "b": None, "c": 3, "d": [1.0, [2.0, None]], "e": True}
+
+    base = {"delta_g": 10.0, "delta_g_error": 0.0, "min_overlap": 0.2, "overlap_neighbour": [0.2],
+            "window_effective_samples": [100.0, 100.0], "window_statistical_inefficiency": [1.0, 1.0]}
+    same = quality_checks(dict(base, first_half=[10.0, 0.0], second_half=[10.0, 0.0]))["halves"]
+    assert same["ok"] is True and same["difference_sigma"] == 0.0                   # was Infinity
+    apart = quality_checks(dict(base, first_half=[10.5, 0.0], second_half=[10.0, 0.0]))["halves"]
+    assert apart["difference_sigma"] is None and "is zero" in apart["difference_sigma_note"]
+    # values that a result file holds as null
+    missing = quality_checks(dict(base, first_half=[None, None], second_half=[10.0, 0.1], bar_delta_g=None,
+                                  bar_note="no estimate"))
+    assert missing["halves"]["ok"] is False and "difference" not in missing["halves"]
+    assert missing["estimators"]["ok"] is None and missing["estimators"]["reason"] == "no estimate"
+    json.loads(jsonio.dumps(missing), parse_constant=not_json)
+    no_energy = quality_checks(dict(base, delta_g=None, delta_g_error=None, min_overlap=None, overlap_neighbour=[None]))
+    assert no_energy["overlap"]["ok"] is False and no_energy["uncertainty"] is None
 
 
 def test_stage_boundaries():

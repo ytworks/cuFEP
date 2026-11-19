@@ -38,7 +38,11 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
     for row, (leg, result) in enumerate(legs):
         a = result["analysis"]
         quality = result.get("quality") or {}
-        final, error = a["delta_g"] / KCAL, a["delta_g_error"] / KCAL
+        if a.get("delta_g") is None:                  # the analysis gave no free energy for this leg
+            axes[row][0].set_title(f"{leg} leg: no free energy", fontsize=9)
+            axes[row][1].set_axis_off()
+            continue
+        final, error = a["delta_g"] / KCAL, (a.get("delta_g_error") or 0.0) / KCAL
         ax = axes[row][0]
         conv = quality.get("halves") or {}
         ax.axhspan(final - error, final + error, color="0.88", zorder=0,
@@ -51,10 +55,10 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
                             ms=4, lw=1, capsize=2, label=name)
         for name, colour, x in (("first_half", "#1f6f8b", 0.48), ("second_half", "#c0392b", 0.52)):
             half = a.get(name)
-            if half is not None and np.isfinite(half[0]):
+            if half is not None and half[0] is not None and np.isfinite(half[0]):
                 ax.plot([x], [half[0] / KCAL], marker="D", ms=8, mfc="none", color=colour)
         # consecutive blocks that do not overlap: a free energy that keeps moving shows as a staircase
-        blocks = [b for b in a.get("blocks", []) if np.isfinite(b[2])]
+        blocks = [b for b in a.get("blocks", []) if b[2] is not None and np.isfinite(b[2])]
         for k, (start, end, value, _err) in enumerate(blocks):
             ax.plot([start, end], [value / KCAL, value / KCAL], color="0.25", lw=2.5, solid_capstyle="butt",
                     label="consecutive blocks" if k == 0 else None)
@@ -86,7 +90,9 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
             ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
             ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
             ax.set_xlabel("lambda window"); ax.set_ylabel("lambda window")
-        ax.set_title(f"overlap matrix, lowest overlap of neighbours {a['min_overlap']:.3f}", fontsize=10)
+        used = a.get("min_overlap_used")
+        ax.set_title(f"overlap matrix, lowest overlap of neighbours {a['min_overlap']:.3f}"
+                     + ("" if used is None else f"\n(among the samples of the estimate {used:.3f})"), fontsize=9)
     fig.suptitle(f"{legs[0][1].get('ligand', '')}  (repeat {legs[0][1].get('repeat', 0)})", fontsize=11)
     fig.tight_layout()
     out = Path(path) if path is not None else repeat_dir / "analysis.png"

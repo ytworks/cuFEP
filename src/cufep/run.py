@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 
+from cufep import jsonio
 from cufep.config.auto import AutoReport, resolve
 from cufep.config.schema import Config, dump_config
 from cufep import mps
@@ -176,10 +177,12 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
                 err = f" ± {s['dg_bind_mbar_error']:.2f} kcal/mol (MBAR uncertainty, 1 repeat)"
             # a pair of neighbouring windows without overlap leaves the free energy undefined,
             # whatever the MBAR uncertainty says; say so next to the number
-            low = s.get("min_overlap", 1.0) < cfg.analysis.min_overlap
+            lowest = [v for v in (s.get("min_overlap"), s.get("min_overlap_used")) if v is not None]
+            unreliable = (f"; NOT RELIABLE: neighbouring lambda windows overlap by only {min(lowest):.3f} "
+                          f"({', '.join(s['not_reliable'])})") if s.get("not_reliable") and lowest else ""
             log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}"
                 + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
-                + (f"; NOT RELIABLE: neighbouring lambda windows overlap by only {s['min_overlap']:.3f}" if low else "")
+                + unreliable
                 + (f"; few independent samples: {', '.join(s['few_samples'])}" if s.get("few_samples") else "")
                 + (f"; halves of the production differ: {', '.join(s['halves_differ'])}" if s.get("halves_differ") else "")
                 + (f"; halves not compared: {', '.join(s['halves_not_compared'])}" if s.get("halves_not_compared") else "")
@@ -210,17 +213,18 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
     with open(out_dir / "summary.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
-                    "lowest_overlap", "failed_legs", "not_reliable", "few_samples", "halves_differ",
-                    "halves_not_compared", "warnings"])
+                    "lowest_overlap", "lowest_overlap_of_the_samples_used", "failed_legs", "not_reliable",
+                    "few_samples", "halves_differ", "halves_not_compared", "warnings"])
         for s in summary:
             w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
-                        _fmt(s.get("min_overlap")), "; ".join(s.get("failed_legs", [])),
+                        _fmt(s.get("min_overlap")), _fmt(s.get("min_overlap_used")),
+                        "; ".join(s.get("failed_legs", [])),
                         "; ".join(s.get("not_reliable", [])),
                         "; ".join(s.get("few_samples", [])), "; ".join(s.get("halves_differ", [])),
                         "; ".join(s.get("halves_not_compared", [])),
                         len(s.get("warnings", []))])
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
+    (out_dir / "summary.json").write_text(jsonio.dumps(summary, indent=1))
 
 
 def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, mps_used: bool, log,

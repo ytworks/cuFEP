@@ -34,14 +34,19 @@ def one_leg(leg_dir: str) -> dict | None:
     except Exception as exc:  # noqa: BLE001
         return {"leg_dir": leg_dir, "error": f"{type(exc).__name__}: {exc}"}
     q = quality_checks(a)
-    kt = 8.31446261815324e-3 * temperature / KCAL
+
+    def kcal(value):
+        return None if value is None else value / KCAL
+
     row = {"leg_dir": leg_dir, "run": d.parts[-4], "ligand": d.parts[-3], "repeat": d.parts[-2], "leg": d.parts[-1],
            "windows": a["n_states"], "production_iterations": a["n_iterations_used"],
-           "delta_g": a["delta_g"] / KCAL, "error": a["delta_g_error"] / KCAL,
-           "first_half": a["first_half"][0] / KCAL, "second_half": a["second_half"][0] / KCAL,
+           "delta_g": kcal(a["delta_g"]), "error": kcal(a["delta_g_error"]),
+           "first_half": kcal(a["first_half"][0]), "second_half": kcal(a["second_half"][0]),
            "halves_kT": q["halves"].get("difference_kT"), "halves_sigma": q["halves"].get("difference_sigma"),
-           "bar": a["bar_delta_g"] / KCAL, "lowest_overlap": a["min_overlap"], "round_trips": a["round_trips"],
+           "bar": kcal(a["bar_delta_g"]), "lowest_overlap": a["min_overlap"], "round_trips": a["round_trips"],
+           "lowest_overlap_used": a["min_overlap_used"], "overlap_below": q["overlap"]["below"],
            "fewest_samples": q["samples"].get("fewest"), "slowest_window": q["samples"].get("window"),
+           "kept_samples": q["samples"].get("kept"), "neighbour": q["samples"].get("neighbour"),
            "g_slowest": q["samples"].get("statistical_inefficiency"),
            "overlap_ok": q["overlap"]["ok"], "samples_ok": q["samples"]["ok"], "halves_ok": q["halves"]["ok"],
            "halves_reason": q["halves"].get("reason"), "estimators_ok": q["estimators"]["ok"],
@@ -82,9 +87,11 @@ def main() -> None:
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         rows = [r for r in pool.map(one_leg, legs) if r is not None]
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(rows, indent=1))
-    print(f"{'run':30s} {'ligand':7s} {'leg':7s} win prod_low     dG     ±   | fewest samples (window, g) | halves: kT  sigma | "
-          f"overlap samples halves BAR/MBAR  trips")
+    from cufep import jsonio
+
+    out.write_text(jsonio.dumps(rows, indent=1))
+    print(f"{'run':30s} {'ligand':7s} {'leg':7s} win  overlap: all  used      dG     ±   | fewest samples: estimated kept "
+          f"(window, to, g) | halves: kT  sigma | overlap samples halves BAR/MBAR  trips")
     for r in rows:
         if "leg" not in r:
             print(f"{r['leg_dir']}: {r['error']}")
@@ -93,16 +100,22 @@ def main() -> None:
         def flag(v):
             return {True: "ok", False: "below", None: "-"}[v]
 
-        halves = "    -      -" if r["halves_kT"] is None else f"{r['halves_kT']:5.1f}  {r['halves_sigma']:5.1f}"
-        print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s} {r['windows']:3d}  {r['lowest_overlap']:.3f}  "
-              f"{r['delta_g']:7.2f} {r['error']:5.2f}  |   {r['fewest_samples']:6.0f}  ({r['slowest_window']:2d}, {r['g_slowest']:5.0f})     | "
-              f"{halves}       | {flag(r['overlap_ok']):6s} {flag(r['samples_ok']):6s}  {flag(r['halves_ok']):6s} "
-              f"{flag(r['estimators_ok']):6s}  {r['round_trips']:4d}")
+        sigma = "    -" if r["halves_sigma"] is None else f"{r['halves_sigma']:5.1f}"
+        halves = "    -      -" if r["halves_kT"] is None else f"{r['halves_kT']:5.1f}  {sigma}"
+        used = "    -" if r["lowest_overlap_used"] is None else f"{r['lowest_overlap_used']:.3f}"
+        to = {-1: "prev", 1: "next"}.get(r["neighbour"], "-")
+        energy = "      -     -" if r["delta_g"] is None else f"{r['delta_g']:7.2f} {r['error'] or 0.0:5.2f}"
+        print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s} {r['windows']:3d}         {r['lowest_overlap']:.3f} {used}  "
+              f"{energy}  |          {r['fewest_samples']:6.0f}   {r['kept_samples']:5d}  ({r['slowest_window']:2d}, {to:4s}, "
+              f"{r['g_slowest']:5.0f})     | {halves}       | {flag(r['overlap_ok']):6s} {flag(r['samples_ok']):6s}  "
+              f"{flag(r['halves_ok']):6s} {flag(r['estimators_ok']):6s}  {r['round_trips']:4d}")
     done = [r for r in rows if "leg" in r]
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]
         if sub:
-            print(f"{leg}: {len(sub)} legs; overlap below 0.03 in {sum(r['overlap_ok'] is False for r in sub)}; "
+            print(f"{leg}: {len(sub)} legs; overlap below 0.03 in {sum(r['overlap_ok'] is False for r in sub)} "
+                  f"(all iterations: {sum('all iterations' in r['overlap_below'] for r in sub)}, the samples of the "
+                  f"estimate: {sum('the samples of the estimate' in r['overlap_below'] for r in sub)}); "
                   f"fewer than 50 independent samples in a window in {sum(r['samples_ok'] is False for r in sub)}; "
                   f"halves differ by more than 1 kT in {sum(r['halves_ok'] is False for r in sub)}, not compared in "
                   f"{sum(r['halves_reason'] is not None for r in sub)}; BAR and MBAR more than 1 kcal/mol apart in "

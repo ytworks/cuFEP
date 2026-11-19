@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
+from cufep import jsonio
 from cufep.config.schema import Config, WindowsConfig
 
 KCAL = 4.184
@@ -888,12 +889,13 @@ def run_leg(job: LegJob) -> dict:
     timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
                   ligand=job.ligand, leg=job.leg, repeat=job.repeat)
     (leg_dir / "timing.json").write_text(json.dumps(timing, indent=1))
-    (leg_dir / "result.json").write_text(json.dumps(result, indent=1))
+    (leg_dir / "result.json").write_text(jsonio.dumps(result, indent=1))
     log(f"dG(decouple) = {total / KCAL:.2f} kcal/mol (MBAR {analysis.delta_g / KCAL:.2f} ± "
         f"{analysis.delta_g_error / KCAL:.2f}, tail {-correction / KCAL:+.2f}); "
-        f"min overlap {analysis.min_overlap:.3f}, round trips {analysis.round_trips}, "
-        f"fewest independent samples in a window {analysis.effective_samples_per_state:.0f} "
-        f"(window {analysis.slowest_window})")
+        f"min overlap {analysis.min_overlap:.3f} (among the samples of the estimate {analysis.min_overlap_used:.3f}), "
+        f"round trips {analysis.round_trips}, fewest independent samples in a window "
+        f"{analysis.effective_samples_per_state:.0f}, of which MBAR gets "
+        f"{analysis.window_kept_samples[analysis.slowest_window]} (window {analysis.slowest_window})")
     return result
 
 
@@ -988,30 +990,49 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
         where = window_stage(windows, min(k, max(0, a.get("n_states", k + 2) - 2)))
         return "" if where is None else f" ({where[0]} stage)"
 
-    out = []
-    if not q["overlap"]["ok"]:
-        k = q["overlap"]["windows"][0]
+    def pair(k: int) -> str:
         where = window_stage(windows, k)
-        stage = "" if where is None else f" ({where[0]} stage, lambda {where[1]:g} and {where[2]:g})"
-        out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1}{stage} is "
-                   f"{q['overlap']['lowest']:.3f}, below {cfg.analysis.min_overlap:g}. Give that stage more lambda "
-                   f"windows (lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) "
-                   f"and run this leg again: cufep run CONFIG --ligand NAME --leg {leg} --reschedule")
+        return "" if where is None else f" ({where[0]} stage, lambda {where[1]:g} and {where[2]:g})"
+
+    out = []
+    ov = q["overlap"]
+    all_ok = ov.get("all_ok", ov["ok"])            # the matrix of all iterations, equal numbers per window
+    more_windows = (f"lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) "
+                    f"and run this leg again: cufep run CONFIG --ligand NAME --leg {leg} --reschedule")
+    if not all_ok:
+        k = ov["windows"][0]
+        lowest = "not defined" if ov["lowest"] is None else f"{ov['lowest']:.3f}"
+        out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1}{pair(k)} is "
+                   f"{lowest}, below {cfg.analysis.min_overlap:g}. Give that stage more lambda "
+                   f"windows ({more_windows}")
+    used = ov.get("used")
+    if used and used["ok"] is False and not (not all_ok and used["windows"] == ov["windows"]):
+        k = used["windows"][0]
+        counts = "" if not used.get("samples") else (f"; window {k} gives it {used['samples'][0]} samples and window "
+                                                     f"{k + 1} gives {used['samples'][1]}")
+        out.append(f"NOT RELIABLE: among the samples the free energy is estimated from, the overlap between lambda "
+                   f"windows {k} and {k + 1}{pair(k)} is {used['lowest']:.3f}, below {cfg.analysis.min_overlap:g}"
+                   f"{counts}. A longer production gives a slow window more samples: {longer}. More lambda windows "
+                   f"in that stage also raise it: change lambda_schedule and run the leg again with --reschedule")
     smp = q["samples"]
     if smp["ok"] is False:
+        towards = {-1: "previous", 1: "next"}.get(smp.get("neighbour"), "next")
+        kept = "" if smp.get("kept") is None else f" and gives MBAR {smp['kept']} samples"
         out.append(f"few independent samples: lambda window {smp['window']}{place(smp['window'])} has "
-                   f"{smp['fewest']:.0f} (its energy difference to the next window is correlated over "
+                   f"{smp['fewest']:.0f}{kept} (its energy difference to the {towards} window is correlated over "
                    f"{smp['statistical_inefficiency']:.0f} iterations); {smp['threshold']:g} are recommended for MBAR. "
                    f"The free energy, its uncertainty and the comparison of the halves rest on these samples. "
                    f"A longer production gives more: {longer}")
     halves = q["halves"]
     if halves["ok"] is False:
         if halves.get("difference") is not None:
+            in_sigma = halves.get("difference_sigma")
+            sigma = "" if in_sigma is None else f", {in_sigma:.1f} standard errors of the difference"
+            error = "" if q.get("uncertainty") is None else f" ± {q['uncertainty'] / KCAL:.2f}"
             out.append(f"the two halves of the production differ by {halves['difference'] / KCAL:.2f} kcal/mol "
-                       f"({halves['difference_kT']:.1f} kT, {halves['difference_sigma']:.1f} standard errors of the "
-                       f"difference; first half {halves['first_half'] / KCAL:.2f}, second half "
-                       f"{halves['second_half'] / KCAL:.2f}, all of it {halves['final'] / KCAL:.2f} ± "
-                       f"{a['delta_g_error'] / KCAL:.2f}). More than {halves['tolerance_kT']:g} kT indicates poor "
+                       f"({halves['difference_kT']:.1f} kT{sigma}; first half {halves['first_half'] / KCAL:.2f}, "
+                       f"second half {halves['second_half'] / KCAL:.2f}, all of it {halves['final'] / KCAL:.2f}"
+                       f"{error}). More than {halves['tolerance_kT']:g} kT indicates poor "
                        f"convergence; a longer production shows whether it is: {longer}")
         else:
             out.append(f"half of the production does not determine the free energy of this leg; run it longer: {longer}")
@@ -1064,6 +1085,14 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
                 kept = " The result this leg had before is kept in result.previous.json and is not used." \
                     if data.get("previous_result") else ""
                 warnings.append(f"repeat {r} {leg}: FAILED: {str(data.get('error', ''))[:300]}.{kept}")
+        for leg, (state, data) in states.items():
+            # a finished leg whose analysis gave no number (windows without any overlap)
+            if state == "finished" and not all(isinstance(data.get(key), (int, float)) and np.isfinite(data[key])
+                                               for key in ("delta_g_decouple", "delta_g_mbar_error")):
+                where = f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else "")
+                failed_legs.append(where)
+                warnings.append(f"repeat {r} {leg}: FAILED: the analysis gave no free energy for this leg")
+                states[leg] = ("failed", data)
         if not all(state == "finished" for state, _ in states.values()):
             warnings.append(f"repeat {r} is incomplete")
             continue
@@ -1079,6 +1108,9 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             "lambda_windows": {"complex": c["n_states"], "solvent": s["n_states"]},
             "lambda_windows_added": {"complex": c.get("lambda_windows_added"), "solvent": s.get("lambda_windows_added")},
             "min_overlap": {"complex": c["analysis"]["min_overlap"], "solvent": s["analysis"]["min_overlap"]},
+            # among the samples the free energy is estimated from (None in results that lack it)
+            "min_overlap_used": {"complex": c["analysis"].get("min_overlap_used"),
+                                 "solvent": s["analysis"].get("min_overlap_used")},
             "production_ns": {"complex": c["production_ns"], "solvent": s["production_ns"]}})
         for leg_result in (c, s):
             warnings += [f"repeat {r} {leg_result['leg']}: {n}" for n in leg_result.get("notes", [])]
@@ -1102,6 +1134,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
         out["dg_bind_std"] = float(vals.std(ddof=1)) if len(vals) > 1 else None
         out["dg_bind_mbar_error"] = float(np.sqrt(np.mean([(p["mbar_error"] / KCAL) ** 2 for p in per_repeat])))
         out["min_overlap"] = float(min(min(p["min_overlap"].values()) for p in per_repeat))
+        used = [v for p in per_repeat for v in p["min_overlap_used"].values() if v is not None]
+        out["min_overlap_used"] = float(min(used)) if used else None
         energy_keys = ("dg_bind", "mbar_error", "dg_complex", "dg_solvent", "restraint_release", "lrc_complex",
                        "lrc_solvent")
         converted = []
@@ -1113,5 +1147,5 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
                 q[k] = {name: value / KCAL for name, value in p[k].items()}
             converted.append(q)
         out["repeats"] = converted
-    (lig_dir / "result.json").write_text(json.dumps(out, indent=1))
+    (lig_dir / "result.json").write_text(jsonio.dumps(out, indent=1))
     return out

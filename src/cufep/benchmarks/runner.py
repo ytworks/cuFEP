@@ -83,7 +83,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                      "windows_solvent": (first.get("lambda_windows") or {}).get("solvent"),
                      "windows_added_complex": None if added.get("complex") is None else sum(added["complex"].values()),
                      "windows_added_solvent": None if added.get("solvent") is None else sum(added["solvent"].values()),
-                     "lowest_overlap": s.get("min_overlap"), "flags": "; ".join(flags),
+                     "lowest_overlap": s.get("min_overlap"), "lowest_overlap_used": s.get("min_overlap_used"),
+                     "flags": "; ".join(flags),
                      "warnings": len(s.get("warnings", []))})
     title = load_registry()[name]["title"]
     lines = [f"# cuFEP benchmark report: {name}", "", title, "",
@@ -102,17 +103,20 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
 
     lines += ["", "## Lambda windows and checks of the analysis", "",
               "Windows per leg, how many of them adaptive lambda scheduling added to its start, the lowest overlap "
-              "of neighbouring windows in the production, and the legs that do not meet a level of the checks "
-              "(first repeat). NOT RELIABLE (overlap below 0.03) is the one that makes a result unusable; the "
-              "others say that more sampling is advisable.", "",
-              "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | flags |",
-              "|---|---|---|---|---|"]
+              "of neighbouring windows in the production (from all iterations with equal numbers of samples per "
+              "window, and among the samples the free energy is estimated from), and the legs that do not meet a "
+              "level of the checks (first repeat). NOT RELIABLE (overlap below 0.03) is the one that makes a result "
+              "unusable; the others say that more sampling is advisable.", "",
+              "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags |",
+              "|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: r["exp"]):
         def cell_windows(leg: str) -> str:
             n, extra = r[f"windows_{leg}"], r[f"windows_added_{leg}"]
             return count(n) + ("" if extra is None else f" ({extra})")
         low = "" if r["lowest_overlap"] is None else f"{r['lowest_overlap']:.3f}"
-        lines.append(f"| {r['ligand']} | {cell_windows('complex')} | {cell_windows('solvent')} | {low} | {r['flags']} |")
+        used = "" if r["lowest_overlap_used"] is None else f"{r['lowest_overlap_used']:.3f}"
+        lines.append(f"| {r['ligand']} | {cell_windows('complex')} | {cell_windows('solvent')} | {low} | {used} | "
+                     f"{r['flags']} |")
     scheduled = [r[f"windows_added_{leg}"] for r in rows for leg in ("complex", "solvent")
                  if r[f"windows_added_{leg}"] is not None]
     if scheduled:

@@ -36,18 +36,28 @@ class LegAnalysis:
     #: statistical inefficiency of the reduced potential summed over the replicas, in iterations;
     #: used only for the overlap matrix (equal numbers of samples per window)
     statistical_inefficiency: float
-    #: independent samples in the lambda window that has the fewest (see window_effective_samples)
+    #: independent samples, as estimated, in the lambda window that has the fewest
+    #: (see window_effective_samples and window_kept_samples)
     effective_samples_per_state: float
     #: free energy of the last state relative to the first, kJ/mol, and its MBAR standard error,
     #: from samples that are decorrelated window by window
     delta_g: float
     delta_g_error: float
-    #: statistical inefficiency of every lambda window, in iterations: of the energy difference to
-    #: the next window (the previous one for the last window), in the configurations of the window
+    #: statistical inefficiency of every lambda window, in iterations: the larger of those of its
+    #: energy differences to the previous and to the next window, in the configurations of the window
     window_statistical_inefficiency: list[float] = field(default_factory=list)
-    #: independent samples per lambda window: production iterations / statistical inefficiency
+    #: the two it is the larger of (NaN where there is no such neighbour), and which neighbour
+    #: gave it: -1 the previous window, +1 the next
+    window_inefficiency_previous: list[float] = field(default_factory=list)
+    window_inefficiency_next: list[float] = field(default_factory=list)
+    window_inefficiency_neighbour: list[int] = field(default_factory=list)
+    #: independent samples per lambda window as estimated: production iterations / statistical
+    #: inefficiency
     window_effective_samples: list[float] = field(default_factory=list)
-    #: the window with the fewest independent samples
+    #: samples every lambda window gives to MBAR: every ceil(statistical inefficiency)-th
+    #: iteration, so never more than the estimate above
+    window_kept_samples: list[int] = field(default_factory=list)
+    #: the window with the fewest samples (the smaller of the two numbers above)
     slowest_window: int = 0
     #: cumulative free energy at every state relative to the first, kJ/mol
     f_k: list[float] = field(default_factory=list)
@@ -57,8 +67,19 @@ class LegAnalysis:
     min_overlap: float = 0.0
     round_trips: int = 0
     swap_acceptance_neighbour: list[float] = field(default_factory=list)
-    #: the whole overlap matrix of the windows (overlap_neighbour is its first off-diagonal)
+    #: the whole overlap matrix of the windows (overlap_neighbour is its first off-diagonal),
+    #: from all iterations with the same number of samples in every window
     overlap_matrix: list[list[float]] = field(default_factory=list)
+    #: the overlap matrix of the samples the free energy is estimated from (window_kept_samples
+    #: per window), in the normalisation of equal numbers of samples per window
+    #: (overlap_with_equal_weights); overlap_used_neighbour is its first off-diagonal
+    overlap_used_matrix: list[list[float]] = field(default_factory=list)
+    overlap_used_neighbour: list[float] = field(default_factory=list)
+    min_overlap_used: float = float("nan")
+    #: pymbar's own matrix of those samples, O[i][j] = N_j * sum_n W_ni W_nj: with different
+    #: numbers of samples O[i][j] and O[j][i] differ by the ratio of the numbers. For the record;
+    #: no level is applied to it
+    overlap_used_weighted_by_number: list[list[float]] = field(default_factory=list)
     #: free energy from growing parts of the production, counted from its start (forward) and
     #: from its end (reverse): (fraction of the production, dG, error)
     forward: list[tuple[float, float, float]] = field(default_factory=list)
@@ -77,6 +98,8 @@ class LegAnalysis:
     #: sum of BAR between neighbouring windows, a second estimator on the same data
     bar_delta_g: float = float("nan")
     bar_delta_g_error: float = float("nan")
+    #: why BAR has no estimate, if it has none
+    bar_note: str = ""
     lrc_delta_g: float = 0.0
     lrc_error: float = 0.0
     lrc_samples: int = 0
@@ -86,7 +109,10 @@ class LegAnalysis:
     temperature_K: float = 298.15
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        """For a result file: a number that has no value (NaN) is None there, see cufep.jsonio."""
+        from cufep.jsonio import clean
+
+        return clean(asdict(self))
 
 
 def assemble(u: np.ndarray, states: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -149,33 +175,48 @@ def solve_mbar(u: np.ndarray, states: np.ndarray, initial_f_k=None, overlap: boo
     return np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0]), matrix
 
 
-def window_inefficiencies(u: np.ndarray, states: np.ndarray) -> np.ndarray:
-    """Statistical inefficiency of every lambda window, in iterations.
+def neighbour_inefficiencies(u: np.ndarray, states: np.ndarray) -> np.ndarray:
+    """Statistical inefficiencies of every lambda window towards its two neighbours, in iterations.
+
+    Row j holds those of the energy differences between window j and window j - 1 (column 0) and
+    between window j and window j + 1 (column 1), over the configurations window j holds from
+    iteration to iteration, whichever replica holds them; NaN where there is no such neighbour.
 
     Free energy estimators need uncorrelated samples (Klimovich, Shirts and Mobley 2015, section
-    2.5, who use dU/dlambda or "any of the potential energy differences"). The series taken here
-    is alchemlyb's default (``decorrelate_u_nk``, method ``dE``): for window j the energy
-    difference to the next window (to the previous one for the last window), over the
-    configurations sampled in window j in the order of the iterations, whichever replica holds
-    them. Where replicas hardly exchange, a window keeps its configurations for a long time and
-    this series shows it; the reduced potential summed over all replicas does not.
+    2.5, who take dU/dlambda or "any of the potential energy differences"). alchemlyb's default
+    (``decorrelate_u_nk``, method ``dE``) takes the difference to the next window only. MBAR uses
+    the energies of a configuration in both neighbours, and a degree of freedom that is slow can
+    change the difference to one neighbour and leave the other alone, so both are examined. Where
+    replicas hardly exchange, a window keeps its configurations for a long time and these series
+    show it; the reduced potential summed over all replicas does not.
     """
     _, timeseries = _pymbar()
     n, _n_rep, k = u.shape
     replica_in = np.argsort(states, axis=1)                    # replica that is in window j at each iteration
     it = np.arange(n)
-    g = np.ones(k)
+    table = np.full((k, 2), np.nan)
     for j in range(k):
-        other = j + 1 if j + 1 < k else j - 1
         r = replica_in[:, j]
-        series = np.minimum(u[it, r, other] - u[it, r, j], 1.0e6)
-        if n >= 8 and not np.allclose(series, series[0]):
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                try:
-                    g[j] = max(1.0, float(timeseries.statistical_inefficiency(series)))
-                except Exception:  # noqa: BLE001
-                    g[j] = 1.0
-    return g
+        for column, other in ((0, j - 1), (1, j + 1)):
+            if not 0 <= other < k:
+                continue
+            series = np.minimum(u[it, r, other] - u[it, r, j], 1.0e6)
+            g = 1.0
+            if n >= 8 and not np.allclose(series, series[0]):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    try:
+                        g = max(1.0, float(timeseries.statistical_inefficiency(series)))
+                    except Exception:  # noqa: BLE001
+                        g = 1.0
+            table[j, column] = g
+    return table
+
+
+def window_inefficiencies(u: np.ndarray, states: np.ndarray) -> np.ndarray:
+    """Statistical inefficiency of every lambda window: the larger of its two in
+    :func:`neighbour_inefficiencies`."""
+    table = neighbour_inefficiencies(u, states)
+    return np.array([np.nanmax(row) if np.isfinite(row).any() else 1.0 for row in table])
 
 
 def kept_iterations(start: int, stop: int, g_window: float) -> np.ndarray:
@@ -208,12 +249,52 @@ def decorrelated(u: np.ndarray, states: np.ndarray, g: np.ndarray, start: int = 
     return np.ascontiguousarray(np.concatenate(rows, axis=0).T), np.array(n_k)
 
 
-def solve_decorrelated(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None, max_iterations: int = 1000):
-    """(f_k, df_k relative to state 0) in kT from samples grouped by state."""
+def solve_decorrelated(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None, max_iterations: int = 1000,
+                       overlap: bool = False):
+    """(f_k, df_k relative to state 0) in kT from samples grouped by state.
+
+    With ``overlap`` also the overlap matrix of these very samples (None if it cannot be
+    computed): pymbar's ``O[i, j] = N_j * sum_n W_ni W_nj``. Its rows sum to 1; it is symmetric
+    only if all windows hold the same number of samples.
+    """
     mbar = _mbar(u_kn, n_k, initial_f_k, max_iterations)
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         res = mbar.compute_free_energy_differences()
-    return np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0])
+        matrix = None
+        if overlap:
+            try:
+                matrix = np.asarray(mbar.compute_overlap()["matrix"], dtype=float)
+            except Exception:  # noqa: BLE001
+                matrix = None
+    f, df = np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0])
+    return (f, df, matrix) if overlap else (f, df)
+
+
+def overlap_with_equal_weights(u_kn: np.ndarray, n_k: np.ndarray, f_k: np.ndarray) -> np.ndarray:
+    """Overlap matrix of samples grouped by state, every window weighing the same whatever its
+    number of samples.
+
+    pymbar's matrix is ``O[i, j] = N_j * sum_n W_ni W_nj`` with the MBAR weights W. With the same
+    number of samples in every window it is symmetric and measures how much the windows share
+    their configurations. With different numbers it also measures the numbers: a window that
+    keeps 30 samples next to one that keeps 3000 has O near 0.003 in one direction however well
+    the two overlap. The numbers of samples have a check of their own, so the overlap is taken
+    here in the normalisation of equal numbers:
+
+        O[i, j] = sum_n w_n P_ni P_nj,   P_ni = exp(f_i - u_i(x_n)) / sum_k exp(f_k - u_k(x_n)),
+
+    where w_n = 1 / N_s for a sample of window s (the samples of every window weigh the same in
+    total) and f the free energies of the estimate. For equal numbers this is pymbar's matrix
+    exactly. It is symmetric; its rows sum to 1 up to the sampling error.
+    """
+    from scipy.special import logsumexp
+
+    n_k = np.asarray(n_k)
+    reduced = np.minimum(np.asarray(u_kn, dtype=float) - np.min(u_kn), 1.0e6)
+    log_p = np.asarray(f_k, dtype=float)[:, None] - reduced
+    p = np.exp(log_p - logsumexp(log_p, axis=0))
+    weights = np.repeat(1.0 / np.maximum(n_k, 1), n_k)
+    return (p * weights) @ p.T
 
 
 def overlap_matrix(u_kn: np.ndarray, n_k: np.ndarray) -> np.ndarray:
@@ -248,6 +329,17 @@ def bar_between_neighbours(u_kn: np.ndarray, n_k: np.ndarray) -> tuple[float, fl
     return total, float(np.sqrt(variance))
 
 
+def _number(value) -> float | None:
+    """``value`` as a finite float, or None for None, NaN, an infinity or something that is no number."""
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) else None
+
+
 def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samples: float = 50.0,
                    halves_tolerance_kT: float = 1.0, estimators_tolerance_kcal: float = 1.0) -> dict:
     """What the analysis of a leg says about its reliability. ``analysis`` holds energies in kJ/mol.
@@ -259,11 +351,17 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
                  overlap matrix and the number of samples, and "values as low as 0.03 [seem] to be
                  tolerable to yield a reliable free energy estimate"; below it "the free energy
                  estimate itself will likely be substantially incorrect" (Klimovich, Shirts and
-                 Mobley 2015, sections 3.4 and 3.5; also the warning level of Flare).
+                 Mobley 2015, sections 3.4 and 3.5; also the warning level of Flare). Two matrices
+                 are examined, both in the normalisation of equal numbers of samples per window:
+                 that of all iterations, and that of the samples the free energy is estimated
+                 from (``used``, :func:`overlap_with_equal_weights`). ``below`` names the one
+                 that is under the level.
     samples      the window with the fewest independent samples has at least
                  ``min_effective_samples`` ("it is recommended that the effective number of
                  uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators are used", Mey et
-                 al. 2020, section 8.2).
+                 al. 2020, section 8.2). Both the estimate (iterations / statistical inefficiency,
+                 ``fewest``) and the number of samples MBAR really gets from that window
+                 (``kept``) must reach it.
     halves       the free energies from the first and from the second half of the production
                  differ by at most ``halves_tolerance_kT`` ("differences over 1 kBT indicating
                  poor convergence", Mey et al. 2020, figure 9, where it is applied to each step of
@@ -277,21 +375,42 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
 
     ``ok`` is None where the analysis does not hold the numbers for a check; for the halves that
     includes a production too short to give each half an estimate, with the reason in ``reason``.
+    A number that has no value is None, in ``analysis`` and in what is returned.
     """
     kt = R_GAS * float(analysis.get("temperature_K", 298.15))
-    final, error = float(analysis["delta_g"]), float(analysis["delta_g_error"])
-    neighbour = list(analysis.get("overlap_neighbour", []))
-    lowest = float(analysis.get("min_overlap", 1.0))
-    pair = int(np.argmin(neighbour)) if neighbour else None
-    out = {"overlap": {"ok": bool(lowest >= min_overlap), "lowest": lowest,
-                       "windows": None if pair is None else [pair, pair + 1], "threshold": min_overlap}}
+    final, error = _number(analysis.get("delta_g")), _number(analysis.get("delta_g_error"))
+    kept = analysis.get("window_kept_samples") or []
+
+    neighbour = [_number(x) for x in analysis.get("overlap_neighbour", [])]
+    lowest = _number(analysis["min_overlap"]) if "min_overlap" in analysis else 1.0
+    all_ok = bool(lowest is not None and lowest >= min_overlap)
+    pair = int(np.argmin([0.0 if x is None else x for x in neighbour])) if neighbour else None
+    overlap = {"ok": all_ok, "lowest": lowest, "windows": None if pair is None else [pair, pair + 1],
+               "threshold": min_overlap, "all_ok": all_ok, "used": None}
+    used = analysis.get("overlap_used_neighbour")
+    if used:
+        values = [0.0 if _number(x) is None else _number(x) for x in used]
+        i = int(np.argmin(values))
+        overlap["used"] = {"ok": bool(values[i] >= min_overlap), "lowest": values[i], "windows": [i, i + 1],
+                           "samples": [int(kept[i]), int(kept[i + 1])] if len(kept) > i + 1 else None}
+        overlap["ok"] = bool(all_ok and overlap["used"]["ok"])
+    overlap["below"] = ([] if all_ok else ["all iterations"]) \
+        + (["the samples of the estimate"] if overlap["used"] and not overlap["used"]["ok"] else [])
+    out = {"overlap": overlap}
 
     samples = {"ok": None, "threshold": float(min_effective_samples)}
     per_window = analysis.get("window_effective_samples")
     if per_window:
-        j = int(np.argmin(per_window))
-        samples.update(ok=bool(per_window[j] >= min_effective_samples), fewest=float(per_window[j]), window=j,
+        counts = [min(float(e), float(kept[j])) if len(kept) == len(per_window) else float(e)
+                  for j, e in enumerate(per_window)]
+        j = int(np.argmin(counts))
+        samples.update(ok=bool(counts[j] >= min_effective_samples), fewest=float(per_window[j]), window=j,
                        statistical_inefficiency=float(analysis["window_statistical_inefficiency"][j]))
+        if len(kept) == len(per_window):
+            samples["kept"] = int(kept[j])
+        towards = analysis.get("window_inefficiency_neighbour") or []
+        if len(towards) == len(per_window):
+            samples["neighbour"] = int(towards[j])
     out["samples"] = samples
 
     halves = [analysis.get("first_half"), analysis.get("second_half")]
@@ -300,22 +419,33 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
     if analysis.get("convergence_note"):
         conv["reason"] = str(analysis["convergence_note"])
     elif per_window and all(h is not None for h in halves):
-        first, second = float(halves[0][0]), float(halves[1][0])
+        first, second = _number(halves[0][0]), _number(halves[1][0])
         conv.update(first_half=first, second_half=second)
-        if np.isfinite(first) and np.isfinite(second):
+        if first is not None and second is not None:
             difference = abs(first - second)
-            sigma = float(np.hypot(halves[0][1], halves[1][1]))
+            errors = [_number(halves[0][1]), _number(halves[1][1])]
+            sigma = None if None in errors else float(np.hypot(*errors))
+            if sigma:
+                in_sigma = difference / sigma
+            elif sigma == 0.0 and difference == 0.0:
+                in_sigma = 0.0                               # identical halves
+            else:
+                in_sigma = None
+                conv["difference_sigma_note"] = ("the standard error of the difference is zero" if sigma == 0.0
+                                                 else "a half has no standard error")
             conv.update(difference=difference, difference_kT=difference / kt, ok=bool(difference <= tolerance),
-                        difference_sigma=difference / sigma if sigma > 0 else float("inf"))
-        elif np.isfinite(final):
+                        difference_sigma=in_sigma)
+        elif final is not None:
             conv["ok"] = False       # half of the data does not determine the free energy
     out["halves"] = conv
 
-    bar = analysis.get("bar_delta_g")
+    bar = _number(analysis.get("bar_delta_g"))
     tolerance = estimators_tolerance_kcal * KCAL
     est = {"ok": None, "tolerance": tolerance, "mbar": final}
-    if per_window and bar is not None and np.isfinite(float(bar)):
-        est.update(bar=float(bar), ok=bool(abs(float(bar) - final) <= tolerance))
+    if per_window and bar is not None and final is not None:
+        est.update(bar=bar, ok=bool(abs(bar - final) <= tolerance))
+    elif analysis.get("bar_note"):
+        est["reason"] = str(analysis["bar_note"])
     out["estimators"] = est
     out["uncertainty"] = error
     return out
@@ -383,8 +513,8 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     """Analyse samples loaded with :func:`cufep.sampling.storage.read_samples`.
 
     The free energy and its uncertainty come from samples that are decorrelated window by
-    window (:func:`window_inefficiencies`, :func:`decorrelated`), as Klimovich, Shirts and Mobley
-    2015 and alchemlyb do. ``n_fractions`` is the number of points of the forward and reverse
+    window (:func:`neighbour_inefficiencies`, :func:`decorrelated`), as Klimovich, Shirts and
+    Mobley 2015 and alchemlyb do. ``n_fractions`` is the number of points of the forward and reverse
     series, ``n_blocks`` the number of consecutive blocks with an estimate of their own. A part
     of the production gets an estimate only if every window holds ``MIN_INDEPENDENT_SAMPLES``
     independent samples in it; a point or block that does not is left out, and halves that do
@@ -407,12 +537,23 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     stride = max(1, int(np.ceil(g_sum)))
     f_start, _df, overlap = solve_mbar(u[::stride], states[::stride])
     neighbour = [float(overlap[i, i + 1]) for i in range(n_states - 1)]
-    # the free energy and its uncertainty: every window decorrelated on its own
-    g = window_inefficiencies(u, states)
+    # the free energy and its uncertainty: every window decorrelated on its own, by the slower of
+    # its energy differences to the two neighbours
+    table = neighbour_inefficiencies(u, states)
+    g = np.array([np.nanmax(row) if np.isfinite(row).any() else 1.0 for row in table])
+    towards = [1 if np.isfinite(row[1]) and not row[0] > row[1] else -1 for row in table]
     u_kn, n_k = decorrelated(u, states, g)
-    f_k, df_k = solve_decorrelated(u_kn, n_k, initial_f_k=f_start)
+    f_k, df_k, by_number = solve_decorrelated(u_kn, n_k, initial_f_k=f_start, overlap=True)
+    # the overlap among these very samples, in the normalisation of equal numbers per window
+    try:
+        used = overlap_with_equal_weights(u_kn, n_k, f_k)
+    except Exception:  # noqa: BLE001
+        used = None
+    if used is not None and not np.all(np.isfinite(used)):
+        used = None
+    used_neighbour = [] if used is None else [float(used[i, i + 1]) for i in range(n_states - 1)]
     effective = n / g
-    slowest = int(np.argmin(effective))
+    slowest = int(np.argmin(np.minimum(effective, n_k)))
 
     def partial(a: int, b: int):
         """(dG, error) of the iterations [a, b), or None if a window has too few independent samples there."""
@@ -453,11 +594,15 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     parts = [partial(a, b) for a, b in zip(edges[:-1], edges[1:])]
     if parts and all(part is not None for part in parts):
         blocks = [(a / n, b / n, *part) for a, b, part in zip(edges[:-1], edges[1:], parts)]
+    bar_note = ""
     try:
         bar, bar_error = bar_between_neighbours(u_kn, n_k)
         bar, bar_error = bar * kt, bar_error * kt
-    except Exception:  # noqa: BLE001  a pair of windows without overlap has no BAR estimate
+    except Exception as exc:  # noqa: BLE001  a pair of windows without overlap has no BAR estimate
         bar = bar_error = float("nan")
+        bar_note = f"BAR gave no estimate for a pair of neighbouring windows ({type(exc).__name__})"
+    if not bar_note and not np.isfinite(bar):
+        bar_note = "BAR gave no finite estimate for a pair of neighbouring windows"
 
     stages = {}
     state_dicts = attrs.get("states", [])
@@ -486,13 +631,20 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         n_states=n_states, n_iterations_used=int(n), statistical_inefficiency=float(g_sum),
         effective_samples_per_state=float(effective[slowest]), delta_g=float(f_k[-1] * kt),
         delta_g_error=float(df_k[-1] * kt), window_statistical_inefficiency=[float(x) for x in g],
-        window_effective_samples=[float(x) for x in effective], slowest_window=slowest,
+        window_inefficiency_previous=[float(x) for x in table[:, 0]],
+        window_inefficiency_next=[float(x) for x in table[:, 1]], window_inefficiency_neighbour=towards,
+        window_effective_samples=[float(x) for x in effective], window_kept_samples=[int(x) for x in n_k],
+        slowest_window=slowest,
         f_k=(f_k * kt).tolist(), df_k=(df_k * kt).tolist(), stage_delta_g=stages,
         overlap_neighbour=neighbour, min_overlap=float(min(neighbour)) if neighbour else 1.0,
         round_trips=count_round_trips(states), swap_acceptance_neighbour=neighbour_swap_fraction(states),
         overlap_matrix=np.round(overlap, 4).tolist(),
+        overlap_used_matrix=[] if used is None else np.round(used, 4).tolist(),
+        overlap_used_weighted_by_number=[] if by_number is None else np.round(by_number, 4).tolist(),
+        overlap_used_neighbour=used_neighbour,
+        min_overlap_used=float(min(used_neighbour)) if used_neighbour else float("nan"),
         forward=forward, reverse=reverse, first_half=first_half, second_half=second_half,
         convergence_note=convergence_note, forward_reverse_gap=float(gap), blocks=blocks,
-        bar_delta_g=float(bar), bar_delta_g_error=float(bar_error),
+        bar_delta_g=float(bar), bar_delta_g_error=float(bar_error), bar_note=bar_note,
         lrc_delta_g=lrc_dg, lrc_error=lrc_se, lrc_samples=lrc_n, lrc_isotropic=lrc_iso,
         temperature_K=temperature_K)
