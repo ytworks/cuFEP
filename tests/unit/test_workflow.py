@@ -534,9 +534,9 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     import shutil
 
     from cufep.config.schema import Config
-    from cufep.workflow import (WorkflowError, check_made_from, equil_contradictions, equil_made_with,
-                                prep_contradictions, prep_made_from, prepare_ligand, restraint_contradictions,
-                                restraint_made_with, settings_differences)
+    from cufep.workflow import (WorkflowError, check_made_from, equil_contradictions, equil_in_membrane,
+                                equil_made_with, prep_contradictions, prep_made_from, prepare_ligand,
+                                restraint_contradictions, restraint_made_with, settings_differences)
 
     protein = tmp_path / "protein.pdb"
     shutil.copy(repo / "benchmarks/tyk2/inputs/tyk2_protein.pdb", protein)
@@ -589,9 +589,13 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert "did not record what it was made from; nothing it holds contradicts this run" in notes[0]
     assert check_made_from("x", tmp_path, None, {}, log=notes.append) is False and check_made_from("x", tmp_path, {}, {})
 
-    # the pre-equilibration of such a version: the time step in the file is the one that was used
-    np.savez(tmp_path / "old_equil.npz", timestep_fs=2.0, simulated_ns=5.0, area_nm2=np.zeros(4), notes="[]")
+    # the pre-equilibration of such a version: the time step in the file is the one that was used.
+    # The area of the box is recorded for every system, the water molecules near the ligand only in a
+    # bilayer (a soluble system was once taken for one because of its area)
+    np.savez(tmp_path / "old_equil.npz", timestep_fs=2.0, simulated_ns=5.0, area_nm2=np.full(40, 61.7),
+             pocket_waters=np.zeros(0), notes="[]")
     old_eq = np.load(tmp_path / "old_equil.npz")
+    assert equil_in_membrane(old_eq) is False
     assert equil_contradictions(old_eq, cfg, "complex", False) == []                  # 2 fs used, 4 fs configured
     assert equil_contradictions(old_eq, config(dynamics={"timestep_fs": 1.0}), "complex", False) \
         == ["time step: 2 fs -> 1 fs"]
@@ -599,20 +603,41 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
                                 "complex", False) == ["length of the MD: 5 ns -> 1 ns"]
     assert equil_contradictions(old_eq, config(membrane={"enabled": True}), "complex", True) \
         == ["length of the MD: 5 ns -> 10 ns", "bilayer: no -> yes"]
-    np.savez(tmp_path / "old_membrane.npz", timestep_fs=4.0, simulated_ns=15.0, area_nm2=np.full(4, 66.0))
-    assert equil_contradictions(np.load(tmp_path / "old_membrane.npz"), config(membrane={"enabled": True}),
-                                "complex", True) == []                                # an extended bilayer run
-    # the restraint of such a version
-    old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0},
+    np.savez(tmp_path / "old_membrane.npz", timestep_fs=4.0, simulated_ns=15.0, area_nm2=np.full(40, 66.0),
+             pocket_waters=np.full(40, 6.0))
+    old_membrane = np.load(tmp_path / "old_membrane.npz")
+    assert equil_in_membrane(old_membrane) is True
+    assert equil_contradictions(old_membrane, config(membrane={"enabled": True}), "complex", True) == []   # extended
+    assert "bilayer: yes -> no" in equil_contradictions(old_membrane, cfg, "complex", False)
+    np.savez(tmp_path / "older.npz", timestep_fs=4.0, simulated_ns=5.0)          # a file that does not tell
+    assert equil_in_membrane(np.load(tmp_path / "older.npz")) is None
+    assert equil_contradictions(np.load(tmp_path / "older.npz"), cfg, "complex", False) == []
+    # the restraint of such a version: all six force constants it holds (kJ/mol/nm^2 and kJ/mol/rad^2)
+    angles = {key: 80.0 * 4.184 for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")}
+    old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0,
+                                   **angles},
                      "info": {"selection": "auto", "force_constants": "openfe"}}
     assert restraint_contradictions(old_restraint, cfg) == []
     assert restraint_contradictions(old_restraint, config(restraints={"force_constants": "auto"})) \
         == ["restraints.force_constants: openfe -> auto"]
     assert restraint_contradictions(old_restraint, config(restraints={"k_r_kcal_per_A2": 20.0})) \
         == ["restraints.k_r_kcal_per_A2: 10 -> 20"]
+    # review of PR 1: the distance constant kept and the angle constant changed from 80 to 20 went through
+    assert restraint_contradictions(old_restraint, config(restraints={"k_angle_kcal_per_rad2": 20.0})) == [
+        "restraints.k_angle_kcal_per_rad2: k_theta_a 80, k_theta_b 80, k_phi_a 80, k_phi_b 80, k_phi_c 80 -> 20"]
+    one_differs = {"restraint": dict(old_restraint["restraint"], k_phi_b=40.0 * 4.184), "info": old_restraint["info"]}
+    assert restraint_contradictions(one_differs, cfg) == ["restraints.k_angle_kcal_per_rad2: k_phi_b 40 -> 80"]
+    only_distance = {"restraint": {"k_r": 10.0 * 4.184 * 100.0}, "info": old_restraint["info"]}
+    assert restraint_contradictions(only_distance, config(restraints={"k_angle_kcal_per_rad2": 20.0})) == []
     assert restraint_contradictions(old_restraint, config(restraints={
         "selection": "manual", "host_atoms": [1, 2, 9], "guest_atoms": [4, 5, 6]})) \
         == ["restraints.selection: auto -> manual", "restraints.host_atoms: [1, 2, 3] -> [1, 2, 9]"]
+    # with manual selection the constants are the configured ones whatever force_constants says
+    manual = {"restraint": dict(old_restraint["restraint"]), "info": {"selection": "manual"}}
+    assert restraint_contradictions(manual, config(restraints={
+        "selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "force_constants": "auto",
+        "k_angle_kcal_per_rad2": 20.0})) == [
+        "restraints.k_angle_kcal_per_rad2: k_theta_a 80, k_theta_b 80, k_phi_a 80, k_phi_b 80, k_phi_c 80 -> 20"]
 
     # pre-equilibration and restraint of a leg
     eq = equil_made_with(cfg, "complex", False, 7)

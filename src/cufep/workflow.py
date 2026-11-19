@@ -209,6 +209,17 @@ def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape:
     return [f"{key}: {info[key]} -> {value}" for key, value in expected.items() if key in info and info[key] != value]
 
 
+def equil_in_membrane(eq) -> bool | None:
+    """Whether a stored pre-equilibration was one of a system in a bilayer; None if the file does not tell.
+
+    The water molecules near the ligand are counted only for a bilayer system. The area of the
+    box is recorded for every system and says nothing.
+    """
+    if "pocket_waters" not in eq.files:
+        return None
+    return bool(np.asarray(eq["pocket_waters"]).size > 0)
+
+
 def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[str]:
     """Where an ``equil.npz`` without a record of its origin says something else than this run.
 
@@ -226,10 +237,9 @@ def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[s
         done = float(eq["simulated_ns"])
         if done < asked - 1e-6 or (not in_membrane and done > asked + 1e-6):
             out.append(f"length of the MD: {done:g} ns -> {asked:g} ns")
-    if "area_nm2" in files:
-        has_bilayer = bool(np.any(np.asarray(eq["area_nm2"], dtype=float) > 0.0))
-        if has_bilayer != bool(in_membrane):
-            out.append(f"bilayer: {'yes' if has_bilayer else 'no'} -> {'yes' if in_membrane else 'no'}")
+    has_bilayer = equil_in_membrane(eq)
+    if has_bilayer is not None and has_bilayer != bool(in_membrane):
+        out.append(f"bilayer: {'yes' if has_bilayer else 'no'} -> {'yes' if in_membrane else 'no'}")
     return out
 
 
@@ -245,11 +255,18 @@ def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
         for key, asked in (("host_atoms", rc.host_atoms), ("guest_atoms", rc.guest_atoms)):
             if asked and key in restraint and list(restraint[key]) != list(asked):
                 out.append(f"restraints.{key}: {list(restraint[key])} -> {list(asked)}")
-    if rc.force_constants != "auto" and "k_r" in restraint:
+    # the six force constants, where the run sets them (not taken from the fluctuations): the file
+    # holds them in kJ/mol/nm^2 and kJ/mol/rad^2
+    if rc.force_constants != "auto" or rc.selection == "manual":
         from cufep.sampling.storage import _same
-        k_r = rc.k_r_kcal_per_A2 * KCAL * 100.0
-        if not _same(float(restraint["k_r"]), k_r):
+        if "k_r" in restraint and not _same(float(restraint["k_r"]), rc.k_r_kcal_per_A2 * KCAL * 100.0):
             out.append(f"restraints.k_r_kcal_per_A2: {float(restraint['k_r']) / (KCAL * 100.0):g} -> {rc.k_r_kcal_per_A2:g}")
+        angles = {key: float(restraint[key]) / KCAL for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")
+                  if key in restraint}
+        other = {key: value for key, value in angles.items() if not _same(value, float(rc.k_angle_kcal_per_rad2))}
+        if other:
+            out.append("restraints.k_angle_kcal_per_rad2: " + ", ".join(f"{key} {value:g}" for key, value in other.items())
+                       + f" -> {rc.k_angle_kcal_per_rad2:g}")
     return out
 
 
