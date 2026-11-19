@@ -67,6 +67,35 @@ class Schedule:
     #: REST2: temperature scale of the hot region in the middle of the leg (1 = no REST2); the
     #: scale of each window is in its state
     rest2_scale: float = 1.0
+    #: the leg the schedule was written for, if the file says so
+    leg: str | None = None
+
+    def check_leg(self, leg: str, stages: list[str]) -> None:
+        """Raise ValueError unless this is a schedule of the given leg.
+
+        A schedule of the solvent leg has no restrain stage and its states carry the restraint at
+        full strength; used for a complex leg it would leave out the free energy of switching the
+        restraint on, while the correction for releasing it is still applied. So the stages must
+        be those of the leg, and the first and the last state must be its physical ends: the
+        ligand fully interacting (in a complex leg without the restraint) and the ligand
+        decoupled (in a complex leg with the restraint).
+        """
+        from cufep.sampling.states import stage_state
+
+        stages = [canonical_stage(s) for s in stages]
+        if self.leg is not None and self.leg != leg:
+            raise ValueError(f"it was written for the {self.leg} leg")
+        if list(self.stages) != stages:
+            raise ValueError(f"its stages are {', '.join(self.stages)}; the {leg} leg has {', '.join(stages)}")
+        for which, state, wanted in (("first", self.states[0], stage_state(stages[0], 0.0)),
+                                     ("last", self.states[-1], stage_state(stages[-1], 1.0))):
+            have = (state.lambda_restraints, state.lambda_electrostatics, state.lambda_sterics, state.rest2_scale)
+            want = (wanted.lambda_restraints, wanted.lambda_electrostatics, wanted.lambda_sterics, 1.0)
+            if any(abs(a - b) > 1e-9 for a, b in zip(have, want)):
+                raise ValueError(
+                    f"its {which} state (restraint {have[0]:g}, electrostatics {have[1]:g}, sterics {have[2]:g}, "
+                    f"REST2 scale {have[3]:g}) is not the {'coupled' if which == 'first' else 'decoupled'} end of "
+                    f"the {leg} leg (restraint {want[0]:g}, electrostatics {want[1]:g}, sterics {want[2]:g})")
 
     def windows(self) -> dict[str, list[float]]:
         """Lambda values per stage, both ends included."""
@@ -99,7 +128,8 @@ class Schedule:
                    stage_of_state=list(d.get("stage_of_state", [0] * n)),
                    stage_lambda=list(d.get("stage_lambda", d.get("progress", [0.0] * n))),
                    mode=str(d.get("mode", "fixed")), provenance=dict(d.get("provenance", {})),
-                   notes=list(d.get("notes", [])), rest2_scale=float(d.get("rest2_scale", 1.0)))
+                   notes=list(d.get("notes", [])), rest2_scale=float(d.get("rest2_scale", 1.0)),
+                   leg=d.get("leg"))
 
 
 def stage_values(spec, recommended) -> list[float]:

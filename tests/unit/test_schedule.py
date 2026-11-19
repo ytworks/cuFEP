@@ -252,3 +252,41 @@ def test_precalculation_with_the_windows_of_an_iteration_run_by_a_pool(water_lig
     assert schedule.provenance["windows_run_concurrently"] is True and schedule.provenance["equilibration_ps"] == 0.02
     assert len(configs) == len(schedule.states) <= 6
     assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(1.0, 0.0, 0.0)
+
+
+def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):
+    """Review of PR 1: a complex leg took the frozen schedule of a solvent leg and lost its restrain stage."""
+    from dataclasses import replace
+
+    from cufep.workflow import WorkflowError, _schedule_of_this_leg
+
+    complex_stages, solvent_stages = ["restrain", "discharge", "vanish"], ["discharge", "vanish"]
+    of_complex = fixed_schedule(complex_stages, {"restrain": 2, "discharge": 2, "vanish": 3}, rest2_scale=1.5)
+    of_solvent = fixed_schedule(solvent_stages, {"discharge": 2, "vanish": 3})
+    of_complex.check_leg("complex", complex_stages)
+    of_solvent.check_leg("solvent", solvent_stages)
+    with pytest.raises(ValueError, match="its stages are discharge, vanish; the complex leg has restrain"):
+        of_solvent.check_leg("complex", complex_stages)
+    with pytest.raises(ValueError, match="its stages are restrain"):
+        of_complex.check_leg("solvent", solvent_stages)
+
+    # the right stage names do not help if the states are not the ends of the leg
+    restrained_from_the_start = replace(of_complex, states=[replace(st, lambda_restraints=1.0) for st in of_complex.states])
+    with pytest.raises(ValueError, match="its first state .restraint 1,.* is not the coupled end of the complex leg"):
+        restrained_from_the_start.check_leg("complex", complex_stages)
+    cut_short = replace(of_complex, states=of_complex.states[:-1])
+    with pytest.raises(ValueError, match="its last state .* is not the decoupled end"):
+        cut_short.check_leg("complex", complex_stages)
+
+    # files: the leg a schedule was saved for is kept, and the workflow names the file it refuses
+    solvent_file, complex_file = tmp_path / "solvent.yaml", tmp_path / "complex.yaml"
+    of_solvent.save(solvent_file, leg="solvent", ligand="lig", repeat=0)
+    of_complex.save(complex_file, leg="complex", ligand="lig", repeat=0)
+    assert Schedule.load(solvent_file).leg == "solvent"
+    assert len(_schedule_of_this_leg(complex_file, "complex", complex_stages).states) == len(of_complex.states)
+    with pytest.raises(WorkflowError, match="solvent.yaml cannot be used for the complex leg: it was written for the solvent leg"):
+        _schedule_of_this_leg(solvent_file, "complex", complex_stages)
+    of_solvent.save(solvent_file)                                       # a file that does not name its leg
+    with pytest.raises(WorkflowError, match="cannot be used for the complex leg: its stages are discharge, vanish"):
+        _schedule_of_this_leg(solvent_file, "complex", complex_stages)
+
