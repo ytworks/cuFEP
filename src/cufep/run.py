@@ -191,6 +191,9 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     for s in summary:
         # legs that this run was to do and that failed; the command ends with an error because of them
         s["failed_in_this_run"] = failed_now.get(s["ligand"], [])
+        # the legs this command ran, which decide how it ends (failed_legs)
+        s["selected_legs"] = sorted([r, leg] for name, r, leg in selected if name == s["ligand"])
+        s["n_repeats_planned"] = repeats
     write_summary(out_dir, summary, ligands)
     for lig in ligands:
         for r in range(repeats):
@@ -262,11 +265,38 @@ def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print
 
 
 def failed_legs(summary: list[dict]) -> list[str]:
-    """Why the command ends with an error, as "ligand: ..." (empty if it does not): the legs that the
-    run was to do and that failed, and ligands whose legs were made under different conditions."""
-    return [f"{s['ligand']}: {leg}" for s in summary for leg in s.get("failed_in_this_run", [])] \
-        + [f"{s['ligand']}: legs made under different conditions ({'; '.join(s['inconsistent_legs'])})"
-           for s in summary if s.get("inconsistent_legs")]
+    """Why the command ends with an error, as "ligand: ..." (empty if it does not): every leg this
+    command ran that failed or has no free energy, and every ligand of such a leg whose legs were
+    made under different conditions. What other ligands or other legs gave does not decide it
+    (review of PR 1: a leg of this run without a free energy ended with 0 because another ligand
+    had a result, and a solvent leg run alone in a new directory ended with 1 because its complex
+    leg was not there yet). One rule for `cufep run` and `cufep benchmark run`."""
+    out = []
+    for s in summary:
+        ran = {(int(r), leg) for r, leg in s.get("selected_legs", [])}
+        if not ran:
+            continue
+        failed = [(int(r), leg) for r, leg in s.get("failed_leg_ids", [])]
+        for r, leg in sorted(set(failed) & ran):
+            out.append(f"{s['ligand']}: {leg} leg" + (f" of repeat {r}" if s.get("n_repeats_planned", 1) > 1 else "")
+                       + " failed or has no free energy")
+        if s.get("inconsistent_legs"):
+            out.append(f"{s['ligand']}: legs made under different conditions ({'; '.join(s['inconsistent_legs'])})")
+    return out
+
+
+def waiting_for_partner(summary: list[dict]) -> list[str]:
+    """Ligands whose legs of this command all have a result but no binding free energy yet, because a
+    leg that this command did not run is not there: not an error, a note."""
+    out = []
+    for s in summary:
+        ran = {(int(r), leg) for r, leg in s.get("selected_legs", [])}
+        failed = {(int(r), leg) for r, leg in s.get("failed_leg_ids", [])}
+        if ran and not (ran & failed) and s.get("dg_bind") is None and not s.get("inconsistent_legs"):
+            missing = sorted({leg for leg in ("complex", "solvent")} - {leg for _r, leg in ran})
+            out.append(f"{s['ligand']}: the legs of this run have a result; the binding free energy needs the "
+                       f"{' and '.join(missing) or 'other'} leg as well")
+    return out
 
 
 def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
@@ -335,4 +365,4 @@ def _fmt(x) -> str:
     return "" if x is None else f"{x:.3f}"
 
 
-__all__ = ["plan", "run", "failed_legs", "KCAL"]
+__all__ = ["plan", "run", "failed_legs", "waiting_for_partner", "KCAL"]

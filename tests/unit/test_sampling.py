@@ -771,6 +771,9 @@ def golden_analysis():
                      "blocks": [list(b) for b in res.blocks], "delta_g_error_blocks": res.delta_g_error_blocks,
                      "parts_not_determined": res.parts_not_determined, "parts_below_level": res.parts_below_level,
                      "convergence_note": res.convergence_note, "halves_warning": res.halves_warning,
+                     "bar_delta_g": res.bar_delta_g, "bar_delta_g_error": res.bar_delta_g_error,
+                     "bar_delta_g_error_n_blocks": res.bar_delta_g_error_n_blocks,
+                     "not_determined": res.not_determined,
                      "quality": {check: {key: quality[check].get(key) for key in ("ok", "difference", "warning", "reason")}
                                  for check in ("overlap", "samples", "halves", "estimators")}}
     return out
@@ -2215,7 +2218,15 @@ def test_a_leg_whose_replicas_would_miss_the_barostat_is_refused_before_it_runs(
         assert s.iteration == 0
 
 
-def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
+def test_inline_replica_exchange_resumes_with_its_rows_assignments_and_boundary(tmp_path, tiny_leg):
+    """A leg is run, stopped and resumed from its checkpoint: the rows stored before are kept exactly, the
+    assignment of replicas to windows goes on from the checkpoint, the new rows and frames follow, and the
+    boundary of the equilibration is the one recorded.
+
+    Review of PR 1 (P2): this test asked ten iterations of a random run for a free energy; whether they connect
+    the windows is chance (window 0 overlapped the others by 7.4e-8 on one machine), and an earlier fix only let
+    the test accept both outcomes. Free energies are checked on inputs whose answer is known (the harmonic
+    windows and the golden analysis above), not here."""
     spec, pos, box = tiny_leg
     leg = tmp_path / "hrex"
     with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
@@ -2223,29 +2234,26 @@ def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
         s.run(6, record_stride=2, checkpoint_stride=3)
         assert s.iteration == 6 and sorted(s.state_of_replica.tolist()) == [0, 1, 2, 3]
         final = s.state_of_replica.copy()
+    first = read_samples(leg)
+    assert first["u"].shape == (6, 4, 4) and first["frame_iter"].tolist() == [0, 2, 4]
     with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
         assert s.restore() and s.iteration == 6
         assert s.state_of_replica.tolist() == final.tolist()
         s.run(6, record_stride=2, checkpoint_stride=3)
         s.storage.set_meta(n_equilibration_iterations=2)
+        checkpoint = s.storage.read_checkpoint()
     data = read_samples(leg)
-    assert data["u"].shape == (12, 4, 4) and np.all(np.isfinite(data["u"][np.arange(12)[:, None], np.arange(4), data["states"]]))
+    assert data["u"].shape == (12, 4, 4)
+    for key in ("u", "states", "volume"):
+        np.testing.assert_array_equal(data[key][:6], first[key])            # the rows before are kept as they were
+    np.testing.assert_array_equal(data["frames"][:3], first["frames"])
     assert all(sorted(row.tolist()) == [0, 1, 2, 3] for row in data["states"])
-    assert data["frames"].shape[1:] == (3, 3) and len(data["frame_iter"]) >= 4
-    res = analyze_leg(data, 300.0)
+    assert np.all(np.isfinite(data["u"][np.arange(12)[:, None], np.arange(4), data["states"]]))
+    assert data["frame_iter"].tolist() == [0, 2, 4, 6, 8, 10] and data["frames"].shape == (6, 3, 3)
+    assert checkpoint["iteration"] == 12 and checkpoint["extra"]["rows"] == 12
+    assert int(data["attrs"]["n_equilibration_iterations"]) == 2
+    res = analyze_leg(data, 300.0)                                          # the recorded boundary is used
     assert res.n_states == 4 and res.n_iterations_used == 10
-    # ten iterations of a random run may not connect the windows (window 0 overlapped the others by 3e-7
-    # here): then the leg has no free energy and says why, never a number its samples do not fix
-    determined = np.isfinite(res.delta_g)
-    assert (determined and set(res.stage_delta_g) == {"discharge", "vanish"}) or \
-        res.not_determined.startswith("the samples do not connect the lambda windows")
-    # review of PR 1: the sign of a free energy from ten random iterations depends on the machine (it was
-    # negative in the CI); what is checked here is that the samples are read and written as they were made.
-    # Free energies are checked on inputs whose answer is known (harmonic windows, tests above)
-    rows_before = read_samples(leg)
-    assert s.storage.read_checkpoint()["iteration"] == 12 and s.storage.read_checkpoint()["extra"]["rows"] == 12
-    assert np.all(np.isfinite(rows_before["volume"])) and (not determined or np.isfinite(res.delta_g_error))
-    assert min(res.window_kept_samples) >= 1 and max(res.window_kept_samples) <= 10
 
 
 def test_a_resumed_leg_does_not_repeat_its_thermal_noise(tmp_path, monkeypatch):
@@ -2595,7 +2603,7 @@ def test_analyze_says_what_the_run_said(tmp_path):
     result = leg_result_from_samples(leg, settings, run)
     # temperature, length and boundary are those of the samples; no configuration is asked for them
     assert result["temperature_K"] == 310.0 and result["production_ns"] == pytest.approx(280 * 2.5 / 1000.0)
-    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION == 6
+    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION
     # the standard error of the leg: that of time blocks or the analytical one, whichever is larger. At the
     # overlap level of 0.5 asked for here every part of these samples is below the level: determined, and
     # shown with its error and a warning (review of PR 1)
@@ -2726,7 +2734,7 @@ def test_a_result_of_the_previous_version_of_the_analysis_is_made_again_from_its
     synthetic_leg(leg)
     run = {"ligand": "lig", "leg": "solvent", "repeat": 0, "backend": "openmm", "notes": []}
     fresh = leg_result_from_samples(leg, cfg, run)
-    assert fresh["analysis_record"]["version"] == ANALYSIS_VERSION == 6
+    assert fresh["analysis_record"]["version"] == ANALYSIS_VERSION
     previous = dict(fresh, delta_g_error=0.7 * fresh["delta_g_error"], temperature_K=999.0,
                     analysis_record=dict(fresh["analysis_record"], version=ANALYSIS_VERSION - 1))
     write_leg_result(leg, previous)

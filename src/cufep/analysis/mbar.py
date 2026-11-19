@@ -28,7 +28,11 @@ KCAL = 4.184
 #:      analysis.min_overlap is used with a warning; blocks without an estimate leave the others.
 #:      The numbers of a fixed input are pinned by a test, so that a change of them cannot keep
 #:      the version
-ANALYSIS_VERSION = 6
+#:   7  the whole production needs as many samples in every window as any part of it
+#:      (too_few_samples); the standard error of the sum of BAR between neighbouring windows comes
+#:      from the same time blocks as that of MBAR (neighbouring pairs share a window, so the errors
+#:      of the pairs are not independent)
+ANALYSIS_VERSION = 7
 #: numbers of time blocks the standard error of a leg is computed with; the largest of the errors
 #: they give is the one reported (:meth:`TimeRangeEstimator.part`). The numbers are cuFEP's choice:
 #: the literature asks for blocks longer than the correlation time and for a standard error that
@@ -192,7 +196,11 @@ class LegAnalysis:
     parts_below_level: list[str] = field(default_factory=list)
     #: sum of BAR between neighbouring windows, a second estimator on the same data
     bar_delta_g: float = float("nan")
+    #: its standard error from the same time blocks as that of MBAR, and the number of blocks; None
+    #: and why where no number of blocks can be used
     bar_delta_g_error: float = float("nan")
+    bar_delta_g_error_n_blocks: int | None = None
+    bar_delta_g_error_note: str = ""
     #: why BAR has no estimate, if it has none
     bar_note: str = ""
     #: the tail correction of the whole production by both methods, where the samples hold what
@@ -634,10 +642,9 @@ class TimeRangeEstimator:
         (boolean masks), solved from ``f_start``; with ``analytic`` also MBAR's standard error."""
         k = len(self.n_k)
         counts = np.bincount(self.window[columns], minlength=k)
-        if counts.min() < MIN_INDEPENDENT_SAMPLES:
-            j = int(np.argmin(counts))
-            return PartEstimate(reason=f"lambda window {j} keeps {int(counts[j])} sample(s) there; "
-                                       f"{MIN_INDEPENDENT_SAMPLES} are needed for an estimate", kind="not determined")
+        few = too_few_samples(counts)
+        if few:
+            return PartEstimate(reason=few, kind="not determined")
         f = free_energies_from(self.reduced[:, columns], counts, f_start)
         df = None
         if f is None or analytic:
@@ -674,6 +681,56 @@ class TimeRangeEstimator:
         return PartEstimate(f=f, mbar=mbar, mbar_error=mbar_error, correction=correction,
                             correction_error=correction_error, correction_samples=n_obs, value=mbar - correction,
                             lowest_overlap=lowest, warning=warning)
+
+    def bar(self, columns: np.ndarray) -> float:
+        """The sum of BAR between neighbouring windows from the samples ``columns``, kJ/mol."""
+        counts = np.bincount(self.window[columns], minlength=len(self.n_k))
+        return float(bar_between_neighbours(self.u_kn[:, columns], counts)[0] * self.kt)
+
+    def bar_error(self, a: int, b: int, block_counts) -> tuple[float | None, int | None, str]:
+        """Standard error (kJ/mol) of the sum of BAR between neighbouring windows over the
+        iterations [a, b): the delete-one-block jackknife over the same time blocks as the error of
+        MBAR (:meth:`jackknife`), the largest of the numbers of blocks that can be used, and that
+        number. Two neighbouring pairs share a window, so the errors of the pairs are not
+        independent and their sum in quadrature is no error of the sum (review of PR 1: three
+        windows whose ends are one Hamiltonian give a sum of exactly 0 and that error 0.158 kT).
+        (None, None, why) if no number of blocks can be used."""
+        columns, _ = self.masks(a, b)
+        best: tuple[float, int] | None = None
+        notes = []
+        for n_blocks in dict.fromkeys(int(c) for c in block_counts):
+            edges = np.array([a + int(round(i * (b - a) / n_blocks)) for i in range(n_blocks + 1)])
+            shortest = int(np.diff(edges).min())
+            if shortest < self.longest:
+                notes.append(f"{n_blocks} blocks: a block of {shortest} iteration(s) is shorter than the interval of "
+                             f"{self.longest} iterations at which the slowest lambda window keeps its samples")
+                continue
+            values = []
+            for i in range(n_blocks):
+                in_block, _ = self.masks(int(edges[i]), int(edges[i + 1]))
+                kept = columns & ~in_block
+                counts = np.bincount(self.window[kept], minlength=len(self.n_k))
+                few = too_few_samples(counts)
+                try:
+                    value = None if few else self.bar(kept)
+                except BarNotDetermined as exc:
+                    few, value = str(exc), None
+                except Exception as exc:  # noqa: BLE001  a pair without overlap has no BAR estimate
+                    few = f"BAR gave no estimate ({type(exc).__name__})"
+                    value = None
+                if value is None or not np.isfinite(value):
+                    notes.append(f"{n_blocks} blocks: without block {i + 1}: {few or 'BAR gave no finite estimate'}")
+                    values = []
+                    break
+                values.append(value)
+            if values:
+                x = np.asarray(values)
+                spread = float(np.sqrt((n_blocks - 1) / n_blocks * np.sum((x - x.mean()) ** 2)))
+                if best is None or spread > best[0]:
+                    best = (spread, n_blocks)
+        if best is None:
+            return None, None, "no number of time blocks could be used: " + "; ".join(notes)
+        return best[0], best[1], ""
 
     def masks(self, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
         """The samples and the tail observations of the iterations [a, b) of the production."""
@@ -771,6 +828,19 @@ class TimeRangeEstimator:
         return out
 
 
+def too_few_samples(counts, where: str = "there") -> str:
+    """Why samples with ``counts`` per lambda window give no estimate, or "": every window must
+    keep ``MIN_INDEPENDENT_SAMPLES``. One rule for every part of a production and for the whole of
+    it (review of PR 1: the whole production with three samples per window gave -0.948 +- 0.946
+    kJ/mol, where every part of it would have had no estimate)."""
+    counts = np.asarray(counts)
+    if counts.size and counts.min() < MIN_INDEPENDENT_SAMPLES:
+        j = int(np.argmin(counts))
+        return (f"lambda window {j} keeps {int(counts[j])} sample(s) {where}; {MIN_INDEPENDENT_SAMPLES} are needed "
+                "for an estimate")
+    return ""
+
+
 def solve_decorrelated(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None, max_iterations: int = 1000,
                        overlap: bool = False):
     """(f_k, df_k relative to state 0) in kT from samples grouped by state.
@@ -826,13 +896,24 @@ def overlap_matrix(u_kn: np.ndarray, n_k: np.ndarray) -> np.ndarray:
         return overlap_of(mbar)
 
 
+class BarNotDetermined(ValueError):
+    """BAR between two neighbouring windows is not determined by their samples."""
+
+
 def bar_between_neighbours(u_kn: np.ndarray, n_k: np.ndarray) -> tuple[float, float]:
     """Free energy of the last window relative to the first as the sum of BAR between neighbours.
 
-    Returns (dG, standard error) in kT from samples grouped by state (``assemble`` or
-    ``decorrelated``). BAR uses only the two windows of a pair, MBAR all windows at once; where
-    the windows overlap well the two agree closely, so a difference is a sign of windows that
-    are too far apart or too little sampled.
+    Returns (dG, standard error of the pairs in quadrature) in kT from samples grouped by state
+    (``assemble`` or ``decorrelated``). BAR uses only the two windows of a pair, MBAR all windows
+    at once; where the windows overlap well the two agree closely, so a difference is a sign of
+    windows that are too far apart or too little sampled. The second number ignores that
+    neighbouring pairs share a window; the analysis reports the error of the sum from time blocks
+    (:meth:`TimeRangeEstimator.bar_error`).
+
+    A pair counts only if its two windows determine their difference by the rule of every MBAR
+    estimate (:func:`too_few_samples`, :func:`not_determined_reason` with the BAR solution):
+    BarNotDetermined otherwise, never a number that the samples do not fix (pymbar's BAR returns a
+    finite value for two windows that share no sample).
     """
     _pymbar()
     from pymbar import other_estimators
@@ -843,10 +924,20 @@ def bar_between_neighbours(u_kn: np.ndarray, n_k: np.ndarray) -> tuple[float, fl
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
             np.errstate(all="ignore"):
         for k in range(len(n_k) - 1):
+            pair_counts = np.asarray(n_k[k:k + 2])
+            few = too_few_samples(pair_counts, "there")
+            if few:
+                raise BarNotDetermined(f"lambda windows {k} and {k + 1}: {few}")
             lower = u_kn[:, first[k]:first[k + 1]]             # samples of window k
             upper = u_kn[:, first[k + 1]:first[k + 2]]         # samples of window k + 1
             res = other_estimators.bar(lower[k + 1] - lower[k], upper[k] - upper[k + 1])
-            total += float(res["Delta_f"])
+            delta = float(res["Delta_f"])
+            pair = u_kn[k:k + 2, first[k]:first[k + 2]]
+            why = not_determined_reason(pair - np.min(pair), pair_counts, np.array([0.0, delta])) \
+                if np.isfinite(delta) else "BAR gave no finite estimate"
+            if why:
+                raise BarNotDetermined(f"lambda windows {k} and {k + 1}: {why}")
+            total += delta
             variance += float(res["dDelta_f"]) ** 2
     return total, float(np.sqrt(variance))
 
@@ -1126,7 +1217,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     # the whole production is determined by the test of every part (review of PR 1: two windows that
     # shared no sample gave 0 +- 0 at analysis.min_overlap 0, and the ligand a binding free energy).
     # If it is not, the leg has no free energy and says why (not_determined)
-    not_determined = not_determined_reason(estimator.reduced, n_k, f_k)
+    not_determined = too_few_samples(n_k, "in the production") or not_determined_reason(estimator.reduced, n_k, f_k)
     if not_determined:
         mbar = mbar_error = float("nan")
         base = PartEstimate(reason=not_determined, kind="not determined")
@@ -1184,15 +1275,20 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     blocks = [(a / n, b / n, float(c[0]), float(c[1])) for a, b, c in zip(edges[:-1], edges[1:], consecutive)
               if not isinstance(c, str)]
     parts_not_determined += [c for c in consecutive if isinstance(c, str)]
-    bar_note = ""
+    bar_note, bar_error, bar_blocks, bar_error_note = "", float("nan"), None, ""
     try:
-        bar, bar_error = bar_between_neighbours(u_kn, n_k)
-        bar, bar_error = bar * kt, bar_error * kt
+        bar = estimator.bar(everything)
+    except BarNotDetermined as exc:
+        bar = float("nan")
+        bar_note = f"BAR has no estimate: {exc}"
     except Exception as exc:  # noqa: BLE001  a pair of windows without overlap has no BAR estimate
-        bar = bar_error = float("nan")
+        bar = float("nan")
         bar_note = f"BAR gave no estimate for a pair of neighbouring windows ({type(exc).__name__})"
     if not bar_note and not np.isfinite(bar):
         bar_note = "BAR gave no finite estimate for a pair of neighbouring windows"
+    if not bar_note:
+        error, bar_blocks, bar_error_note = estimator.bar_error(0, n, error_blocks)
+        bar_error = float("nan") if error is None else float(error)
 
     stages = {}
     state_dicts = attrs.get("states", [])
@@ -1238,6 +1334,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         forward=forward, reverse=reverse, first_half=first_half, second_half=second_half,
         convergence_note=convergence_note, halves_warning=halves_warning, forward_reverse_gap=float(gap), blocks=blocks,
         parts_not_determined=parts_not_determined, parts_below_level=parts_below_level,
-        bar_delta_g=float(bar), bar_delta_g_error=float(bar_error), bar_note=bar_note,
+        bar_delta_g=float(bar), bar_delta_g_error=float(bar_error), bar_delta_g_error_n_blocks=bar_blocks,
+        bar_delta_g_error_note=bar_error_note, bar_note=bar_note,
         lrc_reweight=whole_correction("reweight"), lrc_isotropic=whole_correction("isotropic"),
         temperature_K=temperature_K)

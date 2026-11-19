@@ -248,3 +248,30 @@ def test_a_residue_number_of_two_input_chains_needs_its_chain():
     assert rest2_region(Rest2Config(scale=1.5, residues=["Y:960"]), top, pos, [], [0, 1, 2], chains)[0] == [2]
     with pytest.raises(WorkflowError, match="'960' is a residue of the chains X, Y of the input PDB; give the chain"):
         names("960")
+
+
+def test_the_validation_compares_the_system_a_run_samples(dipeptides_in_water):
+    """Review of PR 1 (P2): `cufep validate` built its System without REST2 and compared states of scale 1 only,
+    while runs use REST2 by default; with region: pocket the scaled protein terms were never compared. The
+    validation now builds the System of the run (alchemical_leg, without the restraint) and a schedule with the
+    REST2 scale of the run along it."""
+    from cufep.config.schema import Config
+    from cufep.validate import validation_system, verdict
+    from cufep.workflow import alchemical_leg
+
+    system, top, pos, box, ligand, other = dipeptides_in_water
+    prep = {"topology": top, "positions": pos, "ligand": ligand, "protein": other,
+            "input_chains": {c.id: c.id for c in top.chains()}}
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "none"},
+                                 "sampling": {"rest2": {"scale": 1.5, "region": "pocket", "pocket_cutoff_nm": 5.0}}})
+    built, schedule = validation_system(cfg, system, prep, box, "complex")
+    assert built.rest2_on and built.hot_atoms == sorted(other)
+    assert built.xml == alchemical_leg(cfg, system, prep, box, None, True).xml        # the System of the run
+    scales = [st.rest2_scale for st in schedule.states]
+    assert scales[0] == scales[-1] == 1.0 and max(scales) == pytest.approx(1.5) and any(1.0 < x < 1.5 for x in scales)
+    solvent, _ = validation_system(cfg, system, prep, box, "solvent")
+    assert solvent.rest2_on and solvent.hot_atoms == []
+    # a validation that compared nothing, or not every leg, has not passed (review of PR 1: two skipped legs passed)
+    assert verdict({"complex": True, "solvent": True}) is True
+    assert verdict({"complex": None, "solvent": None}) is False and verdict({"complex": True, "solvent": None}) is False
+    assert verdict({}) is False and verdict({"complex": False, "solvent": True}) is False

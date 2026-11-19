@@ -1,5 +1,5 @@
 {
- "version": 6,
+ "version": 7,
  "numbers": {
   "long": {
    "delta_g": 5.281209545080566,
@@ -162,6 +162,10 @@
    "parts_below_level": [],
    "convergence_note": "",
    "halves_warning": "",
+   "bar_delta_g": 1.643288998248187,
+   "bar_delta_g_error": 0.08409065964411798,
+   "bar_delta_g_error_n_blocks": 40,
+   "not_determined": "",
    "quality": {
     "overlap": {
      "ok": true,
@@ -278,6 +282,10 @@
    "parts_below_level": [],
    "convergence_note": "the first half (iterations 0-12 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction; the second half (iterations 12-24 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction",
    "halves_warning": "",
+   "bar_delta_g": 2.5105214751938076,
+   "bar_delta_g_error": NaN,
+   "bar_delta_g_error_n_blocks": null,
+   "not_determined": "",
    "quality": {
     "overlap": {
      "ok": true,
@@ -480,6 +488,10 @@
    ],
    "convergence_note": "",
    "halves_warning": "the first half (iterations 0-300 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
+   "bar_delta_g": 12.42187101019685,
+   "bar_delta_g_error": 0.431175001504311,
+   "bar_delta_g_error_n_blocks": 20,
+   "not_determined": "",
    "quality": {
     "overlap": {
      "ok": true,
@@ -617,6 +629,10 @@
    "parts_below_level": [],
    "convergence_note": "the second half (iterations 300-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
    "halves_warning": "",
+   "bar_delta_g": -0.0167143744022987,
+   "bar_delta_g_error": 0.16695516830796756,
+   "bar_delta_g_error_n_blocks": 40,
+   "not_determined": "",
    "quality": {
     "overlap": {
      "ok": true,

@@ -2436,12 +2436,14 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
     # legs whose halves were compared although the windows of a half overlap below analysis.min_overlap
     below_level: list[str] = []
     failed_legs: list[str] = []
+    failed_leg_ids: list[list] = []        # [repeat, leg] of every failed leg and every leg without a free energy
     for r in range(repeats):
         states = {leg: leg_state(lig_dir / f"repeat_{r}" / leg) for leg in ("complex", "solvent")}
         for leg, (state, data) in states.items():
             if state == "failed":
                 where = f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else "")
                 failed_legs.append(where)
+                failed_leg_ids.append([r, leg])
                 kept = " The result this leg had before is kept in result.previous.json and is not used." \
                     if data.get("previous_result") else ""
                 warnings.append(f"repeat {r} {leg}: FAILED: {str(data.get('error', ''))[:300]}.{kept}")
@@ -2455,6 +2457,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
             if not all(isinstance(data.get(key), (int, float)) and np.isfinite(data[key]) for key in needed):
                 where = f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else "")
                 failed_legs.append(where)
+                failed_leg_ids.append([r, leg])
                 warnings.append(f"repeat {r} {leg}: FAILED: the analysis gave no free energy for this leg")
                 states[leg] = ("failed", data)
         if not all(state == "finished" for state, _ in states.values()):
@@ -2529,7 +2532,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                       key=lambda v: -1 if v is None else v)
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
                  "analysis_versions": versions,
-                 "failed_legs": failed_legs, "inconsistent_legs": inconsistent, "not_compared": not_compared,
+                 "failed_legs": failed_legs, "failed_leg_ids": failed_leg_ids, "inconsistent_legs": inconsistent, "not_compared": not_compared,
                  "origin_not_recorded": unrecorded, "old_analysis": old_analysis,
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
                  "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,

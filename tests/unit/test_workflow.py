@@ -374,8 +374,9 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     assert out["warnings"][0].startswith("NO BINDING FREE ENERGY: the legs were not made under the same conditions "
                                          "(temperature (K): complex leg 315.0, solvent leg 298.15)")
     # the command ends with an error because of it
-    assert failed_legs([dict(out, failed_in_this_run=[])]) == [
+    assert failed_legs([dict(out, selected_legs=[[0, "solvent"]])]) == [
         "lig: legs made under different conditions (temperature (K): complex leg 315.0, solvent leg 298.15)"]
+    assert failed_legs([dict(out, selected_legs=[])]) == []                # a ligand this command did not run
 
     write(tmp_path / "b", 0, "solvent", **usual)
     write(tmp_path / "b", 0, "complex", temperature_K=298.15, lrc_method="isotropic")
@@ -426,7 +427,7 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     assert out["dg_bind"] == pytest.approx((80.0 - 160.0) / 4.184) and out["inconsistent_legs"] == []
     # a leg that used files of an earlier version whose origin is not recorded is named in the ligand's result
     assert out["origin_not_recorded"] == ["complex leg: the prepared systems, the samples"]
-    assert out["not_compared"] == [] and failed_legs([dict(out, failed_in_this_run=[])]) == []
+    assert out["not_compared"] == [] and failed_legs([dict(out, selected_legs=[[0, "solvent"]])]) == []
 
     # results of an earlier version that lack the fields: combined, and the result says what was not compared
     write(tmp_path / "e", 0, "solvent")
@@ -602,15 +603,16 @@ def test_commands_end_with_an_error_when_a_leg_failed(tmp_path, monkeypatch):
 
     cfg = tmp_path / "config.yaml"
     cfg.write_text(yaml.safe_dump({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "output": {"dir": str(tmp_path / "out")}}))
-    good = {"ligand": "a", "dg_bind": -9.0, "failed_in_this_run": []}
-    bad = {"ligand": "b", "dg_bind": -8.0, "failed_in_this_run": ["complex leg"]}
-    assert driver.failed_legs([good, bad]) == ["b: complex leg"] and driver.failed_legs([good]) == []
+    good = {"ligand": "a", "dg_bind": -9.0, "selected_legs": [[0, "complex"], [0, "solvent"]], "failed_leg_ids": []}
+    bad = {"ligand": "b", "dg_bind": -8.0, "selected_legs": [[0, "complex"]], "failed_leg_ids": [[0, "complex"]]}
+    assert driver.failed_legs([good, bad]) == ["b: complex leg failed or has no free energy"]
+    assert driver.failed_legs([good]) == []
 
     monkeypatch.setattr(driver, "run", lambda cfg, **kwargs: [good])
     assert CliRunner().invoke(main, ["run", str(cfg)]).exit_code == 0
     monkeypatch.setattr(driver, "run", lambda cfg, **kwargs: [good, bad])
     result = CliRunner().invoke(main, ["run", str(cfg), "--ligand", "b", "--leg", "complex", "--production-ns", "10"])
-    assert result.exit_code == 1 and "failed: b: complex leg" in result.output
+    assert result.exit_code == 1 and "failed: b: complex leg failed or has no free energy" in result.output
 
 
 def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings(repo, tmp_path, ligands):

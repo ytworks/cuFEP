@@ -231,6 +231,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
 
     def cell(method: str, key: str) -> str:
         m, ci = stats[method]
+        if m[key] is None:
+            return "N/A"                               # not defined for these ligands
         text = f"{m[key]:.2f}"
         if key in ci:
             text += f" [{ci[key][0]:.2f}, {ci[key][1]:.2f}]"

@@ -409,9 +409,14 @@ points of the forward and reverse series, the consecutive blocks, and every esti
 jackknife below. A standard error or a check of a number is therefore always one of that
 number, including the correlation between MBAR and the correction. (The comparison of BAR with
 MBAR is the exception: both are estimators of the MBAR part on the same samples, and they are
-compared without the correction.)
+compared without the correction. The standard error of the sum of BAR between neighbouring
+windows comes from the same time blocks as that of MBAR, the largest of the numbers of blocks
+that can be used: two neighbouring pairs share a window, so the errors of the pairs are not
+independent and their sum in quadrature is no error of the sum. A pair counts only if its two
+windows determine their difference by the rules below.)
 
-A part of the production is used only if its free energy is determined:
+The whole production and every part of it are used only if their free energy is determined
+(the whole production by the same rules as every part; analysis version 7):
 
 - every window keeps at least four samples in it;
 - the MBAR equations of its samples have a solution;

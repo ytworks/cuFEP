@@ -325,3 +325,34 @@ def test_replica_exchange_with_rest2(tmp_path, rest2_leg, backend):
     assert np.all(np.isfinite(own)) and np.all(np.isfinite(data["u"][:, :, [0, k - 1]]))
     assert all(sorted(row.tolist()) == list(range(k)) for row in data["states"])
     assert np.any(data["states"][1:] != data["states"][:-1])               # replicas exchange
+
+
+@needs_plugin
+def test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends():
+    """Review of PR 1 (P2): `cufep validate` compares the System that a run samples, with REST2 and its region;
+    here the pocket region holds the whole second peptide and the windows in the middle carry the scale 1.5."""
+    import openmm.unit as u
+
+    from conftest import build_dipeptides_in_water
+
+    from cufep.config.schema import Config
+    from cufep.validate import validation_system
+
+    system, top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    prep = {"topology": top, "positions": pos, "ligand": ligand, "protein": other,
+            "input_chains": {c.id: c.id for c in top.chains()}}
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "none"},
+                                 "sampling": {"rest2": {"scale": 1.5, "region": "pocket", "pocket_cutoff_nm": 5.0}}})
+    built, schedule = validation_system(cfg, system, prep, box, "complex")
+    assert built.rest2_on and built.hot_atoms == sorted(other)
+    rows = {}
+    for name in ("openmm", "cupotential"):
+        backend = get_backend(name)
+        ctx = backend.make_context(backend.prepare_system(built.alch.system),
+                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        rows[name] = StateEnergyEvaluator(ctx, schedule.states, 300.0, None).reduced_potentials()[0]
+        del ctx
+    diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
+    assert np.max(np.abs(diff)) < 0.1, diff
