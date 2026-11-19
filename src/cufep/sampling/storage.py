@@ -72,7 +72,11 @@ def open_samples(path: str | Path, mode: str = "r", wait_s: float = READ_WAIT_S)
 ROW_DATASETS = ("u", "states", "volume")
 TAIL_DATASETS = ("lrc_iter", "lrc_du")
 FRAME_DATASETS = ("frame_iter", "frames", "frame_box")
-#: the attribute that says how much of every dataset is stored (:func:`committed_counts`)
+#: the dataset that says how much of every dataset is stored (:func:`committed_counts`): three
+#: integers, written in place and never deleted, so that a failed update leaves the earlier counts
+COUNTS = "committed_counts"
+#: the attribute in which one earlier version kept them (h5py replaces an attribute by deleting it
+#: and creating it anew, so a failure in between lost them; review of PR 1)
 COMMITTED = "committed"
 
 
@@ -87,10 +91,15 @@ def committed_counts(h5) -> tuple[int, int, int]:
     file and raises StorageError.
     """
     lengths = {name: int(h5[name].shape[0]) for name in ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS if name in h5}
-    if COMMITTED in h5.attrs:
+    stored = None
+    if COUNTS in h5:
+        stored = [int(x) for x in h5[COUNTS][:3]]
+    elif COMMITTED in h5.attrs:
         raw = h5.attrs[COMMITTED]
         counts = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-        rows, tail, frames = int(counts["iterations"]), int(counts["tail_records"]), int(counts["frame_records"])
+        stored = [int(counts["iterations"]), int(counts["tail_records"]), int(counts["frame_records"])]
+    if stored is not None:
+        rows, tail, frames = stored
         short = [name for names, need in ((ROW_DATASETS, rows), (TAIL_DATASETS, tail), (FRAME_DATASETS, frames))
                  for name in names if name in lengths and lengths[name] < need]
         if short:
@@ -182,9 +191,24 @@ def _write_at(dataset, offset: int, values) -> None:
 
 
 def _publish(h5, rows: int, tail: int, frames: int) -> None:
-    """Say how much of every dataset is stored (:func:`committed_counts`): one attribute, written
-    after the data it counts."""
-    h5.attrs[COMMITTED] = json.dumps({"iterations": int(rows), "tail_records": int(tail), "frame_records": int(frames)})
+    """Say how much of every dataset is stored (:func:`committed_counts`): the three integers of
+    the counts dataset, written in place after the data they count. The dataset exists before
+    any data is extended (:func:`_ensure_counts`), so this never creates or deletes anything."""
+    h5[COUNTS][...] = np.array([rows, tail, frames], dtype="i8")
+
+
+def _ensure_counts(h5) -> tuple[int, int, int]:
+    """The counts of an open file, after making sure that it has the counts dataset.
+
+    A file of an earlier version has none: its counts are what its datasets hold
+    (:func:`committed_counts`), and they are written, and flushed, before any of its datasets is
+    extended, so that a write that fails half-way cannot make unwritten rows count (review of
+    PR 1)."""
+    counts = committed_counts(h5)
+    if COUNTS not in h5:
+        h5.create_dataset(COUNTS, data=np.array(counts, dtype="i8"))
+        h5.flush()
+    return counts
 
 
 class LegStorage:
@@ -196,7 +220,7 @@ class LegStorage:
         volume   (n_iter, n_replicas)            box volume, nm^3
         lrc_iter, lrc_du                         coupled-state tail energies (kJ/mol)
         frame_iter, frames, frame_box            coupled-state coordinates of selected atoms
-        committed (attribute)                    how many rows and records are stored
+        committed_counts                         how many rows and records are stored
     ``checkpoint.npz``
         positions, velocities and boxes of every replica, the state permutation and the
         number of committed iterations.
@@ -206,7 +230,7 @@ class LegStorage:
     can therefore read the samples of a leg that is being sampled (``cufep analyze``).
 
     A write is a transaction. Every dataset is written from the stored count on (overwriting
-    whatever a failed write left there), and only then is the new count published
+    whatever a failed write left there), and only then is the new count published in place
     (:func:`committed_counts`), which every reader goes by. A write that fails at any point
     leaves the file at its earlier state for every reader, keeps the rows in memory, and the
     next write starts again from the same place: nothing is stored twice and nothing that was
@@ -241,7 +265,7 @@ class LegStorage:
                                       compression_opts=1)
                     h5.create_dataset("frame_box", shape=(0, 3, 3), maxshape=(None, 3, 3), dtype="f4")
                 h5.attrs["n_equilibration_iterations"] = 0
-                _publish(h5, 0, 0, 0)
+                h5.create_dataset(COUNTS, data=np.zeros(3, dtype="i8"))
         with open_samples(self.h5_path) as h5:
             if h5["u"].shape[1:] != (n_replicas, n_states):
                 raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")
@@ -363,6 +387,7 @@ class LegStorage:
         rows = self._stored + len(self._rows)
         n_tail, n_frames = self._stored_tail + len(tail), self._stored_frames + len(frames)
         with h5:
+            _ensure_counts(h5)
             for column, name in enumerate(ROW_DATASETS):
                 _write_at(h5[name], self._stored, [row[column] for row in self._rows])
             _write_at(h5["lrc_iter"], self._stored_tail, [it for it, _ in tail])
@@ -389,7 +414,7 @@ class LegStorage:
             frame_its = h5["frame_iter"][:self._stored_frames]
             lengths = {name: int(h5[name].shape[0]) for name in ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS
                        if name in h5}
-            published = COMMITTED in h5.attrs
+            published = COUNTS in h5
         rows = min(self._stored, n_iterations)
         tail, frames = int(np.sum(tail_its < n_iterations)), int(np.sum(frame_its < n_iterations))
         wanted = {**{name: rows for name in ROW_DATASETS}, **{name: tail for name in TAIL_DATASETS},
@@ -398,6 +423,7 @@ class LegStorage:
                 lengths[name] == wanted[name] for name in lengths):
             return                                         # nothing to cut: the file is not opened for writing
         with self._file_for_writing() as h5:
+            _ensure_counts(h5)
             _publish(h5, rows, tail, frames)
             h5.flush()
             self._stored, self._stored_tail, self._stored_frames = rows, tail, frames

@@ -949,7 +949,7 @@ def test_samples_of_earlier_versions_are_read_and_continued_from_what_all_their_
     _fill(st, _rows(0, 8), 0)
     st.close()
     with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:   # as an earlier version killed while writing left it
-        del h5.attrs["committed"]
+        del h5["committed_counts"]
         h5["u"].resize(10, axis=0)
         h5["lrc_iter"].resize(5, axis=0)
         h5["lrc_iter"][4] = 8
@@ -962,7 +962,9 @@ def test_samples_of_earlier_versions_are_read_and_continued_from_what_all_their_
     _assert_exactly(tmp_path / "leg", 12)
     from cufep.sampling.storage import stored_attributes, stored_conditions
     assert stored_attributes(tmp_path / "leg")[0] == 12 and stored_conditions(tmp_path / "leg")[0] == 12
-    assert read_samples(tmp_path / "leg")["attrs"]["committed"] == {"iterations": 12, "tail_records": 6, "frame_records": 6}
+    from cufep.sampling.storage import committed_counts
+    with h5py.File(tmp_path / "leg" / "samples.h5", "r") as h5:
+        assert committed_counts(h5) == (12, 6, 6) and h5["committed_counts"][:].tolist() == [12, 6, 6]
     # a count that the datasets do not hold is a damaged file, not a smaller sample
     with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:
         h5["states"].resize(11, axis=0)
@@ -1012,10 +1014,202 @@ def test_the_storage_says_when_it_could_not_store_and_restore_refuses_a_file_sho
     import h5py
     with h5py.File(tmp_path / "hrex" / "samples.h5", "a") as h5:
         frames = int(np.sum(h5["frame_iter"][:] < 2))
-        h5.attrs["committed"] = json.dumps({"iterations": 2, "tail_records": 0, "frame_records": frames})
+        h5["committed_counts"][...] = [2, 0, frames]
     with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append) as s:
         with pytest.raises(StorageError, match="holds 2 iterations, fewer than the 4 that its checkpoint names"):
             s.restore()
+
+
+@pytest.mark.parametrize("moment", ["before the counts are written", "after the counts are written"])
+@pytest.mark.parametrize("operation", ["flush", "truncate"])
+def test_a_failure_while_the_counts_are_written_keeps_the_last_valid_counts(tmp_path, monkeypatch, moment, operation):
+    """Review of PR 1: six iterations stored, the write of four more failed after `volume` was extended; a
+    truncation to six, as when the leg is resumed, then failed while the attribute of the counts was being
+    created anew (h5py deletes an attribute and creates it again): the old counts were gone, the reader fell
+    back to the rule of earlier versions and read ten rows, four of them with a volume of zero. The counts
+    are a dataset now, written in place."""
+    import h5py
+
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 6), 0)
+    st.close()
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(6, 4), 6)
+    real_setitem = h5py.Dataset.__setitem__
+    failures = []
+
+    def setitem(self, key, value):
+        if self.name == "/volume" and not failures:              # the reviewer's first failure
+            failures.append("volume")
+            raise OSError("injected failure while writing volume")
+        if self.name == "/committed_counts" and failures == ["volume", "armed"]:
+            failures.append("counts")
+            if moment == "after the counts are written":
+                real_setitem(self, key, value)
+            raise OSError("injected failure while writing the counts")
+        return real_setitem(self, key, value)
+
+    monkeypatch.setattr(h5py.Dataset, "__setitem__", setitem)
+    with pytest.raises(OSError, match="volume"):
+        st.flush()
+    _assert_exactly(tmp_path / "leg", 6)
+    failures.append("armed")
+    if operation == "truncate":
+        del st._rows[:]                                          # a resume drops the rows after its checkpoint
+        st._records.clear()
+        with pytest.raises(OSError, match="counts"):
+            st.truncate(6)
+        _assert_exactly(tmp_path / "leg", 6)                     # never the ten rows, never a volume of zero
+        monkeypatch.undo()
+        st.truncate(6)
+        _assert_exactly(tmp_path / "leg", 6)
+        _fill(st, _rows(6, 2), 6)
+        st.close()
+        _assert_exactly(tmp_path / "leg", 8)
+    else:
+        with pytest.raises(OSError, match="counts"):
+            st.flush()
+        rows = read_samples(tmp_path / "leg")["u"].shape[0]
+        assert rows == (10 if moment == "after the counts are written" else 6)
+        _assert_exactly(tmp_path / "leg", rows)                  # whichever state, it is one written state
+        monkeypatch.undo()
+        st.close()
+        _assert_exactly(tmp_path / "leg", 10)
+
+
+def test_the_first_write_to_a_file_of_an_earlier_version_counts_what_it_held_first(tmp_path, monkeypatch):
+    """Review of PR 1: a file of an earlier version (no counts) with six rows; four are added and the write of
+    `volume` fails after it was extended: without counts all three row datasets were ten long and the reader
+    returned ten rows, four with a volume of zero. The counts of the old file are written before any dataset
+    is extended."""
+    import h5py
+
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 6), 0)
+    st.close()
+    with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:
+        del h5["committed_counts"]
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(6, 4), 6)
+    real_setitem = h5py.Dataset.__setitem__
+
+    def setitem(self, key, value):
+        if self.name == "/volume":
+            raise OSError("injected failure while writing volume")
+        return real_setitem(self, key, value)
+
+    monkeypatch.setattr(h5py.Dataset, "__setitem__", setitem)
+    with pytest.raises(OSError, match="volume"):
+        st.flush()
+    monkeypatch.undo()
+    _assert_exactly(tmp_path / "leg", 6)
+    with h5py.File(tmp_path / "leg" / "samples.h5", "r") as h5:
+        assert h5["committed_counts"][:].tolist() == [6, 3, 3] and h5["volume"].shape[0] == 10
+    st.close()
+    _assert_exactly(tmp_path / "leg", 10)
+
+
+def test_iterations_that_were_not_stored_have_no_row_and_the_leg_still_resumes(tmp_path, tiny_leg):
+    """Review of PR 1: run(4, store=False) as a warm-up, then run(6, record_stride=1): six rows were stored,
+    the checkpoint named iteration 10, the frames carried iterations 4 to 9, and restore() refused the leg as
+    damaged. Records carry their row now, and the checkpoint the number of stored rows."""
+    spec, pos, box = tiny_leg
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(4, store=False)
+        s.run(6, record_stride=1)
+        assert s.iteration == 10 and s.storage.n_iterations == 6
+    data = read_samples(tmp_path / "hrex")
+    assert data["u"].shape[0] == 6 and data["frame_iter"].tolist() == [0, 1, 2, 3, 4, 5]
+    ckpt = LegStorage(tmp_path / "hrex", 4, 4, len(spec.frame_atoms)).read_checkpoint()
+    assert ckpt["iteration"] == 10 and ckpt["extra"]["rows"] == 6
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        assert s.restore() and s.iteration == 10 and s.storage.n_iterations == 6
+        s.run(2, record_stride=1)
+    data = read_samples(tmp_path / "hrex")
+    assert data["u"].shape[0] == 8 and data["frame_iter"].tolist() == list(range(8))
+
+
+def _exit_at_once(conn):
+    import os
+    conn.close()
+    os._exit(0)
+
+
+def _ready_then_exit(conn):
+    import os
+    conn.send(("ready", "a worker that ends"))
+    conn.close()
+    os._exit(0)
+
+
+def test_a_worker_that_ends_before_or_after_it_is_ready_is_a_failure_of_a_worker():
+    """Review of PR 1: a worker process that ended before it said it was ready gave a bare EOFError, and one
+    that ended just after gave a BrokenPipeError when the precalculation sent it its first window; neither was
+    taken for a failure of a worker, so the fallback to stock OpenMM did not start."""
+    import multiprocessing as mp
+
+    from cufep.sampling.hrex import WindowPool, WorkerError, _Process
+
+    ctx = mp.get_context("fork")
+
+    def worker(target, worker_id):
+        parent, child = ctx.Pipe()
+        proc = ctx.Process(target=target, args=(child,))
+        proc.start()
+        child.close()
+        made = _Process.__new__(_Process)
+        made.parent, made.proc, made.device, made.worker_id, made.start = parent, proc, 0, worker_id, 0
+        return made
+
+    early = worker(_exit_at_once, 7)
+    early.proc.join(30)
+    with pytest.raises(WorkerError, match="worker 7 .device 0. ended before it was ready"):
+        early.wait_ready(30.0)
+    late = worker(_ready_then_exit, 8)
+    assert late.wait_ready(30.0) == "a worker that ends"
+    late.proc.join(30)
+    pool = WindowPool.__new__(WindowPool)
+    pool.workers, pool.log = [late], (lambda message: None)
+    with pytest.raises(WorkerError, match="lambda precalculation"):
+        pool.run([{"window": 0}], timeout=30.0)
+    with pytest.raises(WorkerError, match="worker 8 .device 0. died"):
+        late.result(5.0)
+
+
+def test_workers_that_started_are_stopped_when_another_does_not(tmp_path, tiny_leg, monkeypatch):
+    """Review of PR 1: of two workers of the precalculation one failed to start and the other was ready; the
+    error left the constructor before anything stopped the ready one, which went on holding its GPU while the
+    leg was repeated on stock OpenMM."""
+    import cufep.sampling.hrex as hrex
+    from cufep.sampling.hrex import WindowPool, WorkerError
+
+    made = []
+
+    class Fake:
+        def __init__(self, ctx, spec, device, names, worker_id, start=0):
+            self.device, self.worker_id, self.stopped = device, worker_id, False
+            made.append(self)
+
+        def wait_ready(self, timeout):
+            if self.worker_id == 1:
+                raise WorkerError("worker 1 failed to start: injected")
+            return "ready"
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(hrex, "_Process", Fake)
+    spec, pos, box = tiny_leg
+    with pytest.raises(WorkerError, match="worker 1 failed to start"):
+        WindowPool(spec, [0, 1, 2])
+    assert [w.stopped for w in made] == [True, True, True]
+    made.clear()
+    sampler = ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[0, 1], inline=False, log=lambda m: None)
+    with pytest.raises(WorkerError, match="worker 1 failed to start"):
+        sampler.start()
+    assert [w.stopped for w in made] == [True, True] and sampler.workers == []
+    sampler.close()
 
 
 def test_a_final_checkpoint_that_cannot_be_stored_is_no_failure_of_the_backend(tmp_path, tiny_leg, monkeypatch):
@@ -1236,11 +1430,12 @@ def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
     res = analyze_leg(data, 300.0)
     assert res.n_states == 4 and res.n_iterations_used == 10
     assert np.isfinite(res.delta_g) and set(res.stage_delta_g) == {"discharge", "vanish"}
-    # decoupling a water molecule from water costs free energy (hydration free energy ~ -6 kcal/mol).
-    # Ten iterations are far too few for the analysis of a leg, which thins every window by its own
-    # correlation and may keep one or two of them (its result then depends on the machine); the
-    # samples themselves say it when all of them are taken
-    assert solve_mbar(data["u"][2:], data["states"][2:], overlap=False)[0][-1] > 0
+    # review of PR 1: the sign of a free energy from ten random iterations depends on the machine (it was
+    # negative in the CI); what is checked here is that the samples are read and written as they were made.
+    # Free energies are checked on inputs whose answer is known (harmonic windows, tests above)
+    rows_before = read_samples(leg)
+    assert s.storage.read_checkpoint()["iteration"] == 12 and s.storage.read_checkpoint()["extra"]["rows"] == 12
+    assert np.all(np.isfinite(rows_before["volume"])) and np.isfinite(res.delta_g) and np.isfinite(res.delta_g_error)
     assert min(res.window_kept_samples) >= 1 and max(res.window_kept_samples) <= 10
 
 
@@ -1283,7 +1478,7 @@ def test_a_resumed_leg_does_not_repeat_its_thermal_noise(tmp_path, monkeypatch):
             s.initialize(np.zeros((4, 3)), 3.0 * np.eye(3), velocities=np.zeros((4, 3)))
             assert s.start_number == 0
             noise = noise_of_steps(s, 10)
-            assert s.storage.read_checkpoint()["extra"] == {"start": 0}
+            assert s.storage.read_checkpoint()["extra"] == {"start": 0, "rows": 10}
             with pytest.raises(SamplerError, match="after the workers of this sampler were started"):
                 s.restore()
             return noise
@@ -1292,7 +1487,7 @@ def test_a_resumed_leg_does_not_repeat_its_thermal_noise(tmp_path, monkeypatch):
         with sampler(directory) as s:
             assert s.restore() and s.start_number == start
             noise = noise_of_steps(s, 10)
-            assert s.storage.read_checkpoint()["extra"] == {"start": start}
+            assert s.storage.read_checkpoint()["extra"] == {"start": start, "rows": 10 * (start + 1)}
             return noise
 
     def correlation(a, b):

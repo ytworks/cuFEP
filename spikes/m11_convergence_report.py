@@ -30,7 +30,9 @@ def one_leg(leg_dir: str) -> dict | None:
     try:
         samples = read_samples(d / "hrex")
         temperature = float(samples["attrs"].get("temperature_K", 298.15))
-        a = analyze_leg(samples, temperature).to_dict()
+        # the correction of the runs: by reweighting where the samples hold tail energies
+        tail = "reweight" if len(samples.get("lrc_du", [])) else "none"
+        a = analyze_leg(samples, temperature, tail=tail).to_dict()
     except Exception as exc:  # noqa: BLE001
         return {"leg_dir": leg_dir, "error": f"{type(exc).__name__}: {exc}"}
     q = quality_checks(a)
@@ -42,7 +44,8 @@ def one_leg(leg_dir: str) -> dict | None:
            "windows": a["n_states"], "production_iterations": a["n_iterations_used"],
            "delta_g": kcal(a["delta_g"]), "error": kcal(a["delta_g_error"]),
            # the standard error MBAR gives, that of every number of time blocks, and the number reported
-           "error_mbar": kcal(a.get("delta_g_error_mbar")), "error_n_blocks": a.get("delta_g_error_n_blocks"),
+           "error_mbar": kcal(a.get("delta_g_mbar_error")), "error_n_blocks": a.get("delta_g_error_n_blocks"),
+           "error_from": a.get("delta_g_error_from"), "tail": tail,
            "error_blocks": {count: kcal(value) for count, value in (a.get("delta_g_error_blocks") or {}).items()},
            "error_ratio": q["samples"].get("error_ratio"), "independent": q["samples"].get("independent"),
            "first_half": kcal(a["first_half"][0]), "second_half": kcal(a["second_half"][0]),
@@ -123,21 +126,31 @@ def main() -> None:
         blocks = "  ".join("    -" if r["error_blocks"].get(c) is None else f"{r['error_blocks'][c]:5.2f}" for c in ("40", "20", "10", "5"))
         ratio = "    -" if r["error_ratio"] is None else f"{r['error_ratio']:5.2f}"
         before = min(r["fewest_samples"], r["kept_samples"]) >= 50.0
-        print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s}          {r['error']:5.2f}  ({str(r['error_n_blocks']):>4s})  "
+        source = str(r["error_n_blocks"]) if r["error_from"] == "time blocks" else "anal"
+        print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s}          {r['error']:5.2f}  ({source:>4s})  "
               f"{r['error_mbar']:5.2f} {ratio} |      {blocks} |         {r['kept_samples']:5d}    {r['independent']:6.1f}  "
               f"{'ok   ' if before else 'below'} -> {'ok' if r['samples_ok'] else 'below'}")
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]
         if sub:
-            reported, own = np.array([r["error"] for r in sub]), np.array([r["error_mbar"] for r in sub])
-            ratios = np.array([r["error_ratio"] for r in sub if r["error_ratio"] is not None])
+            def spread(values) -> str:
+                values = np.asarray(values, dtype=float)
+                if not values.size:
+                    return "none"
+                return f"{values.min():.2f}-{values.max():.2f}, median {np.median(values):.2f}"
+
+            # only the legs whose standard error does come from time blocks are counted as such
+            from_blocks = [r["error"] for r in sub if r["error_from"] == "time blocks"]
+            analytical = [r["error"] for r in sub if r["error_from"] != "time blocks"]
+            ratios = [r["error_ratio"] for r in sub if r["error_ratio"] is not None]
             before = sum(min(r["fewest_samples"], r["kept_samples"]) < 50.0 for r in sub)
-            print(f"{leg}: standard error from time blocks {reported.min():.2f}-{reported.max():.2f}, median "
-                  f"{np.median(reported):.2f} kcal/mol; of MBAR {own.min():.2f}-{own.max():.2f}, median {np.median(own):.2f}; "
-                  f"ratio {ratios.min():.2f}-{ratios.max():.2f}, median {np.median(ratios):.2f} ({len(ratios)} legs with "
-                  f"blocks, {len(sub) - len(ratios)} with the error of MBAR); samples check below the level in "
-                  f"{before} legs before the discount and in {sum(r['samples_ok'] is False for r in sub)} now; number of "
-                  f"blocks reported: " + ", ".join(f"{c}: {sum(r['error_n_blocks'] == c for r in sub)}" for c in (40, 20, 10, 5)))
+            print(f"{leg}: standard error from time blocks in {len(from_blocks)} legs: {spread(from_blocks)} kcal/mol; "
+                  f"the analytical one in {len(analytical)}: {spread(analytical)}; of MBAR alone "
+                  f"{spread([r['error_mbar'] for r in sub])}; ratio of the MBAR part {spread(ratios)} ({len(ratios)} legs); "
+                  f"samples check below the level in {before} legs before the discount and in "
+                  f"{sum(r['samples_ok'] is False for r in sub)} now; number of blocks reported: "
+                  + ", ".join(f"{c}: {sum(r['error_n_blocks'] == c and r['error_from'] == 'time blocks' for r in sub)}"
+                              for c in (40, 20, 10, 5)))
     print()
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]

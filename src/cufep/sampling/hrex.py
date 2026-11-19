@@ -87,9 +87,12 @@ class _Process:
         self.device, self.worker_id, self.start = device, worker_id, start
 
     def wait_ready(self, timeout: float) -> str:
-        if not self.parent.poll(timeout):
-            raise WorkerError(f"worker {self.worker_id} (device {self.device}) did not start in {timeout:.0f} s")
-        msg = self.parent.recv()
+        try:
+            if not self.parent.poll(timeout):
+                raise WorkerError(f"worker {self.worker_id} (device {self.device}) did not start in {timeout:.0f} s")
+            msg = self.parent.recv()
+        except (EOFError, OSError) as exc:            # the process ended before it said it was ready
+            raise WorkerError(f"worker {self.worker_id} (device {self.device}) ended before it was ready") from exc
         if msg[0] != "ready":
             raise WorkerError(f"worker {self.worker_id} failed to start: {msg[1]}")
         return msg[1]
@@ -104,11 +107,11 @@ class _Process:
     def result(self, timeout: float) -> dict:
         if getattr(self, "_dead", False):
             raise WorkerError(f"worker {self.worker_id} (device {self.device}) is not running")
-        if not self.parent.poll(timeout):
-            raise WorkerError(f"worker {self.worker_id} (device {self.device}) gave no answer in {timeout:.0f} s")
         try:
+            if not self.parent.poll(timeout):
+                raise WorkerError(f"worker {self.worker_id} (device {self.device}) gave no answer in {timeout:.0f} s")
             msg = self.parent.recv()
-        except EOFError as exc:
+        except (EOFError, OSError) as exc:
             raise WorkerError(f"worker {self.worker_id} (device {self.device}) died") from exc
         if msg[0] != "done":
             raise WorkerError(f"worker {self.worker_id} (device {self.device}): {msg[1]}")
@@ -126,6 +129,28 @@ class _Process:
         self.parent.close()
 
 
+def start_workers(factories, timeout: float = 600.0) -> tuple[list, list[str]]:
+    """Create workers (each callable of ``factories`` makes one) and wait until every one is ready.
+
+    If one cannot be made or does not become ready, every worker that was made is stopped (its
+    process joined, or killed) before the error is raised: a failed start leaves no process that
+    holds a GPU while the leg goes on, or is repeated on another backend (review of PR 1).
+    """
+    workers: list = []
+    try:
+        for make in factories:
+            workers.append(make())
+        described = [w.wait_ready(timeout) for w in workers]
+    except BaseException:
+        for w in workers:
+            try:
+                w.stop()
+            except Exception:  # noqa: BLE001  stopping as many as can be stopped
+                pass
+        raise
+    return workers, described
+
+
 class WindowPool:
     """Worker processes that each run single lambda windows (the adaptive precalculation).
 
@@ -136,9 +161,8 @@ class WindowPool:
     def __init__(self, spec: LegSpec, devices: list, log=print) -> None:
         ctx = mp.get_context("spawn")
         self.spec, self.log = spec, log
-        self.workers = [_Process(ctx, spec, d, None, w) for w, d in enumerate(devices)]
-        for w in self.workers:
-            w.wait_ready(600.0)
+        self.workers, _described = start_workers(
+            [lambda d=d, w=w: _Process(ctx, spec, d, None, w) for w, d in enumerate(devices)])
 
     def run(self, tasks: list[dict], timeout: float = 3600.0) -> list[dict]:
         results: list = [None] * len(tasks)
@@ -149,7 +173,11 @@ class WindowPool:
             for pos, worker in enumerate(self.workers):
                 if pos not in busy and pending:
                     i = pending.pop(0)
-                    worker.parent.send(("window", tasks[i]))
+                    try:
+                        worker.parent.send(("window", tasks[i]))
+                    except (EOFError, OSError) as exc:     # the process has ended
+                        raise WorkerError(f"a worker of the lambda precalculation ended (device {worker.device})") \
+                            from exc
                     busy[pos] = i
             for pos in list(busy):
                 worker = self.workers[pos]
@@ -253,14 +281,15 @@ class ReplicaExchangeSampler:
         n = min(len(self.devices), self.k)
         self.devices = self.devices[:n]
         if self.inline:
-            self.workers = [_Inline(self.spec, self.devices[w], self.arrays, w, self.start_number) for w in range(n)]
+            factories = [lambda w=w: _Inline(self.spec, self.devices[w], self.arrays, w, self.start_number)
+                         for w in range(n)]
         else:
             ctx = mp.get_context("spawn")
-            self.workers = [_Process(ctx, self.spec, self.devices[w], self.arrays.names, w, self.start_number)
-                            for w in range(n)]
+            factories = [lambda w=w: _Process(ctx, self.spec, self.devices[w], self.arrays.names, w, self.start_number)
+                         for w in range(n)]
+        self.workers, ready = start_workers(factories)
+        described = ready[-1]
         self._next_worker_id = n
-        for w in self.workers:
-            described = w.wait_ready(600.0)
         self.log(f"[{self.spec.name}] {n} worker(s) on {self._device_summary()}: {described.split(' (index')[0]}")
         self.device_history.append((self.iteration, list(self.devices)))
         if not self.arrays.location.startswith("/dev/shm"):
@@ -305,13 +334,14 @@ class ReplicaExchangeSampler:
             except Exception:  # noqa: BLE001
                 pass
         ctx = mp.get_context("spawn")
-        new = []
+        ids = []
         for d, n in wanted.items():
             for _ in range(n):
-                new.append(_Process(ctx, self.spec, d, self.arrays.names, self._next_worker_id, self.start_number))
+                ids.append((d, self._next_worker_id))
                 self._next_worker_id += 1
-        for w in new:
-            w.wait_ready(600.0)
+        self.workers = keep                            # the stopped ones are gone, whatever happens next
+        new, _ready = start_workers([lambda d=d, i=i: _Process(ctx, self.spec, d, self.arrays.names, i, self.start_number)
+                                     for d, i in ids])
         self.workers = keep + new
         self.devices = [w.device for w in self.workers]
         self.log(f"[{self.spec.name}] iteration {self.iteration}: now {len(self.workers)} worker(s) on "
@@ -401,17 +431,20 @@ class ReplicaExchangeSampler:
         self.arrays.pos[self.cur] = ckpt["positions"]
         self.arrays.vel[self.cur] = ckpt["velocities"]
         self.arrays.box[self.cur] = ckpt["boxes"]
-        if self.storage.n_iterations < ckpt["iteration"]:
+        # the rows the checkpoint names: iterations that were run without being stored have none
+        # (a checkpoint of an earlier version does not say, and then every iteration had a row)
+        rows = int((ckpt.get("extra") or {}).get("rows", ckpt["iteration"]))
+        if self.storage.n_iterations < rows:
             raise StorageError(
                 f"{self.storage.h5_path} holds {self.storage.n_iterations} iterations, fewer than the "
-                f"{ckpt['iteration']} that its checkpoint names: the file was changed after the checkpoint was written. "
+                f"{rows} that its checkpoint names: the file was changed after the checkpoint was written. "
                 "Nothing was changed; the samples can be analysed (cufep analyze), and --reschedule starts the leg anew")
         self.state_of_replica = ckpt["state_of_replica"].astype(int)
         self.iteration = ckpt["iteration"]
         self.last_checkpoint = int(ckpt["iteration"])
         # one more start of this leg: its workers get random streams that no earlier start used
         self.start_number = int((ckpt.get("extra") or {}).get("start", 0)) + 1
-        self.storage.truncate(self.iteration)
+        self.storage.truncate(rows)
         return True
 
     def _refuse_with_workers(self, what: str) -> None:
@@ -432,7 +465,7 @@ class ReplicaExchangeSampler:
         wait = WRITE_WAIT_S if must else CHECKPOINT_WAIT_S
         written = self.storage.write_checkpoint(
             self.arrays.pos[self.cur], self.arrays.vel[self.cur], self.arrays.box[self.cur], self.state_of_replica,
-            self.iteration, extra={"start": self.start_number}, wait_s=wait)
+            self.iteration, extra={"start": self.start_number, "rows": self.storage.n_iterations}, wait_s=wait)
         if written:
             self.last_checkpoint = int(self.iteration)
         elif must:
@@ -528,10 +561,12 @@ class ReplicaExchangeSampler:
             u = self.arrays.u.copy()
             sampled_states = self.state_of_replica.copy()
             if store:
-                self.storage.append(u, sampled_states, self.arrays.vol.copy())
+                # records carry the row of their iteration: iterations that are not stored (a warm-up
+                # with store=False) have no row
+                row = self.storage.append(u, sampled_states, self.arrays.vol.copy())
                 for res in results:
                     if res.get("recorded"):
-                        self.storage.append_record(self.iteration, res["recorded"])
+                        self.storage.append_record(row, res["recorded"])
             frac = 0.0
             if self.exchange:
                 rng = np.random.default_rng([int(self.spec.seed) & 0x7FFFFFFF, self.iteration, 0x5EED])
