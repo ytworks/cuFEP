@@ -112,7 +112,7 @@ sampling:
   seed: 20261118
   checkpoint_interval_ps: 250.0
   rest2:
-    scale: 2.5                    # temperature of the hot region / temperature of the run, mid-leg; 1.0 = off
+    scale: 1.5                    # temperature of the hot region / temperature of the run, mid-leg; 1.0 = off
     region: ligand                # ligand | pocket (also protein residues near the ligand)
     pocket_cutoff_nm: 0.4
     residues: []                  # protein residues added to the hot region, e.g. ["960", "A:981"]
@@ -172,7 +172,7 @@ the schedule in fixed mode.
 | `sampling.repeats` | 1 | FEP+ and Flare run a calculation once. OpenFE's default is 3; more than one repeat makes the reported uncertainty the standard deviation over repeats |
 | `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol. `force_constants: auto` takes kT / sigma^2 of each restrained coordinate in the pre-equilibration instead, as A3FE and SOMD2 do. On TYK2 ejm_31 (three repeats each) the two gave the same binding free energy within the spread of the repeats (-10.6 ± 1.9 and -10.8 ± 1.2 kcal/mol), so the fixed values of OpenFE stay the default |
 | `restraints.pose_rmsd_warning_nm` | 0.3 nm | cuFEP's own choice: 2 A is the usual limit for calling two poses the same, and thermal motion adds to it. OpenFE reports the ligand RMSD without a limit; like OpenFE, cuFEP does not stop |
-| `sampling.rest2.scale` | 2.5 (745 K at 298 K) | FEP+ heats the hot region in the middle windows: its authors give about 1000 K for about 20 heavy atoms (Abel et al., Acc. Chem. Res. 2017), and Desmond's temperature predictor (exchange probability 0.3, the default 12 windows) gives 670-840 K for ligands of 20-30 heavy atoms. With cuFEP's 19-21 windows a peak of 2.5 keeps the temperature ratio of neighbouring windows at or below 1.15, inside the 1.25 that the same predictor allows for a ligand of 32 atoms. SOMD2's own default is 1.0 (off) |
+| `sampling.rest2.scale` | 1.5 (447 K at 298 K) | A torsion barrier E is crossed at a rate proportional to exp(-E / (kT x scale)). With 1.5 a barrier of 6 kcal/mol, which takes nanoseconds to cross at 298 K, is crossed about 30 times as often, while an amide bond (16 kcal/mol or more) stays 18 kT high. The scale must stay below the point where amide bonds isomerise: with 2.5 (745 K, inside the 670-1000 K that FEP+ uses for its hot region) the solvent legs of five TYK2 ligands ended with a cis amide in 6 to 15 of their 21 windows, none without REST2, and three of the five binding free energies moved 4-5 kcal/mol away from experiment (`spikes/m10_amide_isomers.py`). SOMD2's own default is 1.0 (off) |
 | `sampling.rest2.region` | ligand | default hot region of FEP+ and of SOMD2. `pocket` adds the protein residues within `pocket_cutoff_nm` (0.4 nm, cuFEP's own choice) of the ligand, as FEP+ does on request |
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
 | `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. The threshold has to stay low: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. On the TYK2 complex leg a threshold of 0.20 added windows until `max_windows` (see protocol.md) |

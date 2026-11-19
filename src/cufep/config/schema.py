@@ -259,8 +259,9 @@ class Rest2Config(_Section):
     """
 
     #: temperature of the hot region relative to that of the run in the middle of a leg (the
-    #: meaning of SOMD2's rest2_scale); 1 switches REST2 off
-    scale: float = Field(default=2.5, ge=1.0)
+    #: meaning of SOMD2's rest2_scale); 1 switches REST2 off. Kept low enough that amide bonds
+    #: do not isomerise (docs/configuration.md)
+    scale: float = Field(default=1.5, ge=1.0)
     #: complex leg: ligand = the ligand only; pocket = also the protein residues that have a
     #: heavy atom within pocket_cutoff_nm of a heavy atom of the ligand in the prepared structure
     region: Literal["ligand", "pocket"] = "ligand"
