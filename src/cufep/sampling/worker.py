@@ -48,6 +48,10 @@ class LegSpec:
     mps_thread_percentage: int | None = None
     #: long-range dispersion bookkeeping for the coupled state (see alchemy/lrc.py)
     lrc: dict | None = None
+    #: the settings of the configuration that the samples depend on beyond what is listed here
+    #: (soft-core, REST2, tail), in the words of the configuration: recorded with the conditions,
+    #: so that a later run can be compared with them before any System is built
+    settings: dict = field(default_factory=dict)
     #: atoms whose positions are saved for structural analysis (coupled-state replica)
     frame_atoms: list[int] = field(default_factory=list)
     #: positions *within frame_atoms* of the ligand heavy atoms and the protein C-alpha atoms
@@ -78,7 +82,8 @@ class LegSpec:
                 "steps_per_iteration": int(self.steps_per_iteration), "backend": self.backend,
                 "precision": self.precision, "integrator": self.integrator, "n_atoms": int(self.n_atoms),
                 "system_sha256": hashlib.sha256(self.system_xml.encode()).hexdigest(),
-                "lrc": None if self.lrc is None else dict(self.lrc)}
+                "lrc": None if self.lrc is None else dict(self.lrc),
+                **({"settings": dict(self.settings)} if self.settings else {})}
 
 
 def _shared_directory(required_bytes: int, fallback: str | None = None) -> str:

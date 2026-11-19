@@ -27,6 +27,19 @@ def _same(a, b) -> bool:
         return a == b
 
 
+def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
+    """(number of iterations, conditions) of the samples in ``directory``, read without changing
+    anything; (0, None) if there are no samples, (n, None) if their conditions are not recorded."""
+    path = Path(directory) / "samples.h5"
+    if not path.exists():
+        return 0, None
+    with h5py.File(path, "r") as h5:
+        n = int(h5["u"].shape[0])
+        if n == 0 or "conditions" not in h5.attrs:
+            return n, None
+        return n, json.loads(h5.attrs["conditions"])
+
+
 def stored_backend(directory: str | Path) -> str | None:
     """Backend with which the samples in ``directory`` were made, or None if there are none."""
     path = Path(directory) / "samples.h5"
@@ -107,6 +120,9 @@ class LegStorage:
                     differing.append("the System (force field, restraint or REST2 region)")
                 elif key == "lrc":
                     differing.append("the Lennard-Jones parameters of the ligand's dispersion tail")
+                elif key == "settings" and isinstance(old, dict) and isinstance(new, dict):
+                    differing += [f"{name}: {old.get(name)} -> {new.get(name)}"
+                                  for name in sorted(set(old) | set(new)) if not _same(old.get(name), new.get(name))]
                 else:
                     differing.append(f"{key}: {old} -> {new}")
         if differing:

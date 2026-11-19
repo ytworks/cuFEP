@@ -8,12 +8,12 @@ from pathlib import Path
 
 from cufep import jsonio
 from cufep.config.auto import AutoReport, resolve
-from cufep.config.schema import Config, dump_config
+from cufep.config.schema import Config, dump_config, read_settings
 from cufep import mps
 from cufep.analysis.plots import plot_repeat
 from cufep.scheduler import GpuMonitor, run_jobs
-from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_partner_legs, combine_ligand, prepare_ligand,
-                            refresh_leg_result, safe_name)
+from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_leg_reuse, check_partner_legs, check_prepared,
+                            combine_ligand, prepare_ligand, refresh_leg_result, safe_name, settings_differences)
 
 
 def plan(cfg: Config, log=print) -> tuple[Config, AutoReport, object, list]:
@@ -108,13 +108,10 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         log("only " + ", ".join(sorted({f"{name}/{leg}" for name, _, leg in selected}))
             + " is run; the other legs keep the results they have")
     resolved.output.dir = out_dir
-    dump_config(resolved, out_dir / "resolved_config.yaml")
-    (out_dir / "auto_report.md").write_text(report.to_markdown())
     for key, value, reason in report.decisions:
         log(f"auto: {key} = {value} ({reason})")
     for w in report.warnings:
         log(f"WARNING: {w}")
-    protein.write_pdb(out_dir / "protein_prepared.pdb")
     membrane = bool(resolved.membrane.enabled)
     gpus = list(resolved.resources.gpus) if resolved.resources.gpus else [None]
     cfg_dict = resolved.model_dump(mode="json")
@@ -122,12 +119,29 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     lig_dirs = {lig.name: out_dir / safe_name(lig.name) for lig in ligands}
     to_run = {name for name, _, _ in selected}
     repeats = resolved.sampling.repeats
-    # before anything is sampled: the finished legs that are not part of this run must be legs of
-    # the same calculation
-    for lig in ligands:
-        if lig.name in to_run:
-            check_partner_legs(lig_dirs[lig.name], lig.name, {(r, leg) for name, r, leg in selected if name == lig.name},
-                               repeats, resolved)
+    # Before anything is written or sampled, for all legs of this run: what the output directory
+    # holds must be usable under this configuration, and the finished legs that are not part of
+    # the run must be legs of the same calculation. A run that is refused here leaves the
+    # directory, and its record of the configuration that made its results, as they were.
+    try:
+        for lig in ligands:
+            if lig.name not in to_run:
+                continue
+            mine = {(r, leg) for name, r, leg in selected if name == lig.name}
+            check_partner_legs(lig_dirs[lig.name], lig.name, mine, repeats, resolved)
+            info = check_prepared(resolved, lig, lig_dirs[lig.name], membrane, resolved.solvation.box_shape,
+                                  lambda message: None)
+            for r, leg in sorted(mine):
+                if info is not None:
+                    check_leg_reuse(resolved, lig_dirs[lig.name], leg, r, info, resolved.sampling.production(leg),
+                                    reschedule, log)
+    except Exception as exc:
+        dump_config(resolved, out_dir / "resolved_config.refused.yaml")
+        log(f"refused: {exc}")
+        log("the configuration of this attempt is in resolved_config.refused.yaml; resolved_config.yaml and the "
+            "results are unchanged")
+        raise
+    write_run_record(out_dir, resolved, report, protein, log)
     for lig in ligands:
         if lig.name in to_run:
             prepare_ligand(resolved, lig, protein, lig_dirs[lig.name], membrane, resolved.solvation.box_shape, log)
@@ -208,6 +222,34 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         for w in s.get("warnings", []):
             log(f"  warning: {w}")
     return summary
+
+
+def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print) -> None:
+    """Write the configuration of this run (``resolved_config.yaml``), the report of the automatic
+    choices and the prepared protein, after the run has been found usable for the directory.
+
+    If the directory holds the configuration of an earlier run that differs in more than the
+    resources and the output directory, that file is kept as ``resolved_config.previous_<n>.yaml``:
+    results of the earlier run may still be there (legs this run does not sample).
+    """
+    path = out_dir / "resolved_config.yaml"
+    new = resolved.model_dump(mode="json")
+    earlier = read_settings(path) if path.exists() else None
+
+    def calculation(data: dict) -> dict:
+        return {key: value for key, value in data.items() if key not in ("resources", "output")}
+
+    if earlier is not None and settings_differences(calculation(earlier), calculation(new)):
+        n = 1
+        while (out_dir / f"resolved_config.previous_{n}.yaml").exists():
+            n += 1
+        path.replace(out_dir / f"resolved_config.previous_{n}.yaml")
+        log(f"the configuration differs from the one of the earlier run in this directory, which is kept as "
+            f"resolved_config.previous_{n}.yaml")
+    dump_config(resolved, path)
+    (out_dir / "resolved_config.refused.yaml").unlink(missing_ok=True)
+    (out_dir / "auto_report.md").write_text(report.to_markdown())
+    protein.write_pdb(out_dir / "protein_prepared.pdb")
 
 
 def failed_legs(summary: list[dict]) -> list[str]:

@@ -253,6 +253,101 @@ def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
     return out
 
 
+def leg_seed(cfg: Config, repeat: int, leg: str) -> int:
+    """The seed of a leg: every repeat and each of its two legs has its own."""
+    return int(cfg.sampling.seed) + 7919 * int(repeat) + (0 if leg == "complex" else 104729)
+
+
+def samples_settings(cfg: Config) -> dict:
+    """The settings that the samples of a leg depend on and that their other recorded conditions
+    (states, temperature, pressure, dynamics, System checksum) do not name in the words of the
+    configuration: the soft-core, REST2, the length of an iteration and the tail correction."""
+    return {"alchemy": cfg.alchemy.model_dump(mode="json"), "rest2": cfg.sampling.rest2.model_dump(mode="json"),
+            "time_per_iteration_ps": float(cfg.sampling.time_per_iteration_ps),
+            "tail": None if cfg.analysis.lrc == "none" else {"cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}}
+
+
+def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info: dict, production_ns: float,
+                    reschedule: bool = False, log=print) -> None:
+    """Before a run writes or samples anything: what the leg directory holds must be usable by it.
+
+    The same checks are made again where the files are used (:func:`run_leg`); here they are made
+    for all legs of a run first, from the files alone, so that a run that will be refused leaves
+    the output directory, and its record of the configuration, as they were. Raises WorkflowError
+    or ConditionsError.
+    """
+    from cufep.alchemy.schedule import Schedule
+    from cufep.sampling.storage import ConditionsError, _same, stored_conditions
+
+    leg_dir = lig_dir / f"repeat_{repeat}" / leg
+    is_complex = leg == "complex"
+    in_membrane = is_complex and prep_info.get("complex_barostat") == "membrane"
+    quiet = lambda message: None                                    # noqa: E731  run_leg logs it when it uses the file
+    equil_file = leg_dir / "equil.npz"
+    if equil_file.exists():
+        eq = np.load(equil_file)
+        check_made_from("the pre-equilibration of this leg", equil_file,
+                        json.loads(str(eq["made_with"])) if "made_with" in eq.files else None,
+                        equil_made_with(cfg, leg, in_membrane, leg_seed(cfg, repeat, leg)), quiet,
+                        contradictions=equil_contradictions(eq, cfg, leg, in_membrane))
+    rfile = leg_dir / "restraint.json"
+    if is_complex and rfile.exists():
+        stored = _read_json(rfile) or {}
+        check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_made_with(cfg), quiet,
+                        contradictions=restraint_contradictions(stored, cfg))
+    if reschedule:
+        return                           # the windows and samples the leg has are set aside; it starts anew
+    rest2_scale = cfg.sampling.rest2.scale if cfg.sampling.rest2.scale > 1.0 else 1.0
+    sched_file = leg_dir / "schedule.yaml"
+    if sched_file.exists():
+        schedule = Schedule.load(sched_file)
+        if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
+            raise WorkflowError(
+                f"the lambda schedule in {sched_file} was made with a REST2 scale of {schedule.rest2_scale:g} but "
+                f"sampling.rest2.scale is {rest2_scale:g}. Nothing was changed. Use the same value, or start the "
+                "leg anew with --reschedule.")
+    n_stored, conditions = stored_conditions(leg_dir / "hrex")
+    if n_stored == 0:
+        return
+    iteration_ps = float(cfg.sampling.time_per_iteration_ps)
+    asked = max(1, int(round(cfg.sampling.equilibration(leg) * 1000.0 / iteration_ps))) \
+        + max(4, int(round(production_ns * 1000.0 / iteration_ps)))
+    if conditions is None:
+        if n_stored < asked:
+            raise ConditionsError(
+                f"the {n_stored} iterations of samples in {leg_dir / 'hrex'} were written by a version of cuFEP that "
+                f"did not record the conditions they were made under, and this run asks for {asked}: such samples "
+                "are not continued. Nothing was changed. They can be analysed (cufep analyze); to sample this leg "
+                "further, start it anew with --reschedule: the samples it has are kept in previous_<n>/.")
+        return
+    current = {"temperature_K": float(cfg.thermodynamics.temperature_K),
+               "pressure_bar": float(cfg.thermodynamics.pressure_bar),
+               "friction_per_ps": float(cfg.dynamics.friction_per_ps)}
+    differing = [f"{key}: {conditions[key]} -> {value}" for key, value in current.items()
+                 if key in conditions and not _same(conditions[key], value)]
+    if isinstance(conditions.get("settings"), dict):
+        differing += settings_differences(conditions["settings"], samples_settings(cfg))
+    if differing:
+        raise ConditionsError(
+            f"the {n_stored} iterations of samples in {leg_dir / 'hrex'} were made under other conditions than this "
+            f"run asks for ({'; '.join(differing)}). They are left as they are. A calculation under other conditions "
+            "needs a new output.dir; only the lambda windows of a leg can be determined again in place, with "
+            "--reschedule.")
+
+
+def check_prepared(cfg: Config, ligand, lig_dir: Path, membrane: bool, box_shape: str, log=print) -> dict | None:
+    """The record of the prepared systems of a ligand if they exist and this run can use them (None
+    if there are none yet); raises WorkflowError if they were made from other input or settings."""
+    done = lig_dir / "prep" / "prep.json"
+    if not done.exists():
+        return None
+    info = json.loads(done.read_text())
+    check_made_from(f"the prepared systems of {ligand.name}", lig_dir / "prep", info.get("made_from"),
+                    prep_made_from(cfg, ligand, membrane, box_shape), log,
+                    contradictions=prep_contradictions(info, ligand.name, membrane, box_shape))
+    return info
+
+
 def prep_made_from(cfg: Config, ligand, membrane: bool, box_shape: str) -> dict:
     """The input and the settings from which the prepared systems of a ligand are built."""
     import hashlib
@@ -299,10 +394,8 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     prep_dir = lig_dir / "prep"
     done = prep_dir / "prep.json"
     made_from = prep_made_from(cfg, ligand, membrane, box_shape)
-    if done.exists():
-        info = json.loads(done.read_text())
-        check_made_from(f"the prepared systems of {ligand.name}", prep_dir, info.get("made_from"), made_from, log,
-                        contradictions=prep_contradictions(info, ligand.name, membrane, box_shape))
+    info = check_prepared(cfg, ligand, lig_dir, membrane, box_shape, log)
+    if info is not None:
         return info
     prep_dir.mkdir(parents=True, exist_ok=True)
     warnings = check_ligand(ligand, protein.topology, protein.positions_nm())
@@ -645,7 +738,7 @@ def run_leg(job: LegJob) -> dict:
     prep = load_prepared(lig_dir / "prep", job.leg)
     system = mm.XmlSerializer.deserialize(prep["system_xml"])
     T = cfg.thermodynamics.temperature_K
-    seed = int(cfg.sampling.seed) + 7919 * job.repeat + (0 if is_complex else 104729)
+    seed = leg_seed(cfg, job.repeat, job.leg)
     device0 = job.devices[0] if job.devices else None
     barostat = prep_info["complex_barostat"] if is_complex else "isotropic"
     notes: list[str] = []
@@ -924,7 +1017,7 @@ def run_leg(job: LegJob) -> dict:
             precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
             pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
             timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 17,
-            cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail,
+            cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail, settings=samples_settings(cfg),
             frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
             box_safety=1.3 if barostat == "membrane" else None,
             mps_thread_percentage=thread_percentage(job.oversubscription))

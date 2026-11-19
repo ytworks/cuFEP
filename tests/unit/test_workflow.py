@@ -630,6 +630,95 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 
 
+def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_path, monkeypatch, ligands):
+    """Review of PR 1: a run stopped because its configuration did not fit the directory had already
+    overwritten resolved_config.yaml, which then described a configuration that made none of the results."""
+    import cufep.run as driver
+    from cufep.config.auto import AutoReport
+    from cufep.config.schema import Config, read_settings
+    from cufep.sampling.storage import ConditionsError, LegStorage
+    from cufep.workflow import WorkflowError, check_leg_reuse, prep_made_from, samples_settings
+
+    lig = ligands[0]
+    out = tmp_path / "out"
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": str(tmp_path / "p.pdb"), "ligand": "l.sdf"},
+                                      "output": {"dir": str(out)}, "resources": {"gpus": []},
+                                      "solvation": {"box_shape": "dodecahedron"}, **sections})
+
+    class Protein:
+        def write_pdb(self, path):
+            Path(path).write_text("ATOM")
+
+    from pathlib import Path
+    monkeypatch.setattr(driver, "plan", lambda cfg, log: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
+    monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: [])
+    monkeypatch.setattr(driver, "write_timing", lambda *args, **kwargs: None)
+    monkeypatch.setattr(driver, "refresh_leg_result", lambda *args, **kwargs: "current")
+    monkeypatch.setattr(driver, "plot_repeat", lambda *args, **kwargs: None)
+    log = []
+
+    # an earlier run left: its configuration, the prepared systems, and samples of the solvent leg
+    first = config()
+    lig_dir = out / lig.name
+    (lig_dir / "prep").mkdir(parents=True)
+    (lig_dir / "prep" / "prep.json").write_text(json.dumps({
+        "ligand": lig.name, "complex_barostat": "isotropic", "membrane": False, "box_shape": "dodecahedron",
+        "made_from": prep_made_from(first, lig, False, "dodecahedron")}))
+    hrex = lig_dir / "repeat_0" / "solvent" / "hrex"
+    storage = LegStorage(hrex, 2, 2)
+    storage.check_conditions({"temperature_K": 298.15, "pressure_bar": 1.0, "friction_per_ps": 1.0,
+                              "settings": samples_settings(first)})
+    for _ in range(6):
+        storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+    storage.close()
+    driver._run(first, out, False, log.append)
+    record = (out / "resolved_config.yaml").read_bytes()
+    assert (out / "protein_prepared.pdb").exists() and not list(out.glob("resolved_config.previous_*"))
+
+    # another soft-core: refused before anything is written
+    other = config(alchemy={"softcore_alpha": 0.8})
+    with pytest.raises(ConditionsError, match="alchemy.softcore_alpha: 0.5 -> 0.8.*They are left as they are"):
+        driver._run(other, out, False, log.append)
+    assert (out / "resolved_config.yaml").read_bytes() == record
+    assert read_settings(out / "resolved_config.refused.yaml")["alchemy"]["softcore_alpha"] == 0.8
+    assert any(line.startswith("refused: ") for line in log) and not list(out.glob("resolved_config.previous_*"))
+    # another membrane setting: the prepared systems refuse, the record stays
+    with pytest.raises(WorkflowError, match="membrane.enabled: False -> True"):
+        driver._run(config(membrane={"enabled": True}), out, False, log.append)
+    assert (out / "resolved_config.yaml").read_bytes() == record
+
+    # a run that differs only in its resources is the same calculation: no history
+    driver._run(config(resources={"gpus": [], "cpu_threads_per_worker": 3}), out, False, log.append)
+    assert not list(out.glob("resolved_config.previous_*")) and not (out / "resolved_config.refused.yaml").exists()
+    assert read_settings(out / "resolved_config.yaml")["resources"]["cpu_threads_per_worker"] == 3
+    # a longer production is a change of the calculation: the earlier record is kept, once
+    driver._run(config(sampling={"production_ns": 20.0}), out, False, log.append)
+    assert [f.name for f in out.glob("resolved_config.previous_*")] == ["resolved_config.previous_1.yaml"]
+    assert read_settings(out / "resolved_config.previous_1.yaml")["sampling"]["production_ns"] == 10.0
+    assert read_settings(out / "resolved_config.yaml")["sampling"]["production_ns"] == 20.0
+
+    # the checks of a leg, from its files alone
+    prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())
+    check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
+    with pytest.raises(ConditionsError, match="temperature_K: 298.15 -> 310.0"):
+        check_leg_reuse(config(thermodynamics={"temperature_K": 310.0}), lig_dir, "solvent", 0, prep_info, 10.0)
+    with pytest.raises(ConditionsError, match="rest2.scale: 1.5 -> 2.0"):
+        check_leg_reuse(config(sampling={"rest2": {"scale": 2.0}}), lig_dir, "solvent", 0, prep_info, 10.0)
+    check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0, reschedule=True)      # the leg starts anew
+    check_leg_reuse(other, lig_dir, "solvent", 1, prep_info, 10.0)                       # a leg without files
+    # samples of a version that did not record their conditions: enough of them are analysed, too few
+    # are not continued
+    import h5py
+    with h5py.File(hrex / "samples.h5", "a") as h5:
+        del h5.attrs["conditions"]
+    with pytest.raises(ConditionsError, match="did not record the conditions.*this run asks for 4400.*not continued"):
+        check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
+    check_leg_reuse(config(sampling={"equilibration_ns": 0.0025, "production_ns": 0.005}), lig_dir, "solvent", 0,
+                    prep_info, 0.005)
+
+
 def test_a_run_can_be_restricted_to_ligands_and_legs():
     from cufep.run import select_jobs
     from cufep.workflow import WorkflowError
