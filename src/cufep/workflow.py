@@ -154,6 +154,76 @@ def load_prepared(prep_dir: Path, name: str) -> dict:
             "solute": [int(i) for i in data["solute"]], "protein": [int(i) for i in data["protein"]]}
 
 
+def settings_differences(stored, current, prefix: str = "") -> list[str]:
+    """Where two nested records of settings differ, as ``"a.b: old -> new"``."""
+    from cufep.sampling.storage import _same
+
+    if isinstance(stored, dict) and isinstance(current, dict):
+        out: list[str] = []
+        for key in sorted(set(stored) | set(current)):
+            name = f"{prefix}.{key}" if prefix else str(key)
+            if key not in stored or key not in current:
+                out.append(f"{name}: {stored.get(key, 'not recorded')} -> {current.get(key, 'not given')}")
+            else:
+                out += settings_differences(stored[key], current[key], name)
+        return out
+    return [] if _same(stored, current) else [f"{prefix}: {stored} -> {current}"]
+
+
+def check_made_from(what: str, where: Path, stored: dict | None, current: dict, log=print) -> None:
+    """Refuse to reuse a file of an earlier run that was made from other input or settings.
+
+    cuFEP keeps what it has computed (the prepared systems, the pre-equilibration, the
+    restraint) and uses it again when a calculation is run again in its output directory. That
+    is only right while the input and the settings it came from are the same.
+    """
+    if stored is None:
+        log(f"{what}: {where} was written by a version that did not record what it was made from; it is used as it is")
+        return
+    differing = settings_differences(stored, current)
+    if differing:
+        raise WorkflowError(
+            f"{what} in {where} cannot be used again: this run gives other input or settings than the ones "
+            f"that went into it ({'; '.join(differing[:8])}{' ...' if len(differing) > 8 else ''}). Nothing was "
+            "changed. A calculation with other input or settings needs a new output.dir.")
+
+
+def prep_made_from(cfg: Config, ligand, membrane: bool, box_shape: str) -> dict:
+    """The input and the settings from which the prepared systems of a ligand are built."""
+    import hashlib
+
+    data = cfg.model_dump(mode="json")
+    protein = Path(cfg.system.protein)
+    return {
+        "protein_sha256": hashlib.sha256(protein.read_bytes()).hexdigest() if protein.exists() else "file not found",
+        "ligand": ligand.digest(),                      # chemistry and coordinates of the SDF record
+        "cofactors": data["system"]["cofactors"],
+        "forcefield": data["forcefield"],
+        "dynamics": {k: data["dynamics"][k] for k in ("cutoff_nm", "hmr_mass_amu", "constraints")},
+        "solvation": dict(data["solvation"], box_shape=box_shape),
+        "thermodynamics": {k: data["thermodynamics"][k] for k in ("ionic_strength_M", "ph")},
+        "membrane": dict({k: data["membrane"][k] for k in ("orientation", "lipid", "padding_nm")} if membrane else {},
+                         enabled=bool(membrane)),
+    }
+
+
+def equil_made_with(cfg: Config, leg: str, in_membrane: bool, seed: int) -> dict:
+    """The settings that the pre-equilibration of a leg depends on."""
+    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
+    return {"temperature_K": cfg.thermodynamics.temperature_K, "pressure_bar": cfg.thermodynamics.pressure_bar,
+            "friction_per_ps": cfg.dynamics.friction_per_ps, "timestep_fs": float(cfg.dynamics.timestep_fs),
+            "pre_equilibration": pre.model_dump(mode="json"),
+            "membrane_equilibration_ns": cfg.membrane.equilibration_ns if in_membrane else None,
+            "backend": cfg.backend.name, "precision": cfg.backend.precision, "seed": int(seed)}
+
+
+def restraint_made_with(cfg: Config) -> dict:
+    """The settings that the choice of the Boresch restraint depends on."""
+    data = cfg.restraints.model_dump(mode="json")
+    data.pop("pose_rmsd_warning_nm", None)          # a level for a warning; it does not change the restraint
+    return data
+
+
 def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, box_shape: str, log=print) -> dict:
     """Build and save the solvated complex and the solvated ligand for one ligand."""
     from cufep.backends.cupotential import MIN_BOX_CUTOFF_RATIO
@@ -163,8 +233,11 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
 
     prep_dir = lig_dir / "prep"
     done = prep_dir / "prep.json"
+    made_from = prep_made_from(cfg, ligand, membrane, box_shape)
     if done.exists():
-        return json.loads(done.read_text())
+        info = json.loads(done.read_text())
+        check_made_from(f"the prepared systems of {ligand.name}", prep_dir, info.get("made_from"), made_from, log)
+        return info
     prep_dir.mkdir(parents=True, exist_ok=True)
     warnings = check_ligand(ligand, protein.topology, protein.positions_nm())
     t0 = time.perf_counter()
@@ -213,7 +286,9 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     (prep_dir / "ligand.json").write_text(ligand.offmol.to_json())
     info = {"ligand": ligand.name, "n_atoms_complex": n_complex, "n_atoms_solvent": system.getNumParticles(),
             "complex_barostat": barostat, "membrane": membrane, "box_shape": box_shape,
-            "solvent_box_shape": solvent_shape, "membrane_info": membrane_info, "warnings": warnings}
+            "solvent_box_shape": solvent_shape, "membrane_info": membrane_info, "warnings": warnings,
+            # the cuPotential plugin needs a larger box; a system built for it also runs on stock OpenMM
+            "box_built_for_backend": cfg.backend.name, "made_from": made_from}
     done.write_text(json.dumps(info, indent=1))
     log(f"{ligand.name}: complex {n_complex} atoms, solvent leg {system.getNumParticles()} atoms"
         + (f"; warnings: {'; '.join(warnings)}" if warnings else ""))
@@ -444,8 +519,9 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 1. pre-equilibration: plain MD of the fully interacting system -------------------
     equil_file = leg_dir / "equil.npz"
+    in_membrane = is_complex and barostat == "membrane"
+    equil_from = equil_made_with(cfg, job.leg, in_membrane, seed)
     if not equil_file.exists():
-        in_membrane = is_complex and barostat == "membrane"
         production = pre.md_ns
         restrained: list[int] = []
         wall_atoms: list[int] = []
@@ -488,11 +564,13 @@ def run_leg(job: LegJob) -> dict:
         np.savez(tmp, positions=eq.positions, velocities=eq.velocities, box=eq.box, frames=eq.frames[-n_keep:],
                  frame_boxes=eq.frame_boxes[-n_keep:], frame_atoms=np.array(eq.frame_atoms),
                  timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes), simulated_ns=eq.simulated_ns,
-                 pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2)
+                 pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2, made_with=json.dumps(equil_from))
         tmp.replace(equil_file)
         timed("pre_equilibration", t0)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)
+    check_made_from("the pre-equilibration of this leg", equil_file,
+                    json.loads(str(eq["made_with"])) if "made_with" in eq.files else None, equil_from, log)
     timestep_fs = float(eq["timestep_fs"])
     notes += json.loads(str(eq["notes"]))
 
@@ -506,8 +584,10 @@ def run_leg(job: LegJob) -> dict:
         rdmol = Molecule.from_json((lig_dir / "prep" / "ligand.json").read_text()).to_rdkit()
         symmetry = ligand_symmetry_number(rdmol)
         rfile = leg_dir / "restraint.json"
+        restraint_from = restraint_made_with(cfg)
         if rfile.exists():
             stored = json.loads(rfile.read_text())
+            check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_from, log)
             restraint = BoreschRestraint.from_dict(stored["restraint"])
             notes.extend(stored.get("info", {}).get("notes", []))
         else:
@@ -545,7 +625,7 @@ def run_leg(job: LegJob) -> dict:
                     + ", ".join(label(i) for i in restraint.guest_atoms)
                     + f" | r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * found.ligand_rmsd_nm:.2f} A")
             rfile.write_text(json.dumps({"restraint": restraint.to_dict(), "info": info,
-                                         "ligand_symmetry_number": symmetry}, indent=1))
+                                         "ligand_symmetry_number": symmetry, "made_with": restraint_from}, indent=1))
         release_dg = restraint.release_free_energy(T, "numerical")
         release_dg_analytical = restraint.release_free_energy(T, "analytical")
         if symmetry > 1:
@@ -613,9 +693,10 @@ def run_leg(job: LegJob) -> dict:
                 src = src / safe_name(job.ligand) / f"{job.leg}_r{job.repeat}.yaml"
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
+            _schedule_of_this_leg(src, job.leg, stages)          # before it is taken over
             shutil.copy(src, sched_file)
         if sched_file.exists() and start_file.exists():
-            schedule = Schedule.load(sched_file)
+            schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
             start = np.load(start_file)
             configs = (start["positions"], start["boxes"], start["velocities"])
         else:
@@ -635,7 +716,7 @@ def run_leg(job: LegJob) -> dict:
             if sched_file.exists() or ls.mode == "fixed":
                 # the windows are given: only make a start configuration for each of them
                 if sched_file.exists():
-                    schedule = Schedule.load(sched_file)
+                    schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
                 else:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
@@ -840,6 +921,18 @@ def rest2_region(rest2, topology, positions_nm, ligand, protein) -> tuple[list[i
     hot = sorted(i for i in protein if atoms[i].residue.index in chosen)
     names = [f"{protein_residues[k].name}{protein_residues[k].id}" for k in sorted(chosen)]
     return hot, names
+
+
+def _schedule_of_this_leg(path: Path, leg: str, stages: list[str]):
+    """Load a lambda schedule and make sure it is one of this leg (see ``Schedule.check_leg``)."""
+    from cufep.alchemy.schedule import Schedule
+
+    try:
+        schedule = Schedule.load(path)
+        schedule.check_leg(leg, stages)
+    except ValueError as exc:
+        raise WorkflowError(f"the lambda schedule {path} cannot be used for the {leg} leg: {exc}") from exc
+    return schedule
 
 
 def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs: float) -> list:

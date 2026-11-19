@@ -308,6 +308,66 @@ def test_commands_end_with_an_error_when_a_leg_failed(tmp_path, monkeypatch):
     assert result.exit_code == 1 and "failed: b: complex leg" in result.output
 
 
+def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings(repo, tmp_path, ligands):
+    """Review of PR 1: with membrane.enabled changed, the solvated system of the earlier run was used again."""
+    import shutil
+
+    from cufep.config.schema import Config
+    from cufep.workflow import (WorkflowError, check_made_from, equil_made_with, prep_made_from, prepare_ligand,
+                                restraint_made_with, settings_differences)
+
+    protein = tmp_path / "protein.pdb"
+    shutil.copy(repo / "benchmarks/tyk2/inputs/tyk2_protein.pdb", protein)
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": str(protein), "ligand": "l.sdf"},
+                                      "output": {"dir": str(tmp_path / "out")}, **sections})
+
+    cfg, lig = config(), ligands[0]
+    made = prep_made_from(cfg, lig, False, "dodecahedron")
+    assert settings_differences(made, prep_made_from(config(), lig, False, "dodecahedron")) == []
+    assert settings_differences(made, prep_made_from(cfg, lig, True, "cube")) == [
+        "membrane.enabled: False -> True", "membrane.lipid: not recorded -> POPC",
+        "membrane.orientation: not recorded -> auto", "membrane.padding_nm: not recorded -> 1.5",
+        "solvation.box_shape: dodecahedron -> cube"]
+    assert settings_differences(made, prep_made_from(config(forcefield={"ligand_charges": "am1bcc-nagl"}), lig, False,
+                                                     "dodecahedron")) == ["forcefield.ligand_charges: am1bcc -> am1bcc-nagl"]
+    assert [d.split(":")[0] for d in settings_differences(made, prep_made_from(cfg, ligands[1], False, "dodecahedron"))] \
+        == ["ligand"]
+    protein.write_text(protein.read_text() + "REMARK changed\n")
+    assert [d.split(":")[0] for d in settings_differences(made, prep_made_from(cfg, lig, False, "dodecahedron"))] \
+        == ["protein_sha256"]
+    made = prep_made_from(cfg, lig, False, "dodecahedron")
+
+    # the preparation stops before it does anything when the prepared systems are of other settings
+    lig_dir = tmp_path / "out" / lig.name
+    (lig_dir / "prep").mkdir(parents=True)
+    (lig_dir / "prep" / "prep.json").write_text(json.dumps({"ligand": lig.name, "made_from": made}))
+    assert prepare_ligand(cfg, lig, None, lig_dir, False, "dodecahedron")["ligand"] == lig.name
+    with pytest.raises(WorkflowError, match="the prepared systems of jmc_23 in .*prep cannot be used again"
+                                            ".*membrane.enabled: False -> True.*needs a new output.dir"):
+        prepare_ligand(config(membrane={"enabled": True}), lig, None, lig_dir, True, "cube")
+    notes = []
+    (lig_dir / "prep" / "prep.json").write_text(json.dumps({"ligand": lig.name}))           # an older version's file
+    assert prepare_ligand(config(membrane={"enabled": True}), lig, None, lig_dir, True, "cube", log=notes.append)
+    assert "did not record what it was made from" in notes[0]
+
+    # pre-equilibration and restraint of a leg
+    eq = equil_made_with(cfg, "complex", False, 7)
+    longer = config(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}})
+    assert settings_differences(eq, equil_made_with(longer, "complex", False, 7)) == ["pre_equilibration.md_ns: 5.0 -> 1.0"]
+    assert settings_differences(eq, equil_made_with(longer, "solvent", False, 7))[0].startswith("pre_equilibration.md_ns")
+    assert settings_differences(eq, equil_made_with(config(thermodynamics={"temperature_K": 310.0}), "complex", False, 7)) \
+        == ["temperature_K: 298.15 -> 310.0"]
+    in_membrane = equil_made_with(config(membrane={"enabled": True, "equilibration_ns": 20.0}), "complex", True, 7)
+    assert settings_differences(equil_made_with(config(membrane={"enabled": True}), "complex", True, 7), in_membrane) \
+        == ["membrane_equilibration_ns: 10.0 -> 20.0"]
+    with pytest.raises(WorkflowError, match="the pre-equilibration of this leg in .*equil.npz cannot be used again"):
+        check_made_from("the pre-equilibration of this leg", tmp_path / "equil.npz", eq, in_membrane)
+    stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0, "pose_rmsd_warning_nm": 0.5}))
+    assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
+
+
 def test_a_run_can_be_restricted_to_ligands_and_legs():
     from cufep.run import select_jobs
     from cufep.workflow import WorkflowError
