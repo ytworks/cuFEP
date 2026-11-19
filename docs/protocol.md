@@ -230,6 +230,8 @@ picoseconds, and a precalculation of 50 ps per window does not see it:
   precalculation had read 0.058 to 0.129 there, the production had 0.008 to 0.031, a replica
   moved between the two windows in at most 0.5 % of the iterations, and four of the five
   results were `NOT RELIABLE`.
+- The A2A example in a bilayer behaved the same with 50 ps per window: 0.209 in the
+  precalculation and 0.053 in the production for the pair 0.75-0.88, no window added.
 - A precalculation of 500 ps per window after 500 ps of equilibration on ejm_31 read 0.105
   and 0.015 for the two pairs, as the production does (0.084 and 0.022 in one run), added a
   window at 0.82, and then read at least 0.10 everywhere.
@@ -373,6 +375,8 @@ MBAR never apart. In the complex legs a half of the production typically differs
 whole by 0.3 to 0.8 kcal/mol where the tolerance is about 0.3. Longer runs do not simply
 cure this: one complex leg that was continued from 5 to 10 ns moved by 1.4 kcal/mol and its
 uncertainty rose from 0.2 to 0.7 kcal/mol, because a slow change occurred in the second half.
+The complex leg of the A2A example fell steadily during its 5 ns of production: 36.2 kcal/mol
+from the first half and 31.6 from the second.
 
 `analysis.png` in each repeat directory shows, for both legs, the forward and reverse series
 (the free energy from growing parts of the production, counted from its start and from its
