@@ -2166,13 +2166,17 @@ def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
     assert data["frames"].shape[1:] == (3, 3) and len(data["frame_iter"]) >= 4
     res = analyze_leg(data, 300.0)
     assert res.n_states == 4 and res.n_iterations_used == 10
-    assert np.isfinite(res.delta_g) and set(res.stage_delta_g) == {"discharge", "vanish"}
+    # ten iterations of a random run may not connect the windows (window 0 overlapped the others by 3e-7
+    # here): then the leg has no free energy and says why, never a number its samples do not fix
+    determined = np.isfinite(res.delta_g)
+    assert (determined and set(res.stage_delta_g) == {"discharge", "vanish"}) or \
+        res.not_determined.startswith("the samples do not connect the lambda windows")
     # review of PR 1: the sign of a free energy from ten random iterations depends on the machine (it was
     # negative in the CI); what is checked here is that the samples are read and written as they were made.
     # Free energies are checked on inputs whose answer is known (harmonic windows, tests above)
     rows_before = read_samples(leg)
     assert s.storage.read_checkpoint()["iteration"] == 12 and s.storage.read_checkpoint()["extra"]["rows"] == 12
-    assert np.all(np.isfinite(rows_before["volume"])) and np.isfinite(res.delta_g) and np.isfinite(res.delta_g_error)
+    assert np.all(np.isfinite(rows_before["volume"])) and (not determined or np.isfinite(res.delta_g_error))
     assert min(res.window_kept_samples) >= 1 and max(res.window_kept_samples) <= 10
 
 
