@@ -13,8 +13,9 @@ from cufep import mps
 from cufep.analysis.plots import plot_repeat
 from cufep.benchmarks.runner import LEG_FLAGS, flags_of
 from cufep.scheduler import GpuMonitor, run_jobs
-from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_leg_reuse, check_partner_legs, check_prepared,
-                            combine_ligand, prepare_ligand, refresh_leg_result, safe_name, settings_differences)
+from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_leg_reuse, check_manual_anchors, check_partner_legs,
+                            check_prepared, combine_ligand, ligand_directories, prepare_ligand, refresh_leg_result,
+                            select_ligands, select_names, settings_differences)
 
 
 def plan(cfg: Config, log=print) -> tuple[Config, AutoReport, object, list]:
@@ -24,22 +25,20 @@ def plan(cfg: Config, log=print) -> tuple[Config, AutoReport, object, list]:
     from cufep.prep.protein import prepare_protein
 
     check_configuration(cfg)
+    # the ligands first: what they are called decides where anything is written
+    ligands = load_ligands(cfg.system.ligand)
+    all_names = [lig.name for lig in ligands]
+    if len(set(all_names)) != len(all_names):
+        raise WorkflowError("ligand names in the SDF are not unique; give every record a distinct title line")
+    ligands = select_ligands(ligands, cfg.system.ligand_names, "system.ligand_names")
+    names = [lig.name for lig in ligands]
+    ligand_directories(cfg.output.dir, names)        # refuses names that are no directory of their own
+    if cfg.system.cofactors:
+        raise WorkflowError("system.cofactors is not implemented yet in this version")
     ff = make_forcefield(ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water), [])
     protein = prepare_protein(cfg.system.protein, forcefield=ff, ph=cfg.thermodynamics.ph)
     for line in protein.report.lines():
         log(f"protein: {line}")
-    ligands = load_ligands(cfg.system.ligand)
-    if cfg.system.ligand_names:
-        wanted = set(cfg.system.ligand_names)
-        missing = wanted - {lig.name for lig in ligands}
-        if missing:
-            raise WorkflowError(f"ligands not found in {cfg.system.ligand}: {', '.join(sorted(missing))}")
-        ligands = [lig for lig in ligands if lig.name in wanted]
-    names = [lig.name for lig in ligands]
-    if len(set(safe_name(n) for n in names)) != len(names):
-        raise WorkflowError("ligand names in the SDF are not unique; give every record a distinct title line")
-    if cfg.system.cofactors:
-        raise WorkflowError("system.cofactors is not implemented yet in this version")
     resolved, report = resolve(cfg, protein)
     report.warnings += protein.report.warnings
     if protein.report.protonation_assigned:
@@ -71,9 +70,7 @@ def lock_output_directory(out_dir: Path):
 def select_jobs(names: list[str], repeats: int, only_ligands=None, only_legs=None) -> list[tuple[str, int, str]]:
     """(ligand, repeat, leg) of the jobs of a run, restricted to the given ligands and legs."""
     only_ligands, only_legs = list(only_ligands or []), list(only_legs or [])
-    unknown = [n for n in only_ligands if n not in names]
-    if unknown:
-        raise WorkflowError(f"--ligand: not among the ligands of this run: {', '.join(unknown)}")
+    select_names(names, only_ligands, "--ligand")
     wrong = [leg for leg in only_legs if leg not in ("complex", "solvent")]
     if wrong:
         raise WorkflowError(f"--leg: {', '.join(wrong)} is neither complex nor solvent")
@@ -119,7 +116,7 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     gpus = list(resolved.resources.gpus) if resolved.resources.gpus else [None]
     cfg_dict = resolved.model_dump(mode="json")
 
-    lig_dirs = {lig.name: out_dir / safe_name(lig.name) for lig in ligands}
+    lig_dirs = ligand_directories(out_dir, [lig.name for lig in ligands])
     to_run = {name for name, _, _ in selected}
     repeats = resolved.sampling.repeats
     # Before anything is written or sampled, for all legs of this run: what the output directory
@@ -134,6 +131,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
             info = check_prepared(resolved, lig, lig_dirs[lig.name], membrane, resolved.solvation.box_shape,
                                   lambda message: None)
             check_partner_legs(lig_dirs[lig.name], lig.name, mine, repeats, resolved, info)
+            if info is not None:
+                check_manual_anchors(resolved, lig_dirs[lig.name])
             for r, leg in sorted(mine):
                 if info is not None:
                     check_leg_reuse(resolved, lig_dirs[lig.name], leg, r, info, resolved.sampling.production(leg),
@@ -148,6 +147,7 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     for lig in ligands:
         if lig.name in to_run:
             prepare_ligand(resolved, lig, protein, lig_dirs[lig.name], membrane, resolved.solvation.box_shape, log)
+            check_manual_anchors(resolved, lig_dirs[lig.name])          # before any job starts
 
     t_prepared = time.time()
     sizes = {name: json.loads((lig_dirs[name] / "prep" / "prep.json").read_text()) for name in to_run}

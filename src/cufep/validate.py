@@ -23,16 +23,17 @@ def validate(cfg, ligand_name: str | None = None, device: int = 0, echo=print) -
     from cufep.backends import get_backend
     from cufep.backends.cupotential import CuPotentialBackend
     from cufep.sampling.states import STAGES_SOLVENT, StateEnergyEvaluator
-    from cufep.workflow import load_prepared, prepare_ligand, safe_name
+    from cufep.workflow import ligand_directories, load_prepared, prepare_ligand, select_ligands
 
     ok_plugin, why = CuPotentialBackend.available()
     if not ok_plugin:
         echo(f"cuPotential is not available ({why}); nothing to compare.")
         return False
     resolved, _report, protein, ligands = driver.plan(cfg, echo)
-    ligand = next((l for l in ligands if l.name == ligand_name), ligands[0])
+    # the first ligand only when none is named; a name that is not there is an error, before anything is prepared
+    ligand = select_ligands(ligands, [ligand_name], "--ligand")[0] if ligand_name else ligands[0]
     out_dir = Path(resolved.output.dir)
-    lig_dir = out_dir / safe_name(ligand.name)
+    lig_dir = ligand_directories(out_dir, [ligand.name])[ligand.name]
     prepare_ligand(resolved, ligand, protein, lig_dir, bool(resolved.membrane.enabled), resolved.solvation.box_shape, echo)
     info = json.loads((lig_dir / "prep" / "prep.json").read_text())
     T = resolved.thermodynamics.temperature_K

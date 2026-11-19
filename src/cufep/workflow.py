@@ -56,6 +56,94 @@ def safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in name.strip()) or "ligand"
 
 
+#: what cuFEP itself writes directly under ``output.dir``; no ligand directory may take one of
+#: these names (a source scan in the tests keeps the list complete)
+OUTPUT_ROOT_NAMES = frozenset({
+    "cache", "cufep.log", "resolved_config.yaml", "resolved_config.refused.yaml", "auto_report.md",
+    "protein_prepared.pdb", "summary.json", "summary.csv", "timing.json", "timing_rerun.json",
+    "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "frozen_schedules", ".cufep.lock"})
+
+
+def ligand_dir_name(name: str) -> str:
+    """The name of the directory of a ligand under ``output.dir``: its SDF title with every
+    character other than letters, digits, ``-``, ``_`` and ``.`` replaced by ``_``. A name that
+    would not be a directory of its own there (``.``, ``..``, a hidden name, a name cuFEP uses at
+    the root of the output) is refused: ``.`` wrote the ligand's files into the output root and
+    ``..`` into its parent (review of PR 1)."""
+    safe = safe_name(name)
+    if safe in ("", ".", "..") or safe.startswith(".") or safe in OUTPUT_ROOT_NAMES:
+        raise WorkflowError(f"the ligand {name!r} cannot have a directory of its own under output.dir (its name "
+                            f"would be {safe!r}); give its SDF record another title line")
+    return safe
+
+
+def ligand_directories(out_dir: Path | str, names) -> dict[str, Path]:
+    """The directory of every ligand under ``out_dir`` (:func:`ligand_dir_name`). Two ligands
+    whose names give the same directory are refused, before anything is written."""
+    seen: dict[str, str] = {}
+    out: dict[str, Path] = {}
+    for name in names:
+        d = ligand_dir_name(name)
+        if d in seen:
+            raise WorkflowError(f"the ligands {seen[d]!r} and {name!r} would share the directory {d}/ under "
+                                "output.dir; give every SDF record a title line of its own")
+        seen[d] = name
+        out[name] = Path(out_dir) / d
+    return out
+
+
+def select_names(available, wanted, source: str) -> list[str]:
+    """The ``wanted`` names in the order of ``available``; all of ``available`` if none is wanted.
+    A wanted name that is not available is an error that names ``source`` (the setting or the
+    option it came from). One rule for every command that picks ligands."""
+    available = list(available)
+    wanted = list(wanted or [])
+    if not wanted:
+        return available
+    missing = [n for n in wanted if n not in available]
+    if missing:
+        raise WorkflowError(f"{source}: not among the ligands of this calculation: {', '.join(missing)} "
+                            f"(there are {', '.join(available[:12])}{' ...' if len(available) > 12 else ''})")
+    return [n for n in available if n in set(wanted)]
+
+
+def select_ligands(ligands, wanted, source: str) -> list:
+    """The ligands whose names are ``wanted`` (:func:`select_names`), in the order of the SDF."""
+    keep = set(select_names([lig.name for lig in ligands], wanted, source))
+    return [lig for lig in ligands if lig.name in keep]
+
+
+def restraint_anchor_problems(host_atoms, guest_atoms, prep: dict) -> list[str]:
+    """Why Boresch anchors cannot restrain the ligand to the protein in the prepared complex
+    ``prep`` (:func:`load_prepared`): the host atoms must be atoms of the protein and the guest
+    atoms atoms of the ligand. With six protein atoms the restraint does not move when the
+    ligand does, and its release would still be added to the binding free energy (review of
+    PR 1)."""
+    out = []
+    for key, atoms, members, what in (("host_atoms", host_atoms, prep["protein"], "the protein"),
+                                      ("guest_atoms", guest_atoms, prep["ligand"], "the ligand")):
+        atoms = [int(i) for i in (atoms or [])]
+        if len(atoms) != 3 or len(set(atoms)) != 3:
+            out.append(f"restraints.{key} must be three distinct atoms, not {atoms}")
+        outside = [i for i in atoms if i not in set(int(m) for m in members)]
+        if outside:
+            out.append(f"restraints.{key}: {outside} are not atoms of {what} in the prepared complex (atoms are "
+                       "numbered from 0 as in prep/complex.pdb)")
+    return out
+
+
+def check_manual_anchors(cfg: Config, lig_dir: Path) -> None:
+    """Refuse a manual restraint whose anchors are not atoms of the protein and the ligand of
+    this ligand's prepared complex. Called before any MD: after the preparation, by the run
+    before it starts its jobs and by the job of the complex leg."""
+    rc = cfg.restraints
+    if rc.selection != "manual":
+        return
+    problems = restraint_anchor_problems(rc.host_atoms, rc.guest_atoms, load_prepared(Path(lig_dir) / "prep", "complex"))
+    if problems:
+        raise WorkflowError("; ".join(problems))
+
+
 # =============================================================================== preparation
 POSE_CONTACT_NM = 0.45
 POSE_MIN_CONTACT_FRACTION = 0.5
@@ -1118,6 +1206,8 @@ def run_leg(job: LegJob) -> dict:
     lig_dir = Path(job.lig_dir)
     prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())
     prep = load_prepared(lig_dir / "prep", job.leg)
+    if is_complex:
+        check_manual_anchors(cfg, lig_dir)
     system = mm.XmlSerializer.deserialize(prep["system_xml"])
     T = cfg.thermodynamics.temperature_K
     seed = leg_seed(cfg, job.repeat, job.leg)
@@ -1213,6 +1303,9 @@ def run_leg(job: LegJob) -> dict:
                                    contradictions=restraint_contradictions(stored, cfg)):
                 origin_not_recorded.append("the restraint")
             restraint = BoreschRestraint.from_dict(stored["restraint"])
+            problems = restraint_anchor_problems(restraint.host_atoms, restraint.guest_atoms, prep)
+            if problems:
+                raise WorkflowError(f"the restraint in {rfile} cannot be used: " + "; ".join(problems))
         else:
             rc = cfg.restraints
             k_r, k_a = rc.k_r_kcal_per_A2 * KCAL * 100.0, rc.k_angle_kcal_per_rad2 * KCAL
@@ -1297,7 +1390,7 @@ def run_leg(job: LegJob) -> dict:
             # one file for every leg, or a directory of frozen schedules: <ligand>/<leg>_r<repeat>.yaml
             src = Path(ls.file)
             if src.is_dir():
-                src = src / safe_name(job.ligand) / f"{job.leg}_r{job.repeat}.yaml"
+                src = src / ligand_dir_name(job.ligand) / f"{job.leg}_r{job.repeat}.yaml"
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
             _schedule_of_this_leg(src, job.leg, stages)          # before it is taken over

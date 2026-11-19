@@ -142,6 +142,19 @@ class RestraintConfig(_Section):
     #: this from the input pose over the second half of the pre-equilibration MD
     pose_rmsd_warning_nm: float = Field(0.3, gt=0)
 
+    @model_validator(mode="after")
+    def _manual_anchors(self):
+        if self.selection == "manual":
+            for key in ("host_atoms", "guest_atoms"):
+                atoms = getattr(self, key)
+                if not atoms or len(atoms) != 3 or len(set(atoms)) != 3 or min(atoms) < 0:
+                    raise ValueError(f"restraints.selection is 'manual': restraints.{key} must be three distinct atom "
+                                     f"indices of the prepared complex (from 0), not {atoms}")
+            if set(self.host_atoms) & set(self.guest_atoms):
+                raise ValueError(f"restraints.host_atoms {self.host_atoms} and guest_atoms {self.guest_atoms} share "
+                                 "atoms; the host atoms belong to the protein and the guest atoms to the ligand")
+        return self
+
 
 class AlchemyConfig(_Section):
     softcore_alpha: float = 0.5
