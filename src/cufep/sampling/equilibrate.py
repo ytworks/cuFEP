@@ -176,6 +176,23 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
         return _production(system, backend, start, frame_atoms, settings, dt_fs, device, log, notes)
 
 
+#: how the note about a bilayer that has not settled begins
+BILAYER_NOTE = "the bilayer had not settled after"
+
+
+def bilayer_note(verdict: dict, simulated_ns: float) -> str | None:
+    """The note for a bilayer that had not settled (:func:`membrane_settled`), or None."""
+    if verdict.get("settled") is not False:
+        return None
+    water = "" if verdict["pocket_water_change"] is None else (
+        f" and the number of water molecules near the ligand by {verdict['pocket_water_change']:+.1f} "
+        f"(tolerance {verdict['pocket_water_tolerance']:g})")
+    return (f"{BILAYER_NOTE} {simulated_ns:g} ns of equilibration: between the last two quarters "
+            f"the area in the membrane plane changed by {100 * verdict['area_change']:+.1f} % (tolerance "
+            f"{100 * verdict['area_tolerance']:g} %){water}. A longer membrane.equilibration_ns, in a new "
+            "output.dir, gives it more time")
+
+
 def membrane_settled(areas, waters, area_tolerance: float, water_tolerance: float) -> dict:
     """Whether a bilayer has settled by the end of its equilibration.
 
@@ -243,16 +260,10 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
     verdict = None
     if settings.barostat == "membrane":
         verdict = membrane_settled(areas, waters, settings.area_tolerance, settings.water_tolerance)
-        if verdict["settled"] is False:
-            water = "" if verdict["pocket_water_change"] is None else (
-                f" and the number of water molecules near the ligand by {verdict['pocket_water_change']:+.1f} "
-                f"(tolerance {settings.water_tolerance:g})")
-            notes.append(
-                f"the bilayer had not settled after {total:g} ns of equilibration: between the last two quarters "
-                f"the area in the membrane plane changed by {100 * verdict['area_change']:+.1f} % (tolerance "
-                f"{100 * settings.area_tolerance:g} %){water}. A longer membrane.equilibration_ns, in a new "
-                "output.dir, gives it more time")
-            log(f"WARNING: {notes[-1]}")
+        note = bilayer_note(verdict, total)
+        if note:
+            notes.append(note)
+            log(f"WARNING: {note}")
     pos, vel, bx = _state_arrays(ctx)
     del ctx, integ
     half = len(frames) // 2

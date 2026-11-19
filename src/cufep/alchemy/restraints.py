@@ -285,22 +285,42 @@ def _guest_anchor_candidates(rdmol, ligand_atoms: list[int], rmsf: np.ndarray, r
     return [t[2] for t in triples[:limit]]
 
 
+#: how the note about a ligand that left its pose begins
+POSE_NOTE = "the ligand moved away from its"
+
+
+def pose_note(rmsd_nm: float, warning_nm: float, reference: str = "input") -> str | None:
+    """The note for a ligand whose heavy atoms are further than ``warning_nm`` from the pose it is
+    compared with (``reference``: "input" or "starting"), or None."""
+    if rmsd_nm <= warning_nm:
+        return None
+    return (f"{POSE_NOTE} {reference} pose in the pre-equilibration MD (heavy-atom RMSD {10 * rmsd_nm:.1f} A over the "
+            f"second half, above restraints.pose_rmsd_warning_nm = {10 * warning_nm:g} A); the result is for the pose "
+            "it moved to")
+
+
 def nearest_image_of_ligand(positions_nm: np.ndarray, ligand: np.ndarray, anchor: np.ndarray,
                             box_nm: np.ndarray) -> np.ndarray:
     """Copy of the coordinates with the ligand, as a whole, in the periodic image nearest to ``anchor``.
 
     ``positions_nm`` is (n_atoms, 3) or (n_frames, n_atoms, 3); ``anchor`` and ``box_nm`` (3 x 3
-    box vectors) are one per frame accordingly.
+    box vectors, OpenMM's reduced form) are one per frame accordingly. The ligand may be any
+    number of cells away: coordinates of a trajectory are not wrapped into the box.
     """
+    from cufep.alchemy.lrc import minimum_image
+
     single = positions_nm.ndim == 2
     pos = np.array(positions_nm[None] if single else positions_nm, dtype=float)
     anchors = np.asarray(anchor, dtype=float).reshape(-1, 3)
     boxes = np.asarray(box_nm, dtype=float).reshape(-1, 3, 3)
     shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)], dtype=float)
     for f in range(pos.shape[0]):
-        candidates = shifts @ boxes[min(f, len(boxes) - 1)]
-        centre = pos[f, ligand].mean(axis=0)
-        best = candidates[np.argmin(np.linalg.norm(centre + candidates - anchors[min(f, len(anchors) - 1)], axis=1))]
+        box = boxes[min(f, len(boxes) - 1)]
+        delta = pos[f, ligand].mean(axis=0) - anchors[min(f, len(anchors) - 1)]
+        # the lattice vector that brings the ligand next to the anchor, however many cells that is,
+        # and its neighbours (in a skewed cell the nearest image need not be that one)
+        candidates = minimum_image(delta[None], box)[0] - delta + shifts @ box
+        best = candidates[np.argmin(np.linalg.norm(delta + candidates, axis=1))]
         pos[f, ligand] += best
     return pos[0] if single else pos
 
@@ -374,11 +394,9 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
         d = np.sqrt(((aligned[:, lig_heavy[perm], :] - reference) ** 2).sum(axis=2).mean(axis=1))
         rmsd = d if rmsd is None else np.minimum(rmsd, d)
     tail = float(rmsd[len(rmsd) // 2:].mean())
-    if tail > s.pose_rmsd_warning_nm:
-        notes.append(f"the ligand moved away from its {'input' if input_pose_nm is not None else 'starting'} pose "
-                     f"in the pre-equilibration MD (heavy-atom RMSD "
-                     f"{10 * tail:.1f} A over the second half, above restraints.pose_rmsd_warning_nm = "
-                     f"{10 * s.pose_rmsd_warning_nm:g} A); the result is for the pose it moved to")
+    note = pose_note(tail, s.pose_rmsd_warning_nm, "input" if input_pose_nm is not None else "starting")
+    if note:
+        notes.append(note)
 
     guests = _guest_anchor_candidates(rdmol, list(lig), lig_rmsf, s.rmsf_cutoff_nm, s.max_guest_anchors)
     if not guests:

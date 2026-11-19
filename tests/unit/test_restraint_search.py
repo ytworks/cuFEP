@@ -151,3 +151,33 @@ def test_force_constants_from_fluctuations():
     assert 0.25 * K_R_DEFAULT <= r.k_r <= 4.0 * K_R_DEFAULT
     assert (r.r0, r.host_atoms, r.guest_atoms) == (base.r0, base.host_atoms, base.guest_atoms)
     assert np.isfinite(r.release_free_energy(298.15)) and base.k_r == K_R_DEFAULT
+
+
+def test_a_ligand_several_cells_away_is_brought_next_to_its_anchor():
+    """Review of PR 1: only the neighbouring cells were tried, so a ligand two cells away from the
+    protein (coordinates of a trajectory are not wrapped) stayed more than a box length away."""
+    from cufep.alchemy.restraints import nearest_image_of_ligand
+
+    rng = np.random.default_rng(6)
+    anchor = np.array([1.0, 2.0, 3.0])
+    pos = np.zeros((12, 3))
+    ligand = np.arange(4, 8)
+    pos[:4] = anchor + rng.normal(scale=0.3, size=(4, 3))              # atoms that are not the ligand
+    home = anchor + np.array([0.2, 0.0, 0.0]) + rng.normal(scale=0.05, size=(4, 3))
+    for box in (np.diag([4.0, 4.0, 4.0]),
+                np.array([[4.0, 0.0, 0.0], [1.3, 3.8, 0.0], [-1.1, 1.6, 3.5]])):     # a cube and a skewed cell
+        for cells in ([2, 0, 0], [-3, 2, 1], [0, 0, 0], [1, -1, 0], [5, 4, -6]):
+            moved = pos.copy()
+            moved[ligand] = home + np.array(cells, dtype=float) @ box
+            back = nearest_image_of_ligand(moved, ligand, anchor, box)
+            assert np.allclose(back[ligand], home, atol=1e-9)                        # the same pose again
+            assert np.linalg.norm(back[ligand].mean(axis=0) - anchor) < 0.3
+            assert np.array_equal(back[:4], moved[:4])                               # nothing else is moved
+    # frames with a box each
+    frames = np.repeat(pos[None], 3, axis=0)
+    boxes = np.array([np.diag([4.0, 4.0, 4.0]), np.diag([4.1, 4.0, 3.9]), np.diag([4.2, 4.1, 4.0])])
+    for f in range(3):
+        frames[f, ligand] = home + np.array([2.0, -2.0, 3.0]) @ boxes[f]
+    back = nearest_image_of_ligand(frames, ligand, np.repeat(anchor[None], 3, axis=0), boxes)
+    assert np.allclose(back[:, ligand], home, atol=1e-9)
+

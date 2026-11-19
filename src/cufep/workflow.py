@@ -348,6 +348,50 @@ def check_prepared(cfg: Config, ligand, lig_dir: Path, membrane: bool, box_shape
     return info
 
 
+def equil_notes(eq, cfg: Config, in_membrane: bool) -> list[str]:
+    """The notes of a stored pre-equilibration, with the verdict on the bilayer made anew.
+
+    Whether the bilayer has settled is judged with the tolerances of this run from the series the
+    file holds (area in the membrane plane, water molecules near the ligand), not taken from the
+    sentence the run wrote that made the file: a tolerance is a level for a note and can be changed
+    without making the pre-equilibration another one.
+    """
+    from cufep.sampling.equilibrate import BILAYER_NOTE, bilayer_note, membrane_settled
+
+    notes = json.loads(str(eq["notes"])) if "notes" in eq.files else []
+    if not in_membrane or "area_nm2" not in eq.files:
+        return notes
+    notes = [n for n in notes if not n.startswith(BILAYER_NOTE)]
+    waters = np.asarray(eq["pocket_waters"]) if "pocket_waters" in eq.files else np.zeros(0)
+    verdict = membrane_settled(np.asarray(eq["area_nm2"]), waters, cfg.membrane.area_tolerance,
+                               cfg.membrane.pocket_water_tolerance)
+    note = bilayer_note(verdict, float(eq["simulated_ns"]) if "simulated_ns" in eq.files else float("nan"))
+    return notes + ([note] if note else [])
+
+
+def restraint_notes(stored: dict, cfg: Config) -> list[str]:
+    """The notes of a stored restraint, with the note about the pose made anew.
+
+    The file holds how far the ligand was from the pose it was given; that is compared with
+    ``restraints.pose_rmsd_warning_nm`` of this run. A file of a version that measured the
+    distance from the first frame of the MD, or that holds none, cannot be judged again: its
+    note is kept and the leg says so.
+    """
+    from cufep.alchemy.restraints import POSE_NOTE, pose_note
+
+    info = stored.get("info") or {}
+    notes = list(info.get("notes", []))
+    if info.get("selection") == "manual":
+        return notes
+    if info.get("ligand_rmsd_reference") == "input pose" and info.get("ligand_rmsd_A") is not None:
+        notes = [n for n in notes if not n.startswith(POSE_NOTE)]
+        note = pose_note(float(info["ligand_rmsd_A"]) / 10.0, cfg.restraints.pose_rmsd_warning_nm)
+        return notes + ([note] if note else [])
+    return notes + ["the distance of the ligand from its input pose was measured by an earlier version of cuFEP "
+                    "in another way (or not stored) and could not be compared with restraints.pose_rmsd_warning_nm "
+                    "of this run"]
+
+
 def prep_made_from(cfg: Config, ligand, membrane: bool, box_shape: str) -> dict:
     """The input and the settings from which the prepared systems of a ligand are built."""
     import hashlib
@@ -811,7 +855,7 @@ def run_leg(job: LegJob) -> dict:
                            contradictions=equil_contradictions(eq, cfg, job.leg, in_membrane)):
         origin_not_recorded.append("the pre-equilibration")
     timestep_fs = float(eq["timestep_fs"])
-    notes += json.loads(str(eq["notes"]))
+    notes += equil_notes(eq, cfg, in_membrane)
 
     # ---- 2. restraint (complex only) --------------------------------------------------------
     t_restraint = time.perf_counter()
@@ -830,7 +874,7 @@ def run_leg(job: LegJob) -> dict:
                                    contradictions=restraint_contradictions(stored, cfg)):
                 origin_not_recorded.append("the restraint")
             restraint = BoreschRestraint.from_dict(stored["restraint"])
-            notes.extend(stored.get("info", {}).get("notes", []))
+            notes.extend(restraint_notes(stored, cfg))
         else:
             rc = cfg.restraints
             k_r, k_a = rc.k_r_kcal_per_A2 * KCAL * 100.0, rc.k_angle_kcal_per_rad2 * KCAL
@@ -862,8 +906,8 @@ def run_leg(job: LegJob) -> dict:
                 notes.extend(found.notes)
                 info = {"selection": "auto", "force_constants": rc.force_constants, "score": found.score,
                         "fluctuations": found.fluctuations,
-                        "ligand_rmsd_A": 10 * found.ligand_rmsd_nm, "candidates_tested": found.n_candidates,
-                        "notes": found.notes}
+                        "ligand_rmsd_A": 10 * found.ligand_rmsd_nm, "ligand_rmsd_reference": "input pose",
+                        "candidates_tested": found.n_candidates, "notes": found.notes}
                 atoms = list(prep["topology"].atoms())
                 label = lambda i: f"{atoms[i].residue.name}{atoms[i].residue.id}:{atoms[i].name}"   # noqa: E731
                 log("restraint: host " + ", ".join(label(i) for i in restraint.host_atoms) + " | guest "
