@@ -41,6 +41,10 @@ def one_leg(leg_dir: str) -> dict | None:
     row = {"leg_dir": leg_dir, "run": d.parts[-4], "ligand": d.parts[-3], "repeat": d.parts[-2], "leg": d.parts[-1],
            "windows": a["n_states"], "production_iterations": a["n_iterations_used"],
            "delta_g": kcal(a["delta_g"]), "error": kcal(a["delta_g_error"]),
+           # the standard error MBAR gives, that of every number of time blocks, and the number reported
+           "error_mbar": kcal(a.get("delta_g_error_mbar")), "error_n_blocks": a.get("delta_g_error_n_blocks"),
+           "error_blocks": {count: kcal(value) for count, value in (a.get("delta_g_error_blocks") or {}).items()},
+           "error_ratio": q["samples"].get("error_ratio"), "independent": q["samples"].get("independent"),
            "first_half": kcal(a["first_half"][0]), "second_half": kcal(a["second_half"][0]),
            "halves_kT": q["halves"].get("difference_kT"), "halves_sigma": q["halves"].get("difference_sigma"),
            "bar": kcal(a["bar_delta_g"]), "lowest_overlap": a["min_overlap"], "round_trips": a["round_trips"],
@@ -110,6 +114,31 @@ def main() -> None:
               f"{r['g_slowest']:5.0f})     | {halves}       | {flag(r['overlap_ok']):6s} {flag(r['samples_ok']):6s}  "
               f"{flag(r['halves_ok']):6s} {flag(r['estimators_ok']):6s}  {r['round_trips']:4d}")
     done = [r for r in rows if "leg" in r]
+    import numpy as np
+
+    print()
+    print(f"{'run':30s} {'ligand':7s} {'leg':7s}  error: reported (blocks)  MBAR  ratio | blocks 40    20    10     5 | samples: "
+          f"kept  count as  check before -> now")
+    for r in done:
+        blocks = "  ".join("    -" if r["error_blocks"].get(c) is None else f"{r['error_blocks'][c]:5.2f}" for c in ("40", "20", "10", "5"))
+        ratio = "    -" if r["error_ratio"] is None else f"{r['error_ratio']:5.2f}"
+        before = min(r["fewest_samples"], r["kept_samples"]) >= 50.0
+        print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s}          {r['error']:5.2f}  ({str(r['error_n_blocks']):>4s})  "
+              f"{r['error_mbar']:5.2f} {ratio} |      {blocks} |         {r['kept_samples']:5d}    {r['independent']:6.1f}  "
+              f"{'ok   ' if before else 'below'} -> {'ok' if r['samples_ok'] else 'below'}")
+    for leg in ("complex", "solvent"):
+        sub = [r for r in done if r["leg"] == leg]
+        if sub:
+            reported, own = np.array([r["error"] for r in sub]), np.array([r["error_mbar"] for r in sub])
+            ratios = np.array([r["error_ratio"] for r in sub if r["error_ratio"] is not None])
+            before = sum(min(r["fewest_samples"], r["kept_samples"]) < 50.0 for r in sub)
+            print(f"{leg}: standard error from time blocks {reported.min():.2f}-{reported.max():.2f}, median "
+                  f"{np.median(reported):.2f} kcal/mol; of MBAR {own.min():.2f}-{own.max():.2f}, median {np.median(own):.2f}; "
+                  f"ratio {ratios.min():.2f}-{ratios.max():.2f}, median {np.median(ratios):.2f} ({len(ratios)} legs with "
+                  f"blocks, {len(sub) - len(ratios)} with the error of MBAR); samples check below the level in "
+                  f"{before} legs before the discount and in {sum(r['samples_ok'] is False for r in sub)} now; number of "
+                  f"blocks reported: " + ", ".join(f"{c}: {sum(r['error_n_blocks'] == c for r in sub)}" for c in (40, 20, 10, 5)))
+    print()
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]
         if sub:

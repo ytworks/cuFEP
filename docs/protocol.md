@@ -566,25 +566,41 @@ windows), read again with this analysis:
 |---|---|---|
 | overlap below 0.03 | 1 (among all iterations) | 0 |
 | statistical inefficiency of the slowest window, in iterations of 2.5 ps | 23-412, median 76 | 1-281, median 25 |
-| samples of that window | 5-87, median 26; fewer than 50 in 37 legs | 7-1000, median 77; fewer than 50 in 16 legs |
-| standard error of the leg, kcal/mol | 0.17-0.62, median 0.33 | 0.11-0.44, median 0.13 |
-| halves more than 1 kT apart | 24 legs; in 13 of them by more than 2 standard errors | 8 legs; in 6 of them by more than 2 standard errors |
+| samples MBAR gets from that window | 5-87, median 26; fewer than 50 in 37 legs | 7-1000, median 77; fewer than 50 in 16 legs |
+| standard error of the leg from time blocks, kcal/mol | 0.11-1.10, median 0.49 | 0.11-0.38, median 0.18 |
+| standard error MBAR gives, kcal/mol | 0.17-0.62, median 0.33 | 0.11-0.44, median 0.13 |
+| ratio of the two | 0.28-3.03, median 1.49 | 0.80-2.89, median 1.37 |
+| what the standard error leaves of the samples | 1-48, median 12; fewer than 50 in all 43 legs | 4-696, median 33; fewer than 50 in 25 legs |
+| halves more than 1 kT apart | 24 legs; in 5 of them by more than 2 standard errors | 8 legs; in 4 of them by more than 2 standard errors |
 | BAR and MBAR more than 1 kcal/mol apart | 0 | 0 |
 
 The overlap holds in all legs but one. What limits these legs is the number of independent
-samples: in 5 ns the slowest window of a complex leg holds about 26 where 50 are recommended,
-and at that number the halves of most complex legs are more than 1 kT apart, about half of
-them by no more than twice the standard error of the difference. In the solvent leg the
-slowest window is the first one, the fully interacting ligand in water, in 39 of the 43 legs.
+samples: in 5 ns the slowest window of a complex leg gives MBAR about 26 samples where 50 are
+recommended, and the standard error from time blocks is 1.5 times the one MBAR gives for
+them, which leaves about 12. At that number the halves of most complex legs are more than 1
+kT apart, all but 5 of them by no more than twice the standard error of the difference. In
+the solvent leg the slowest window is the first one, the fully interacting ligand in water,
+in 39 of the 43 legs. In 34 further legs of 5 and 10 ns (17 complex, 17 solvent) the medians
+are 0.48 and 0.27 kcal/mol from time blocks against 0.36 and 0.20 from MBAR, and no complex
+leg and 3 solvent legs reach 50.
+
+The ratio of the two standard errors has a statistical error of its own. In model runs
+without any correlation its median was 1.07 to 1.12, and it was above 1.41, which halves the
+count of the samples, in 15 of 144 runs. In 3 complex and 9 solvent legs of the 86 it is
+below 1, so the standard error from time blocks is the smaller one there; in the leg with
+0.28, the slowest window kept 10 samples and only 5 blocks could be used. With that few
+samples neither standard error is known well.
 
 One run against several. The same complex leg of five TYK2 ligands, run three times with
 different seeds, differs with a standard deviation of 0.7 to 2.9 kcal/mol (pooled 1.8), the
-binding free energy with 0.3 to 2.9 (pooled 1.6); the standard error of a binding free energy
-from one run is 0.3 to 0.5 kcal/mol. The standard error of one run does not contain the slow
-changes described under "What windows do not cure".
+binding free energy with 0.3 to 2.9 (pooled 1.6). The standard error of such a complex leg
+from one run is 0.49 kcal/mol from time blocks (root mean square over the 15 legs; 0.36 from
+MBAR), that of a binding free energy 0.2 to 0.8 (median 0.5). The standard error of one run
+does not contain the slow changes described under "What windows do not cure": changes that
+do not occur within the run leave no trace in its blocks either.
 
-The standard errors in this section are the ones MBAR gives for the kept samples; they were
-measured before the standard error from time blocks. The three continued legs below were
+The standard errors in the table below are the ones MBAR gives for the kept samples; the
+table was made before the standard error from time blocks. The three continued legs in it were
 continued by a version that started the random streams of a resumed leg from their beginning
 (see "Running again in the same output directory"): their second 5 ns were driven by the same
 thermal noise as the first, so they are no evidence of what a longer run gives.
@@ -618,7 +634,10 @@ FEP+ uses 5 ns. Of 55 TYK2 complex legs with 5 ns, 11 had 50 independent samples
 slowest window; the statistical inefficiencies of that window (quartiles 52, 68 and 116
 iterations) put 33 of them there with 10 ns, if they stay as they are, and 46 with 20 ns. Of
 54 solvent legs, 33 had 50 with 5 ns. A longer run can also show a slower change, as the
-ejm_31 leg above did, so 10 ns do not guarantee the 50.
+ejm_31 leg above did, so 10 ns do not guarantee the 50. These counts are of the samples MBAR
+gets. By what the standard error from time blocks leaves of them, no complex leg of 5 ns
+reaches 50 (table above), and the complex leg of ejm_31 run for 10 ns in one piece counts as
+8 (22 samples kept, ratio 1.6).
 
 `analysis.png` in each repeat directory shows, for both legs, the forward and reverse series
 (the free energy from growing parts of the production, counted from its start and from its
