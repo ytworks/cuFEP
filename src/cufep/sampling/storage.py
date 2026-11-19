@@ -126,6 +126,22 @@ class LegStorage:
         for key, value in kwargs.items():
             self.h5.attrs[key] = json.dumps(value) if isinstance(value, (dict, list)) else value
 
+    def set_plan(self, n_equilibration: int, n_total: int) -> None:
+        """Record, before the run, how many of its iterations are equilibration and how many it has.
+
+        It goes to the disk at once: an analysis of a run that was interrupted must not count
+        equilibration as production.
+        """
+        self.h5.attrs["n_equilibration_iterations"] = int(n_equilibration)
+        self.h5.attrs["n_planned_iterations"] = int(n_total)
+        self.h5.flush()
+
+    def clear_plan(self) -> None:
+        """A run that starts anew has no plan until :meth:`set_plan` gives it one."""
+        self.h5.attrs["n_equilibration_iterations"] = 0
+        if "n_planned_iterations" in self.h5.attrs:
+            del self.h5.attrs["n_planned_iterations"]
+
     @property
     def n_iterations(self) -> int:
         return int(self.h5["u"].shape[0])
@@ -190,6 +206,23 @@ class LegStorage:
             self.h5.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def equilibration_boundary(attrs: dict, leg_dir: str | Path | None = None) -> int | None:
+    """The number of equilibration iterations of the samples with these attributes, or None if
+    the file does not tell.
+
+    The run records its plan before its first iteration (``n_planned_iterations``). Earlier
+    versions wrote the boundary only when a run had finished; until then it read 0. For such a
+    file the number is taken as written if it is above 0 or if the leg has a result, and is
+    unknown otherwise.
+    """
+    n = int(attrs.get("n_equilibration_iterations", 0))
+    if "n_planned_iterations" in attrs or n > 0:
+        return n
+    if leg_dir is not None and any((Path(leg_dir) / name).exists() for name in ("result.json", "result.previous.json")):
+        return n
+    return None
 
 
 def read_samples(directory: str | Path) -> dict:

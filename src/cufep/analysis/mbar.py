@@ -15,6 +15,10 @@ KCAL = 4.184
 MIN_INDEPENDENT_SAMPLES = 4
 
 
+class NoProduction(ValueError):
+    """The samples hold no production to analyse (yet)."""
+
+
 def _pymbar():
     # pymbar solves with JAX when JAX is installed. A job process once stopped for good inside
     # that solver (a deadlock in JAX's array conversion) after the sampling had finished, so
@@ -526,10 +530,15 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     attrs = samples.get("attrs", {})
     if n_equilibration is None:
         n_equilibration = int(attrs.get("n_equilibration_iterations", 0))
+    stored = int(samples["u"].shape[0])
     u = samples["u"][n_equilibration:]
     states = samples["states"][n_equilibration:]
     if u.shape[0] < 4:
-        raise ValueError("not enough production iterations to analyse")
+        planned = attrs.get("n_planned_iterations")
+        raise NoProduction(
+            f"the samples hold {stored} iteration(s), of which the first {n_equilibration} are equilibration"
+            + ("" if planned is None else f" (the run was planned for {int(planned)})")
+            + f": {max(0, stored - n_equilibration)} iteration(s) of production, and 4 are the least for an analysis")
     n, n_states = u.shape[0], u.shape[2]
     # the overlap matrix: equal numbers of samples per window, so that its elements mean the
     # same for every window (statistical inefficiency of the summed reduced potential)

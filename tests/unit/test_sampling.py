@@ -1,4 +1,6 @@
 """Replica mixing, MBAR, storage and an inline replica-exchange run on the CPU."""
+import json
+
 import numpy as np
 import openmm as mm
 import pytest
@@ -569,6 +571,67 @@ def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tm
         assert s.conditions_of_storage == "older file" and s.restore() and s.iteration == 8
     with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
         assert s.conditions_of_storage == "same"                       # recorded from then on
+
+
+def test_an_interrupted_leg_is_not_analysed_with_its_equilibration(tmp_path, tiny_leg):
+    """Review of PR 1: the end of the equilibration was written only when a run had finished, so the
+    analysis of an interrupted leg counted its equilibration as production."""
+    from click.testing import CliRunner
+
+    from cufep.analysis.mbar import NoProduction
+    from cufep.cli import main
+    from cufep.sampling.storage import equilibration_boundary
+
+    spec, pos, box = tiny_leg
+    leg = tmp_path / "leg"
+    # 8 iterations of equilibration and 6 of production are planned; the run stops after 6 iterations
+    with ReplicaExchangeSampler(spec, leg / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.storage.set_plan(8, 14)
+        s.run(6, record_stride=2, checkpoint_stride=3)
+    data = read_samples(leg / "hrex")
+    assert data["attrs"]["n_equilibration_iterations"] == 8 and data["attrs"]["n_planned_iterations"] == 14
+    assert equilibration_boundary(data["attrs"], leg) == 8
+    with pytest.raises(NoProduction, match="6 iteration.s., of which the first 8 are equilibration .the run was "
+                                           "planned for 14.: 0 iteration.s. of production"):
+        analyze_leg(data, 300.0)
+    result = CliRunner().invoke(main, ["analyze", str(leg)])
+    assert result.exit_code == 1 and "no production yet" in result.output
+
+    # it goes on and stops again in its production: only the production is analysed
+    with ReplicaExchangeSampler(spec, leg / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        assert s.restore() and s.iteration == 6
+        s.storage.set_plan(8, 14)
+        s.run(6, record_stride=2, checkpoint_stride=3)
+    assert analyze_leg(read_samples(leg / "hrex"), 300.0).n_iterations_used == 4
+    result = CliRunner().invoke(main, ["analyze", str(leg)])
+    assert result.exit_code == 0
+    shown = json.loads(result.output)
+    assert shown["n_iterations_used"] == 4 and shown["n_equilibration_iterations"] == 8
+    assert shown["n_iterations_stored"] == 12 and shown["n_planned_iterations"] == 14
+
+    # the plan is on the disk before the first iteration, not only in the open file
+    early = tmp_path / "early" / "hrex"
+    with ReplicaExchangeSampler(spec, early, devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.storage.set_plan(8, 14)
+        assert read_samples(early)["attrs"]["n_planned_iterations"] == 14
+
+    # a run of an earlier version that did not finish: the boundary reads 0 and is not known
+    old = tmp_path / "old"
+    with ReplicaExchangeSampler(spec, old / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(6, record_stride=2, checkpoint_stride=3)
+    attrs = read_samples(old / "hrex")["attrs"]
+    assert "n_planned_iterations" not in attrs and equilibration_boundary(attrs, old) is None
+    result = CliRunner().invoke(main, ["analyze", str(old)])
+    assert result.exit_code == 1 and "--equilibration-ns" in result.output
+    # 2 fs and 10 steps per iteration: 0.00004 ns are two iterations
+    result = CliRunner().invoke(main, ["analyze", str(old), "--equilibration-ns", "0.00004"])
+    assert result.exit_code == 0 and json.loads(result.output)["n_iterations_used"] == 4
+    # once such a leg has a result, the number in its file is the one that run wrote
+    (old / "result.json").write_text("{}")
+    assert equilibration_boundary(attrs, old) == 0
 
 
 def test_an_interruption_before_the_first_checkpoint_does_not_leave_samples_twice(tmp_path, tiny_leg):

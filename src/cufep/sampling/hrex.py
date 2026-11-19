@@ -334,7 +334,7 @@ class ReplicaExchangeSampler:
         self.iteration = 0
         self.state_of_replica = np.arange(self.k)
         self.storage.truncate(0)
-        self.storage.set_meta(n_equilibration_iterations=0)
+        self.storage.clear_plan()
         positions, boxes = np.asarray(positions, dtype=float), np.asarray(boxes, dtype=float)
         if positions.ndim == 2:
             positions = np.broadcast_to(positions, (self.k, *positions.shape))

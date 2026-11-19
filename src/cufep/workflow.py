@@ -798,6 +798,8 @@ def run_leg(job: LegJob) -> dict:
                 sampler.initialize(*configs)
             else:
                 log(f"resumed at iteration {sampler.iteration}")
+            # before the first iteration: what an analysis of an interrupted run needs to know
+            sampler.storage.set_plan(n_equil, total)
             if control is not None and total > sampler.iteration:
                 devices = control.request_devices(n_windows, remaining_work(sampler.iteration))
                 if devices:
@@ -820,7 +822,6 @@ def run_leg(job: LegJob) -> dict:
             if remaining > 0:
                 sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20),
                             on_iteration=on_iteration)
-            sampler.storage.set_meta(n_equilibration_iterations=n_equil)
             # the result is for the length that was asked for, and every iteration is stored once
             if sampler.storage.n_iterations != sampler.iteration or sampler.iteration < total:
                 raise WorkflowError(

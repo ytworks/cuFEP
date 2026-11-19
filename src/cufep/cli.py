@@ -176,17 +176,42 @@ def run(config: str, repeats, production_ns, gpus, backend, output, ligands, leg
 
 @main.command()
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
-def analyze(directory: str) -> None:
-    """Re-analyse a finished or running leg directory (the one containing hrex/)."""
+@click.option("--equilibration-ns", type=float,
+              help="Length of the equilibration per lambda window. Needed only for a run of an earlier version "
+                   "that was interrupted: it did not record where its production begins.")
+def analyze(directory: str, equilibration_ns) -> None:
+    """Analyse a finished, running or interrupted leg directory (the one containing hrex/).
+
+    Only prints; no result file is written or changed.
+    """
     from cufep import jsonio
-    from cufep.analysis.mbar import analyze_leg, quality_checks
-    from cufep.sampling.storage import read_samples
+    from cufep.analysis.mbar import NoProduction, analyze_leg, quality_checks
+    from cufep.sampling.storage import equilibration_boundary, read_samples
 
     d = Path(directory)
     hrex = d / "hrex" if (d / "hrex").exists() else d
     samples = read_samples(hrex)
-    temperature = float(samples["attrs"].get("temperature_K", 298.15))
-    res = analyze_leg(samples, temperature).to_dict()
+    attrs = samples["attrs"]
+    temperature = float(attrs.get("temperature_K", 298.15))
+    if equilibration_ns is not None:
+        if "iteration_ps" not in attrs:
+            raise click.ClickException(f"{hrex}: the samples do not record the length of an iteration")
+        n_equilibration = int(round(equilibration_ns * 1000.0 / float(attrs["iteration_ps"])))
+    else:
+        n_equilibration = equilibration_boundary(attrs, hrex.parent)
+        if n_equilibration is None:
+            raise click.ClickException(
+                f"{hrex}: these samples are of a run that did not finish and that was made by a version of cuFEP "
+                "which recorded the end of the equilibration only then. Give the length of the equilibration per "
+                "lambda window with --equilibration-ns (sampling.equilibration_ns of that run; the default was 1).")
+    try:
+        res = analyze_leg(samples, temperature, n_equilibration=n_equilibration).to_dict()
+    except NoProduction as exc:
+        raise click.ClickException(f"{hrex}: no production yet: {exc}") from exc
+    res["n_equilibration_iterations"] = n_equilibration
+    res["n_iterations_stored"] = int(samples["u"].shape[0])
+    if "n_planned_iterations" in attrs:
+        res["n_planned_iterations"] = int(attrs["n_planned_iterations"])
     out = {k: v for k, v in res.items() if k not in ("f_k", "df_k", "overlap_matrix", "overlap_used_matrix",
                                                   "overlap_used_weighted_by_number")}
     out["quality"] = quality_checks(res)
