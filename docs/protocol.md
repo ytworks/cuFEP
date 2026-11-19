@@ -112,8 +112,9 @@ reported uncertainty is then the MBAR uncertainty. With more repeats, every repe
 completely independent run of steps 1-5 with a different seed, and the reported uncertainty
 is the standard deviation over the repeats, as in OpenFE.
 
-The lengths are fixed: nothing extends a run automatically. A leg whose neighbouring
-lambda windows overlap by less than `analysis.min_overlap` (0.03) gets a warning.
+The lengths are fixed: nothing extends a run automatically. The analysis checks the overlap
+of the lambda windows and the convergence of every leg and flags a leg that fails
+("Checks of the analysis").
 
 ## Lambda windows
 
@@ -311,6 +312,30 @@ sqrt(s). One difference between the backends: stock OpenMM does not update the l
 dispersion correction when an epsilon offset changes, the cuPotential plugin does. The two
 therefore differ by a constant per window in the scaled windows; the end states and the
 free energy are not affected, and a leg is sampled by one backend.
+
+## Checks of the analysis
+
+After the production the analysis of each leg makes three checks. They change nothing in
+what is run. A leg that fails is flagged in the result line, in `result.json` (`quality`),
+in `summary.csv` and in the benchmark report. The checks follow Klimovich, Shirts and Mobley,
+"Guidelines for the analysis of free energy calculations", J. Comput. Aided Mol. Des. 2015,
+29, 397. Flare shows the same quantities after a run: the overlap matrix with a warning
+below 0.03, a convergence analysis, and a comparison of TI and MBAR.
+
+| check | rule | flag | what the guideline says |
+|---|---|---|---|
+| overlap | every pair of neighbouring lambda windows overlaps by at least `analysis.min_overlap` (0.03) in the production | `NOT RELIABLE` | "values as low as 0.03 ... tolerable"; "Anything below that number should serve as a caution sign" |
+| convergence | the free energy from the first half of the production alone, and from the second half alone, lies within `analysis.convergence_tolerance_sigma` (2) MBAR standard errors of the free energy from all of it | `NOT CONVERGED` | "In a favorable case, both sets of data should converge rapidly to within uncertainty of the final value." It gives no factor; 2 is cuFEP's own choice |
+| estimators | BAR between neighbouring windows and MBAR agree within the same tolerance | a warning | "we primarily look for disagreement between TI-based methods and BAR-based methods". cuFEP does not record dU/dlambda and has no TI estimate; BAR against MBAR is a weaker comparison |
+
+With independent samples a half of the data differs from the whole by about one standard
+error, so at a tolerance of 2 about one leg in twenty is flagged by chance.
+
+`analysis.png` in each repeat directory shows, for both legs, the forward and reverse series
+(the free energy from growing parts of the production, counted from its start and from its
+end, at `analysis.convergence_points` points), the two halves, the band of the tolerance and
+the overlap matrix. The number of round trips of the replicas and the exchange between
+neighbouring windows are in `result.json`; no threshold is applied to them.
 
 ## Long-range dispersion
 

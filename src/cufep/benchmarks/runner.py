@@ -70,8 +70,17 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         ref = reference.get(s["ligand"])
         if ref is None or "dg_bind" not in s:
             continue
+        first = (s.get("repeats") or [{}])[0]
+        added = first.get("lambda_windows_added") or {}
+        flags = (["NOT RELIABLE (overlap): " + ", ".join(s["not_reliable"])] if s.get("not_reliable") else []) \
+            + (["NOT CONVERGED: " + ", ".join(s["not_converged"])] if s.get("not_converged") else [])
         rows.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": s["dg_bind"],
                      "cufep_std": s.get("dg_bind_std"), "n_repeats": s["n_repeats"],
+                     "windows_complex": (first.get("lambda_windows") or {}).get("complex"),
+                     "windows_solvent": (first.get("lambda_windows") or {}).get("solvent"),
+                     "windows_added_complex": None if added.get("complex") is None else sum(added["complex"].values()),
+                     "windows_added_solvent": None if added.get("solvent") is None else sum(added["solvent"].values()),
+                     "lowest_overlap": s.get("min_overlap"), "flags": "; ".join(flags),
                      "warnings": len(s.get("warnings", []))})
     title = load_registry()[name]["title"]
     lines = [f"# cuFEP benchmark report: {name}", "", title, "",
@@ -84,6 +93,26 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     for r in sorted(rows, key=lambda r: r["exp"]):
         sd = "" if r["cufep_std"] is None else f"{r['cufep_std']:.2f}"
         lines.append(f"| {r['ligand']} | {r['exp']:.2f} | {r['cufep']:.2f} | {sd} | {r['n_repeats']} | {r['fepplus']:.2f} |")
+
+    def count(value) -> str:
+        return "" if value is None else str(value)
+
+    lines += ["", "## Lambda windows and checks of the analysis", "",
+              "Windows per leg, how many of them adaptive lambda scheduling added to its start, the lowest overlap "
+              "of neighbouring windows in the production, and the legs that fail a check (first repeat).", "",
+              "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | flags |",
+              "|---|---|---|---|---|"]
+    for r in sorted(rows, key=lambda r: r["exp"]):
+        def cell_windows(leg: str) -> str:
+            n, extra = r[f"windows_{leg}"], r[f"windows_added_{leg}"]
+            return count(n) + ("" if extra is None else f" ({extra})")
+        low = "" if r["lowest_overlap"] is None else f"{r['lowest_overlap']:.3f}"
+        lines.append(f"| {r['ligand']} | {cell_windows('complex')} | {cell_windows('solvent')} | {low} | {r['flags']} |")
+    scheduled = [r[f"windows_added_{leg}"] for r in rows for leg in ("complex", "solvent")
+                 if r[f"windows_added_{leg}"] is not None]
+    if scheduled:
+        lines += ["", f"Adaptive lambda scheduling added windows in {sum(1 for n in scheduled if n > 0)} of "
+                      f"{len(scheduled)} legs. {sum(1 for r in rows if r['flags'])} of {len(rows)} ligands have a flag."]
     exp = [r["exp"] for r in rows]
     table = {"cuFEP": [r["cufep"] for r in rows], "FEP+": [r["fepplus"] for r in rows]}
     stats = {k: (metrics(v, exp), bootstrap(v, exp) if len(rows) >= 4 else {}) for k, v in table.items()}

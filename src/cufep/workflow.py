@@ -334,7 +334,7 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, find_boresch_restraint,
                                           ligand_symmetry_number, with_force_constants_from_fluctuations)
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
-    from cufep.analysis.mbar import analyze_leg
+    from cufep.analysis.mbar import analyze_leg, quality_checks
     from cufep.analysis.structure import structural_analysis
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
@@ -683,7 +683,7 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 6. analysis ------------------------------------------------------------------------------
     t_analysis = time.perf_counter()
-    analysis = analyze_leg(samples, T)
+    analysis = analyze_leg(samples, T, n_fractions=cfg.analysis.convergence_points)
     correction = {"reweight": analysis.lrc_delta_g, "isotropic": analysis.lrc_isotropic, "none": 0.0}[cfg.analysis.lrc]
     total = analysis.delta_g - correction                  # decoupling with the full LJ range
     structure = structural_analysis(samples, int(samples["attrs"].get("n_equilibration_iterations", 0)))
@@ -699,8 +699,15 @@ def run_leg(job: LegJob) -> dict:
         "restraint_release": release_dg, "restraint_release_analytical": release_dg_analytical,
         "ligand_symmetry_number": symmetry, "analysis": analysis.to_dict(), "notes": notes, "units": "kJ/mol",
     }
+    result["quality"] = quality_checks(result["analysis"], cfg.analysis.min_overlap,
+                                       cfg.analysis.convergence_tolerance_sigma)
     result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
     result["lambda_windows"] = schedule.windows()
+    # windows that adaptive lambda scheduling added to its start, per stage (None: fixed windows)
+    start = schedule.provenance.get("initial_windows") if schedule.mode == "adaptive" else None
+    result["lambda_windows_added"] = (
+        {name: len(values) - int(start[name]) for name, values in schedule.windows().items() if name in start}
+        if start else None)
     result["rest2"] = {"scale": float(rest2.scale) if rest2_on else 1.0, "hot_protein_atoms": len(hot_atoms),
                        "hot_residues": hot_residues, "torsion_terms_scaled": alch.rest2_torsions,
                        "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}
@@ -768,14 +775,35 @@ def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs:
 
 
 def quality_warnings(result: dict, cfg: Config) -> list[str]:
-    """Warnings about the sampling of a finished leg. None of them changes what is run."""
+    """Warnings about the sampling of a finished leg, from ``result["quality"]``
+    (:func:`cufep.analysis.mbar.quality_checks`). None of them changes what is run.
+    """
+    from cufep.analysis.mbar import quality_checks
+
     a = result["analysis"]
+    q = result.get("quality") or quality_checks(a, cfg.analysis.min_overlap, cfg.analysis.convergence_tolerance_sigma)
+    sigma = cfg.analysis.convergence_tolerance_sigma
     out = []
-    if a["min_overlap"] < cfg.analysis.min_overlap:
-        k = int(np.argmin(a["overlap_neighbour"]))
-        out.append(f"the overlap between lambda windows {k} and {k + 1} is {a['min_overlap']:.3f}, below "
-                   f"{cfg.analysis.min_overlap:g}; add lambda windows there (lambda_schedule.windows with mode: fixed, "
-                   f"or more lambda_schedule.adaptive.initial_windows)")
+    if not q["overlap"]["ok"]:
+        k = q["overlap"]["windows"][0]
+        out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1} is {q['overlap']['lowest']:.3f}, "
+                   f"below {cfg.analysis.min_overlap:g}; add lambda windows there (lambda_schedule.windows with "
+                   f"mode: fixed, or more lambda_schedule.adaptive.initial_windows) and run this leg again")
+    conv = q["convergence"]
+    if conv["ok"] is False:
+        whole = f"{conv['final'] / KCAL:.2f} ± {a['delta_g_error'] / KCAL:.2f}"
+        if np.isfinite(conv["first_half"]) and np.isfinite(conv["second_half"]):
+            halves = (f"the first half of the production gives {conv['first_half'] / KCAL:.2f} kcal/mol and the "
+                      f"second half {conv['second_half'] / KCAL:.2f}")
+        else:
+            halves = "half of the production does not determine the free energy"
+        out.append(f"NOT CONVERGED: {halves}, the whole {whole}; both halves should lie within {sigma:g} standard "
+                   f"errors of the whole. Run this leg longer (sampling.production_ns)")
+    est = q["estimators"]
+    if est["ok"] is False:
+        out.append(f"BAR between neighbouring lambda windows gives {est['bar'] / KCAL:.2f} kcal/mol and MBAR "
+                   f"{est['mbar'] / KCAL:.2f}; they should agree within {sigma:g} standard errors. The windows are "
+                   f"too far apart or too little sampled")
     return out
 
 
@@ -797,6 +825,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
     """Binding free energy from the finished legs of one ligand."""
     per_repeat = []
     warnings: list[str] = []
+    # legs whose analysis fails a check of cufep.analysis.mbar.quality_checks
+    flagged: dict[str, list[str]] = {"overlap": [], "convergence": [], "estimators": []}
     for r in range(repeats):
         files = {leg: lig_dir / f"repeat_{r}" / leg / "result.json" for leg in ("complex", "solvent")}
         if not all(f.exists() for f in files.values()):
@@ -812,11 +842,19 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             "backend_solvent": s["backend"], "stage_complex": c["analysis"]["stage_delta_g"],
             "stage_solvent": s["analysis"]["stage_delta_g"],
             "lambda_windows": {"complex": c["n_states"], "solvent": s["n_states"]},
+            "lambda_windows_added": {"complex": c.get("lambda_windows_added"), "solvent": s.get("lambda_windows_added")},
             "min_overlap": {"complex": c["analysis"]["min_overlap"], "solvent": s["analysis"]["min_overlap"]},
             "production_ns": {"complex": c["production_ns"], "solvent": s["production_ns"]}})
         for leg_result in (c, s):
             warnings += [f"repeat {r} {leg_result['leg']}: {n}" for n in leg_result.get("notes", [])]
-    out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings}
+            where = f"{leg_result['leg']} leg" + (f" of repeat {r}" if repeats > 1 else "")
+            quality = leg_result.get("quality") or {}
+            for check, legs in flagged.items():
+                if (quality.get(check) or {}).get("ok") is False:
+                    legs.append(where)
+    out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
+                 "not_reliable": flagged["overlap"], "not_converged": flagged["convergence"],
+                 "estimators_disagree": flagged["estimators"]}
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL
         out["dg_bind"] = float(vals.mean())

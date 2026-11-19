@@ -157,15 +157,17 @@ def run(config: str, repeats, production_ns, gpus, backend, output, reschedule: 
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
 def analyze(directory: str) -> None:
     """Re-analyse a finished or running leg directory (the one containing hrex/)."""
-    from cufep.analysis.mbar import analyze_leg
+    from cufep.analysis.mbar import analyze_leg, quality_checks
     from cufep.sampling.storage import read_samples
 
     d = Path(directory)
     hrex = d / "hrex" if (d / "hrex").exists() else d
     samples = read_samples(hrex)
     temperature = float(samples["attrs"].get("temperature_K", 298.15))
-    res = analyze_leg(samples, temperature)
-    click.echo(json.dumps({k: v for k, v in res.to_dict().items() if k not in ("f_k", "df_k")}, indent=1))
+    res = analyze_leg(samples, temperature).to_dict()
+    out = {k: v for k, v in res.items() if k not in ("f_k", "df_k", "overlap_matrix")}
+    out["quality"] = quality_checks(res)
+    click.echo(json.dumps(out, indent=1))
 
 
 @main.command()

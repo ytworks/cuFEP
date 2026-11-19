@@ -309,8 +309,16 @@ class AnalysisConfig(_Section):
     #: OpenMM's long-range correction and OpenFE; none = truncated interaction
     lrc: Literal["reweight", "isotropic", "none"] = "reweight"
     lrc_cutoff_nm: float = 2.0
-    #: warn if the overlap between two neighbouring lambda windows in the production is below this
+    #: a result is NOT RELIABLE if the overlap between two neighbouring lambda windows in the
+    #: production is below this
     min_overlap: float = 0.03
+    #: number of points of the forward and reverse series (free energy from growing parts of the
+    #: production, counted from its start and from its end)
+    convergence_points: int = Field(default=10, ge=2)
+    #: a leg is NOT CONVERGED if the free energy from the first half of its production, or from
+    #: the second half, differs from the free energy of the whole by more than this many MBAR
+    #: standard errors; the same tolerance applies to BAR against MBAR
+    convergence_tolerance_sigma: float = Field(default=2.0, gt=0.0)
 
 
 class ResourcesConfig(_Section):

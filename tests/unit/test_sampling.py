@@ -115,9 +115,63 @@ def test_analysis_of_a_leg_with_a_window_that_overlaps_no_other_is_bounded():
     t0 = time.perf_counter()
     res = analyze_leg({"u": u, "states": states}, 298.15)
     assert time.perf_counter() - t0 < 60.0
-    assert res.min_overlap < 1e-6 and len(res.forward) == 5 and len(res.reverse) == 5
+    assert res.min_overlap < 1e-6 and len(res.forward) == 10 and len(res.reverse) == 10
     # the last entries of the forward and reverse series are the estimate from all data
     assert res.forward[-1][1] == res.delta_g and res.reverse[-1][1] == res.delta_g
+
+
+def test_bar_between_neighbours_agrees_with_mbar():
+    from cufep.analysis.mbar import bar_between_neighbours
+
+    rng = np.random.default_rng(11)
+    k_spring = np.array([1.0, 1.6, 2.6, 4.2, 6.7, 10.7])
+    u, states, _ = harmonic_samples(3000, k_spring, np.linspace(0.0, 1.0, 6), rng)
+    f, df, _ = solve_mbar(u, states)
+    bar, bar_error = bar_between_neighbours(u, states)
+    exact = 0.5 * np.log(k_spring[-1] / k_spring[0])
+    assert abs(bar - exact) < 5 * bar_error and abs(bar - f[-1]) < 2 * df[-1]
+    assert 0.5 * df[-1] < bar_error < 3 * df[-1]
+
+
+def test_convergence_check_separates_a_steady_leg_from_one_that_drifts():
+    """Half of the production against all of it, as in Klimovich, Shirts and Mobley 2015."""
+    from cufep.analysis.mbar import quality_checks
+
+    k_spring = np.array([1.0, 1.6, 2.6, 4.2, 6.7, 10.7])
+    x0 = np.linspace(0.0, 1.0, 6)
+    u, states, _ = harmonic_samples(3000, k_spring, x0, np.random.default_rng(3))
+    steady = analyze_leg({"u": u, "states": states}, 298.15)
+    kt = 8.31446261815324e-3 * 298.15
+    assert len(steady.forward) == 10 and steady.forward[4][0] == pytest.approx(0.5)
+    assert steady.forward[-1][1] == steady.delta_g and steady.reverse[-1][1] == steady.delta_g
+    assert np.array(steady.overlap_matrix).shape == (6, 6)
+    assert steady.overlap_neighbour[2] == pytest.approx(steady.overlap_matrix[2][3], abs=1e-4)
+    assert steady.forward_reverse_gap == pytest.approx(abs(steady.first_half[0] - steady.second_half[0]))
+    q = quality_checks(steady.to_dict())
+    assert q["overlap"]["ok"] and q["convergence"]["ok"] and q["estimators"]["ok"]
+    assert q["convergence"]["tolerance"] == pytest.approx(2.0 * steady.delta_g_error)
+    assert abs(steady.bar_delta_g - steady.delta_g) < 0.1 * kt
+
+    # the last state becomes stiffer half way through the production, as when a slow degree of
+    # freedom changes: its free energy rises by 0.5 ln(30 / 10.7) = 0.52 kT in the second half
+    late = k_spring.copy()
+    late[-1] = 30.0
+    u2, states2, _ = harmonic_samples(3000, late, x0, np.random.default_rng(4))
+    drifting = analyze_leg({"u": np.concatenate([u, u2]), "states": np.concatenate([states, states2])}, 298.15)
+    assert (drifting.second_half[0] - drifting.first_half[0]) / kt == pytest.approx(0.52, abs=0.1)
+    q = quality_checks(drifting.to_dict())
+    assert q["overlap"]["ok"] and q["convergence"]["ok"] is False
+    assert quality_checks(drifting.to_dict(), tolerance_sigma=50.0)["convergence"]["ok"]
+
+    # overlap below the threshold, and an analysis that lacks the numbers of a check
+    assert quality_checks(steady.to_dict(), min_overlap=0.9)["overlap"]["ok"] is False
+    old = {"delta_g": 10.0, "delta_g_error": 0.5, "min_overlap": 0.2, "overlap_neighbour": [0.2, 0.3]}
+    q = quality_checks(old)
+    assert q["overlap"] == {"ok": True, "lowest": 0.2, "windows": [0, 1], "threshold": 0.03}
+    assert q["convergence"]["ok"] is None and q["estimators"]["ok"] is None
+    half_missing = dict(old, first_half=[float("nan"), float("nan")], second_half=[10.1, 0.7], bar_delta_g=12.0)
+    q = quality_checks(half_missing)
+    assert q["convergence"]["ok"] is False and q["estimators"]["ok"] is False
 
 
 def test_stage_boundaries():

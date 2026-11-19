@@ -120,7 +120,9 @@ analysis:
   estimator: mbar
   lrc: reweight                   # reweight | isotropic | none
   lrc_cutoff_nm: 2.0
-  min_overlap: 0.03
+  min_overlap: 0.03               # NOT RELIABLE below this overlap of two neighbouring lambda windows
+  convergence_points: 10          # points of the forward and reverse series
+  convergence_tolerance_sigma: 2.0 # NOT CONVERGED if half of the production differs from the whole by more standard errors
 resources:
   gpus: auto                      # auto | a list of device indices
   oversubscription_factor: auto   # auto | 1 | 2 | 4 | ...
@@ -179,6 +181,8 @@ the schedule in fixed mode.
 | `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 in both legs | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer (cuFEP's own choice for these two) |
 | `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
 | `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015; the warning level of Flare and of the alchemical best-practice guide |
+| `analysis.convergence_tolerance_sigma` | 2 | Klimovich, Shirts and Mobley 2015: the free energy from the first part and from the last part of the data "should converge rapidly to within uncertainty of the final value". The guideline gives no factor; 2 standard errors is cuFEP's own choice. The same tolerance is used for BAR against MBAR |
+| `analysis.convergence_points` | 10 | cuFEP's own choice for the number of points of the forward and reverse series |
 | `analysis.lrc` | reweight | see protocol.md, long-range dispersion |
 | `resources.oversubscription_factor` | from the size of the system: 16 up to 10,000 atoms, 8 up to 60,000, 4 up to 200,000, else 2 | measured total throughput per GPU under NVIDIA MPS |
 | `membrane.equilibration_ns` | 10 ns | cuFEP's own choice for a freshly built bilayer |

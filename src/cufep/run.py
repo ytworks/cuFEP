@@ -9,6 +9,7 @@ from pathlib import Path
 from cufep.config.auto import AutoReport, resolve
 from cufep.config.schema import Config, dump_config
 from cufep import mps
+from cufep.analysis.plots import plot_repeat
 from cufep.scheduler import GpuMonitor, run_jobs
 from cufep.workflow import KCAL, LegJob, WorkflowError, _Log, combine_ligand, prepare_ligand, safe_name
 
@@ -123,6 +124,12 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log) -> list[dict]:
 
     summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats) for lig in ligands]
     write_summary(out_dir, summary, ligands)
+    for lig in ligands:
+        for r in range(repeats):
+            try:
+                plot_repeat(lig_dirs[lig.name] / f"repeat_{r}")
+            except Exception as exc:  # noqa: BLE001  a figure never fails a run
+                log(f"WARNING: no analysis figure for {lig.name}, repeat {r}: {type(exc).__name__}: {exc}")
     for s in summary:
         if "dg_bind" in s:
             if s.get("dg_bind_std") is not None:
@@ -134,6 +141,7 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log) -> list[dict]:
             low = s.get("min_overlap", 1.0) < cfg.analysis.min_overlap
             log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}"
                 + (f"; NOT RELIABLE: neighbouring lambda windows overlap by only {s['min_overlap']:.3f}" if low else "")
+                + (f"; NOT CONVERGED: {', '.join(s['not_converged'])}" if s.get("not_converged") else "")
                 + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
             for w in s.get("warnings", []):
                 log(f"  warning: {w}")
@@ -154,11 +162,12 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
     with open(out_dir / "summary.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
-                    "warnings"])
+                    "lowest_overlap", "not_reliable", "not_converged", "warnings"])
         for s in summary:
             w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
-                        len(s.get("warnings", []))])
+                        _fmt(s.get("min_overlap")), "; ".join(s.get("not_reliable", [])),
+                        "; ".join(s.get("not_converged", [])), len(s.get("warnings", []))])
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
 
 

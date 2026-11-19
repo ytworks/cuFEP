@@ -166,6 +166,59 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
     assert out["repeats"][0]["dg_bind"] == pytest.approx((80.0 - 160.0 + 40.0) / 4.184)
     assert out["dg_bind"] == pytest.approx((-40.0 - 44.184) / 2 / 4.184)
     assert out["dg_bind_std"] == pytest.approx(np.std([-40.0, -44.184], ddof=1) / 4.184)
+    # legs written before the checks existed carry no verdict
+    assert out["not_reliable"] == [] and out["not_converged"] == [] and out["estimators_disagree"] == []
+
+
+def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_path):
+    from cufep.analysis.mbar import quality_checks
+    from cufep.config.schema import Config
+    from cufep.workflow import quality_warnings
+
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
+    kcal = 4.184
+    steady = {"delta_g": 100.0 * kcal, "delta_g_error": 0.2 * kcal, "min_overlap": 0.11, "overlap_neighbour": [0.2, 0.11],
+              "first_half": [100.3 * kcal, 0.3 * kcal], "second_half": [99.8 * kcal, 0.3 * kcal],
+              "bar_delta_g": 100.1 * kcal, "stage_delta_g": {"vanish": 1.0}}
+    drifting = dict(steady, first_half=[100.9 * kcal, 0.3 * kcal], second_half=[99.2 * kcal, 0.3 * kcal],
+                    min_overlap=0.02, overlap_neighbour=[0.2, 0.02], bar_delta_g=101.0 * kcal)
+    assert quality_warnings({"analysis": steady}, cfg) == []
+    notes = quality_warnings({"analysis": drifting}, cfg)
+    assert len(notes) == 3
+    assert notes[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 is 0.020, below 0.03")
+    assert notes[1].startswith("NOT CONVERGED: the first half of the production gives 100.90 kcal/mol and the second "
+                               "half 99.20, the whole 100.00 ± 0.20")
+    assert "sampling.production_ns" in notes[1] and notes[2].startswith("BAR between neighbouring lambda windows gives 101.00")
+
+    for name, analysis in (("complex", drifting), ("solvent", steady)):
+        d = tmp_path / "repeat_0" / name
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({
+            "leg": name, "delta_g_decouple": analysis["delta_g"], "delta_g_mbar_error": 0.4, "restraint_release": 0.0,
+            "lrc": 0.0, "backend": "openmm", "analysis": analysis, "n_states": 15, "production_ns": 5.0, "notes": [],
+            "quality": quality_checks(analysis), "lambda_windows_added": {"vanish": 2} if name == "solvent" else None}))
+    out = combine_ligand(tmp_path, "lig", 1)
+    assert out["not_reliable"] == ["complex leg"] and out["not_converged"] == ["complex leg"]
+    assert out["estimators_disagree"] == ["complex leg"]
+    assert out["repeats"][0]["lambda_windows_added"] == {"complex": None, "solvent": {"vanish": 2}}
+
+
+def test_analysis_figure_is_written(tmp_path):
+    pytest.importorskip("matplotlib")
+    from cufep.analysis.mbar import quality_checks
+    from cufep.analysis.plots import plot_repeat
+
+    assert plot_repeat(tmp_path) is None                              # no finished leg
+    analysis = {"delta_g": 400.0, "delta_g_error": 0.8, "min_overlap": 0.02, "overlap_neighbour": [0.2, 0.02],
+                "overlap_matrix": [[0.8, 0.2, 0.0], [0.2, 0.78, 0.02], [0.0, 0.02, 0.98]],
+                "forward": [[0.5, 402.0, 1.1], [1.0, 400.0, 0.8]], "reverse": [[0.5, 398.5, 1.1], [1.0, 400.0, 0.8]],
+                "first_half": [402.0, 1.1], "second_half": [398.5, 1.1], "bar_delta_g": 400.2}
+    d = tmp_path / "solvent"
+    d.mkdir()
+    (d / "result.json").write_text(json.dumps({"ligand": "lig", "repeat": 0, "leg": "solvent", "analysis": analysis,
+                                               "quality": quality_checks(analysis)}))
+    out = plot_repeat(tmp_path)
+    assert out == tmp_path / "analysis.png" and out.stat().st_size > 10000
 
 
 @pytest.mark.parametrize("shape,ratio", [("cube", 1.0), ("dodecahedron", 2 ** -0.5)])

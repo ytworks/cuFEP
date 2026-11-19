@@ -43,9 +43,20 @@ class LegAnalysis:
     min_overlap: float = 0.0
     round_trips: int = 0
     swap_acceptance_neighbour: list[float] = field(default_factory=list)
-    forward: list[tuple[float, float, float]] = field(default_factory=list)   # (fraction, dG, error)
+    #: the whole overlap matrix of the windows (overlap_neighbour is its first off-diagonal)
+    overlap_matrix: list[list[float]] = field(default_factory=list)
+    #: free energy from growing parts of the production, counted from its start (forward) and
+    #: from its end (reverse): (fraction of the production, dG, error)
+    forward: list[tuple[float, float, float]] = field(default_factory=list)
     reverse: list[tuple[float, float, float]] = field(default_factory=list)
+    #: (dG, error) from the first half and from the second half of the production alone
+    first_half: tuple[float, float] = (float("nan"), float("nan"))
+    second_half: tuple[float, float] = (float("nan"), float("nan"))
+    #: difference between the two halves
     forward_reverse_gap: float = 0.0
+    #: sum of BAR between neighbouring windows, a second estimator on the same data
+    bar_delta_g: float = float("nan")
+    bar_delta_g_error: float = float("nan")
     lrc_delta_g: float = 0.0
     lrc_error: float = 0.0
     lrc_samples: int = 0
@@ -125,6 +136,74 @@ def overlap_matrix(u_kn: np.ndarray, n_k: np.ndarray) -> np.ndarray:
         return np.asarray(mbar.compute_overlap()["matrix"])
 
 
+def bar_between_neighbours(u: np.ndarray, states: np.ndarray) -> tuple[float, float]:
+    """Free energy of the last window relative to the first as the sum of BAR between neighbours.
+
+    Returns (dG, standard error) in kT, from ``u[iter, replica, state]`` and
+    ``states[iter, replica]``. BAR uses only the two windows of a pair, MBAR all windows at
+    once; where the windows overlap well the two agree closely, so a difference is a sign of
+    windows that are too far apart or too little sampled.
+    """
+    _pymbar()
+    from pymbar import other_estimators
+
+    n_states = u.shape[2]
+    flat_u = np.minimum(u.reshape(-1, n_states) - np.min(u), 1.0e6)
+    flat_s = states.reshape(-1)
+    total, variance = 0.0, 0.0
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
+            np.errstate(all="ignore"):
+        for k in range(n_states - 1):
+            lower, upper = flat_u[flat_s == k], flat_u[flat_s == k + 1]
+            res = other_estimators.bar(lower[:, k + 1] - lower[:, k], upper[:, k] - upper[:, k + 1])
+            total += float(res["Delta_f"])
+            variance += float(res["dDelta_f"]) ** 2
+    return total, float(np.sqrt(variance))
+
+
+def quality_checks(analysis: dict, min_overlap: float = 0.03, tolerance_sigma: float = 2.0) -> dict:
+    """What the analysis of a leg says about its reliability. Energies in the units of ``analysis``.
+
+    Three checks, after Klimovich, Shirts and Mobley, J. Comput. Aided Mol. Des. 2015, 29, 397:
+
+    overlap      every pair of neighbouring windows overlaps by at least ``min_overlap``
+                 ("values as low as 0.03 ... tolerable"; also the warning level of Flare).
+    convergence  the free energy from the first half of the production alone, and from the second
+                 half alone, lies within ``tolerance_sigma`` MBAR standard errors of the free
+                 energy from all of it ("both sets of data should converge rapidly to within
+                 uncertainty of the final value"; the guideline gives no factor, 2 is cuFEP's).
+    estimators   BAR between neighbouring windows and MBAR agree within the same tolerance (the
+                 guideline compares TI with BAR-type estimators; cuFEP records no dU/dlambda).
+
+    ``ok`` is None where the analysis does not hold the numbers for a check.
+    """
+    final, error = float(analysis["delta_g"]), float(analysis["delta_g_error"])
+    tolerance = tolerance_sigma * error
+    neighbour = list(analysis.get("overlap_neighbour", []))
+    lowest = float(analysis.get("min_overlap", 1.0))
+    pair = int(np.argmin(neighbour)) if neighbour else None
+    out = {"overlap": {"ok": bool(lowest >= min_overlap), "lowest": lowest,
+                       "windows": None if pair is None else [pair, pair + 1], "threshold": min_overlap}}
+
+    halves = [analysis.get("first_half"), analysis.get("second_half")]
+    conv = {"ok": None, "tolerance": tolerance, "final": final}
+    if all(h is not None for h in halves):
+        first, second = float(halves[0][0]), float(halves[1][0])
+        conv.update(first_half=first, second_half=second)
+        if np.isfinite(first) and np.isfinite(second):
+            conv["ok"] = bool(max(abs(first - final), abs(second - final)) <= tolerance)
+        elif np.isfinite(final):
+            conv["ok"] = False       # half of the data does not determine the free energy
+    out["convergence"] = conv
+
+    bar = analysis.get("bar_delta_g")
+    est = {"ok": None, "tolerance": tolerance, "mbar": final}
+    if bar is not None and np.isfinite(float(bar)):
+        est.update(bar=float(bar), ok=bool(abs(float(bar) - final) <= tolerance))
+    out["estimators"] = est
+    return out
+
+
 def statistical_inefficiency(u: np.ndarray, states: np.ndarray) -> float:
     """g of the replica-summed reduced potential at the sampled states (in iterations)."""
     _, timeseries = _pymbar()
@@ -183,8 +262,11 @@ def stage_boundaries(state_dicts: list[dict]) -> dict[str, tuple[int, int]]:
 
 
 def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None = None,
-                n_fractions: int = 5) -> LegAnalysis:
-    """Analyse samples loaded with :func:`cufep.sampling.storage.read_samples`."""
+                n_fractions: int = 10) -> LegAnalysis:
+    """Analyse samples loaded with :func:`cufep.sampling.storage.read_samples`.
+
+    ``n_fractions`` is the number of points of the forward and reverse series.
+    """
     from cufep.alchemy.lrc import tail_free_energy
 
     kt = R_GAS * temperature_K
@@ -220,7 +302,13 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         forward.append((frac, *(everything if m >= n else partial(slice(0, m)))))
         reverse.append((frac, *(everything if m >= n else partial(slice(n - m, n)))))
     half = max(4 * stride, n // 2)
-    gap = abs(partial(slice(0, half))[0] - partial(slice(n - half, n))[0])
+    first_half, second_half = partial(slice(0, half)), partial(slice(n - half, n))
+    gap = abs(first_half[0] - second_half[0])
+    try:
+        bar, bar_error = bar_between_neighbours(u[::stride], states[::stride])
+        bar, bar_error = bar * kt, bar_error * kt
+    except Exception:  # noqa: BLE001  a pair of windows without overlap has no BAR estimate
+        bar = bar_error = float("nan")
 
     stages = {}
     state_dicts = attrs.get("states", [])
@@ -251,6 +339,8 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         f_k=(f_k * kt).tolist(), df_k=(df_k * kt).tolist(), stage_delta_g=stages,
         overlap_neighbour=neighbour, min_overlap=float(min(neighbour)) if neighbour else 1.0,
         round_trips=count_round_trips(states), swap_acceptance_neighbour=neighbour_swap_fraction(states),
-        forward=forward, reverse=reverse, forward_reverse_gap=float(gap),
+        overlap_matrix=np.round(overlap, 4).tolist(),
+        forward=forward, reverse=reverse, first_half=first_half, second_half=second_half,
+        forward_reverse_gap=float(gap), bar_delta_g=float(bar), bar_delta_g_error=float(bar_error),
         lrc_delta_g=lrc_dg, lrc_error=lrc_se, lrc_samples=lrc_n, lrc_isotropic=lrc_iso,
         temperature_K=temperature_K)
