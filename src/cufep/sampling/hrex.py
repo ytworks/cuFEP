@@ -424,6 +424,9 @@ class ReplicaExchangeSampler:
             self.cur = 1 - self.cur
             u = self.arrays.u.copy()
             sampled_states = self.state_of_replica.copy()
+            #: reduced energies and sampled states of the iteration just committed (for callers
+            #: that judge the lambda windows while the run is going)
+            self.last_u, self.last_states = u, sampled_states
             if store:
                 self.storage.append(u, sampled_states, self.arrays.vol.copy())
                 for res in results:

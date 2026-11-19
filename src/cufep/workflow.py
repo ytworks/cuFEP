@@ -604,61 +604,94 @@ def run_leg(job: LegJob) -> dict:
                 f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a new one")
 
         # ---- 5. replica exchange -----------------------------------------------------------------
-        spec = LegSpec(
-            name=job.tag, system_xml=alch_xml, states=[s.to_dict() for s in schedule.states],
-            n_atoms=alch.system.getNumParticles(), backend=backend_name,
-            precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
-            pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
-            timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 17,
-            cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail,
-            frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
-            box_safety=1.3 if barostat == "membrane" else None,
-            mps_thread_percentage=thread_percentage(job.oversubscription))
-        n_windows, total = len(schedule.states), n_equil + n_prod
         control = job.control
+        total = n_equil + n_prod
         # seconds one replica needs per iteration: a guess until the first iterations were timed
         replica_seconds = [0.05 * (1.0 + alch.system.getNumParticles() / 50000.0)]
-
-        def remaining_work(done: int) -> float:
-            return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)
-
+        # adaptive lambda scheduling goes on during the equilibration: see _equilibration_checks
+        check_ps = ls.adaptive.equilibration_check_ps
+        checks_due = (ls.mode == "adaptive" and ls.file is None and check_ps > 0.0
+                      and not schedule.provenance.get("equilibration_checks_passed"))
+        als_live = AlsSettings(overlap_threshold=ls.adaptive.overlap_threshold, candidates=ls.adaptive.candidates,
+                               max_windows=ls.adaptive.max_windows.complex if is_complex else ls.adaptive.max_windows.solvent,
+                               rest2_scale=rest2.scale)
         t_sampling = time.perf_counter()
-        with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline,
-                                    exchange=cfg.sampling.exchange == "hrex", log=log) as sampler:
-            if not sampler.restore():
-                sampler.initialize(*configs)
-            else:
-                log(f"resumed at iteration {sampler.iteration}")
-            if control is not None and total > sampler.iteration:
-                devices = control.request_devices(n_windows, remaining_work(sampler.iteration))
-                if devices:
-                    sampler.set_devices(devices)
+        iterations_run = 0
+        while True:
+            spec = LegSpec(
+                name=job.tag, system_xml=alch_xml, states=[s.to_dict() for s in schedule.states],
+                n_atoms=alch.system.getNumParticles(), backend=backend_name,
+                precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
+                pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
+                timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 17,
+                cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=tail,
+                frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
+                box_safety=1.3 if barostat == "membrane" else None,
+                mps_thread_percentage=thread_percentage(job.oversubscription))
+            n_windows = len(schedule.states)
 
-            def on_iteration(smp, stats) -> None:
-                if control is None:
-                    return
-                per_worker = stats.all_workers / max(1, len(smp.workers))
-                per_replica = per_worker / max(1.0, n_windows / max(1, len(smp.workers)))
-                replica_seconds[0] = 0.8 * replica_seconds[0] + 0.2 * per_replica if smp.iteration > 3 else per_replica
-                devices = control.poll_devices()
-                if devices:
-                    smp.set_devices(devices)
-                if smp.iteration % 25 == 0:
-                    control.progress(remaining_work(smp.iteration))
+            def remaining_work(done: int) -> float:
+                return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)
 
-            remaining = total - sampler.iteration
-            first = sampler.iteration
-            if remaining > 0:
-                sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20),
-                            on_iteration=on_iteration)
-            sampler.storage.set_meta(n_equilibration_iterations=n_equil)
-            timing["sampling"] = {
-                "lambda_windows": n_windows, "iterations": sampler.iteration - first,
-                "seconds_per_iteration": (time.perf_counter() - t_sampling) / max(1, sampler.iteration - first),
-                "worker_busy_fraction": sampler.busy_seconds / sampler.worker_seconds_available
-                if sampler.worker_seconds_available > 0 else None,
-                "workers": [[it, list(devs)] for it, devs in sampler.device_history],
-                "oversubscription_factor": job.oversubscription}
+            restart = None
+            with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline,
+                                        exchange=cfg.sampling.exchange == "hrex", log=log) as sampler:
+                if not sampler.restore():
+                    sampler.initialize(*configs)
+                else:
+                    log(f"resumed at iteration {sampler.iteration}")
+                if control is not None and total > sampler.iteration:
+                    devices = control.request_devices(n_windows, remaining_work(sampler.iteration))
+                    if devices:
+                        sampler.set_devices(devices)
+
+                def on_iteration(smp, stats) -> None:
+                    if control is None:
+                        return
+                    per_worker = stats.all_workers / max(1, len(smp.workers))
+                    per_replica = per_worker / max(1.0, n_windows / max(1, len(smp.workers)))
+                    replica_seconds[0] = (0.8 * replica_seconds[0] + 0.2 * per_replica if smp.iteration > 3
+                                          else per_replica)
+                    devices = control.poll_devices()
+                    if devices:
+                        smp.set_devices(devices)
+                    if smp.iteration % 25 == 0:
+                        control.progress(remaining_work(smp.iteration))
+
+                first = sampler.iteration
+                if checks_due:
+                    restart = _equilibration_checks(
+                        sampler, schedule, als_live, n_equil, max(1, int(round(check_ps / iteration_ps))), iteration_ps,
+                        dict(checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20)), on_iteration, log)
+                if restart is None:
+                    if checks_due:
+                        schedule.provenance["equilibration_checks_passed"] = True
+                        schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
+                                      backend=backend_name)
+                        checks_due = False
+                    remaining = total - sampler.iteration
+                    if remaining > 0:
+                        sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20),
+                                    on_iteration=on_iteration)
+                    sampler.storage.set_meta(n_equilibration_iterations=n_equil)
+                iterations_run += sampler.iteration - first
+                busy, available = sampler.busy_seconds, sampler.worker_seconds_available
+                history = [[it, list(devs)] for it, devs in sampler.device_history]
+            if restart is None:
+                break
+            # a window was added: the run starts again with the new windows, from the configurations
+            # the replicas had, and the data of the discarded equilibration are removed
+            schedule, configs = restart
+            schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed, backend=backend_name)
+            np.savez(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2])
+            shutil.rmtree(hrex_dir, ignore_errors=True)
+            log(f"lambda schedule (adaptive, during equilibration): {len(schedule.states)} windows: "
+                + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items()))
+        timing["sampling"] = {
+            "lambda_windows": n_windows, "iterations": iterations_run,
+            "seconds_per_iteration": (time.perf_counter() - t_sampling) / max(1, iterations_run),
+            "worker_busy_fraction": busy / available if available > 0 else None,
+            "workers": history, "oversubscription_factor": job.oversubscription}
         if control is not None:
             control.serial()
         timed("sampling", t_sampling)
@@ -714,6 +747,61 @@ def run_leg(job: LegJob) -> dict:
         f"min overlap {analysis.min_overlap:.3f}, round trips {analysis.round_trips}, "
         f"N_eff/state {analysis.effective_samples_per_state:.0f}")
     return result
+
+
+def _equilibration_checks(sampler, schedule, als, n_equil: int, n_check: int, iteration_ps: float, run_kwargs: dict,
+                          on_iteration, log):
+    """Adaptive lambda scheduling on the equilibration of a replica-exchange run.
+
+    Runs the equilibration in blocks of ``n_check`` iterations. After every block the overlap of
+    neighbouring windows is computed from that block and the rule of the precalculation is
+    applied (:func:`cufep.alchemy.schedule.equilibration_step`). If a window is added, returns
+    ``(new schedule, start configurations)``: the caller starts the run again with them. Returns
+    ``None`` when the whole equilibration has passed without a deficient pair.
+    """
+    from cufep.alchemy.schedule import equilibration_step, nearest_windows
+
+    block_u: list = []
+    block_states: list = []
+
+    def collect(smp, stats) -> None:
+        block_u.append(smp.last_u)
+        block_states.append(smp.last_states)
+        on_iteration(smp, stats)
+
+    while sampler.iteration < n_equil:
+        block_u.clear(); block_states.clear()
+        sampler.run(min(n_check, n_equil - sampler.iteration), on_iteration=collect, **run_kwargs)
+        if len(block_u) < max(8, n_check // 2):
+            continue                                        # a short last block: too few samples to judge
+        new, records = equilibration_step(schedule, np.array(block_u), np.array(block_states), als)
+        done_ps = sampler.iteration * iteration_ps
+        for rec in records:
+            rec["after_equilibration_ps"] = done_ps
+        schedule.provenance.setdefault("equilibration_checks", []).extend(records)
+        for rec in records:
+            if rec["status"] == "inserted":
+                log(f"lambda schedule, {rec['stage']}: after {done_ps:g} ps of equilibration the overlap is at or below "
+                    f"{als.overlap_threshold:g} between {rec['section'][0]:g} and {rec['section'][1]:g}; "
+                    f"adding a window, running {rec['new_lambda']}")
+            elif rec["status"] in ("saturated", "max_windows"):
+                note = (f"adaptive lambda scheduling could not raise the overlap in the {rec['stage']} stage any further "
+                        f"({'the windows are one candidate apart' if rec['status'] == 'saturated' else 'limit of windows reached'}); "
+                        f"lowest overlap {min(rec['superdiagonal']):.3f}")
+                if note not in schedule.notes:
+                    schedule.notes.append(note)
+        if new is None:
+            continue
+        new.provenance = dict(schedule.provenance)
+        new.provenance["windows_added_during_equilibration"] = int(
+            schedule.provenance.get("windows_added_during_equilibration", 0)) + len(new.states) - len(schedule.states)
+        new.notes = list(schedule.notes)
+        positions, boxes, state_of_replica = sampler.current_configurations()
+        velocities = sampler.arrays.vel[sampler.cur].copy()
+        replica_of_state = np.argsort(state_of_replica)
+        source = [int(replica_of_state[m]) for m in nearest_windows(schedule, new)]
+        return new, (positions[source], boxes[source], velocities[source])
+    return None
 
 
 def rest2_region(rest2, topology, positions_nm, ligand, protein) -> tuple[list[int], list[str]]:

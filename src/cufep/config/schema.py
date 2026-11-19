@@ -169,12 +169,12 @@ class WindowsConfig(_Section):
 class ComplexInitialWindows(_Section):
     restrain: int = Field(default=3, ge=2)
     discharge: int = Field(default=5, ge=2)
-    vanish: int = Field(default=13, ge=2)
+    vanish: int = Field(default=9, ge=2)
 
 
 class SolventInitialWindows(_Section):
-    discharge: int = Field(default=9, ge=2)
-    vanish: int = Field(default=13, ge=2)
+    discharge: int = Field(default=5, ge=2)
+    vanish: int = Field(default=9, ge=2)
 
 
 class InitialWindows(_Section):
@@ -211,7 +211,11 @@ class AdaptiveConfig(_Section):
     #: the windows of an iteration run at the same time on the available GPUs; before the first
     #: iteration a walk through the windows with this much MD each gives them start configurations
     walk_ps: float = Field(default=5.0, gt=0.0)
-    #: largest number of windows per leg; reaching it ends the precalculation with a warning
+    #: the rule is applied again during the equilibration of the replica-exchange run, to the
+    #: overlap of every block of this length; a window that is added restarts the equilibration.
+    #: 0 leaves the windows as the precalculation chose them
+    equilibration_check_ps: float = Field(default=250.0, ge=0.0)
+    #: largest number of windows per leg; reaching it ends the scheduling with a warning
     max_windows: WindowLimits = Field(default_factory=WindowLimits)
 
 

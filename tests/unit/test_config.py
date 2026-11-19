@@ -73,8 +73,9 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert len(ls.windows.solvent.vanish) == 10
     a = ls.adaptive
     assert (a.overlap_threshold, a.candidates, a.window_ps) == (0.04, 101, 50.0)
-    assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 13}
-    assert a.initial_windows.for_leg("solvent") == {"discharge": 9, "vanish": 13}
+    assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
+    assert a.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 9}
+    assert a.equilibration_check_ps == 250.0
     assert (a.max_windows.complex, a.max_windows.solvent) == (48, 32)
     cfg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {
         "mode": "fixed",
@@ -86,8 +87,8 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert w.for_leg("solvent") == {"discharge": 5, "vanish": [0.0, 0.5, 0.8, 1.0]}
     assert list(w.for_leg("complex")) == ["restrain", "discharge", "vanish"]
     assert cfg.lambda_schedule.adaptive.overlap_threshold == 0.03
-    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("solvent") == {"discharge": 9, "vanish": 5}
-    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 13}
+    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 5}
+    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
 
 
 def test_rest2_is_on_by_default_and_can_be_set(tmp_path):

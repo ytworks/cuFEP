@@ -35,14 +35,28 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 | 3 | 速度の実測: MPS の oversubscription、iteration の内訳、GPU 数に対するスケーリング、pre-equilibration | 済 (GPU 8 個と膜系は後の手順で測る) |
 | 4 | 設定スキーマを作り替える。fixed の推奨値を設定の `windows` で与える | 済 |
 | 5 | GPU の割当を作り替える。MPS、仕事量に比例した配分、worker の増減、`timing.json` | 済 |
-| 6 | adaptive lambda scheduling を実装する | 済 |
+| 6 | adaptive lambda scheduling を実装する | 済。手順 9 の結果を受けて、判定を replica exchange の equilibration の間にも行うようにした (下記) |
 | 7 | 文書を仕様と用語に合わせる。`docs/configuration.md` を新設 | 済 |
 | 8 | TYK2 example を既定設定で GPU 8 個と 1 個で走らせ、所要時間を測る | GPU 1 個と 5 個で実測済み。GPU 8 個は OpenFE の参照計算 (GPU 3 個を使用中) が終わってから測る |
-| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。adaptive の開始 window 数を実測で確定 (protocol.md)。restraint の強さ (固定と自動) と pre-equilibration (5 ns と 1 ns) は TYK2 で差が出ず、既定は変えない (configuration.md)。T4 リゾチーム/トルエンは 9 本中 6 本が -4.2〜-5.2 (実験 -5.52)、3 本は対称なリガンドの反転で無効 (下記) |
+| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。restraint の強さ (固定と自動) と pre-equilibration (5 ns と 1 ns) は TYK2 で差が出ず、既定は変えない (configuration.md)。T4 リゾチーム/トルエンは 9 本中 6 本が -4.2〜-5.2 (実験 -5.52)、3 本は対称なリガンドの反転で無効 (下記) |
 | 10 | A2A example (`membrane: {enabled: true}`) | 済。既定設定で完走し、dG_bind -12.03 ± 0.23 kcal/mol (1 回。実験 -12.07、FEP+ -11.01)。全ての隣り合う window の overlap は 0.08 以上、警告は対称数の注記のみ |
 | 11 | OpenFE との照合 (TYK2 ejm_31、jmc_23、T4 リゾチーム/トルエン) | 参照計算を実行中 |
 | 12 | ベンチマーク (smoke、subset、full)。1 リガンド 1 回 | 未 |
 | 13 | 公式イメージの作り直しと確認 | 未 |
+
+## adaptive lambda scheduling が働くようにする (2026-11-19)
+
+手順 9 で、論文どおりの 50 ps の precalculation は complex leg の overlap の低下 (数百 ps かけて
+起きる) を見られないことが分かった。そのとき私は開始 window 数を 13 に増やして overlap を確保
+したが、その結果 adaptive lambda scheduling は 94 leg のうち 1 leg でしか window を足さなく
+なり、実質は固定スケジュールになっていた。これは目玉機能を使わないという判断を勝手にした
+ことになる。オーナーの指示で次のように直した。
+
+- 開始 window 数を論文の値に戻す (restrain 3、discharge 5、vanish 9)。
+- 同じ規則を、replica exchange の equilibration (もともと捨てているデータ) にも適用する。
+  250 ps ごとに各 stage の overlap matrix を計算し、閾値以下の組があれば論文の規則で window を
+  1 つ足して equilibration をやり直す。equilibration の全長を閾値以下の組なしで通過したら
+  production に進む。仕様は protocol.md の "The rule goes on during the equilibration"。
 
 ## T4 リゾチーム L99A / トルエン (手順 9)
 

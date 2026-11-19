@@ -183,3 +183,43 @@ def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
     assert np.isfinite(res.delta_g) and set(res.stage_delta_g) == {"discharge", "vanish"}
     # decoupling a water molecule from water costs free energy (hydration free energy ~ -6 kcal/mol)
     assert res.delta_g > 0
+
+
+def test_windows_are_added_during_the_equilibration_of_replica_exchange(tmp_path, water_ligand_system):
+    """A leg that starts with two vanish windows that do not overlap gets a window from its own equilibration."""
+    from cufep.alchemy.schedule import AlsSettings, schedule_from_windows
+    from cufep.workflow import _equilibration_checks
+
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+    schedule = schedule_from_windows(["discharge", "vanish"], {"discharge": 2, "vanish": 2}, {"discharge": 2, "vanish": 2})
+    settings = AlsSettings(overlap_threshold=0.04, candidates=101, max_windows=6)
+    messages, restarts = [], 0
+    configs = (pos, box, None)
+    while True:
+        spec = LegSpec(name="tiny", system_xml=mm.XmlSerializer.serialize(alch.system),
+                       states=[s.to_dict() for s in schedule.states], n_atoms=system.getNumParticles(),
+                       backend="openmm", platform="CPU", precision="mixed", temperature_K=300.0, pressure_bar=1.0,
+                       barostat="isotropic", timestep_fs=2.0, steps_per_iteration=5, seed=5, frame_atoms=list(ligand))
+        leg = tmp_path / f"hrex{restarts}"
+        with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+            s.initialize(*configs)
+            out = _equilibration_checks(s, schedule, settings, n_equil=24, n_check=12, iteration_ps=0.01,
+                                        run_kwargs=dict(checkpoint_stride=12), on_iteration=lambda smp, st: None,
+                                        log=messages.append)
+            if out is None:
+                assert s.iteration == 24                    # the whole equilibration passed without a deficient pair
+                break
+        new, configs = out
+        assert len(new.states) == len(schedule.states) + 1 and new.mode == "adaptive"
+        assert configs[0].shape == (len(new.states), system.getNumParticles(), 3) and configs[1].shape[0] == len(new.states)
+        assert np.all(np.isfinite(configs[0])) and np.all(np.isfinite(configs[2]))
+        assert new.provenance["windows_added_during_equilibration"] == restarts + 1
+        schedule, restarts = new, restarts + 1
+        if restarts == 3:
+            break
+    assert restarts >= 1 and len(schedule.windows()["vanish"]) > 2
+    checks = schedule.provenance["equilibration_checks"]
+    assert any(c["status"] == "inserted" and c["stage"] == "vanish" for c in checks)
+    assert all("after_equilibration_ps" in c for c in checks)
+    assert any("adding a window" in m for m in messages)
