@@ -289,7 +289,7 @@ class LegJob:
 
 #: what a leg directory holds of its lambda windows and its replica-exchange run
 LEG_RUN_FILES = ("schedule.yaml", "start_configs.npz", "hrex", "hrex_failed_cupotential", "result.json", "error.json",
-                 "timing.json")
+                 "result.last_success.json", "timing.json")
 
 
 def archive_leg(leg_dir: Path) -> Path | None:
@@ -308,7 +308,42 @@ def archive_leg(leg_dir: Path) -> Path | None:
     dest.mkdir()
     for f in present:
         f.rename(dest / f.name)
+    # a leg that is being run again has had its result set aside by begin_leg: in the archive
+    # it is the result of those windows and samples again
+    if (dest / "result.last_success.json").exists() and not (dest / "result.json").exists():
+        (dest / "result.last_success.json").rename(dest / "result.json")
     return dest
+
+
+def begin_leg(leg_dir: Path) -> None:
+    """Called before a leg runs (again): from here on it has a result only if this run finishes.
+
+    The result of an earlier, finished run is kept as ``result.last_success.json``. It is a
+    record of what the leg gave before and is not used for a binding free energy: if this run
+    fails, for instance while a finished leg is being continued, the leg counts as failed.
+    """
+    leg_dir.mkdir(parents=True, exist_ok=True)
+    result = leg_dir / "result.json"
+    if result.exists():
+        result.replace(leg_dir / "result.last_success.json")
+    (leg_dir / "error.json").unlink(missing_ok=True)
+
+
+def leg_state(leg_dir: Path) -> tuple[str, dict | None]:
+    """What a leg directory holds: ("finished", result), ("failed", error) or ("missing", None).
+
+    A directory written before results were set aside at the start of a run can hold a result
+    and a later error; the later file counts.
+    """
+    result, error = leg_dir / "result.json", leg_dir / "error.json"
+    if result.exists() and error.exists():
+        newer = result if result.stat().st_mtime >= error.stat().st_mtime else error
+        return ("finished" if newer is result else "failed"), json.loads(newer.read_text())
+    if result.exists():
+        return "finished", json.loads(result.read_text())
+    if error.exists():
+        return "failed", json.loads(error.read_text())
+    return "missing", None
 
 
 def window_stage(lambda_windows: dict, k: int) -> tuple[str, float, float] | None:
@@ -327,10 +362,9 @@ def window_stage(lambda_windows: dict, k: int) -> tuple[str, float, float] | Non
 
 def read_result(job: LegJob) -> dict:
     """The result of a finished job, or its error."""
-    for name in ("result.json", "error.json"):
-        f = job.leg_dir / name
-        if f.exists():
-            return json.loads(f.read_text())
+    state, data = leg_state(job.leg_dir)
+    if data is not None:
+        return data
     return {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat,
             "error": "the job process ended without writing a result (killed?)"}
 
@@ -692,6 +726,11 @@ def run_leg(job: LegJob) -> dict:
                 sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20),
                             on_iteration=on_iteration)
             sampler.storage.set_meta(n_equilibration_iterations=n_equil)
+            # the result is for the length that was asked for, and every iteration is stored once
+            if sampler.storage.n_iterations != sampler.iteration or sampler.iteration < total:
+                raise WorkflowError(
+                    f"the leg holds {sampler.storage.n_iterations} iterations of samples after {sampler.iteration} "
+                    f"iterations were run and {total} were asked for; its samples are left as they are")
             timing["sampling"] = {
                 "lambda_windows": n_windows, "iterations": sampler.iteration - first,
                 "seconds_per_iteration": (time.perf_counter() - t_sampling) / max(1, sampler.iteration - first),
@@ -853,12 +892,19 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
 
 def run_leg_safe(job: LegJob) -> dict:
     """``run_leg`` that records failures instead of raising (for worker processes)."""
+    begin_leg(job.leg_dir)
     try:
         return run_leg(job)
     except Exception as exc:  # noqa: BLE001
         err = {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "error": f"{type(exc).__name__}: {exc}",
                "traceback": traceback.format_exc(limit=12)}
         job.leg_dir.mkdir(parents=True, exist_ok=True)
+        before = job.leg_dir / "result.last_success.json"
+        if before.exists():
+            old = json.loads(before.read_text())
+            err["last_success"] = {"file": before.name, "production_ns": old.get("production_ns"),
+                                   "delta_g_decouple_kJ_mol": old.get("delta_g_decouple")}
+        (job.leg_dir / "result.json").unlink(missing_ok=True)       # no result of a run that failed
         (job.leg_dir / "error.json").write_text(json.dumps(err, indent=1))
         print(f"[{job.tag}] FAILED: {err['error']}", flush=True)
         return err
@@ -871,12 +917,20 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
     warnings: list[str] = []
     # legs whose analysis fails a check of cufep.analysis.mbar.quality_checks
     flagged: dict[str, list[str]] = {"overlap": [], "convergence": [], "estimators": []}
+    failed_legs: list[str] = []
     for r in range(repeats):
-        files = {leg: lig_dir / f"repeat_{r}" / leg / "result.json" for leg in ("complex", "solvent")}
-        if not all(f.exists() for f in files.values()):
+        states = {leg: leg_state(lig_dir / f"repeat_{r}" / leg) for leg in ("complex", "solvent")}
+        for leg, (state, data) in states.items():
+            if state == "failed":
+                where = f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else "")
+                failed_legs.append(where)
+                kept = " An earlier result of this leg is kept in result.last_success.json and is not used." \
+                    if data.get("last_success") else ""
+                warnings.append(f"repeat {r} {leg}: FAILED: {str(data.get('error', ''))[:300]}.{kept}")
+        if not all(state == "finished" for state, _ in states.values()):
             warnings.append(f"repeat {r} is incomplete")
             continue
-        c, s = (json.loads(files[leg].read_text()) for leg in ("complex", "solvent"))
+        c, s = states["complex"][1], states["solvent"][1]
         dg = s["delta_g_decouple"] - c["delta_g_decouple"] - c["restraint_release"]
         err = float(np.hypot(c["delta_g_mbar_error"], s["delta_g_mbar_error"]))
         per_repeat.append({
@@ -897,6 +951,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
                 if (quality.get(check) or {}).get("ok") is False:
                     legs.append(where)
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
+                 "failed_legs": failed_legs,
                  "not_reliable": flagged["overlap"], "not_converged": flagged["convergence"],
                  "estimators_disagree": flagged["estimators"]}
     if per_repeat:

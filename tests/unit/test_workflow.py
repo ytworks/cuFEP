@@ -235,6 +235,79 @@ def test_a_leg_that_starts_anew_keeps_what_it_had(tmp_path):
     assert window_stage(windows, 7) == ("vanish", 0.5, 1.0) and window_stage(windows, 8) is None
 
 
+def _leg_result(dg, production_ns=5.0, leg="complex"):
+    return {"leg": leg, "delta_g_decouple": dg, "delta_g_mbar_error": 0.4, "restraint_release": 0.0, "lrc": 0.0,
+            "backend": "openmm", "analysis": {"stage_delta_g": {"vanish": dg}, "min_overlap": 0.2}, "n_states": 15,
+            "production_ns": production_ns, "notes": []}
+
+
+def test_a_leg_that_fails_while_it_is_continued_does_not_count_with_its_old_result(tmp_path, monkeypatch):
+    """Review of PR 1: a finished 5 ns leg whose continuation to 10 ns failed kept its old free energy."""
+    import cufep.workflow as workflow
+    from cufep.workflow import archive_leg, begin_leg, leg_state, read_result, run_leg_safe
+
+    lig = tmp_path / "lig"
+    for leg in ("complex", "solvent"):
+        d = lig / "repeat_0" / leg
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps(_leg_result(160.0 if leg == "complex" else 80.0, leg=leg)))
+    assert "dg_bind" in combine_ligand(lig, "lig", 1)
+
+    def fails(job):
+        raise RuntimeError("the GPU was lost")
+
+    monkeypatch.setattr(workflow, "run_leg", fails)
+    job = LegJob(ligand="lig", leg="complex", repeat=0, lig_dir=str(lig), devices=[], config={}, production_ns=10.0)
+    res = run_leg_safe(job)
+    leg_dir = lig / "repeat_0" / "complex"
+    assert "the GPU was lost" in res["error"] and res["last_success"]["production_ns"] == 5.0
+    assert not (leg_dir / "result.json").exists()
+    assert json.loads((leg_dir / "result.last_success.json").read_text())["delta_g_decouple"] == 160.0
+    assert leg_state(leg_dir)[0] == "failed" and "error" in read_result(job)
+    out = combine_ligand(lig, "lig", 1)
+    assert "dg_bind" not in out and out["n_repeats"] == 0 and out["failed_legs"] == ["complex leg"]
+    assert any("FAILED: RuntimeError: the GPU was lost" in w and "result.last_success.json" in w for w in out["warnings"])
+
+    # the leg runs again and finishes: the error is gone and the new result counts
+    begin_leg(leg_dir)
+    assert leg_state(leg_dir) == ("missing", None)
+    (leg_dir / "result.json").write_text(json.dumps(_leg_result(164.184, production_ns=10.0)))
+    out = combine_ligand(lig, "lig", 1)
+    assert out["failed_legs"] == [] and out["repeats"][0]["production_ns"] == {"complex": 10.0, "solvent": 5.0}
+
+    # a directory of an older version can hold a result and a later error: the later file counts
+    (leg_dir / "error.json").write_text(json.dumps({"error": "later"}))
+    import os
+    os.utime(leg_dir / "result.json", (1.0, 1.0))
+    assert leg_state(leg_dir)[0] == "failed"
+
+    # started anew, the leg keeps the result it had under its own name in the archive
+    begin_leg(leg_dir)
+    (leg_dir / "schedule.yaml").write_text("windows")
+    previous = archive_leg(leg_dir)
+    assert (previous / "result.json").exists() and not (previous / "result.last_success.json").exists()
+
+
+def test_commands_end_with_an_error_when_a_leg_failed(tmp_path, monkeypatch):
+    import yaml
+    from click.testing import CliRunner
+
+    import cufep.run as driver
+    from cufep.cli import main
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "output": {"dir": str(tmp_path / "out")}}))
+    good = {"ligand": "a", "dg_bind": -9.0, "failed_in_this_run": []}
+    bad = {"ligand": "b", "dg_bind": -8.0, "failed_in_this_run": ["complex leg"]}
+    assert driver.failed_legs([good, bad]) == ["b: complex leg"] and driver.failed_legs([good]) == []
+
+    monkeypatch.setattr(driver, "run", lambda cfg, **kwargs: [good])
+    assert CliRunner().invoke(main, ["run", str(cfg)]).exit_code == 0
+    monkeypatch.setattr(driver, "run", lambda cfg, **kwargs: [good, bad])
+    result = CliRunner().invoke(main, ["run", str(cfg), "--ligand", "b", "--leg", "complex", "--production-ns", "10"])
+    assert result.exit_code == 1 and "failed: b: complex leg" in result.output
+
+
 def test_a_run_can_be_restricted_to_ligands_and_legs():
     from cufep.run import select_jobs
     from cufep.workflow import WorkflowError

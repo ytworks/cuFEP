@@ -164,7 +164,10 @@ def run(config: str, repeats, production_ns, gpus, backend, output, ligands, leg
         summary = driver.run(cfg, reschedule=reschedule, only_ligands=ligands, only_legs=legs)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
-    if not any("dg_bind" in s for s in summary):
+    failed = driver.failed_legs(summary)
+    if failed:
+        click.echo("failed: " + "; ".join(failed), err=True)
+    if failed or not any("dg_bind" in s for s in summary):
         sys.exit(1)
 
 
@@ -229,10 +232,14 @@ def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
 
     try:
         cfg = _apply_overrides(benchmark_config(name, tier, output), repeats, None, gpus, None, None)
-        driver.run(cfg)
+        summary = driver.run(cfg)
         click.echo(report(name, cfg.output.dir))
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
+    failed = driver.failed_legs(summary)
+    if failed:
+        click.echo("failed: " + "; ".join(failed), err=True)
+        sys.exit(1)
 
 
 @benchmark.command("report")

@@ -145,9 +145,12 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         monitor.stop()
         if daemon is not None:
             daemon.stop()
+    failed_now: dict[str, list[str]] = {}
     for r in results:
         if "error" in r:
             log(f"FAILED {r['ligand']}/r{r['repeat']}/{r['leg']}: {r['error']}")
+            failed_now.setdefault(r["ligand"], []).append(f"{r['leg']} leg" + (f" of repeat {r['repeat']}"
+                                                                              if repeats > 1 else ""))
     # a run of some legs only leaves the timing of the whole run in place
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, daemon is not None, log,
                  file_name="timing_rerun.json" if partial else "timing.json")
@@ -155,6 +158,9 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats) if lig_dirs[lig.name].exists()
                else {"ligand": lig.name, "units": "kcal/mol", "n_repeats": 0, "warnings": ["not run"]}
                for lig in ligands]
+    for s in summary:
+        # legs that this run was to do and that failed; the command ends with an error because of them
+        s["failed_in_this_run"] = failed_now.get(s["ligand"], [])
     write_summary(out_dir, summary, ligands)
     for lig in ligands:
         for r in range(repeats):
@@ -172,14 +178,22 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
             # whatever the MBAR uncertainty says; say so next to the number
             low = s.get("min_overlap", 1.0) < cfg.analysis.min_overlap
             log(f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}"
+                + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
                 + (f"; NOT RELIABLE: neighbouring lambda windows overlap by only {s['min_overlap']:.3f}" if low else "")
                 + (f"; NOT CONVERGED: {', '.join(s['not_converged'])}" if s.get("not_converged") else "")
                 + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
-            for w in s.get("warnings", []):
-                log(f"  warning: {w}")
         else:
-            log(f"RESULT {s['ligand']}: no complete repeat")
+            log(f"RESULT {s['ligand']}: no complete repeat"
+                + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
+                + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
+        for w in s.get("warnings", []):
+            log(f"  warning: {w}")
     return summary
+
+
+def failed_legs(summary: list[dict]) -> list[str]:
+    """The legs that the run was to do and that failed, as "ligand: leg" (empty if none)."""
+    return [f"{s['ligand']}: {leg}" for s in summary for leg in s.get("failed_in_this_run", [])]
 
 
 def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
@@ -194,11 +208,12 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
     with open(out_dir / "summary.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
-                    "lowest_overlap", "not_reliable", "not_converged", "warnings"])
+                    "lowest_overlap", "failed_legs", "not_reliable", "not_converged", "warnings"])
         for s in summary:
             w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
-                        _fmt(s.get("min_overlap")), "; ".join(s.get("not_reliable", [])),
+                        _fmt(s.get("min_overlap")), "; ".join(s.get("failed_legs", [])),
+                        "; ".join(s.get("not_reliable", [])),
                         "; ".join(s.get("not_converged", [])), len(s.get("warnings", []))])
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
 
@@ -242,4 +257,4 @@ def _fmt(x) -> str:
     return "" if x is None else f"{x:.3f}"
 
 
-__all__ = ["plan", "run", "KCAL"]
+__all__ = ["plan", "run", "failed_legs", "KCAL"]
