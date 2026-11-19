@@ -237,7 +237,10 @@ def load_prepared(prep_dir: Path, name: str) -> dict:
     from cufep.prep.topology_io import topology_from_dict
 
     data = np.load(prep_dir / f"{name}.npz")
-    return {"system_xml": (prep_dir / f"{name}_system.xml").read_text(),
+    info_file = Path(prep_dir) / "prep.json"
+    info = json.loads(info_file.read_text()) if info_file.exists() else {}
+    return {"input_chains": info.get("input_chains"),       # None for a preparation of an earlier version
+            "system_xml": (prep_dir / f"{name}_system.xml").read_text(),
             "topology": topology_from_dict(json.loads((prep_dir / f"{name}_topology.json").read_text())),
             "positions": data["positions"], "box": data["box"], "ligand": [int(i) for i in data["ligand"]],
             "solute": [int(i) for i in data["solute"]], "protein": [int(i) for i in data["protein"]]}
@@ -420,7 +423,7 @@ def alchemical_leg(cfg: Config, system, prep: dict, box, restraint, is_complex: 
     hot_atoms, hot_residues = ([], [])
     if rest2_on and is_complex:
         hot_atoms, hot_residues = rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"],
-                                               prep["protein"])
+                                               prep["protein"], prep.get("input_chains"))
     alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha, rest2=rest2_on,
                                   rest2_atoms=hot_atoms,
                                   bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()])
@@ -841,7 +844,9 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
             "complex_barostat": barostat, "membrane": membrane, "box_shape": box_shape,
             "solvent_box_shape": solvent_shape, "membrane_info": membrane_info, "warnings": warnings,
             # the cuPotential plugin needs a larger box; a system built for it also runs on stock OpenMM
-            "box_built_for_backend": cfg.backend.name, "made_from": made_from}
+            "box_built_for_backend": cfg.backend.name, "made_from": made_from,
+            # the chain of the input PDB of every chain of the prepared protein
+            "input_chains": dict(protein.input_chains)}
     done.write_text(json.dumps(info, indent=1))
     log(f"{ligand.name}: complex {n_complex} atoms, solvent leg {system.getNumParticles()} atoms"
         + (f"; warnings: {'; '.join(warnings)}" if warnings else ""))
@@ -1604,12 +1609,22 @@ def run_leg(job: LegJob) -> dict:
     return result
 
 
-def rest2_region(rest2, topology, positions_nm, ligand, protein) -> tuple[list[int], list[str]]:
+def rest2_region(rest2, topology, positions_nm, ligand, protein,
+                 input_chains: dict[str, str] | None = None) -> tuple[list[int], list[str]]:
     """Protein atoms of the REST2 hot region (whole residues) and the names of their residues.
 
     ``region: pocket`` takes the residues with a heavy atom within ``pocket_cutoff_nm`` of a
-    heavy atom of the ligand in the prepared structure; ``residues`` adds residues by number.
+    heavy atom of the ligand in the prepared structure; ``residues`` adds residues named as in
+    the input PDB: ``"960"``, ``"B:960"`` or with an insertion code ``"B:898A"``. The
+    preparation gives every peptide segment a chain of its own, named A, B, ... in order, so the
+    chain of the input is found through ``input_chains`` (prepared chain -> input chain, recorded
+    in prep.json); a number without a chain must name one residue of the input. A preparation of
+    an earlier version recorded no such map, and residues are then refused rather than guessed
+    (review of PR 1: with only chain B in the input, "B:960" found nothing, and with several
+    chains it could take a residue of another chain).
     """
+    import re
+
     atoms = list(topology.atoms())
     protein = set(int(i) for i in protein)
     positions = np.asarray(positions_nm)
@@ -1625,15 +1640,32 @@ def rest2_region(rest2, topology, positions_nm, ligand, protein) -> tuple[list[i
                 if np.min(np.linalg.norm(ligand_heavy - positions[i], axis=1)) < rest2.pocket_cutoff_nm:
                     chosen.add(atoms[i].residue.index)
     protein_residues = {atoms[i].residue.index: atoms[i].residue for i in protein}
+    if rest2.residues and input_chains is None:
+        raise WorkflowError("sampling.rest2.residues names residues of the input PDB, and the prepared systems of this "
+                            "ligand were made by an earlier version that did not record the chains of the input. "
+                            "Nothing was changed; run the calculation in a new output.dir")
     for spec in rest2.residues:
-        chain, _, number = str(spec).rpartition(":")
-        found = [r.index for r in protein_residues.values()
-                 if str(r.id).strip() == number.strip() and (not chain or r.chain.id == chain)]
+        chain, _, number = str(spec).strip().rpartition(":")
+        m = re.fullmatch(r"(-?\d+)([A-Za-z]?)", number.strip())
+        if m is None:
+            raise WorkflowError(f"sampling.rest2.residues: '{spec}' is not a residue number of the input PDB "
+                                "(\"960\", \"B:960\" or \"B:898A\")")
+        found = {}
+        for r in protein_residues.values():
+            source = input_chains.get(r.chain.id)
+            code = (getattr(r, "insertionCode", "") or "").strip()
+            if str(r.id).strip() == m[1] and code == m[2] and (not chain or source == chain.strip()):
+                found[r.index] = source
         if not found:
-            raise WorkflowError(f"sampling.rest2.residues: no protein residue '{spec}'")
+            raise WorkflowError(f"sampling.rest2.residues: no protein residue '{spec}' in the input PDB")
+        if len(set(found.values())) > 1:
+            raise WorkflowError(f"sampling.rest2.residues: '{spec}' is a residue of the chains "
+                                f"{', '.join(sorted(set(found.values())))} of the input PDB; give the chain, e.g. "
+                                f"'{sorted(set(found.values()))[0]}:{number.strip()}'")
         chosen.update(found)
     hot = sorted(i for i in protein if atoms[i].residue.index in chosen)
-    names = [f"{protein_residues[k].name}{protein_residues[k].id}" for k in sorted(chosen)]
+    names = [f"{protein_residues[k].name}{protein_residues[k].id}"
+             f"{(getattr(protein_residues[k], 'insertionCode', '') or '').strip()}" for k in sorted(chosen)]
     return hot, names
 
 

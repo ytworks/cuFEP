@@ -209,6 +209,7 @@ def test_hot_region_of_the_complex_leg(dipeptides_in_water):
     from cufep.workflow import WorkflowError, rest2_region
 
     system, top, pos, box, ligand, other = dipeptides_in_water
+    same = {c.id: c.id for c in top.chains()}          # prepared chain -> chain of the input
     none, names = rest2_region(Rest2Config(scale=2.0), top, pos, ligand, other)
     assert none == [] and names == []
     # far cutoff: every residue of the other peptide, whole residues
@@ -217,9 +218,33 @@ def test_hot_region_of_the_complex_leg(dipeptides_in_water):
     hot, names = rest2_region(Rest2Config(scale=2.0, region="pocket", pocket_cutoff_nm=0.05), top, pos, ligand, other)
     assert hot == []
     atoms = list(top.atoms())
-    hot, names = rest2_region(Rest2Config(scale=2.0, residues=["2"]), top, pos, ligand, other)
+    hot, names = rest2_region(Rest2Config(scale=2.0, residues=["2"]), top, pos, ligand, other, same)
     assert names == ["ALA2"] and {atoms[i].residue.name for i in hot} == {"ALA"} and len(hot) == 10
     chain = atoms[other[0]].residue.chain.id
-    assert rest2_region(Rest2Config(scale=2.0, residues=[f"{chain}:2"]), top, pos, ligand, other)[0] == hot
+    assert rest2_region(Rest2Config(scale=2.0, residues=[f"{chain}:2"]), top, pos, ligand, other, same)[0] == hot
     with pytest.raises(WorkflowError):
-        rest2_region(Rest2Config(scale=2.0, residues=["99"]), top, pos, ligand, other)
+        rest2_region(Rest2Config(scale=2.0, residues=["99"]), top, pos, ligand, other, same)
+
+
+def test_a_residue_number_of_two_input_chains_needs_its_chain():
+    """Review of PR 1 (P2): residues are named as in the input PDB; prepared chains map to the chains of the
+    input, and a number that two input chains have does not say which residue is meant."""
+    import openmm.app as app
+
+    from cufep.config.schema import Rest2Config
+    from cufep.workflow import WorkflowError, rest2_region
+
+    top = app.Topology()
+    for chain_id in ("A", "B", "C"):                     # prepared chains: A and B from input chain X, C from Y
+        res = top.addResidue("ILE", top.addChain(chain_id), id="960" if chain_id != "B" else "961")
+        top.addAtom("CA", app.element.carbon, res)
+    pos = np.zeros((3, 3))
+    chains = {"A": "X", "B": "X", "C": "Y"}
+
+    def names(*residues):
+        return rest2_region(Rest2Config(scale=1.5, residues=list(residues)), top, pos, [], [0, 1, 2], chains)[1]
+
+    assert names("X:960") == ["ILE960"] and names("Y:960") == ["ILE960"] and names("961") == ["ILE961"]
+    assert rest2_region(Rest2Config(scale=1.5, residues=["Y:960"]), top, pos, [], [0, 1, 2], chains)[0] == [2]
+    with pytest.raises(WorkflowError, match="'960' is a residue of the chains X, Y of the input PDB; give the chain"):
+        names("960")

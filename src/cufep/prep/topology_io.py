@@ -11,8 +11,12 @@ def topology_to_dict(topology: app.Topology) -> dict:
     for chain in topology.chains():
         residues = []
         for res in chain.residues():
-            residues.append({"name": res.name, "id": res.id,
-                             "atoms": [[a.name, a.element.symbol if a.element is not None else ""] for a in res.atoms()]})
+            entry = {"name": res.name, "id": res.id,
+                     "atoms": [[a.name, a.element.symbol if a.element is not None else ""] for a in res.atoms()]}
+            code = (getattr(res, "insertionCode", "") or "").strip()
+            if code:                                   # PDB insertion code: 898 and 898A are two residues
+                entry["icode"] = code
+            residues.append(entry)
         chains.append({"id": chain.id, "residues": residues})
     bonds = [[b[0].index, b[1].index] for b in topology.bonds()]
     box = topology.getPeriodicBoxVectors()
@@ -26,7 +30,7 @@ def topology_from_dict(data: dict) -> app.Topology:
     for c in data["chains"]:
         chain = top.addChain(c["id"])
         for r in c["residues"]:
-            res = top.addResidue(r["name"], chain, id=r["id"])
+            res = top.addResidue(r["name"], chain, id=r["id"], insertionCode=r.get("icode", ""))
             for name, symbol in r["atoms"]:
                 atoms.append(top.addAtom(name, elem.get_by_symbol(symbol) if symbol else None, res))
     for i, j in data["bonds"]:

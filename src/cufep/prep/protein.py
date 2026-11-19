@@ -36,6 +36,8 @@ _CANONICAL = {"HID": "HIS", "HIE": "HIS", "HIP": "HIS", "HSD": "HIS", "HSE": "HI
 CAPS = {"ACE", "NME", "NMA"}
 WATER = {"HOH", "WAT", "H2O", "TIP", "TIP3", "SOL"}
 TITRATABLE = {"HIS", "ASP", "GLU", "LYS", "CYS", "TYR", "ARG"}
+#: residues whose state infer_variant reads from the hydrogens of the file
+INFERRED = {"HIS", "ASP", "GLU", "LYS", "CYS"}
 MAX_PEPTIDE_BOND_NM = 0.16
 _CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -64,6 +66,10 @@ class PreparedProtein:
     topology: app.Topology
     positions: unit.Quantity
     report: ProteinReport
+    #: chain of the input PDB of every chain of the prepared protein: the preparation gives every
+    #: peptide segment a chain of its own (a chain break makes two), named A, B, ... in order, so
+    #: residues named in the words of the input (sampling.rest2.residues) are found through this
+    input_chains: dict[str, str] = field(default_factory=dict)
 
     def positions_nm(self) -> np.ndarray:
         return np.asarray(self.positions.value_in_unit(unit.nanometer), dtype=float)
@@ -74,8 +80,15 @@ class PreparedProtein:
 
 
 # --------------------------------------------------------------------------- helpers
+def residue_key(res) -> tuple[str, str, str]:
+    """What identifies a residue in a PDB file: chain, residue number and insertion code.
+    ``LYS 898`` and ``LYS 898A`` of one chain are two residues (review of PR 1)."""
+    return (res.chain.id, str(res.id), (getattr(res, "insertionCode", "") or "").strip())
+
+
 def _label(res) -> str:
-    return f"{res.name}{res.id}{'/' + res.chain.id if res.chain.id.strip() else ''}"
+    chain, number, code = residue_key(res)
+    return f"{res.name}{number}{code}{'/' + chain if chain.strip() else ''}"
 
 
 def _bonded(topology: app.Topology) -> dict[int, set[int]]:
@@ -141,23 +154,36 @@ def _rename_cap(kind: str, atoms, nbrs) -> dict[int, str]:
     return names
 
 
+#: hydrogens of the backbone; every other hydrogen of an amino acid is on its side chain
+BACKBONE_HYDROGENS = {"H", "H1", "H2", "H3", "HN", "HA", "HA2", "HA3"}
+
+
 def infer_variant(res) -> str | None:
-    """Protonation variant implied by the hydrogens already on a residue (None = no hydrogens)."""
-    names = {a.name for a in res.atoms()}
-    if not any(a.element == elem.hydrogen for a in res.atoms()):
+    """Protonation variant implied by the hydrogens already on a residue, or None where they do
+    not decide it; ``Modeller.addHydrogens`` then assigns the state at the pH of the run.
+
+    The hydrogens decide nothing when the side chain carries none (a file with hydrogens on the
+    backbone only), when a histidine has neither HD1 nor HE2 (a ring without its proton is no
+    state of the force field: HIN has no template in Amber14, review of PR 1), when a lysine has
+    neither two nor three HZ, and when a cysteine without HG is not in a disulfide bond (CYX
+    belongs to a bonded pair; addHydrogens makes it from the bonds of the topology).
+    """
+    names = {a.name for a in res.atoms() if a.element == elem.hydrogen}
+    if not names - BACKBONE_HYDROGENS:
         return None
     base = _CANONICAL.get(res.name, res.name)
     if base == "HIS":
         d, e = "HD1" in names, "HE2" in names
-        return "HIP" if d and e else "HID" if d else "HIE" if e else "HIN"
+        return "HIP" if d and e else "HID" if d else "HIE" if e else None
     if base == "ASP":
         return "ASH" if names & {"HD2", "HD1"} else "ASP"
     if base == "GLU":
         return "GLH" if names & {"HE2", "HE1"} else "GLU"
     if base == "LYS":
-        return "LYS" if len([n for n in names if n.startswith("HZ")]) >= 3 else "LYN"
+        hz = len([n for n in names if n.startswith("HZ")])
+        return "LYS" if hz >= 3 else "LYN" if hz == 2 else None
     if base == "CYS":
-        return "CYS" if "HG" in names else "CYX"
+        return "CYS" if "HG" in names else None
     return None
 
 
@@ -308,7 +334,11 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
     cap_plan: dict[tuple[int, int], list[str]] = {}
 
     def copy_res(res, chain, name=None, rename=None, resid=None):
-        new_res = new_top.addResidue(name or res.name, chain, id=str(resid if resid is not None else res.id))
+        # the insertion code goes along: without it the PDB written below is read back with two
+        # residues of one number merged into one
+        code = residue_key(res)[2] if resid is None else ""
+        new_res = new_top.addResidue(name or res.name, chain, id=str(resid if resid is not None else res.id),
+                                     insertionCode=code)
         for a in res.atoms():
             if a.index in drop_atoms:
                 continue
@@ -319,8 +349,10 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
 
     if len(segments) > len(_CHAIN_IDS) - 1:
         raise ProteinError("too many protein segments for PDB chain identifiers")
+    input_chains: dict[str, str] = {}
     for s, seg in enumerate(segments):
         chain = new_top.addChain(_CHAIN_IDS[s])
+        input_chains[_CHAIN_IDS[s]] = seg[0].chain.id
         first, last = seg[0], seg[-1]
         n_in_chain = 0
         if first.index in ace_for:
@@ -360,8 +392,8 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
     fixer = PDBFixer(pdbfile=buf)
     fixer.missingResidues = dict(cap_plan)
     fixer.findMissingAtoms()
-    capped_last = {(_CHAIN_IDS[s], str(seg[-1].id)) for s, seg in enumerate(segments) if seg[-1].index in no_oxt}
-    fixer.missingTerminals = {r: a for r, a in fixer.missingTerminals.items() if (r.chain.id, r.id) not in capped_last}
+    capped_last = {(_CHAIN_IDS[s], *residue_key(seg[-1])[1:]) for s, seg in enumerate(segments) if seg[-1].index in no_oxt}
+    fixer.missingTerminals = {r: a for r, a in fixer.missingTerminals.items() if residue_key(r) not in capped_last}
     rebuilt = [f"{_label(r)}:{'+'.join(a.name for a in atoms)}" for r, atoms in fixer.missingAtoms.items()]
     if rebuilt:
         report.warnings.append("missing heavy atoms rebuilt: " + ", ".join(rebuilt[:20])
@@ -370,14 +402,19 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
 
     # ---- 7. hydrogens: keep what is there, add what is missing ----------------------------------
     variants = [infer_variant(res) if res.name in AMINO_ACIDS else None for res in fixer.topology.residues()]
-    before = {(r.chain.id, r.id, r.name): sum(1 for a in r.atoms() if a.element == elem.hydrogen)
+    # residues whose hydrogens were given but do not decide their state (infer_variant)
+    undecided = {residue_key(r) for r, v in zip(fixer.topology.residues(), variants)
+                 if v is None and r.name in AMINO_ACIDS and _CANONICAL.get(r.name, r.name) in INFERRED
+                 and any(a.element == elem.hydrogen for a in r.atoms())}
+    before = {(*residue_key(r), r.name): sum(1 for a in r.atoms() if a.element == elem.hydrogen)
               for r in fixer.topology.residues()}
     modeller = app.Modeller(fixer.topology, fixer.positions)
     actual = modeller.addHydrogens(forcefield, pH=ph, variants=variants)
     for res, variant, given in zip(modeller.topology.residues(), actual, variants):
         base = _CANONICAL.get(res.name, res.name)
-        if given is None and base in TITRATABLE and before.get((res.chain.id, res.id, res.name), 0) == 0:
-            report.protonation_assigned.append(f"{res.name}{res.id}/{res.chain.id}={variant or res.name}")
+        if given is None and base in TITRATABLE and (before.get((*residue_key(res), res.name), 0) == 0
+                                                       or residue_key(res) in undecided):
+            report.protonation_assigned.append(f"{_label(res)}={variant or res.name}")
     if report.protonation_assigned:
         his = [p for p in report.protonation_assigned if p.startswith("HIS")]
         report.notes.append(f"protonation assigned at pH {ph} for {len(report.protonation_assigned)} titratable "
@@ -388,7 +425,7 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
     if unmatched:
         raise ProteinError("no force-field template for: " + ", ".join(sorted({_label(r) for r in unmatched})[:12])
                            + ". Check termini, protonation and missing atoms of these residues.")
-    return PreparedProtein(modeller.topology, modeller.positions, report)
+    return PreparedProtein(modeller.topology, modeller.positions, report, input_chains)
 
 
 def _int_id(res_id: str) -> int:

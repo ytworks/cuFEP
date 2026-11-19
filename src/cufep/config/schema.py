@@ -331,8 +331,8 @@ class Rest2Config(_Section):
     #: heavy atom within pocket_cutoff_nm of a heavy atom of the ligand in the prepared structure
     region: Literal["ligand", "pocket"] = "ligand"
     pocket_cutoff_nm: float = Field(default=0.4, gt=0.0)
-    #: protein residues added to the hot region: residue numbers as in the PDB file, "960" or
-    #: with the chain "A:960"
+    #: protein residues added to the hot region, named as in the input PDB: "960", with the chain
+    #: of the input "B:960", with an insertion code "B:898A"
     residues: list[str] = Field(default_factory=list)
 
 
