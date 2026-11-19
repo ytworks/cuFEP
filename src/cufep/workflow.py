@@ -551,6 +551,7 @@ def run_leg(job: LegJob) -> dict:
             production_ns=production, barostat=barostat, platform=cfg.backend.platform,
             precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
             md_backend=cfg.backend.name,
+            area_tolerance=cfg.membrane.area_tolerance, water_tolerance=cfg.membrane.pocket_water_tolerance,
             restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half, wall_centre_nm=0.0,
             ligand_atoms=prep["ligand"] if in_membrane else [],
             water_oxygens=[a.index for a in prep["topology"].atoms()
@@ -564,7 +565,8 @@ def run_leg(job: LegJob) -> dict:
         np.savez(tmp, positions=eq.positions, velocities=eq.velocities, box=eq.box, frames=eq.frames[-n_keep:],
                  frame_boxes=eq.frame_boxes[-n_keep:], frame_atoms=np.array(eq.frame_atoms),
                  timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes), simulated_ns=eq.simulated_ns,
-                 pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2, made_with=json.dumps(equil_from))
+                 pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2, made_with=json.dumps(equil_from),
+                 membrane_settled=json.dumps(eq.settled))
         tmp.replace(equil_file)
         timed("pre_equilibration", t0)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")

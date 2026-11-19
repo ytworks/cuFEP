@@ -30,6 +30,8 @@ membrane:
   lipid: POPC
   padding_nm: 1.5
   equilibration_ns: 10.0
+  area_tolerance: 0.01            # warning if the area still changes by more than this fraction at the end of the equilibration
+  pocket_water_tolerance: 1.5     # ... or the number of waters near the ligand by more than this
 forcefield:
   protein: amber14/protein.ff14SB.xml
   water: amber14/tip3p.xml
@@ -194,3 +196,4 @@ the schedule in fixed mode.
 | `analysis.lrc` | reweight | see protocol.md, long-range dispersion |
 | `resources.oversubscription_factor` | from the size of the system: 16 up to 10,000 atoms, 8 up to 60,000, 4 up to 200,000, else 2 | measured total throughput per GPU under NVIDIA MPS |
 | `membrane.equilibration_ns` | 10 ns | cuFEP's own choice for a freshly built bilayer |
+| `membrane.area_tolerance`, `pocket_water_tolerance` | 0.01; 1.5 | cuFEP's own choice: the mean area in the membrane plane and the mean number of water molecules within 0.6 nm of the ligand are compared between the last two quarters of the equilibration. A larger change is reported with the result; the run is not made longer |

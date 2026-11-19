@@ -70,6 +70,12 @@ class MembraneConfig(_Section):
     padding_nm: float = 1.5
     #: unrestrained MD of the bilayer before the alchemical run (replaces pre_equilibration md_ns)
     equilibration_ns: float = 10.0
+    #: the result carries a warning if the bilayer has not settled by the end of that MD: if,
+    #: between its last two quarters, the area in the membrane plane changes by more than this
+    #: fraction, or the number of water molecules within 0.6 nm of the ligand by more than the
+    #: number below. The run is not made longer
+    area_tolerance: float = Field(default=0.01, gt=0.0)
+    pocket_water_tolerance: float = Field(default=1.5, gt=0.0)
 
 
 class ForceFieldConfig(_Section):
