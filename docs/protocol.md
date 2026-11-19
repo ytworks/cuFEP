@@ -925,10 +925,14 @@ exchanged.
 - The GPUs are CUDA device numbers as `CUDA_VISIBLE_DEVICES` leaves them (`resources.gpus`,
   `--gpus`); cuFEP sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` so that a device number names the same
   GPU as nvidia-smi does, whose load decides which GPUs are free and is reported.
-- If the scheduler fails or is interrupted (Ctrl-C reaches it alone: every job runs in a
-  process group of its own), it stops every job, which stops its workers and closes its
-  files, waits for them (a job that has not ended after 120 s is killed with its workers), and
-  only then gives up the lock of the output directory.
+- If the scheduler fails or is ended by Ctrl-C, SIGTERM or a hangup (these reach it alone:
+  every job runs in a process group of its own), it stops every job, which stops its workers
+  and closes its files, waits for them (a job that has not ended after 120 s is killed with its
+  workers; a further Ctrl-C meanwhile is noted and does not cut this short), and only then
+  gives up the lock of the output directory. A scheduler that is killed (SIGKILL) cannot do
+  this: its jobs get a signal from the kernel when it ends (Linux `PR_SET_PDEATHSIG`) and stop
+  in order, workers likewise end with their job, and every job holds a lock of its own leg
+  while it lives, so a new run in the directory is refused until the last job has ended.
 - With more jobs than can run at once, the others wait; freed capacity goes to waiting
   jobs first. The same code runs on one GPU.
 

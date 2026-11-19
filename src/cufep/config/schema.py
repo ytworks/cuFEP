@@ -459,18 +459,15 @@ def md_segments(cfg: "Config") -> list[tuple[str, int]]:
     ls = cfg.lambda_schedule
     out = [("sampling.time_per_iteration_ps (the MD of one replica in one iteration)",
             md_steps(cfg.sampling.time_per_iteration_ps, dt))]
-    if ls.mode == "fixed" or ls.file is not None:
-        out.append(("lambda_schedule.fixed_walk_ps (the MD in each window that makes its start configuration)",
-                    md_steps(ls.fixed_walk_ps, dt)))
+    # the walks through the windows (fixed_walk_ps, adaptive.walk_ps) are one trajectory that goes from
+    # window to window: no other configuration shares its Context, so it is not listed here
     if ls.mode == "adaptive" and ls.file is None:
         a = ls.adaptive
         for leg in ("complex", "solvent"):
             eq_steps, n_samples, per_sample = precalculation_steps(a.window(leg), a.equilibration(leg),
                                                                    a.sample_interval_ps, dt)
             out.append((f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
-                        "the precalculation)", eq_steps + n_samples * per_sample))
-        out.append(("lambda_schedule.adaptive.walk_ps (the MD in each window before the first iteration of the "
-                    "precalculation)", md_steps(a.walk_ps, dt)))
+                        "the precalculation, which starts from a configuration of its own)", eq_steps + n_samples * per_sample))
     return out
 
 

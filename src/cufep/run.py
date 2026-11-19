@@ -14,26 +14,20 @@ from cufep import mps
 from cufep.analysis.plots import plot_repeat
 from cufep.benchmarks.runner import LEG_FLAGS, flags_of
 from cufep.scheduler import GpuMonitor, run_jobs
-from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_leg_reuse, check_manual_anchors, check_partner_legs,
-                            check_prepared, combine_ligand, ligand_directories, prepare_ligand, refresh_leg_result,
-                            select_ligands, select_names, settings_differences)
+from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_before_jobs, check_leg_reuse, check_partner_legs,
+                            check_prepared, combine_ligand, ligand_directories, ligands_of_run, prepare_ligand,
+                            refresh_leg_result, select_names, settings_differences)
 
 
-def plan(cfg: Config, log=print) -> tuple[Config, AutoReport, object, list]:
+def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, object, list]:
     """Static part of a run: prepare the protein, read the ligands, resolve ``auto`` settings."""
     from cufep.prep.forcefield import ForceFieldSpec, make_forcefield
-    from cufep.prep.ligand import load_ligands
     from cufep.prep.protein import prepare_protein
 
     check_configuration(cfg)
     # the ligands first: what they are called decides where anything is written
-    ligands = load_ligands(cfg.system.ligand)
-    all_names = [lig.name for lig in ligands]
-    if len(set(all_names)) != len(all_names):
-        raise WorkflowError("ligand names in the SDF are not unique; give every record a distinct title line")
-    ligands = select_ligands(ligands, cfg.system.ligand_names, "system.ligand_names")
+    ligands = ligands_of_run(cfg) if ligands is None else ligands
     names = [lig.name for lig in ligands]
-    ligand_directories(cfg.output.dir, names)        # refuses names that are no directory of their own
     if cfg.system.cofactors:
         raise WorkflowError("system.cofactors is not implemented yet in this version")
     ff = make_forcefield(ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water), [])
@@ -58,6 +52,8 @@ def lock_output_directory(out_dir: Path):
     """
     import fcntl
 
+    from cufep.processes import legs_still_running
+
     handle = open(Path(out_dir) / ".cufep.lock", "w")
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -65,6 +61,12 @@ def lock_output_directory(out_dir: Path):
         handle.close()
         raise WorkflowError(f"another cufep run is using the output directory {out_dir}; wait for it to end, "
                             "or give this run another directory (output.dir or -o)") from None
+    # a job of an earlier run whose scheduler ended without stopping it may still be writing
+    running = legs_still_running(out_dir)
+    if running:
+        handle.close()
+        raise WorkflowError(f"a job of an earlier run is still running in {', '.join(running)} of {out_dir}; it "
+                            "stops by itself now that its run has ended. Wait for it, then run again")
     return handle
 
 
@@ -90,19 +92,21 @@ def run(cfg: Config, reschedule: bool = False, log=None, only_ligands=None, only
     the other legs already have.
     """
     check_configuration(cfg)                     # before the output directory is made
+    ligands = ligands_of_run(cfg, only_ligands)  # so are the names of the ligands
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)
     try:
-        return _run(cfg, out_dir, reschedule, log, only_ligands, only_legs)
+        return _run(cfg, out_dir, reschedule, log, only_ligands, only_legs, ligands)
     finally:
         lock.close()
 
 
-def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, only_legs=None) -> list[dict]:
+def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, only_legs=None,
+         ligands=None) -> list[dict]:
     log = log or _Log(out_dir / "cufep.log")
     t_run = time.time()
-    resolved, report, protein, ligands = plan(cfg, log)
+    resolved, report, protein, ligands = plan(cfg, log, ligands)
     selected = select_jobs([lig.name for lig in ligands], resolved.sampling.repeats, only_ligands, only_legs)
     partial = bool(only_ligands or only_legs)
     if partial:
@@ -133,7 +137,7 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
                                   lambda message: None)
             check_partner_legs(lig_dirs[lig.name], lig.name, mine, repeats, resolved, info)
             if info is not None:
-                check_manual_anchors(resolved, lig_dirs[lig.name])
+                check_before_jobs(resolved, lig_dirs[lig.name], mine)
             for r, leg in sorted(mine):
                 if info is not None:
                     check_leg_reuse(resolved, lig_dirs[lig.name], leg, r, info, resolved.sampling.production(leg),
@@ -148,7 +152,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     for lig in ligands:
         if lig.name in to_run:
             prepare_ligand(resolved, lig, protein, lig_dirs[lig.name], membrane, resolved.solvation.box_shape, log)
-            check_manual_anchors(resolved, lig_dirs[lig.name])          # before any job starts
+            check_before_jobs(resolved, lig_dirs[lig.name],             # before any job starts
+                              {(r, leg) for name, r, leg in selected if name == lig.name})
 
     t_prepared = time.time()
     sizes = {name: json.loads((lig_dirs[name] / "prep" / "prep.json").read_text()) for name in to_run}

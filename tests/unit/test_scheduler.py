@@ -118,28 +118,12 @@ def test_no_gpu_is_ever_given_more_than_it_takes(seed):
 
 # ---- a run that fails stops everything it started --------------------------------------------------------
 
-def child_job(job, conn):
-    """Stands in for a job process: writes its pid and a heartbeat into the leg directory until it is stopped.
-    A job named 'stubborn' ignores SIGTERM; one named 'short-<s>' ends after s seconds with a result."""
-    os.setpgrp()
-    leg = Path(job.leg_dir)
-    leg.mkdir(parents=True, exist_ok=True)
-    if job.ligand == "stubborn":
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    else:
-        signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(SystemExit(143)))
-    (leg / "pid").write_text(str(os.getpid()))
-    t0 = time.time()
-    (leg / "began").write_text(repr(t0))
-    while True:
-        (leg / "heartbeat").write_text(repr(time.time()))
-        if job.ligand.startswith("short-") and time.time() - t0 > float(job.ligand.split("-")[1]):
-            (leg / "ended").write_text(repr(time.time()))
-            (leg / "result.json").write_text(json.dumps({"ligand": job.ligand, "leg": job.leg, "repeat": 0,
-                                                         "analysis": {}}))
-            (leg / ".started").unlink(missing_ok=True)
-            return
-        time.sleep(0.05)
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+import job_doubles  # noqa: E402
+
+TESTS = Path(__file__).parent
 
 
 def _jobs(tmp_path, names):
@@ -147,25 +131,45 @@ def _jobs(tmp_path, names):
                    production_ns=1.0) for name in names]
 
 
+def _gone(pid: int) -> bool:
+    """The process has ended: it does not exist, or it is a zombie that nobody has reaped yet (a job whose
+    scheduler was killed belongs to pid 1, which in a test container does not reap)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] == "Z"
+    except OSError:
+        return True
+
+
+def _wait_for(condition, timeout=60.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return False
+
+
 @pytest.mark.parametrize("name", ["polite", "stubborn"])
 def test_a_scheduler_that_fails_stops_its_jobs_before_it_returns(tmp_path, monkeypatch, name):
     """Review of PR 1 (P1): an exception in the scheduler right after a job had started (here: the log that
     reports the start fails) released the lock of the output directory while the job went on writing there."""
-    monkeypatch.setattr(scheduler, "_entry", child_job)
+    monkeypatch.setattr(scheduler, "JOB_FUNCTION", job_doubles.heartbeat_job)
     monkeypatch.setattr(scheduler, "STOP_GRACE_SECONDS", 2.0)
     jobs = _jobs(tmp_path, [name])
 
     def log(message):
         if message.startswith("started"):
-            time.sleep(1.0)                            # the job is running
+            _wait_for(lambda: (jobs[0].leg_dir / "heartbeat").exists())
             raise OSError("the log cannot be written")
 
     with pytest.raises(OSError, match="the log cannot be written"):
         scheduler.run_jobs(jobs, [0], log=log, mps=False)
     leg = jobs[0].leg_dir
-    pid = int((leg / "pid").read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)                                # gone, not only asked to go
+    assert _gone(int((leg / "pid").read_text()))       # gone, not only asked to go
     beat = (leg / "heartbeat").read_text()
     time.sleep(0.5)
     assert (leg / "heartbeat").read_text() == beat     # nothing writes there any more
@@ -173,8 +177,92 @@ def test_a_scheduler_that_fails_stops_its_jobs_before_it_returns(tmp_path, monke
 
 
 def test_jobs_wait_for_room_on_a_single_gpu_without_mps(tmp_path, monkeypatch):
-    monkeypatch.setattr(scheduler, "_entry", child_job)
+    monkeypatch.setattr(scheduler, "JOB_FUNCTION", job_doubles.heartbeat_job)
     jobs = _jobs(tmp_path, ["short-0.6", "short-0.7"])
     scheduler.run_jobs(jobs, [0], log=lambda m: None, mps=False)
     spans = [(float((j.leg_dir / "began").read_text()), float((j.leg_dir / "ended").read_text())) for j in jobs]
     assert spans[1][0] >= spans[0][1]                  # the second began after the first had ended
+
+
+def _start_run(out, names):
+    """A run of heartbeat jobs in a process of its own, leader of its own process group, as at a terminal."""
+    code = (f"import sys; sys.path.insert(0, {str(TESTS)!r}); import job_doubles; "
+            f"job_doubles.scheduler_main({str(out)!r}, {list(names)!r})")
+    proc = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
+    legs = [out / name / "repeat_0" / "solvent" for name in names]
+    assert _wait_for(lambda: all((leg / "heartbeat").exists() for leg in legs)), "the jobs did not start"
+    return proc, legs
+
+
+def _lock_is_free(out) -> bool:
+    import fcntl
+
+    with open(out / ".cufep.lock", "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return True
+
+
+@pytest.mark.parametrize("how", ["SIGTERM to the run", "SIGHUP to its process group"])
+def test_a_run_ended_by_a_signal_stops_its_jobs_before_its_lock_goes(tmp_path, how):
+    """Review of PR 1 (P1): the jobs run in process groups of their own; a SIGTERM (kill, GNU timeout) or a hangup
+    ended the run without stopping them, its lock went, and the jobs went on writing (heartbeat 11 -> 17 lines in
+    3 s)."""
+    import signal
+
+    out = tmp_path / "out"
+    proc, legs = _start_run(out, ["slow-1", "polite"])
+    if how.startswith("SIGTERM"):
+        proc.send_signal(signal.SIGTERM)
+    else:
+        os.killpg(proc.pid, signal.SIGHUP)
+    assert proc.wait(timeout=60) != 0
+    for leg in legs:
+        assert _gone(int((leg / "pid").read_text()))
+        beat = (leg / "heartbeat").read_text()
+        time.sleep(0.3)
+        assert (leg / "heartbeat").read_text() == beat
+    assert (legs[0] / "stopped").exists()               # the slow one was let finish its stop
+    lines = (out / "scheduler.log").read_text().splitlines()
+    assert lines[-1] == "released" and sum(" stopped (exit code" in line for line in lines) == 2
+    assert _lock_is_free(out)
+
+
+def test_a_run_that_is_killed_leaves_no_job_behind_and_no_second_run_meets_one(tmp_path):
+    """SIGKILL cannot be caught: the jobs get a signal from the kernel when their scheduler ends and stop in
+    order, and while one still stops, a new run in the same directory is refused."""
+    import signal
+
+    from cufep.run import lock_output_directory
+    from cufep.workflow import WorkflowError
+
+    out = tmp_path / "out"
+    proc, legs = _start_run(out, ["slow-2"])
+    proc.send_signal(signal.SIGKILL)
+    proc.wait(timeout=30)
+    assert _wait_for(lambda: (legs[0] / "heartbeat").read_text().startswith("stopping"), timeout=10)
+    with pytest.raises(WorkflowError, match=r"a job of an earlier run is still running in slow-2/repeat_0/solvent"):
+        lock_output_directory(out)
+    assert _wait_for(lambda: _gone(int((legs[0] / "pid").read_text())), timeout=30)
+    assert (legs[0] / "stopped").exists()
+    lock_output_directory(out).close()                  # once it has ended, the directory is free
+
+
+def test_a_second_interrupt_does_not_release_the_lock_while_jobs_stop(tmp_path):
+    """Review of PR 1 (P2): a second Ctrl-C while the jobs stopped left stop_jobs, and the lock went while a job
+    was still stopping."""
+    import signal
+
+    out = tmp_path / "out"
+    proc, legs = _start_run(out, ["slow-3"])
+    proc.send_signal(signal.SIGINT)
+    time.sleep(0.5)
+    proc.send_signal(signal.SIGINT)
+    time.sleep(1.0)
+    assert proc.poll() is None and not _lock_is_free(out)     # still stopping its job, still holding the lock
+    proc.wait(timeout=60)
+    assert (legs[0] / "stopped").exists() and _gone(int((legs[0] / "pid").read_text()))
+    assert _lock_is_free(out)

@@ -770,7 +770,7 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
             Path(path).write_text("ATOM")
 
     from pathlib import Path
-    monkeypatch.setattr(driver, "plan", lambda cfg, log: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
+    monkeypatch.setattr(driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
     monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: [])
     monkeypatch.setattr(driver, "write_timing", lambda *args, **kwargs: None)
     monkeypatch.setattr(driver, "refresh_leg_result", lambda *args, **kwargs: "current")
@@ -942,7 +942,7 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
         def write_pdb(self, path):
             Path(path).write_text("ATOM")
 
-    monkeypatch.setattr(driver, "plan", lambda cfg, log: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
+    monkeypatch.setattr(driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
     monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: pytest.fail("the run was not refused"))
     (out / "resolved_config.yaml").write_text("the record of the run that made the samples")
     before = {path: path.read_bytes() for path in (out / "resolved_config.yaml", leg_dir / "result.json",

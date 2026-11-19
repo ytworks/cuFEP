@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -302,8 +303,14 @@ class GpuMonitor:
         return {g: (sum(r.get(g, 0.0) for r in rows) / len(rows) if rows else None) for g in self.gpus}
 
 
-def _entry(job: LegJob, conn) -> None:
+#: what a job process runs (tests put a stand-in here; it must be importable by the job process)
+JOB_FUNCTION = run_leg_safe
+
+
+def _entry(job: LegJob, conn, scheduler_pid: int | None = None, function=None) -> None:
     import signal
+
+    from cufep.processes import die_with_parent, hold_job_lock
 
     # a process group of its own: the scheduler stops the job and every worker it started together,
     # and an interrupt at the terminal reaches the scheduler, which stops the jobs in order
@@ -313,9 +320,15 @@ def _entry(job: LegJob, conn) -> None:
         raise SystemExit(128 + signum)          # leaves every `with` and `finally`: workers stop, files close
 
     signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGHUP, stop)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # a scheduler that ends without stopping its jobs (SIGKILL, a crash) stops them all the same,
+    # and while this job lives no new run uses its leg (cufep.processes)
+    if scheduler_pid is not None:
+        die_with_parent(scheduler_pid)
+    lock = hold_job_lock(job.leg_dir)           # noqa: F841  held until this process ends
     job.control = JobControl(conn)
-    run_leg_safe(job)
+    (function or run_leg_safe)(job)
 
 
 #: how long a job is given to stop its workers and close its files after SIGTERM before it is killed
@@ -334,6 +347,29 @@ def stop_jobs(running: dict[int, dict], jobs: list[LegJob], log=print, grace: fl
     import signal
 
     grace = STOP_GRACE_SECONDS if grace is None else float(grace)
+    # a second interrupt (or a hangup, a SIGTERM) while the jobs stop must not end this function: the
+    # lock of the output directory would go with it while jobs still write (review of PR 1)
+    told = []
+
+    def wait_please(signum, frame):            # noqa: ARG001
+        if not told:
+            told.append(signum)
+            log(f"stopping the jobs; this ends by itself within {grace:.0f} s")
+
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            previous[sig] = signal.signal(sig, wait_please)
+    try:
+        _stop_started(running, jobs, log, grace)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _stop_started(running: dict[int, dict], jobs: list[LegJob], log, grace: float) -> None:
+    import signal
+
     started = {i: r for i, r in running.items() if r.get("proc") is not None and r["proc"].pid is not None}
     for i, r in started.items():
         if r["proc"].is_alive():
@@ -412,6 +448,15 @@ def _run_started_jobs(jobs: list[LegJob], gpus: list, log, oversubscription, mps
         candidate = Demand(job=i, phase="serial", factor=jobs[i].oversubscription)
         return allocate(gpus, demands() + [candidate], strict=True) is not None
 
+    def interrupted(signum, frame):            # noqa: ARG001
+        raise SystemExit(128 + signum)
+
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        # a SIGTERM (kill, GNU timeout) or a hangup ends the run as Ctrl-C does: the jobs are stopped
+        # before the lock of the output directory goes (review of PR 1)
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            previous[sig] = signal.signal(sig, interrupted)
     try:
         while waiting or running:
             # start waiting jobs, as long as their first worker fits
@@ -428,7 +473,7 @@ def _run_started_jobs(jobs: list[LegJob], gpus: list, log, oversubscription, mps
                 # dies at once, the leg must not be read as finished
                 begin_leg(job.leg_dir, job)
                 parent, child = ctx.Pipe()
-                proc = ctx.Process(target=_entry, args=(job, child))
+                proc = ctx.Process(target=_entry, args=(job, child, os.getpid(), JOB_FUNCTION))
                 running[i].update(proc=proc, conn=parent)       # known before it starts: stopped on any failure
                 proc.start()
                 child.close()
@@ -468,6 +513,9 @@ def _run_started_jobs(jobs: list[LegJob], gpus: list, log, oversubscription, mps
     except BaseException:
         stop_jobs(running, jobs, log)
         raise
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     return [read_result(job) for job in jobs]
 
 

@@ -62,7 +62,7 @@ def test_a_ligand_without_a_directory_of_its_own_is_refused_by_every_command(tmp
     for name, entry in entries.items():
         with pytest.raises(WorkflowError, match=why):
             entry()
-        assert set(written(tmp_path / "out")) <= {".cufep.lock"}, name
+        assert not (tmp_path / "out").exists(), name     # not even the directory, its lock or its log
     assert written(tmp_path)[:1] != ["prep"] and not (tmp_path / "prep").exists()
 
 
@@ -102,7 +102,7 @@ def test_the_ligand_named_on_the_command_line_must_exist(tmp_path, repo, monkeyp
     cfg = config_for(tmp_path, repo, sdf)
     ligands = load_ligands(sdf)
     monkeypatch.setattr(CuPotentialBackend, "available", staticmethod(lambda: (True, "")))
-    monkeypatch.setattr(driver, "plan", lambda cfg, echo=print: (cfg, None, None, ligands))
+    monkeypatch.setattr(driver, "plan", lambda cfg, echo=print, chosen=None: (cfg, None, None, chosen or ligands))
 
     def must_not_prepare(*args, **kwargs):
         raise AssertionError("a ligand was prepared")
@@ -116,6 +116,24 @@ def test_the_ligand_named_on_the_command_line_must_exist(tmp_path, repo, monkeyp
     assert select_names(["a", "b"], [], "--ligand") == ["a", "b"]
     with pytest.raises(WorkflowError, match="--ligand: not among"):
         driver.select_jobs(["a", "b"], 1, only_ligands=["x"])
+
+
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
+def test_cufep_run_with_an_unknown_ligand_writes_nothing(tmp_path, repo):
+    """Review (independent check before the push): `cufep run -o new_dir --ligand typo` made new_dir with its lock and
+    its log before it said that the ligand does not exist. Duplicate titles count among the selected ligands only,
+    as before."""
+    from cufep import run as driver
+
+    cfg = config_for(tmp_path, repo, write_sdf(tmp_path / "ligands.sdf", repo, ["ejm_31", "ejm_42", "dup", "dup"]))
+    cfg.system.ligand_names = ["ejm_31", "ejm_42"]              # the duplicate titles are not selected
+    with pytest.raises(WorkflowError, match="--ligand: not among the ligands of this calculation: ejm_3l"):
+        driver.run(cfg, log=lambda m: None, only_ligands=["ejm_3l"])
+    assert not (tmp_path / "out").exists()
+    assert [lig.name for lig in driver.ligands_of_run(cfg)] == ["ejm_31", "ejm_42"]
+    cfg.system.ligand_names = ["dup"]
+    with pytest.raises(WorkflowError, match="not unique"):
+        driver.ligands_of_run(cfg)
 
 
 def test_manual_anchors_belong_to_the_protein_and_the_ligand():
@@ -145,3 +163,32 @@ def test_manual_anchors_belong_to_the_protein_and_the_ligand():
 def test_manual_anchors_are_checked_when_the_configuration_is_read(restraints, why):
     with pytest.raises(Exception, match=why):
         Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "restraints": restraints})
+
+
+def test_what_a_complex_job_would_refuse_is_refused_before_any_job(tmp_path, monkeypatch, dipeptides_in_water):
+    """Review (independent check before the push): REST2 residues with prepared systems of an earlier version
+    (no record of the input chains), and a manual restraint with an equil.npz without frame boxes, were refused only
+    inside each complex job, after its result had been set aside and its pre-equilibration run."""
+    from cufep import workflow
+    from cufep.workflow import WorkflowError, check_before_jobs
+
+    system, top, pos, box, ligand, other = dipeptides_in_water
+    old_prep = {"topology": top, "positions": pos, "ligand": ligand, "protein": other, "input_chains": None}
+    monkeypatch.setattr(workflow, "load_prepared", lambda prep_dir, name: old_prep)
+    lig_dir = tmp_path / "lig"
+    residues = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                      "sampling": {"rest2": {"scale": 1.5, "residues": ["2"]}}})
+    with pytest.raises(WorkflowError, match="did not record the chains of the input"):
+        check_before_jobs(residues, lig_dir, {(0, "complex")})
+    check_before_jobs(residues, lig_dir, {(0, "solvent")})          # a run of the solvent leg alone needs no region
+    manual = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                    "restraints": {"selection": "manual", "host_atoms": other[:3],
+                                                   "guest_atoms": ligand[:3]}})
+    leg = lig_dir / "repeat_0" / "complex"
+    leg.mkdir(parents=True)
+    np.savez(leg / "equil.npz", positions=pos, frames=pos[None], frame_atoms=np.arange(len(pos)))
+    with pytest.raises(WorkflowError, match="holds no boxes of its frames"):
+        check_before_jobs(manual, lig_dir, {(0, "complex")})
+    np.savez(leg / "equil.npz", positions=pos, frames=pos[None], frame_atoms=np.arange(len(pos)),
+             frame_boxes=np.asarray(box)[None])
+    check_before_jobs(manual, lig_dir, {(0, "complex")})

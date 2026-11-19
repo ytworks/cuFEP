@@ -48,14 +48,15 @@ def validate(cfg, ligand_name: str | None = None, device: int = 0, echo=print) -
     from cufep.backends import get_backend
     from cufep.backends.cupotential import CuPotentialBackend
     from cufep.sampling.states import StateEnergyEvaluator
-    from cufep.workflow import ligand_directories, load_prepared, prepare_ligand, select_ligands
+    from cufep.workflow import ligand_directories, ligands_of_run, load_prepared, prepare_ligand, select_ligands
 
     ok_plugin, why = CuPotentialBackend.available()
     if not ok_plugin:
         echo(f"cuPotential is not available ({why}); nothing to compare.")
         return False
-    resolved, _report, protein, ligands = driver.plan(cfg, echo)
     # the first ligand only when none is named; a name that is not there is an error, before anything is prepared
+    ligands = ligands_of_run(cfg, [ligand_name] if ligand_name else [])
+    resolved, _report, protein, ligands = driver.plan(cfg, echo, ligands)
     ligand = select_ligands(ligands, [ligand_name], "--ligand")[0] if ligand_name else ligands[0]
     out_dir = Path(resolved.output.dir)
     lig_dir = ligand_directories(out_dir, [ligand.name])[ligand.name]

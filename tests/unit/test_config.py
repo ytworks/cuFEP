@@ -268,12 +268,15 @@ def test_barostat_frequency_is_a_setting_and_every_shared_stretch_of_md_gets_mov
     cfg = load_config(write(tmp_path, {**BASE, "sampling": {"time_per_iteration_ps": 0.02},
                                        "dynamics": {"barostat_frequency": 5}}))
     assert cfg.dynamics.barostat_frequency == 5
-    # the stretches of the precalculation count only where the lambda schedule uses them
-    with pytest.raises(Exception, match="walk_ps"):
-        load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"walk_ps": 0.05}}}))
-    load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "adaptive": {"walk_ps": 0.05}}}))
-    with pytest.raises(Exception, match="fixed_walk_ps"):
-        load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "fixed_walk_ps": 0.05}}))
+    # a window of the precalculation starts from a configuration of its own in a Context it shares, so it
+    # counts; the walks through the windows are one trajectory, and no other shares its Context
+    with pytest.raises(Exception, match="window_ps"):
+        load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"window_ps": 0.05, "equilibration_ps": 0.0,
+                                                                              "sample_interval_ps": 0.025}}}))
+    load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "adaptive": {
+        "window_ps": 0.05, "equilibration_ps": 0.0, "sample_interval_ps": 0.025}}}))
+    load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"walk_ps": 0.05}}}))
+    load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "fixed_walk_ps": 0.05}}))
     with pytest.raises(Exception):
         load_config(write(tmp_path, {**BASE, "dynamics": {"barostat_frequency": 0}}))
 

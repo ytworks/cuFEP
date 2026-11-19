@@ -133,6 +133,51 @@ def restraint_anchor_problems(host_atoms, guest_atoms, prep: dict) -> list[str]:
     return out
 
 
+def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
+    """Refuse, before any job starts and before an earlier result of a leg is set aside, what the job
+    of a complex leg would refuse from the prepared systems and the files of its leg: manual restraint
+    anchors that are not atoms of the protein and the ligand (:func:`check_manual_anchors`), REST2
+    residues that a preparation of an earlier version cannot name (:func:`rest2_region`), and a
+    manual restraint that would be measured from a pre-equilibration without the boxes of its frames
+    (:func:`manual_boresch_restraint`). ``legs`` are the (repeat, leg) of this run. Review of PR 1:
+    these were refused only inside each job, after its result had been set aside and its
+    pre-equilibration run."""
+    complex_repeats = sorted(int(r) for r, leg in legs if leg == "complex")
+    if not complex_repeats:
+        return
+    check_manual_anchors(cfg, lig_dir)
+    rest2 = cfg.sampling.rest2
+    if rest2.scale > 1.0 and rest2.residues:
+        prep = load_prepared(Path(lig_dir) / "prep", "complex")
+        rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"], prep["protein"], prep.get("input_chains"))
+    if cfg.restraints.selection == "manual":
+        for r in complex_repeats:
+            leg_dir = Path(lig_dir) / f"repeat_{r}" / "complex"
+            equil = leg_dir / "equil.npz"
+            if equil.exists() and not (leg_dir / "restraint.json").exists():
+                with np.load(equil) as eq:
+                    if "frame_boxes" not in eq:
+                        raise WorkflowError(f"{equil} holds no boxes of its frames (an earlier version wrote it): the "
+                                            "reference values of a manual restraint cannot be measured across the "
+                                            "periodic boundary. Nothing was changed; run the calculation in a new "
+                                            "output.dir")
+
+
+def ligands_of_run(cfg: Config, only_ligands=()) -> list:
+    """The ligands of a calculation, read from the SDF and checked before anything is written: those
+    of ``system.ligand_names`` (all if none), with distinct titles, each with a directory of its own
+    under ``output.dir`` (:func:`ligand_directories`), and the names of ``--ligand`` among them."""
+    from cufep.prep.ligand import load_ligands
+
+    ligands = select_ligands(load_ligands(cfg.system.ligand), cfg.system.ligand_names, "system.ligand_names")
+    names = [lig.name for lig in ligands]
+    if len(set(names)) != len(names):
+        raise WorkflowError("ligand names in the SDF are not unique; give every record a distinct title line")
+    ligand_directories(cfg.output.dir, names)
+    select_names(names, only_ligands, "--ligand")
+    return ligands
+
+
 def check_manual_anchors(cfg: Config, lig_dir: Path) -> None:
     """Refuse a manual restraint whose anchors are not atoms of the protein and the ligand of
     this ligand's prepared complex. Called before any MD: after the preparation, by the run

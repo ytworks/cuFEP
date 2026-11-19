@@ -301,8 +301,13 @@ class ReplicaWorker:
         del self.integrator
 
 
-def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker_id: int, start: int = 0) -> None:
-    """Entry point of a worker process."""
+def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker_id: int, start: int = 0,
+                parent_pid: int | None = None) -> None:
+    """Entry point of a worker process. It ends with the job that started it (cufep.processes)."""
+    if parent_pid is not None:
+        from cufep.processes import die_with_parent
+
+        die_with_parent(parent_pid)
     os.environ["OPENMM_CPU_THREADS"] = str(spec.cpu_threads)
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
         os.environ[var] = str(spec.cpu_threads)

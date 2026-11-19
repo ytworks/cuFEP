@@ -12,6 +12,8 @@ how replicas are spread over workers.
 """
 from __future__ import annotations
 
+import os
+
 import multiprocessing as mp
 import time
 from dataclasses import dataclass
@@ -80,8 +82,8 @@ class _Process:
 
     def __init__(self, ctx, spec: LegSpec, device, shm_names: dict, worker_id: int, start: int = 0) -> None:
         self.parent, child = ctx.Pipe()
-        self.proc = ctx.Process(target=worker_main, args=(child, spec, device, shm_names, worker_id, start),
-                                daemon=True)
+        self.proc = ctx.Process(target=worker_main, args=(child, spec, device, shm_names, worker_id, start,
+                                                          os.getpid()), daemon=True)
         self.proc.start()
         child.close()
         self.device, self.worker_id, self.start = device, worker_id, start
