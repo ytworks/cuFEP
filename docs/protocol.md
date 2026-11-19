@@ -408,6 +408,8 @@ source code and papers (see "Sources").
 | time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 5 ns |
 | runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
 | reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | MBAR uncertainty; standard deviation over repeats if more than one |
+| checks after the run | convergence plots, exchange between replicas | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | overlap matrix, replica exchange matrix, forward and reverse convergence plot | overlap below 0.03, halves of the production against the whole, BAR against MBAR; flags in the result |
+| a calculation that is not good enough | longer simulation, set by the user | a further instance of the link with a longer simulation or more lambda windows, started by the user | more repeats or a longer simulation, set by the user | the flagged leg is run again by the user, longer or with more lambda windows |
 | replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 with `sampling.rest2` |
 | MD before the alchemical run | 1 ns and a short equilibration | minimisation, equilibration, MD for the restraint search | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
 | restraint | Boresch-type, atoms chosen from hydrogen bonds and salt bridges | Boresch, atoms and strengths chosen automatically | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |

@@ -16,6 +16,8 @@ Every other setting has a recommended default and can be changed in YAML
   [docs/protocol.md](docs/protocol.md) compares cuFEP with FEP+, Flare and OpenFE.
 - Lambda windows: adaptive lambda scheduling by default (the method of Cresset Flare), or a
   fixed number or list of lambda values per leg and stage.
+- The analysis checks the overlap of the lambda windows and the convergence of every leg and
+  flags the result; a flagged leg can be run again on its own, longer or with more windows.
 - One GPU or many: the replicas of a calculation are spread over all free GPUs, several per
   GPU through NVIDIA MPS.
 - Benchmarks against experiment and FEP+ for a kinase (TYK2) and a GPCR in a bilayer (A2A).
