@@ -365,6 +365,10 @@ def add_ions(modeller, forcefield, ionic_strength_M: float, exclusion_z_nm: floa
     waters = [r for r in top.residues() if r.name in WATER]
     n_pairs = int(np.floor((len(waters) - abs(total)) * ionic_strength_M / 55.4 + 0.5))
     n_pos, n_neg = n_pairs + max(0, -total), n_pairs + max(0, total)
+    if n_pos + n_neg == 0:
+        # a neutral system without salt: no water is replaced
+        log(f"membrane: net charge {total:+d}; no ion needed")
+        return {"net_charge_before_ions": total, "n_sodium": 0, "n_chloride": 0}
     oxygen = {r.index: next(a.index for a in r.atoms() if a.element == elem.oxygen) for r in waters}
     tree = cKDTree(pos[solute])
     candidates = [r for r in waters if abs(pos[oxygen[r.index], 2]) > exclusion_z_nm
@@ -375,12 +379,12 @@ def add_ions(modeller, forcefield, ionic_strength_M: float, exclusion_z_nm: floa
     order = rng.permutation(len(candidates))
     picked: list = []
     for k in order:
+        if len(picked) == n_pos + n_neg:
+            break
         r = candidates[k]
         here = pos[oxygen[r.index]]
         if all(np.linalg.norm(here - pos[oxygen[q.index]]) > 0.5 for q in picked):
             picked.append(r)
-        if len(picked) == n_pos + n_neg:
-            break
     if len(picked) < n_pos + n_neg:
         raise MembraneError("could not place the ions with 0.5 nm spacing")
     ion_top = app.Topology()
