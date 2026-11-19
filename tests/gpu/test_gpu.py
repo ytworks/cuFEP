@@ -42,9 +42,13 @@ def big_water_leg():
     mod.addSolvent(ff, boxSize=mm.Vec3(3.2, 3.2, 3.2) * u.nanometer)
     system = ff.createSystem(mod.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,
                              constraints=app.HBonds, rigidWater=True, ewaldErrorTolerance=5e-4)
-    stock = get_backend("openmm")
+    # the configuration the backends are compared on is made on the CPU platform with fixed seeds, so that
+    # it is the same in every run: MD on a GPU is not reproducible to the bit, and with a configuration that
+    # changed from run to run this comparison failed once in four runs at 1.08e-4 (review of PR 1 on tests
+    # whose input is random)
+    stock = get_backend("openmm", platform="CPU")
     integ = stock.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=1)
-    ctx = stock.make_context(stock.prepare_system(system), integ, 0)
+    ctx = stock.make_context(stock.prepare_system(system), integ)
     ctx.setPositions(mod.positions)
     mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 300)
     ctx.setVelocitiesToTemperature(300 * u.kelvin, 1)
