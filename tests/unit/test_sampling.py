@@ -671,6 +671,76 @@ def test_an_interrupted_leg_is_not_analysed_with_its_equilibration(tmp_path, tin
     assert equilibration_boundary(attrs, old) == 0
 
 
+def synthetic_leg(leg_dir, n=300, temperature=310.0, n_equilibration=20):
+    """A leg directory with harmonic samples, as a finished run leaves it (no tail data, no schedule)."""
+    u, states, _ = harmonic_samples(n, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12))
+    storage = LegStorage(leg_dir / "hrex", 4, 4)
+    for it in range(n):
+        storage.append(u[it], states[it], np.ones(4))
+    storage.set_meta(temperature_K=temperature, iteration_ps=2.5, backend="openmm", leg="solvent")
+    storage.set_plan(n_equilibration, n)
+    storage.close()
+
+
+def test_analyze_says_what_the_run_said(tmp_path):
+    """Review of PR 1: `cufep analyze` judged a leg by the default levels, not by those of its run: a leg
+    that its run called NOT RELIABLE at analysis.min_overlap 0.2 passed, with 10 points instead of 4."""
+    import yaml
+    from click.testing import CliRunner
+
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+    from cufep.cli import main
+    from cufep.config.schema import AnalysisConfig
+    from cufep.workflow import WorkflowError, analysis_record, leg_result_from_samples, write_leg_result
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    synthetic_leg(leg)
+    settings = AnalysisConfig(lrc="none", min_overlap=0.5, convergence_points=4, convergence_blocks=2)
+    run = {"ligand": "lig", "leg": "solvent", "repeat": 0, "backend": "openmm", "timestep_fs": 4.0,
+           "notes": ["a note of the run"]}
+    result = leg_result_from_samples(leg, settings, run)
+    # temperature, length and boundary are those of the samples; no configuration is asked for them
+    assert result["temperature_K"] == 310.0 and result["production_ns"] == pytest.approx(280 * 2.5 / 1000.0)
+    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION
+    assert result["quality"]["overlap"]["threshold"] == 0.5 and result["quality"]["overlap"]["ok"] is False
+    assert len(result["analysis"]["forward"]) == 4 and len(result["analysis"]["blocks"]) == 2
+    assert result["notes"][0] == "a note of the run" and result["notes"][1].startswith("NOT RELIABLE")
+    assert result["run"] == run and result["ligand"] == "lig" and result["lrc"] == 0.0
+    write_leg_result(leg, result)
+
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["analysis_settings_from"] == "the settings the leg's result records"
+    assert shown["quality"] == json.loads(json.dumps(result["quality"]))
+    assert len(shown["forward"]) == 4 and len(shown["blocks"]) == 2 and shown["notes"] == result["notes"]
+    assert shown["delta_g_decouple"] == pytest.approx(result["delta_g_decouple"]) and shown["temperature_K"] == 310.0
+    assert json.loads((leg / "result.json").read_text())["notes"] == result["notes"]      # the command only prints
+
+    # other settings on request; the temperature of the configuration is not one of them
+    base = {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "thermodynamics": {"temperature_K": 350.0}}
+    other = tmp_path / "other.yaml"
+    other.write_text(yaml.safe_dump({**base, "analysis": {"lrc": "none"}}))
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg), "--config", str(other)]).output)
+    assert shown["analysis_settings_from"].startswith("--config") and shown["temperature_K"] == 310.0
+    assert shown["quality"]["overlap"] == dict(shown["quality"]["overlap"], threshold=0.03, ok=True)
+    assert len(shown["forward"]) == 10 and len(shown["blocks"]) == 5 and shown["notes"] == ["a note of the run"]
+
+    # these samples hold no data for a tail correction: asking for one stops
+    with pytest.raises(WorkflowError, match="without the data for a correction of the dispersion tail"):
+        leg_result_from_samples(leg, AnalysisConfig(lrc="reweight"), run)
+    other.write_text(yaml.safe_dump({**base, "analysis": {"lrc": "isotropic"}}))
+    stopped = CliRunner().invoke(main, ["analyze", str(leg), "--config", str(other)])
+    assert stopped.exit_code == 1 and "cannot be analysed with analysis.lrc: isotropic" in stopped.output
+
+    # a result of a version that recorded no settings: the defaults, and the command says so; the
+    # notes of that version's analysis are not carried over
+    older = {k: v for k, v in result.items() if k not in ("analysis_record", "run")}
+    older["notes"] = ["a note of the run", "NOT CONVERGED: the first half of the production gives ..."]
+    (leg / "result.json").write_text(json.dumps(json.loads(__import__("cufep.jsonio", fromlist=["dumps"]).dumps(older))))
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["analysis_settings_from"].startswith("the defaults") and shown["lrc_method"] == "none"
+    assert shown["quality"]["overlap"]["threshold"] == 0.03 and shown["notes"] == ["a note of the run"]
+
+
 def test_an_interruption_before_the_first_checkpoint_does_not_leave_samples_twice(tmp_path, tiny_leg):
     """Review of PR 1: two iterations before the first checkpoint stayed in front of the rerun's six."""
     spec, pos, box = tiny_leg

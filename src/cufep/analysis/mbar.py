@@ -10,6 +10,13 @@ import numpy as np
 
 R_GAS = 8.31446261815324e-3   # kJ/mol/K
 KCAL = 4.184
+#: The version of the method by which a leg is analysed. A result records it; a result of another
+#: version is made again from its samples before it is combined with others.
+#:   1  one statistical inefficiency for all lambda windows, from the summed reduced potential
+#:   2  one per window, from its energy difference to the next window
+#:   3  the larger of those to both neighbours; overlap also among the samples of the estimate;
+#:      the samples check counts what MBAR gets
+ANALYSIS_VERSION = 3
 #: a part of the production gets a free energy estimate of its own only if it holds at least this
 #: many statistically independent samples per lambda window
 MIN_INDEPENDENT_SAMPLES = 4

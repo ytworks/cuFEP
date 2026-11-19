@@ -176,45 +176,79 @@ def run(config: str, repeats, production_ns, gpus, backend, output, ligands, leg
 
 @main.command()
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
+@click.option("--config", "config", type=click.Path(exists=True, dir_okay=False),
+              help="Take the settings of the analysis from this configuration instead of those the leg was "
+                   "analysed with (its analysis section; nothing else of it is used).")
 @click.option("--equilibration-ns", type=float,
               help="Length of the equilibration per lambda window. Needed only for a run of an earlier version "
                    "that was interrupted: it did not record where its production begins.")
-def analyze(directory: str, equilibration_ns) -> None:
+def analyze(directory: str, config, equilibration_ns) -> None:
     """Analyse a finished, running or interrupted leg directory (the one containing hrex/).
 
-    Only prints; no result file is written or changed.
+    The analysis uses the settings that the leg's own result records (overlap level, numbers of
+    points and blocks, tail correction ...), so that it says what the run said; --config gives
+    others. Temperature and the length of an iteration are always those of the samples. Only
+    prints; no result file is written or changed.
     """
     from cufep import jsonio
-    from cufep.analysis.mbar import NoProduction, analyze_leg, quality_checks
+    from cufep.analysis.mbar import NoProduction
+    from cufep.config.schema import AnalysisConfig
     from cufep.sampling.storage import equilibration_boundary, read_samples
+    from cufep.workflow import (WorkflowError, analysis_settings_of, leg_result_from_samples, run_record_of)
 
     d = Path(directory)
-    hrex = d / "hrex" if (d / "hrex").exists() else d
+    if d.name == "hrex" and (d / "samples.h5").exists():
+        d = d.parent
+    hrex = d / "hrex"
+    if not (hrex / "samples.h5").exists():
+        raise click.ClickException(f"{d}: no samples (hrex/samples.h5) in this directory")
     samples = read_samples(hrex)
     attrs = samples["attrs"]
-    temperature = float(attrs.get("temperature_K", 298.15))
     if equilibration_ns is not None:
         if "iteration_ps" not in attrs:
             raise click.ClickException(f"{hrex}: the samples do not record the length of an iteration")
         n_equilibration = int(round(equilibration_ns * 1000.0 / float(attrs["iteration_ps"])))
     else:
-        n_equilibration = equilibration_boundary(attrs, hrex.parent)
+        n_equilibration = equilibration_boundary(attrs, d)
         if n_equilibration is None:
             raise click.ClickException(
                 f"{hrex}: these samples are of a run that did not finish and that was made by a version of cuFEP "
                 "which recorded the end of the equilibration only then. Give the length of the equilibration per "
                 "lambda window with --equilibration-ns (sampling.equilibration_ns of that run; the default was 1).")
+    # the result the leg has, or had before a run that did not finish
+    earlier = None
+    for name in ("result.json", "result.previous.json"):
+        if (d / name).exists():
+            try:
+                earlier = json.loads((d / name).read_text())
+                break
+            except json.JSONDecodeError:
+                continue
+    if config is not None:
+        settings, source = _load(config).analysis, f"--config {config}"
+    elif earlier is not None and earlier.get("analysis_record"):
+        settings, source = analysis_settings_of(earlier["analysis_record"]), "the settings the leg's result records"
+    else:
+        tail = "reweight" if "lrc_s6" in attrs else "none"
+        if earlier is not None and earlier.get("lrc_method") in ("reweight", "isotropic", "none"):
+            tail = earlier["lrc_method"]
+        settings = AnalysisConfig(lrc=tail)
+        source = "the defaults: the leg has no record of the settings it was analysed with"
     try:
-        res = analyze_leg(samples, temperature, n_equilibration=n_equilibration).to_dict()
+        result = leg_result_from_samples(d, settings, run_record_of(earlier, d), samples=samples,
+                                         n_equilibration=n_equilibration)
     except NoProduction as exc:
         raise click.ClickException(f"{hrex}: no production yet: {exc}") from exc
-    res["n_equilibration_iterations"] = n_equilibration
-    res["n_iterations_stored"] = int(samples["u"].shape[0])
+    except WorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    out = {k: v for k, v in result["analysis"].items() if k not in ("f_k", "df_k", "overlap_matrix", "overlap_used_matrix",
+                                                                    "overlap_used_weighted_by_number")}
+    out.update(n_equilibration_iterations=n_equilibration, n_iterations_stored=int(samples["u"].shape[0]))
     if "n_planned_iterations" in attrs:
-        res["n_planned_iterations"] = int(attrs["n_planned_iterations"])
-    out = {k: v for k, v in res.items() if k not in ("f_k", "df_k", "overlap_matrix", "overlap_used_matrix",
-                                                  "overlap_used_weighted_by_number")}
-    out["quality"] = quality_checks(res)
+        out["n_planned_iterations"] = int(attrs["n_planned_iterations"])
+    out.update(delta_g_decouple=result["delta_g_decouple"], lrc=result["lrc"], lrc_method=result["lrc_method"],
+               quality=result["quality"], notes=result["notes"], analysis_record=result["analysis_record"],
+               analysis_settings_from=source)
     click.echo(jsonio.dumps(out, indent=1))
 
 

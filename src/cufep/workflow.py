@@ -623,8 +623,6 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, find_boresch_restraint,
                                           ligand_symmetry_number, with_force_constants_from_fluctuations)
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
-    from cufep.analysis.mbar import analyze_leg
-    from cufep.analysis.structure import structural_analysis
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
     from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
@@ -1016,51 +1014,31 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 6. analysis ------------------------------------------------------------------------------
     t_analysis = time.perf_counter()
-    analysis = analyze_leg(samples, T, n_fractions=cfg.analysis.convergence_points,
-                           n_blocks=cfg.analysis.convergence_blocks)
-    correction = {"reweight": analysis.lrc_delta_g, "isotropic": analysis.lrc_isotropic, "none": 0.0}[cfg.analysis.lrc]
-    total = analysis.delta_g - correction                  # decoupling with the full LJ range
-    structure = structural_analysis(samples, int(samples["attrs"].get("n_equilibration_iterations", 0)))
-    if structure is not None:
-        notes += structure["warnings"]
-    result = {
-        "ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "backend": backend_name,
-        "temperature_K": T, "timestep_fs": timestep_fs, "n_states": analysis.n_states,
-        "production_ns": float(analysis.n_iterations_used * iteration_ps / 1000.0),
-        "delta_g_decouple": total, "delta_g_mbar": analysis.delta_g, "delta_g_mbar_error": analysis.delta_g_error,
-        "lrc": correction, "lrc_method": cfg.analysis.lrc, "lrc_reweight": analysis.lrc_delta_g,
-        "lrc_isotropic": analysis.lrc_isotropic, "lrc_error": analysis.lrc_error, "structure": structure,
+    run_record = {
+        "ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "backend": backend_name, "timestep_fs": timestep_fs,
         "restraint_release": release_dg, "restraint_release_analytical": release_dg_analytical,
-        "ligand_symmetry_number": symmetry, "analysis": analysis.to_dict(), "notes": notes, "units": "kJ/mol",
-    }
-    result["quality"] = leg_quality(result["analysis"], cfg)
-    result["lambda_windows"] = schedule.windows()
-    # what this leg used although an earlier version had written it without saying what it was made from
-    result["origin_not_recorded"] = origin_not_recorded
-    if origin_not_recorded:
-        notes.append("written by an earlier version of cuFEP without a record of what it was made from, and used "
-                     f"as it is: {', '.join(origin_not_recorded)}. Nothing in these files contradicts this run; "
-                     "that they were made with its settings could not be checked")
-    result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
-    # windows that adaptive lambda scheduling added to its start, per stage (None: fixed windows)
-    start = schedule.provenance.get("initial_windows") if schedule.mode == "adaptive" else None
-    result["lambda_windows_added"] = (
-        {name: len(values) - int(start[name]) for name, values in schedule.windows().items() if name in start}
-        if start else None)
-    result["rest2"] = {"scale": float(rest2.scale) if rest2_on else 1.0, "hot_protein_atoms": len(hot_atoms),
-                       "hot_residues": hot_residues, "torsion_terms_scaled": alch.rest2_torsions,
-                       "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}
+        "ligand_symmetry_number": symmetry, "notes": list(notes), "origin_not_recorded": list(origin_not_recorded),
+        "rest2": {"scale": float(rest2.scale) if rest2_on else 1.0, "hot_protein_atoms": len(hot_atoms),
+                  "hot_residues": hot_residues, "torsion_terms_scaled": alch.rest2_torsions,
+                  "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}}
+    result = leg_result_from_samples(leg_dir, cfg.analysis, run_record, samples=samples, schedule=schedule)
+    analysis_dict, correction, total = result["analysis"], result["lrc"], result["delta_g_decouple"]
     timed("analysis", t_analysis)
     timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
                   ligand=job.ligand, leg=job.leg, repeat=job.repeat)
     (leg_dir / "timing.json").write_text(json.dumps(timing, indent=1))
     write_leg_result(leg_dir, result)
-    log(f"dG(decouple) = {total / KCAL:.2f} kcal/mol (MBAR {analysis.delta_g / KCAL:.2f} ± "
-        f"{analysis.delta_g_error / KCAL:.2f}, tail {-correction / KCAL:+.2f}); "
-        f"min overlap {analysis.min_overlap:.3f} (among the samples of the estimate {analysis.min_overlap_used:.3f}), "
-        f"round trips {analysis.round_trips}, fewest independent samples in a window "
-        f"{analysis.effective_samples_per_state:.0f}, of which MBAR gets "
-        f"{analysis.window_kept_samples[analysis.slowest_window]} (window {analysis.slowest_window})")
+
+    def number(value, digits: int = 2, scale: float = 1.0) -> str:
+        return "none" if value is None else f"{value / scale:.{digits}f}"
+
+    slowest = analysis_dict["slowest_window"]
+    log(f"dG(decouple) = {number(total, 2, KCAL)} kcal/mol (MBAR {number(analysis_dict['delta_g'], 2, KCAL)} ± "
+        f"{number(analysis_dict['delta_g_error'], 2, KCAL)}, tail {number(-correction, 2, KCAL)}); "
+        f"min overlap {number(analysis_dict['min_overlap'], 3)} (among the samples of the estimate "
+        f"{number(analysis_dict['min_overlap_used'], 3)}), round trips {analysis_dict['round_trips']}, fewest "
+        f"independent samples in a window {analysis_dict['effective_samples_per_state']:.0f}, of which MBAR gets "
+        f"{analysis_dict['window_kept_samples'][slowest]} (window {slowest})")
     return result
 
 
@@ -1127,22 +1105,138 @@ def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs:
     return out
 
 
-def leg_quality(analysis: dict, cfg: Config) -> dict:
-    """The checks of :func:`cufep.analysis.mbar.quality_checks` with the levels of the configuration."""
+def leg_quality(analysis: dict, cfg) -> dict:
+    """The checks of :func:`cufep.analysis.mbar.quality_checks` with the levels of the configuration
+    (the whole configuration or its ``analysis`` section)."""
     from cufep.analysis.mbar import quality_checks
 
-    a = cfg.analysis
+    a = getattr(cfg, "analysis", cfg)
     return quality_checks(analysis, a.min_overlap, a.min_effective_samples, a.halves_tolerance_kT,
                           a.estimators_tolerance_kcal_mol)
 
 
-def quality_warnings(result: dict, cfg: Config) -> list[str]:
+def analysis_record(cfg) -> dict:
+    """The settings a leg is analysed with and the version of the method, as its result records them."""
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+
+    a = getattr(cfg, "analysis", cfg)
+    return {"version": ANALYSIS_VERSION, "lrc": a.lrc, "min_overlap": float(a.min_overlap),
+            "min_effective_samples": float(a.min_effective_samples), "halves_tolerance_kT": float(a.halves_tolerance_kT),
+            "estimators_tolerance_kcal_mol": float(a.estimators_tolerance_kcal_mol),
+            "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks)}
+
+
+def analysis_settings_of(record: dict | None):
+    """The ``analysis`` section that a stored :func:`analysis_record` describes (defaults for what it lacks)."""
+    from cufep.config.schema import AnalysisConfig
+
+    return AnalysisConfig(**{key: value for key, value in (record or {}).items() if key in AnalysisConfig.model_fields})
+
+
+#: how the notes begin that the analysis of a leg writes; a result that is made again from its
+#: samples gets them anew
+_ANALYSIS_NOTES = ("NOT RELIABLE", "NOT CONVERGED", "convergence not assessed", "few independent samples",
+                   "the two halves of the production", "half of the production does not",
+                   "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record")
+#: what the run of a leg knows and its samples do not hold
+_RUN_KEYS = ("ligand", "leg", "repeat", "backend", "timestep_fs", "restraint_release", "restraint_release_analytical",
+             "ligand_symmetry_number", "rest2", "origin_not_recorded")
+
+
+def run_record_of(result: dict | None, leg_dir: Path | None = None) -> dict:
+    """The record of the run in a leg's result; for a result of a version that kept none, what its
+    fields give (its notes without those of the analysis); for no result, what the path gives."""
+    if result and isinstance(result.get("run"), dict):
+        return result["run"]
+    record = dict(_leg_identity(leg_dir)) if leg_dir is not None else {}
+    if result:
+        structure = set((result.get("structure") or {}).get("warnings", []))
+        record.update({key: result[key] for key in _RUN_KEYS if key in result})
+        record["notes"] = [n for n in result.get("notes", []) if not n.startswith(_ANALYSIS_NOTES) and n not in structure]
+    return record
+
+
+def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | None = None, schedule=None,
+                            n_equilibration: int | None = None) -> dict:
+    """The result of a leg from the samples in its directory. Needs no GPU.
+
+    ``analysis`` is the ``analysis`` section of a configuration, and nothing else of a
+    configuration enters: temperature, length of an iteration and the end of the equilibration
+    are those of the samples, so that a leg cannot be analysed as if it had been run under the
+    settings of another run. ``run`` holds what only the run of the leg knows (:data:`_RUN_KEYS`
+    and its notes). The same function serves a leg that has just been sampled, ``cufep
+    analyze``, and a result that is made again because the method of the analysis has changed.
+    """
+    from cufep.alchemy.schedule import Schedule
+    from cufep.analysis.mbar import analyze_leg
+    from cufep.analysis.structure import structural_analysis
+    from cufep.sampling.storage import equilibration_boundary, read_samples
+
+    a = getattr(analysis, "analysis", analysis)
+    if samples is None:
+        samples = read_samples(leg_dir / "hrex")
+    attrs = samples["attrs"]
+    if "temperature_K" not in attrs or "iteration_ps" not in attrs:
+        raise WorkflowError(f"the samples in {leg_dir} do not record their temperature and the length of an iteration")
+    temperature, iteration_ps = float(attrs["temperature_K"]), float(attrs["iteration_ps"])
+    if n_equilibration is None:
+        n_equilibration = equilibration_boundary(attrs, leg_dir)
+        if n_equilibration is None:
+            raise WorkflowError(f"the samples in {leg_dir} are of a run that did not finish and do not record where "
+                                "its production begins")
+    if a.lrc != "none" and "lrc_s6" not in attrs:
+        raise WorkflowError(f"the samples in {leg_dir} were made without the data for a correction of the dispersion "
+                            f"tail (analysis.lrc: none) and cannot be analysed with analysis.lrc: {a.lrc}")
+    if schedule is None and (leg_dir / "schedule.yaml").exists():
+        schedule = Schedule.load(leg_dir / "schedule.yaml")
+    res = analyze_leg(samples, temperature, n_equilibration=n_equilibration, n_fractions=a.convergence_points,
+                      n_blocks=a.convergence_blocks)
+    correction = {"reweight": res.lrc_delta_g, "isotropic": res.lrc_isotropic, "none": 0.0}[a.lrc]
+    structure = structural_analysis(samples, n_equilibration)
+    notes = list(run.get("notes") or [])
+    notes += [n for n in (structure or {}).get("warnings", []) if n not in notes]
+    origin_not_recorded = list(run.get("origin_not_recorded") or [])
+    result = {
+        "ligand": run.get("ligand"), "leg": run.get("leg"), "repeat": run.get("repeat"), "backend": run.get("backend"),
+        "temperature_K": temperature, "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
+        "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
+        "delta_g_decouple": res.delta_g - correction,          # decoupling with the full LJ range
+        "delta_g_mbar": res.delta_g, "delta_g_mbar_error": res.delta_g_error,
+        "lrc": correction, "lrc_method": a.lrc, "lrc_reweight": res.lrc_delta_g,
+        "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.lrc_error, "structure": structure,
+        "restraint_release": run.get("restraint_release", 0.0),
+        "restraint_release_analytical": run.get("restraint_release_analytical", 0.0),
+        "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
+        "analysis_record": analysis_record(a), "run": run,
+    }
+    result["quality"] = leg_quality(result["analysis"], a)
+    result["lambda_windows"] = schedule.windows() if schedule is not None else {}
+    # what this leg used although an earlier version had written it without saying what it was made from
+    result["origin_not_recorded"] = origin_not_recorded
+    if origin_not_recorded:
+        notes.append("written by an earlier version of cuFEP without a record of what it was made from, and used "
+                     f"as it is: {', '.join(origin_not_recorded)}. Nothing in these files contradicts this run; "
+                     "that they were made with its settings could not be checked")
+    if schedule is not None:
+        notes += [n for n in schedule.notes if n not in notes]
+    result["notes"] = notes + quality_warnings(result, a)
+    # windows that adaptive lambda scheduling added to its start, per stage (None: fixed windows)
+    start = schedule.provenance.get("initial_windows") if schedule is not None and schedule.mode == "adaptive" else None
+    result["lambda_windows_added"] = (
+        {name: len(values) - int(start[name]) for name, values in schedule.windows().items() if name in start}
+        if start else None)
+    result["rest2"] = run.get("rest2")
+    return result
+
+
+def quality_warnings(result: dict, cfg) -> list[str]:
     """Warnings about a finished leg, from its checks. None of them changes what is run.
 
     The overlap of neighbouring lambda windows comes first: below the level, the free energy is
     NOT RELIABLE. The other messages give a number and the level the literature names for it;
     they say that more sampling is advisable, not that the result is wrong.
     """
+    cfg = getattr(cfg, "analysis", cfg)            # the whole configuration or its analysis section
     a = result["analysis"]
     q = result.get("quality")
     if not q or "halves" not in q:                 # none, or the checks of an older version
@@ -1168,7 +1262,7 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
         k = ov["windows"][0]
         lowest = "not defined" if ov["lowest"] is None else f"{ov['lowest']:.3f}"
         out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1}{pair(k)} is "
-                   f"{lowest}, below {cfg.analysis.min_overlap:g}. Give that stage more lambda "
+                   f"{lowest}, below {cfg.min_overlap:g}. Give that stage more lambda "
                    f"windows ({more_windows}")
     used = ov.get("used")
     if used and used["ok"] is False and not (not all_ok and used["windows"] == ov["windows"]):
@@ -1176,7 +1270,7 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
         counts = "" if not used.get("samples") else (f"; window {k} gives it {used['samples'][0]} samples and window "
                                                      f"{k + 1} gives {used['samples'][1]}")
         out.append(f"NOT RELIABLE: among the samples the free energy is estimated from, the overlap between lambda "
-                   f"windows {k} and {k + 1}{pair(k)} is {used['lowest']:.3f}, below {cfg.analysis.min_overlap:g}"
+                   f"windows {k} and {k + 1}{pair(k)} is {used['lowest']:.3f}, below {cfg.min_overlap:g}"
                    f"{counts}. A longer production gives a slow window more samples: {longer}. More lambda windows "
                    f"in that stage also raise it: change lambda_schedule and run the leg again with --reschedule")
     smp = q["samples"]
@@ -1207,7 +1301,7 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
     est = q["estimators"]
     if est["ok"] is False:
         out.append(f"BAR between neighbouring lambda windows gives {est['bar'] / KCAL:.2f} kcal/mol and MBAR "
-                   f"{est['mbar'] / KCAL:.2f}; a difference above {cfg.analysis.estimators_tolerance_kcal_mol:g} "
+                   f"{est['mbar'] / KCAL:.2f}; a difference above {cfg.estimators_tolerance_kcal_mol:g} "
                    f"kcal/mol indicates windows that are too far apart or too little sampled")
     return out
 
