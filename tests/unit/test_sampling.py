@@ -560,17 +560,54 @@ def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tm
         s.run(2, record_stride=2, checkpoint_stride=3)
     assert stored()[0] == 8
 
-    # a file of a version that did not record the conditions is compared in what it holds
-    with h5py.File(leg / "samples.h5", "a") as h5:
+
+
+def test_samples_of_unrecorded_conditions_are_read_but_not_continued(tmp_path, tiny_leg, water_ligand_system):
+    """Review of PR 1: six iterations written by an earlier version with a soft-core alpha of 0.5 were
+    continued with 0.8, and all ten rows were then labelled with the hash of the 0.8 System.
+
+    That version recorded neither the soft-core nor a hash of its System, and it rewrote temperature,
+    backend and states whenever it opened the file: nothing on the disk shows what such samples were
+    made with. They are read and analysed, never added to, and their file is not touched.
+    """
+    import dataclasses
+    import hashlib
+
+    import h5py
+
+    from cufep.sampling.storage import ConditionsError
+
+    spec, pos, box = tiny_leg
+    leg = tmp_path / "hrex"
+    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(6, record_stride=2, checkpoint_stride=3)
+        s.storage.set_meta(n_equilibration_iterations=2)
+    with h5py.File(leg / "samples.h5", "a") as h5:                     # as the earlier version left it
         del h5.attrs["conditions"]
-    with pytest.raises(ConditionsError, match="temperature_K: 300.0 -> 315.0"):
-        ReplicaExchangeSampler(changes["temperature_K"], leg, devices=[None], inline=True, log=lambda m: None)
-    with pytest.raises(ConditionsError, match="iteration_ps"):
-        ReplicaExchangeSampler(changes["steps_per_iteration"], leg, devices=[None], inline=True, log=lambda m: None)
-    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
-        assert s.conditions_of_storage == "older file" and s.restore() and s.iteration == 8
-    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
-        assert s.conditions_of_storage == "same"                       # recorded from then on
+
+    def content():
+        with h5py.File(leg / "samples.h5", "r") as h5:
+            return ({name: h5[name][:].tobytes() for name in h5}, {key: str(h5.attrs[key]) for key in h5.attrs})
+
+    before, checkpoint = content(), hashlib.sha256((leg / "checkpoint.npz").read_bytes()).hexdigest()
+    system, _pos, _box, ligand = water_ligand_system
+    other_alpha = dataclasses.replace(spec, system_xml=mm.XmlSerializer.serialize(
+        make_alchemical_system(system, ligand, 0.8).system))
+    for attempt in (other_alpha, spec):                                # even the same settings cannot be shown
+        with ReplicaExchangeSampler(attempt, leg, devices=[None], inline=True, log=lambda m: None) as s:
+            assert s.conditions_of_storage == "unrecorded" and s.unrecorded
+            for step in (s.restore, lambda: s.run(4, record_stride=2, checkpoint_stride=3),
+                         lambda: s.initialize(pos, box)):
+                with pytest.raises(ConditionsError, match="did not record the conditions they were made under"
+                                                          ".*can be analysed.*--reschedule"):
+                    step()
+        assert content() == before                                     # no dataset and no attribute changed
+        assert hashlib.sha256((leg / "checkpoint.npz").read_bytes()).hexdigest() == checkpoint
+    with h5py.File(leg / "samples.h5", "r") as h5:
+        assert "conditions" not in h5.attrs and h5["u"].shape[0] == 6  # no conditions of today on old rows
+    # the samples are still read and analysed
+    assert analyze_leg(read_samples(leg), 300.0).n_iterations_used == 4
 
 
 def test_an_interrupted_leg_is_not_analysed_with_its_equilibration(tmp_path, tiny_leg):

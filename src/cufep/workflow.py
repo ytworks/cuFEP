@@ -171,22 +171,86 @@ def settings_differences(stored, current, prefix: str = "") -> list[str]:
     return [] if _same(stored, current) else [f"{prefix}: {stored} -> {current}"]
 
 
-def check_made_from(what: str, where: Path, stored: dict | None, current: dict, log=print) -> None:
+def check_made_from(what: str, where: Path, stored: dict | None, current: dict, log=print,
+                    contradictions: list[str] | tuple = ()) -> bool:
     """Refuse to reuse a file of an earlier run that was made from other input or settings.
 
     cuFEP keeps what it has computed (the prepared systems, the pre-equilibration, the
     restraint) and uses it again when a calculation is run again in its output directory. That
     is only right while the input and the settings it came from are the same.
+
+    ``stored`` is the record in the file of what it was made from. A file of a version that kept
+    no such record (None) is refused if what it does hold contradicts this run
+    (``contradictions``, as ``"item: in the file -> in this run"``); otherwise it is used and
+    False is returned, so that the result can say that its origin could not be checked.
     """
     if stored is None:
-        log(f"{what}: {where} was written by a version that did not record what it was made from; it is used as it is")
-        return
+        if contradictions:
+            raise WorkflowError(
+                f"{what} in {where} cannot be used again: the file is of a version that did not record what it "
+                f"was made from, and what it does hold is not what this run asks for ({'; '.join(contradictions)}). "
+                "Nothing was changed. A calculation with other input or settings needs a new output.dir.")
+        log(f"{what}: {where} was written by a version that did not record what it was made from; nothing it "
+            "holds contradicts this run and it is used as it is")
+        return False
     differing = settings_differences(stored, current)
     if differing:
         raise WorkflowError(
             f"{what} in {where} cannot be used again: this run gives other input or settings than the ones "
             f"that went into it ({'; '.join(differing[:8])}{' ...' if len(differing) > 8 else ''}). Nothing was "
             "changed. A calculation with other input or settings needs a new output.dir.")
+    return True
+
+
+def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape: str) -> list[str]:
+    """Where a ``prep.json`` without a record of its origin says something else than this run."""
+    expected = {"ligand": ligand_name, "membrane": bool(membrane),
+                "complex_barostat": "membrane" if membrane else "isotropic", "box_shape": box_shape}
+    return [f"{key}: {info[key]} -> {value}" for key, value in expected.items() if key in info and info[key] != value]
+
+
+def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[str]:
+    """Where an ``equil.npz`` without a record of its origin says something else than this run.
+
+    The time step in the file is the one that was used, which is smaller than the configured
+    one after the automatic fall-back to 2 fs: only a larger one is a contradiction. The MD of a
+    bilayer system could be extended by earlier versions, so there only a shorter one is.
+    """
+    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
+    out = []
+    files = set(eq.files)
+    if "timestep_fs" in files and float(eq["timestep_fs"]) > float(cfg.dynamics.timestep_fs) + 1e-9:
+        out.append(f"time step: {float(eq['timestep_fs']):g} fs -> {float(cfg.dynamics.timestep_fs):g} fs")
+    if "simulated_ns" in files:
+        asked = max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns
+        done = float(eq["simulated_ns"])
+        if done < asked - 1e-6 or (not in_membrane and done > asked + 1e-6):
+            out.append(f"length of the MD: {done:g} ns -> {asked:g} ns")
+    if "area_nm2" in files:
+        has_bilayer = bool(np.any(np.asarray(eq["area_nm2"], dtype=float) > 0.0))
+        if has_bilayer != bool(in_membrane):
+            out.append(f"bilayer: {'yes' if has_bilayer else 'no'} -> {'yes' if in_membrane else 'no'}")
+    return out
+
+
+def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
+    """Where a ``restraint.json`` without a record of its origin says something else than this run."""
+    rc, info, restraint = cfg.restraints, stored.get("info") or {}, stored.get("restraint") or {}
+    out = []
+    if "selection" in info and info["selection"] != rc.selection:
+        out.append(f"restraints.selection: {info['selection']} -> {rc.selection}")
+    if "force_constants" in info and info["force_constants"] != rc.force_constants:
+        out.append(f"restraints.force_constants: {info['force_constants']} -> {rc.force_constants}")
+    if rc.selection == "manual":
+        for key, asked in (("host_atoms", rc.host_atoms), ("guest_atoms", rc.guest_atoms)):
+            if asked and key in restraint and list(restraint[key]) != list(asked):
+                out.append(f"restraints.{key}: {list(restraint[key])} -> {list(asked)}")
+    if rc.force_constants != "auto" and "k_r" in restraint:
+        from cufep.sampling.storage import _same
+        k_r = rc.k_r_kcal_per_A2 * KCAL * 100.0
+        if not _same(float(restraint["k_r"]), k_r):
+            out.append(f"restraints.k_r_kcal_per_A2: {float(restraint['k_r']) / (KCAL * 100.0):g} -> {rc.k_r_kcal_per_A2:g}")
+    return out
 
 
 def prep_made_from(cfg: Config, ligand, membrane: bool, box_shape: str) -> dict:
@@ -237,7 +301,8 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     made_from = prep_made_from(cfg, ligand, membrane, box_shape)
     if done.exists():
         info = json.loads(done.read_text())
-        check_made_from(f"the prepared systems of {ligand.name}", prep_dir, info.get("made_from"), made_from, log)
+        check_made_from(f"the prepared systems of {ligand.name}", prep_dir, info.get("made_from"), made_from, log,
+                        contradictions=prep_contradictions(info, ligand.name, membrane, box_shape))
         return info
     prep_dir.mkdir(parents=True, exist_ok=True)
     warnings = check_ligand(ligand, protein.topology, protein.positions_nm())
@@ -572,8 +637,12 @@ def run_leg(job: LegJob) -> dict:
         timed("pre_equilibration", t0)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)
-    check_made_from("the pre-equilibration of this leg", equil_file,
-                    json.loads(str(eq["made_with"])) if "made_with" in eq.files else None, equil_from, log)
+    # files of this leg that an earlier version wrote without a record of what they were made from
+    origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
+    if not check_made_from("the pre-equilibration of this leg", equil_file,
+                           json.loads(str(eq["made_with"])) if "made_with" in eq.files else None, equil_from, log,
+                           contradictions=equil_contradictions(eq, cfg, job.leg, in_membrane)):
+        origin_not_recorded.append("the pre-equilibration")
     timestep_fs = float(eq["timestep_fs"])
     notes += json.loads(str(eq["notes"]))
 
@@ -590,7 +659,9 @@ def run_leg(job: LegJob) -> dict:
         restraint_from = restraint_made_with(cfg)
         if rfile.exists():
             stored = json.loads(rfile.read_text())
-            check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_from, log)
+            if not check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_from, log,
+                                   contradictions=restraint_contradictions(stored, cfg)):
+                origin_not_recorded.append("the restraint")
             restraint = BoreschRestraint.from_dict(stored["restraint"])
             notes.extend(stored.get("info", {}).get("notes", []))
         else:
@@ -794,6 +865,17 @@ def run_leg(job: LegJob) -> dict:
         t_sampling = time.perf_counter()
         with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline,
                                     exchange=cfg.sampling.exchange == "hrex", log=log) as sampler:
+            if sampler.unrecorded:
+                # samples of an earlier version, whose conditions are not recorded: a leg that has
+                # all its iterations is analysed as it is; nothing is added to such samples
+                if sampler.storage.n_iterations < total:
+                    sampler.storage.refuse_unrecorded()
+                log(f"the {sampler.storage.n_iterations} iterations of samples of this leg were written by a "
+                    "version that did not record their conditions; they are analysed as they are")
+                if "the samples" not in origin_not_recorded:
+                    origin_not_recorded.append("the samples")
+                timed("sampling", t_sampling)
+                return read_samples(hrex_dir), schedule
             if not sampler.restore():
                 sampler.initialize(*configs)
             else:
@@ -877,6 +959,12 @@ def run_leg(job: LegJob) -> dict:
     }
     result["quality"] = leg_quality(result["analysis"], cfg)
     result["lambda_windows"] = schedule.windows()
+    # what this leg used although an earlier version had written it without saying what it was made from
+    result["origin_not_recorded"] = origin_not_recorded
+    if origin_not_recorded:
+        notes.append("written by an earlier version of cuFEP without a record of what it was made from, and used "
+                     f"as it is: {', '.join(origin_not_recorded)}. Nothing in these files contradicts this run; "
+                     "that they were made with its settings could not be checked")
     result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
     # windows that adaptive lambda scheduling added to its start, per stage (None: fixed windows)
     start = schedule.provenance.get("initial_windows") if schedule.mode == "adaptive" else None
@@ -1167,8 +1255,12 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
                         "the others, in a new output.dir if their samples are to be kept")
         per_repeat = []
     warnings += [f"could not be compared between the legs: {item}" for item in not_compared]
+    # legs that used files of an earlier version whose origin is not recorded
+    unrecorded = [f"{where}: {', '.join(result['origin_not_recorded'])}" for where, result in complete
+                  if result.get("origin_not_recorded")]
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
                  "failed_legs": failed_legs, "inconsistent_legs": inconsistent, "not_compared": not_compared,
+                 "origin_not_recorded": unrecorded,
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
                  "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,
                  "estimators_disagree": flagged["estimators"]}

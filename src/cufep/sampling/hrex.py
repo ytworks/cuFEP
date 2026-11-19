@@ -217,14 +217,11 @@ class ReplicaExchangeSampler:
             self.storage.close()
             raise
         self.arrays = SharedArrays(self.k, spec.n_atoms, self.k, fallback_dir=str(self.storage.dir))
-        self.storage.set_meta(states=spec.states, temperature_K=spec.temperature_K,
-                              backend=spec.backend, leg=spec.name,
-                              iteration_ps=spec.steps_per_iteration * spec.timestep_fs * 1e-3,
-                              frame_ligand=list(spec.frame_ligand), frame_ca=list(spec.frame_ca))
-        if spec.lrc is not None:
-            from cufep.alchemy.lrc import TailEnergy
-            tail = TailEnergy.from_dict(spec.lrc)
-            self.storage.set_meta(lrc_s6=tail._s6, lrc_s12=tail._s12, lrc_cutoff_nm=tail.cutoff_nm)  # noqa: SLF001
+        #: the storage holds samples of an earlier version whose conditions are not recorded: they
+        #: are not continued, and nothing is written to their file
+        self.unrecorded = self.conditions_of_storage == "unrecorded"
+        if not self.unrecorded:
+            self._write_meta()
         self.workers: list = []
         self._next_worker_id = 0
         self._iter_seconds: float | None = None
@@ -323,6 +320,17 @@ class ReplicaExchangeSampler:
     def __exit__(self, *exc) -> None:
         self.close()
 
+    def _write_meta(self) -> None:
+        spec = self.spec
+        self.storage.set_meta(states=spec.states, temperature_K=spec.temperature_K,
+                              backend=spec.backend, leg=spec.name,
+                              iteration_ps=spec.steps_per_iteration * spec.timestep_fs * 1e-3,
+                              frame_ligand=list(spec.frame_ligand), frame_ca=list(spec.frame_ca))
+        if spec.lrc is not None:
+            from cufep.alchemy.lrc import TailEnergy
+            tail = TailEnergy.from_dict(spec.lrc)
+            self.storage.set_meta(lrc_s6=tail._s6, lrc_s12=tail._s12, lrc_cutoff_nm=tail.cutoff_nm)  # noqa: SLF001
+
     # -- state ------------------------------------------------------------------------
     def initialize(self, positions: np.ndarray, boxes: np.ndarray, velocities: np.ndarray | None = None) -> None:
         """Start the run: set replica coordinates, one configuration for all or one per replica.
@@ -331,6 +339,8 @@ class ReplicaExchangeSampler:
         checkpoint would otherwise stay in front of the samples of this one. A checkpoint of
         the start is written, so that such an interruption resumes from here.
         """
+        if self.unrecorded:
+            self.storage.refuse_unrecorded()
         self.iteration = 0
         self.state_of_replica = np.arange(self.k)
         self.storage.truncate(0)
@@ -351,6 +361,8 @@ class ReplicaExchangeSampler:
 
     def restore(self) -> bool:
         """Resume from the checkpoint in the storage directory, if there is one."""
+        if self.unrecorded:
+            self.storage.refuse_unrecorded()
         ckpt = self.storage.read_checkpoint()
         if ckpt is None:
             return False
@@ -431,6 +443,8 @@ class ReplicaExchangeSampler:
         ``on_iteration(sampler, stats)`` is called after every iteration; it may call
         :meth:`set_devices`.
         """
+        if self.unrecorded and store:
+            self.storage.refuse_unrecorded()
         self.start()
         stats: list[IterationStats] = []
         for _ in range(int(n_iterations)):

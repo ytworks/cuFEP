@@ -82,23 +82,21 @@ class LegStorage:
         """Record the conditions of the samples, or refuse to continue them under other ones.
 
         Nothing is written if they differ: the samples and their metadata stay as they are.
-        A file written before conditions were recorded is compared in what it holds (states,
-        temperature, backend, length of an iteration). Returns "new", "same" or "older file".
+        Returns "new", "same" or "unrecorded".
+
+        "unrecorded": the file holds samples of a version that did not record their conditions.
+        Nothing on the disk tells what they were made with (the soft-core, the pressure and the
+        friction were stored nowhere, and that version rewrote temperature, backend and states
+        every time it opened the file), so they cannot be checked and nothing is written to the
+        file. Such samples are read and analysed; they are not continued (:meth:`refuse_unrecorded`).
         """
         if self.n_iterations == 0:
             self.h5.attrs["conditions"] = json.dumps(conditions)
             return "new"
-        if "conditions" in self.h5.attrs:
-            stored, kind = json.loads(self.h5.attrs["conditions"]), "same"
-            current = conditions
-        else:
-            kind = "older file"
-            stored = {key: self.h5.attrs[key] for key in ("temperature_K", "backend") if key in self.h5.attrs}
-            if "states" in self.h5.attrs:
-                stored["states"] = json.loads(self.h5.attrs["states"])
-            if "iteration_ps" in self.h5.attrs:
-                stored["iteration_ps"] = float(self.h5.attrs["iteration_ps"])
-            current = dict(conditions, iteration_ps=conditions["steps_per_iteration"] * conditions["timestep_fs"] * 1e-3)
+        if "conditions" not in self.h5.attrs:
+            return "unrecorded"
+        stored, kind = json.loads(self.h5.attrs["conditions"]), "same"
+        current = conditions
         differing = []
         for key, old in stored.items():
             new = current.get(key)
@@ -117,9 +115,15 @@ class LegStorage:
                 f"this run asks for ({'; '.join(differing)}). They are left as they are. A calculation under other "
                 "conditions needs a new output.dir; only the lambda windows of a leg can be determined again in "
                 "place, with --reschedule.")
-        if kind == "older file":
-            self.h5.attrs["conditions"] = json.dumps(conditions)
         return kind
+
+    def refuse_unrecorded(self) -> None:
+        """Raise: samples whose conditions were not recorded are not continued."""
+        raise ConditionsError(
+            f"the {self.n_iterations} iterations of samples in {self.dir} were written by a version of cuFEP that "
+            "did not record the conditions they were made under, so nothing shows that this run would continue "
+            "them under the same ones. They are left as they are and can be analysed (cufep analyze). To sample "
+            "this leg further, start it anew with --reschedule: the samples it has are kept in previous_<n>/.")
 
     # -- metadata -----------------------------------------------------------------
     def set_meta(self, **kwargs) -> None:

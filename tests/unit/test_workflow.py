@@ -347,9 +347,12 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
 
     # what may differ between the legs of one calculation does not stop the combination
     write(tmp_path / "d", 0, "solvent", backend="cupotential", timestep_fs=4.0, n_states=14, **usual)
-    write(tmp_path / "d", 0, "complex", backend="openmm", timestep_fs=2.0, n_states=19, rest2={"scale": 1.5}, **usual)
+    write(tmp_path / "d", 0, "complex", backend="openmm", timestep_fs=2.0, n_states=19, rest2={"scale": 1.5},
+          origin_not_recorded=["the prepared systems", "the samples"], **usual)
     out = combine_ligand(tmp_path / "d", "lig", 1)
     assert out["dg_bind"] == pytest.approx((80.0 - 160.0) / 4.184) and out["inconsistent_legs"] == []
+    # a leg that used files of an earlier version whose origin is not recorded is named in the ligand's result
+    assert out["origin_not_recorded"] == ["complex leg: the prepared systems, the samples"]
     assert out["not_compared"] == [] and failed_legs([dict(out, failed_in_this_run=[])]) == []
 
     # results of an earlier version that lack the fields: combined, and the result says what was not compared
@@ -455,7 +458,8 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     import shutil
 
     from cufep.config.schema import Config
-    from cufep.workflow import (WorkflowError, check_made_from, equil_made_with, prep_made_from, prepare_ligand,
+    from cufep.workflow import (WorkflowError, check_made_from, equil_contradictions, equil_made_with,
+                                prep_contradictions, prep_made_from, prepare_ligand, restraint_contradictions,
                                 restraint_made_with, settings_differences)
 
     protein = tmp_path / "protein.pdb"
@@ -489,10 +493,50 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     with pytest.raises(WorkflowError, match="the prepared systems of jmc_23 in .*prep cannot be used again"
                                             ".*membrane.enabled: False -> True.*needs a new output.dir"):
         prepare_ligand(config(membrane={"enabled": True}), lig, None, lig_dir, True, "cube")
+    # a file of a version that kept no record of what it was made from, with what such a file holds:
+    # refused where it says something else than this run, used otherwise
     notes = []
-    (lig_dir / "prep" / "prep.json").write_text(json.dumps({"ligand": lig.name}))           # an older version's file
-    assert prepare_ligand(config(membrane={"enabled": True}), lig, None, lig_dir, True, "cube", log=notes.append)
-    assert "did not record what it was made from" in notes[0]
+    older = {"ligand": lig.name, "n_atoms_complex": 50000, "n_atoms_solvent": 3000, "complex_barostat": "isotropic",
+             "membrane": False, "box_shape": "dodecahedron", "solvent_box_shape": "cube", "membrane_info": {},
+             "warnings": []}
+    (lig_dir / "prep" / "prep.json").write_text(json.dumps(older))
+    assert prep_contradictions(older, lig.name, True, "dodecahedron") == ["membrane: False -> True",
+                                                                          "complex_barostat: isotropic -> membrane"]
+    with pytest.raises(WorkflowError, match="did not record what it was made from, and what it does hold is not "
+                                            "what this run asks for .membrane: False -> True; complex_barostat: "
+                                            "isotropic -> membrane.*needs a new output.dir"):
+        prepare_ligand(config(membrane={"enabled": True}), lig, None, lig_dir, True, "dodecahedron", log=notes.append)
+    with pytest.raises(WorkflowError, match="box_shape: dodecahedron -> cube"):
+        prepare_ligand(cfg, lig, None, lig_dir, False, "cube", log=notes.append)
+    assert notes == []
+    assert prepare_ligand(cfg, lig, None, lig_dir, False, "dodecahedron", log=notes.append)["ligand"] == lig.name
+    assert "did not record what it was made from; nothing it holds contradicts this run" in notes[0]
+    assert check_made_from("x", tmp_path, None, {}, log=notes.append) is False and check_made_from("x", tmp_path, {}, {})
+
+    # the pre-equilibration of such a version: the time step in the file is the one that was used
+    np.savez(tmp_path / "old_equil.npz", timestep_fs=2.0, simulated_ns=5.0, area_nm2=np.zeros(4), notes="[]")
+    old_eq = np.load(tmp_path / "old_equil.npz")
+    assert equil_contradictions(old_eq, cfg, "complex", False) == []                  # 2 fs used, 4 fs configured
+    assert equil_contradictions(old_eq, config(dynamics={"timestep_fs": 1.0}), "complex", False) \
+        == ["time step: 2 fs -> 1 fs"]
+    assert equil_contradictions(old_eq, config(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}}),
+                                "complex", False) == ["length of the MD: 5 ns -> 1 ns"]
+    assert equil_contradictions(old_eq, config(membrane={"enabled": True}), "complex", True) \
+        == ["length of the MD: 5 ns -> 10 ns", "bilayer: no -> yes"]
+    np.savez(tmp_path / "old_membrane.npz", timestep_fs=4.0, simulated_ns=15.0, area_nm2=np.full(4, 66.0))
+    assert equil_contradictions(np.load(tmp_path / "old_membrane.npz"), config(membrane={"enabled": True}),
+                                "complex", True) == []                                # an extended bilayer run
+    # the restraint of such a version
+    old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0},
+                     "info": {"selection": "auto", "force_constants": "openfe"}}
+    assert restraint_contradictions(old_restraint, cfg) == []
+    assert restraint_contradictions(old_restraint, config(restraints={"force_constants": "auto"})) \
+        == ["restraints.force_constants: openfe -> auto"]
+    assert restraint_contradictions(old_restraint, config(restraints={"k_r_kcal_per_A2": 20.0})) \
+        == ["restraints.k_r_kcal_per_A2: 10 -> 20"]
+    assert restraint_contradictions(old_restraint, config(restraints={
+        "selection": "manual", "host_atoms": [1, 2, 9], "guest_atoms": [4, 5, 6]})) \
+        == ["restraints.selection: auto -> manual", "restraints.host_atoms: [1, 2, 3] -> [1, 2, 9]"]
 
     # pre-equilibration and restraint of a leg
     eq = equil_made_with(cfg, "complex", False, 7)
