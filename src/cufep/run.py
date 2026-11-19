@@ -181,8 +181,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     for lig in ligands:
         for r in range(repeats):
             for leg in ("complex", "solvent"):
-                refresh_leg_result(lig_dirs[lig.name] / f"repeat_{r}" / leg, resolved.analysis, log)
-    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats, resolved.analysis) if lig_dirs[lig.name].exists()
+                refresh_leg_result(lig_dirs[lig.name] / f"repeat_{r}" / leg, resolved, log)
+    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats, resolved) if lig_dirs[lig.name].exists()
                else {"ligand": lig.name, "units": "kcal/mol", "n_repeats": 0, "warnings": ["not run"]}
                for lig in ligands]
     for s in summary:

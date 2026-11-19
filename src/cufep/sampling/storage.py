@@ -169,14 +169,17 @@ class LegStorage:
         for key, value in kwargs.items():
             self.h5.attrs[key] = json.dumps(value) if isinstance(value, (dict, list)) else value
 
-    def set_plan(self, n_equilibration: int, n_total: int) -> None:
-        """Record, before the run, how many of its iterations are equilibration and how many it has.
+    def set_plan(self, n_equilibration: int, n_total: int, analysis_record: dict | None = None) -> None:
+        """Record, before the run, how many of its iterations are equilibration and how many it has,
+        and the settings its result will be analysed with (``analysis_record``).
 
         It goes to the disk at once: an analysis of a run that was interrupted must not count
-        equilibration as production.
+        equilibration as production, and must judge the leg by the levels of its run.
         """
         self.h5.attrs["n_equilibration_iterations"] = int(n_equilibration)
         self.h5.attrs["n_planned_iterations"] = int(n_total)
+        if analysis_record is not None:
+            self.h5.attrs["analysis_record"] = json.dumps(analysis_record)
         self.h5.flush()
 
     def clear_plan(self) -> None:

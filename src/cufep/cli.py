@@ -178,23 +178,26 @@ def run(config: str, repeats, production_ns, gpus, backend, output, ligands, leg
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
 @click.option("--config", "config", type=click.Path(exists=True, dir_okay=False),
               help="Take the settings of the analysis from this configuration instead of those the leg was "
-                   "analysed with (its analysis section; nothing else of it is used).")
+                   "analysed with (its analysis section and the levels for the notes on the bilayer and the pose; "
+                   "nothing else of it is used).")
 @click.option("--equilibration-ns", type=float,
               help="Length of the equilibration per lambda window. Needed only for a run of an earlier version "
                    "that was interrupted: it did not record where its production begins.")
 def analyze(directory: str, config, equilibration_ns) -> None:
     """Analyse a finished, running or interrupted leg directory (the one containing hrex/).
 
-    The analysis uses the settings that the leg's own result records (overlap level, numbers of
-    points and blocks, tail correction ...), so that it says what the run said; --config gives
-    others. Temperature and the length of an iteration are always those of the samples. Only
-    prints; no result file is written or changed.
+    The analysis uses the settings of the leg's own run (overlap level, numbers of points and
+    blocks, tail correction ...), so that it says what the run said: those its result records,
+    for a leg without a result those its run stored with the samples before it began, else
+    those of the result it had before. --config gives others. Temperature and the length of an
+    iteration are always those of the samples. Only prints; no result file is written or changed.
     """
     from cufep import jsonio
     from cufep.analysis.mbar import NoProduction
     from cufep.config.schema import AnalysisConfig
     from cufep.sampling.storage import equilibration_boundary, read_samples
-    from cufep.workflow import (WorkflowError, analysis_settings_of, leg_result_from_samples, run_record_of)
+    from cufep.workflow import (WorkflowError, analysis_settings, analysis_settings_of, leg_result_from_samples,
+                                run_record_of)
 
     d = Path(directory)
     if d.name == "hrex" and (d / "samples.h5").exists():
@@ -215,24 +218,34 @@ def analyze(directory: str, config, equilibration_ns) -> None:
                 f"{hrex}: these samples are of a run that did not finish and that was made by a version of cuFEP "
                 "which recorded the end of the equilibration only then. Give the length of the equilibration per "
                 "lambda window with --equilibration-ns (sampling.equilibration_ns of that run; the default was 1).")
-    # the result the leg has, or had before a run that did not finish
-    earlier = None
+    # the result the leg has, and the one it had before a run that did not finish
+    results = {}
     for name in ("result.json", "result.previous.json"):
         if (d / name).exists():
             try:
-                earlier = json.loads((d / name).read_text())
-                break
+                results[name] = json.loads((d / name).read_text())
             except json.JSONDecodeError:
                 continue
+    earlier = results.get("result.json") or results.get("result.previous.json")
+    # the settings of the run of this leg: its result, else what the run stored with the samples
+    # before its first iteration, else the result the leg had before
+    of_the_run = attrs.get("analysis_record") if isinstance(attrs.get("analysis_record"), dict) else None
     if config is not None:
-        settings, source = _load(config).analysis, f"--config {config}"
-    elif earlier is not None and earlier.get("analysis_record"):
-        settings, source = analysis_settings_of(earlier["analysis_record"]), "the settings the leg's result records"
+        settings, source = _load(config), f"--config {config}"
+    elif (results.get("result.json") or {}).get("analysis_record"):
+        settings = analysis_settings_of(results["result.json"]["analysis_record"])
+        source = "the settings the leg's result records"
+    elif of_the_run:
+        settings = analysis_settings_of(of_the_run)
+        source = "the settings of the run that made the samples, which has no result (yet)"
+    elif (results.get("result.previous.json") or {}).get("analysis_record"):
+        settings = analysis_settings_of(results["result.previous.json"]["analysis_record"])
+        source = "the settings the result records that the leg had before"
     else:
         tail = "reweight" if "lrc_s6" in attrs else "none"
         if earlier is not None and earlier.get("lrc_method") in ("reweight", "isotropic", "none"):
             tail = earlier["lrc_method"]
-        settings = AnalysisConfig(lrc=tail)
+        settings = analysis_settings(AnalysisConfig(lrc=tail))
         source = "the defaults: the leg has no record of the settings it was analysed with"
     try:
         result = leg_result_from_samples(d, settings, run_record_of(earlier, d), samples=samples,

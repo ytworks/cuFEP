@@ -1031,6 +1031,66 @@ def test_analyze_says_what_the_run_said(tmp_path):
     assert shown["quality"]["overlap"]["threshold"] == 0.03 and shown["notes"] == ["a note of the run"]
 
 
+def test_a_leg_whose_first_run_was_interrupted_is_judged_by_the_levels_of_that_run(tmp_path):
+    """Review of PR 1: a leg without a result was analysed with the default settings: 100 iterations of a
+    run with analysis.min_overlap 0.45, 4 points and 2 blocks passed at 0.03 with 10 points and 5 blocks."""
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+    from cufep.config.schema import Config
+    from cufep.workflow import analysis_record, analysis_settings, analysis_settings_of
+
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                 "analysis": {"lrc": "none", "min_overlap": 0.45, "convergence_points": 4,
+                                              "convergence_blocks": 2},
+                                 "membrane": {"area_tolerance": 0.02}, "restraints": {"pose_rmsd_warning_nm": 0.2}})
+    record = analysis_record(cfg)
+    assert record["min_overlap"] == 0.45 and record["membrane_area_tolerance"] == 0.02
+    assert record["membrane_pocket_water_tolerance"] == 1.5 and record["pose_rmsd_warning_nm"] == 0.2
+    # the settings a record describes give the same record, and an analysis section alone the default levels
+    assert analysis_record(analysis_settings_of(record)) == record and analysis_settings(cfg) is cfg
+    alone = analysis_record(cfg.analysis)
+    assert alone == dict(record, membrane_area_tolerance=0.01, pose_rmsd_warning_nm=0.3)
+
+    # the run stores them with the samples before its first iteration; it is interrupted after 100
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    u, states, _ = harmonic_samples(100, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12))
+    storage = LegStorage(leg / "hrex", 4, 4)
+    storage.set_meta(temperature_K=310.0, iteration_ps=2.5, backend="openmm", leg="solvent")
+    storage.set_plan(4, 400, record)
+    for it in range(100):
+        storage.append(u[it], states[it], np.ones(4))
+    storage.close()
+    assert read_samples(leg / "hrex")["attrs"]["analysis_record"] == record
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["analysis_settings_from"] == "the settings of the run that made the samples, which has no result (yet)"
+    assert shown["quality"]["overlap"]["threshold"] == 0.45 and shown["quality"]["overlap"]["ok"] is False
+    assert len(shown["forward"]) == 4 and len(shown["blocks"]) == 2 and shown["analysis_record"] == record
+    assert shown["n_planned_iterations"] == 400 and shown["n_iterations_used"] == 96
+    # the result the leg had before that run is of an earlier run: the run that made the samples comes first
+    earlier = dict(record, min_overlap=0.03, convergence_points=10)
+    (leg / "result.previous.json").write_text(json.dumps({"analysis_record": earlier, "lrc_method": "none"}))
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["quality"]["overlap"]["threshold"] == 0.45 and len(shown["forward"]) == 4
+    # a finished leg says what its result says
+    (leg / "result.json").write_text(json.dumps({"analysis_record": earlier, "lrc_method": "none"}))
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["analysis_settings_from"] == "the settings the leg's result records"
+    assert shown["quality"]["overlap"]["threshold"] == 0.03 and len(shown["forward"]) == 10
+    (leg / "result.json").unlink()
+    # samples of a run that stored no settings: the result the leg had before, then the defaults
+    import h5py
+    with h5py.File(leg / "hrex" / "samples.h5", "a") as h5:
+        del h5.attrs["analysis_record"]
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["analysis_settings_from"] == "the settings the result records that the leg had before"
+    assert shown["quality"]["overlap"]["threshold"] == 0.03 and len(shown["forward"]) == 10
+    (leg / "result.previous.json").unlink()
+    shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
+    assert shown["analysis_settings_from"].startswith("the defaults") and shown["analysis_record"] == dict(
+        alone, min_overlap=0.03, convergence_points=10, convergence_blocks=5)
+
+
 def test_a_result_of_another_analysis_is_made_again_before_the_legs_are_combined(tmp_path):
     """Review of PR 1: when only one leg was run again, its new analysis was combined with the free energy
     and the uncertainty that an earlier method of analysis had given the other leg."""

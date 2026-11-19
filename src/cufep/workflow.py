@@ -975,7 +975,8 @@ def run_leg(job: LegJob) -> dict:
                            contradictions=equil_contradictions(eq, cfg, job.leg, in_membrane)):
         origin_not_recorded.append("the pre-equilibration")
     timestep_fs = float(eq["timestep_fs"])
-    notes += equil_notes(eq, cfg, in_membrane)
+    # the notes of the pre-equilibration and of the restraint are made from their files when the
+    # result is made (notes_of_leg_files), with the levels of the run that makes it
 
     # ---- 2. restraint (complex only) --------------------------------------------------------
     t_restraint = time.perf_counter()
@@ -993,7 +994,6 @@ def run_leg(job: LegJob) -> dict:
                                    contradictions=restraint_contradictions(stored, cfg)):
                 origin_not_recorded.append("the restraint")
             restraint = BoreschRestraint.from_dict(stored["restraint"])
-            notes.extend(restraint_notes(stored, cfg))
         else:
             rc = cfg.restraints
             k_r, k_a = rc.k_r_kcal_per_A2 * KCAL * 100.0, rc.k_angle_kcal_per_rad2 * KCAL
@@ -1022,7 +1022,6 @@ def run_leg(job: LegJob) -> dict:
                 restraint = found.restraint
                 if rc.force_constants == "auto":
                     restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)
-                notes.extend(found.notes)
                 info = {"selection": "auto", "force_constants": rc.force_constants, "score": found.score,
                         "fluctuations": found.fluctuations,
                         "ligand_rmsd_A": 10 * found.ligand_rmsd_nm, "ligand_rmsd_reference": "input pose",
@@ -1194,7 +1193,7 @@ def run_leg(job: LegJob) -> dict:
             else:
                 log(f"resumed at iteration {sampler.iteration}")
             # before the first iteration: what an analysis of an interrupted run needs to know
-            sampler.storage.set_plan(n_equil, total)
+            sampler.storage.set_plan(n_equil, total, analysis_record(cfg))
             if control is not None and total > sampler.iteration:
                 devices = control.request_devices(n_windows, remaining_work(sampler.iteration))
                 if devices:
@@ -1260,7 +1259,7 @@ def run_leg(job: LegJob) -> dict:
         "rest2": {"scale": float(rest2.scale) if rest2_on else 1.0, "hot_protein_atoms": len(hot_atoms),
                   "hot_residues": hot_residues, "torsion_terms_scaled": alch.rest2_torsions,
                   "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}}
-    result = leg_result_from_samples(leg_dir, cfg.analysis, run_record, samples=samples, schedule=schedule)
+    result = leg_result_from_samples(leg_dir, cfg, run_record, samples=samples, schedule=schedule)
     analysis_dict, correction, total = result["analysis"], result["lrc"], result["delta_g_decouple"]
     timed("analysis", t_analysis)
     timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
@@ -1357,22 +1356,83 @@ def leg_quality(analysis: dict, cfg) -> dict:
                           a.estimators_tolerance_kcal_mol)
 
 
+def analysis_settings(source):
+    """The settings with which the result of a leg is made from its samples and files.
+
+    They are the ``analysis`` section and three levels for notes that are made from the files of
+    the leg: ``membrane.area_tolerance`` and ``membrane.pocket_water_tolerance`` (whether the
+    bilayer had settled) and ``restraints.pose_rmsd_warning_nm`` (whether the ligand left its
+    pose). The run of a leg, a result that is made again and ``cufep analyze`` use the same
+    ones. ``source`` is a whole configuration (returned as it is), an object with these three
+    sections, or an ``analysis`` section alone, which gets the default levels.
+    """
+    if all(hasattr(source, section) for section in ("analysis", "membrane", "restraints")):
+        return source
+    settings = analysis_settings_of(None)
+    settings.analysis = getattr(source, "analysis", source)
+    return settings
+
+
 def analysis_record(cfg) -> dict:
-    """The settings a leg is analysed with and the version of the method, as its result records them."""
+    """The settings the result of a leg is made with (:func:`analysis_settings`) and the version of
+    the method, as the result records them."""
     from cufep.analysis.mbar import ANALYSIS_VERSION
 
-    a = getattr(cfg, "analysis", cfg)
+    settings = analysis_settings(cfg)
+    a = settings.analysis
     return {"version": ANALYSIS_VERSION, "lrc": a.lrc, "min_overlap": float(a.min_overlap),
             "min_effective_samples": float(a.min_effective_samples), "halves_tolerance_kT": float(a.halves_tolerance_kT),
             "estimators_tolerance_kcal_mol": float(a.estimators_tolerance_kcal_mol),
-            "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks)}
+            "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
+            "membrane_area_tolerance": float(settings.membrane.area_tolerance),
+            "membrane_pocket_water_tolerance": float(settings.membrane.pocket_water_tolerance),
+            "pose_rmsd_warning_nm": float(settings.restraints.pose_rmsd_warning_nm)}
 
 
 def analysis_settings_of(record: dict | None):
-    """The ``analysis`` section that a stored :func:`analysis_record` describes (defaults for what it lacks)."""
-    from cufep.config.schema import AnalysisConfig
+    """The settings that a stored :func:`analysis_record` describes (:func:`analysis_settings`;
+    defaults for what it lacks)."""
+    from types import SimpleNamespace
 
-    return AnalysisConfig(**{key: value for key, value in (record or {}).items() if key in AnalysisConfig.model_fields})
+    from cufep.config.schema import AnalysisConfig, MembraneConfig, RestraintConfig
+
+    record = record or {}
+    membrane, restraints = MembraneConfig(), RestraintConfig()
+    return SimpleNamespace(
+        analysis=AnalysisConfig(**{key: value for key, value in record.items() if key in AnalysisConfig.model_fields}),
+        membrane=SimpleNamespace(
+            area_tolerance=float(record.get("membrane_area_tolerance", membrane.area_tolerance)),
+            pocket_water_tolerance=float(record.get("membrane_pocket_water_tolerance", membrane.pocket_water_tolerance))),
+        restraints=SimpleNamespace(
+            pose_rmsd_warning_nm=float(record.get("pose_rmsd_warning_nm", restraints.pose_rmsd_warning_nm))))
+
+
+def notes_of_leg_files(leg_dir: Path, settings, conditions: dict) -> tuple[list[str], tuple[str, ...]]:
+    """The notes that the pre-equilibration and the restraint of a leg carry, from the files of the
+    leg, with the verdicts on the bilayer and on the pose made with the levels of ``settings``.
+
+    Returns the notes and how those begin whose verdict was made here: such notes of an earlier
+    run are replaced by them. A file that is not there gives no notes and replaces none.
+    ``conditions`` are those of the samples (the barostat says whether the leg is in a bilayer;
+    samples that do not record it leave that to the pre-equilibration file).
+    """
+    from cufep.alchemy.restraints import POSE_NOTE
+    from cufep.sampling.equilibrate import BILAYER_NOTE
+
+    notes: list[str] = []
+    judged: list[str] = []
+    equil_file, restraint_file = leg_dir / "equil.npz", leg_dir / "restraint.json"
+    if equil_file.exists():
+        eq = np.load(equil_file)
+        barostat = conditions.get("barostat")
+        in_membrane = barostat == "membrane" if barostat is not None else bool(equil_in_membrane(eq))
+        notes += equil_notes(eq, settings, in_membrane)
+        judged.append(BILAYER_NOTE)
+    stored = _read_json(restraint_file) if restraint_file.exists() else None
+    if stored:
+        notes += [n for n in restraint_notes(stored, settings) if n not in notes]
+        judged.append(POSE_NOTE)
+    return notes, tuple(judged)
 
 
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
@@ -1486,19 +1546,23 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
                             n_equilibration: int | None = None) -> dict:
     """The result of a leg from the samples in its directory. Needs no GPU.
 
-    ``analysis`` is the ``analysis`` section of a configuration, and nothing else of a
-    configuration enters: temperature, length of an iteration and the end of the equilibration
-    are those of the samples, so that a leg cannot be analysed as if it had been run under the
-    settings of another run. ``run`` holds what only the run of the leg knows (:data:`_RUN_KEYS`
-    and its notes). The same function serves a leg that has just been sampled, ``cufep
-    analyze``, and a result that is made again because the method of the analysis has changed.
+    ``analysis`` gives the settings of :func:`analysis_settings` (a whole configuration, or its
+    ``analysis`` section alone), and nothing else of a configuration enters: temperature, length
+    of an iteration and the end of the equilibration are those of the samples, so that a leg
+    cannot be analysed as if it had been run under the settings of another run. ``run`` holds
+    what only the run of the leg knows (:data:`_RUN_KEYS` and its notes). The notes of the
+    pre-equilibration and of the restraint are made from the files of the leg
+    (:func:`notes_of_leg_files`). The same function serves a leg that has just been sampled,
+    ``cufep analyze``, and a result that is made again because the method or the settings of
+    the analysis have changed.
     """
     from cufep.alchemy.schedule import Schedule
     from cufep.analysis.mbar import analyze_leg
     from cufep.analysis.structure import structural_analysis
     from cufep.sampling.storage import equilibration_boundary, read_samples
 
-    a = getattr(analysis, "analysis", analysis)
+    settings = analysis_settings(analysis)
+    a = settings.analysis
     if samples is None:
         samples = read_samples(leg_dir / "hrex")
     attrs = samples["attrs"]
@@ -1519,11 +1583,14 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
                       n_blocks=a.convergence_blocks)
     correction = {"reweight": res.lrc_delta_g, "isotropic": res.lrc_isotropic, "none": 0.0}[a.lrc]
     structure = structural_analysis(samples, n_equilibration)
-    notes = list(run.get("notes") or [])
+    conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
+    # the notes of the pre-equilibration and the restraint, with the verdicts on the bilayer and the
+    # pose by the levels of these settings; then what the run noted besides
+    notes, judged = notes_of_leg_files(leg_dir, settings, conditions)
+    notes += [n for n in (run.get("notes") or []) if n not in notes and not (judged and n.startswith(judged))]
     notes += [n for n in (structure or {}).get("warnings", []) if n not in notes]
     origin_not_recorded = list(run.get("origin_not_recorded") or [])
     # the pressure is the one the samples were made under; samples that do not record it have none
-    conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
     pressure = conditions.get("pressure_bar")
     release, release_analytical = restraint_release_of(leg_dir, attrs, temperature)
     # the outer radius to which the tail energy of these samples was recorded; the energies cannot
@@ -1544,7 +1611,7 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.lrc_error, "structure": structure,
         "restraint_release": release, "restraint_release_analytical": release_analytical,
         "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
-        "analysis_record": analysis_record(a), "run": run,
+        "analysis_record": analysis_record(settings), "run": run,
     }
     result["quality"] = leg_quality(result["analysis"], a)
     result["lambda_windows"] = schedule.windows() if schedule is not None else {}
