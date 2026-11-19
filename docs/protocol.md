@@ -399,10 +399,45 @@ by the statistical inefficiency g of that window: the window keeps every ceil(g)
 iteration. g is taken from the energy difference between the window and a neighbouring one,
 over the configurations the window holds from iteration to iteration. For a window with two
 neighbours both differences are examined and the larger g is used; the result records both
-values and which neighbour gave it. The free energy of the leg is that of MBAR on the samples
-that are kept. A part of the production (a point of the forward or reverse series, a half, a
-block) is estimated from those kept samples that lie in it. The standard error of the leg
-comes from blocks of time, described below.
+values and which neighbour gave it.
+
+The free energy of the leg that is reported is that of decoupling: MBAR on the samples that
+are kept, minus the correction for the dispersion tail ("Long-range dispersion") of the same
+iterations. Everything that is said about the leg is said about this quantity, and every part
+of the production is estimated in the same way, from its own iterations: the two halves, the
+points of the forward and reverse series, the consecutive blocks, and every estimate of the
+jackknife below. A standard error or a check of a number is therefore always one of that
+number, including the correlation between MBAR and the correction. (The comparison of BAR with
+MBAR is the exception: both are estimators of the MBAR part on the same samples, and they are
+compared without the correction.)
+
+A part of the production is used only if its free energy is determined:
+
+- every window keeps at least four samples in it;
+- the MBAR equations of its samples have a solution;
+- its samples connect the windows. The overlap matrix is stochastic, its largest eigenvalue is
+  1, and the others "approach one when the matrices can be nearly decomposed into independent
+  block matrices"; the variance of a free energy grows as lambda / (N (1 - lambda))
+  (Klimovich et al., section 3.4). A part is determined if 1 minus the second largest
+  eigenvalue, times the samples of the window with the fewest, is at least one. Without samples
+  that connect two windows the MBAR equations hold for any difference of their free energies,
+  and a solver that starts from a value returns it; such a part is found here, whatever
+  `analysis.min_overlap` is;
+- every pair of neighbouring windows overlaps by at least `analysis.min_overlap` (0.03) among
+  its samples, the level of Klimovich et al. below which the estimate "will likely be
+  substantially incorrect". A part below it is determined, but not used, and its reason says
+  so;
+- the correction has at least four observations in it (tail energies for the correction by
+  reweighting, volumes of the coupled state for the isotropic one), all of them finite (and the
+  volumes positive). For the correction by reweighting the result also gives the effective
+  number of its observations, 1 / sum w^2 of their normalised exponential weights, and the
+  largest weight, so that a correction resting on a few configurations shows; no level is
+  applied to them.
+
+A part that is not determined, or below the level, is left out with the reason: such halves
+are "not compared", points and blocks are listed in `parts_not_determined`, and the other
+blocks keep their places. A production without
+the four observations of the correction gives the leg no free energy.
 
 This is the procedure of Klimovich, Shirts and Mobley 2015 (section 2.5: the series may be
 dU/dlambda or "any of the potential energy differences") and of Mey et al. 2020 (section 8.2)
@@ -444,20 +479,30 @@ from blocks of time that are the same for all windows:
   are uncorrelated are the unit that is resampled", and with few of them the jackknife is the
   method of choice (Grossfield et al., section 7.6);
 - it is computed for B = 40, 20, 10 and 5 (`analysis.error_blocks`), the four values are stored
-  (`delta_g_error_blocks`), and the largest is the standard error that is reported. Blocks
+  (`delta_g_error_blocks`), and the largest is the standard error that is reported, unless the
+  analytical one is larger. The analytical one combines the standard errors MBAR and the
+  correction give for independent samples; both come from the same configurations of the
+  coupled state, so their correlation is taken from the jackknife replicates of the most blocks
+  that can be used (`correction_correlation`), and where none can, their sum, an upper bound of
+  the error of their difference, is taken and named ("analytical upper bound"). Five blocks give
+  an error with four degrees of freedom,
+  which scatters by about a third; on 86 stored legs the error from blocks was below the
+  analytical one in 12, and the analytical one is already at the low end of the spread
+  between runs (Rizzi et al.). Which of the two is reported is recorded
+  (`delta_g_error_from`). Blocks
   have to be longer than the correlation time, and the standard error stops growing with
   their length once they are (Grossfield et al., section 7.3.2); the correlation time between
   the windows is not known beforehand, so the longest blocks that still give an estimate are
   included. The four numbers of blocks are cuFEP's choice; none of the sources gives numbers,
   and none describes this procedure for replica exchange as a whole;
 - a number of blocks is not used if a block is shorter than the interval at which the slowest
-  window keeps its samples, or if a window keeps fewer than four samples without a block.
-  Where no number can be used (a very short leg) the standard error is the one MBAR gives,
-  and the leg says so with the reason;
+  window keeps its samples, or if the estimate without one of its blocks is not determined
+  (see above). Where no number can be used (a very short leg) the standard error is the
+  analytical one, and the leg says so with the reason;
 - the standard error MBAR gives is kept next to it (`delta_g_mbar_error`, `dg_bind_mbar_error`,
-  column `mbar_error` of `summary.csv`). The two halves of the production get their standard
-  errors from five blocks each (`analysis.halves_error_blocks`). The points of the forward and reverse series and the
-  consecutive blocks of the figure carry the error MBAR gives for their samples.
+  column `mbar_error` of `summary.csv`). Every part of the production (each half, each point of
+  the forward and reverse series, each consecutive block) gets its standard error in the same
+  way from five blocks within it (`analysis.part_error_blocks`).
 
 How well it does was measured on a model: eight harmonic windows of the same curvature whose
 end states have the same free energy, a configuration that keeps 0.97 of its distance from the
@@ -510,7 +555,7 @@ and MBAR.
 | overlap | every pair of neighbouring lambda windows overlaps by at least `analysis.min_overlap` (0.03) in the production, in both matrices above; the message says which one is below | `NOT RELIABLE` | Klimovich et al., section 3.5: "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy estimate (as long as the resulting error is sufficiently low)". "Anything below that number should serve as a caution sign ...; in this case, not only will the estimated variance increase but the free energy estimate itself will likely be substantially incorrect" |
 | independent samples | the lambda window with the fewest has at least `analysis.min_effective_samples` (50): as estimated (iterations of the production divided by g of the window), as the number of samples MBAR gets from it (every ceil(g)-th iteration), and as what the standard error leaves of those (see below) | few independent samples | Mey et al., section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used" |
 | halves | the free energies from the first and from the second half of the production differ by at most `analysis.halves_tolerance_kT` (1 kT, 0.59 kcal/mol at 298 K) | the two halves of the production differ | Mey et al., figure 9: the difference between the forward and the reverse free energy "at the midpoint of the simulation time gives an indication of the overall convergence of the simulation, with differences over 1 kBT indicating poor convergence". The figure applies it to each step of a relative perturbation, cuFEP to a leg |
-| estimators | BAR between neighbouring windows and MBAR differ by at most `analysis.estimators_tolerance_kcal_mol` (1 kcal/mol) | BAR and MBAR differ | Mey et al.: "differences between methods that are larger than 1 kcal/mol ... would indicate poor convergence". The guides compare TI with BAR-type estimators; cuFEP records no dU/dlambda, and BAR against MBAR is a weaker comparison |
+| estimators | BAR between neighbouring windows and MBAR (on the same samples, both without the tail correction) differ by at most `analysis.estimators_tolerance_kcal_mol` (1 kcal/mol) | BAR and MBAR differ | Mey et al.: "differences between methods that are larger than 1 kcal/mol ... would indicate poor convergence". The guides compare TI with BAR-type estimators; cuFEP records no dU/dlambda, and BAR against MBAR is a weaker comparison |
 
 The overlap comes first. The overlap matrix is "a quantitative estimator of the phase-space
 overlap" (Klimovich et al., section 3.4), "trustworthy results should in general have at
@@ -534,7 +579,9 @@ do not say that a result is wrong:
   1 / r^2 as many independent ones, and that number is compared with the level
   (`quality.samples.independent`, with r as `error_ratio`). A ratio below 1 counts as 1. This
   rule is cuFEP's; it is how the correlation between the windows, which the thinning window
-  by window does not remove, enters the check. In the first run of the model above the
+  by window does not remove, enters the check. r is taken for the MBAR part alone (the largest
+  error from blocks that can be used), so that the variance of the correction does not count
+  as a correlation of the samples. In the first run of the model above the
   slowest window kept 67 samples, which is above the level; they count as 8, and none of the
   48 runs passes.
 - The two halves are the first and the second half of the production in time and share no
@@ -716,6 +763,31 @@ belong together:
   iterations up to the last checkpoint, all datasets to the same iteration. If a reader has
   the file open at the moment of a checkpoint, that checkpoint is postponed to the next one
   and the run goes on.
+- A write of the samples is a transaction: every dataset is written from the stored count on,
+  the data is flushed to the file, and only then is the new count published (the dataset
+  `committed_counts`, three integers written in place and never deleted), by which every reader
+  goes. A write that fails half-way, or a process killed at any point of it, leaves the file at
+  one written state; the samples stay in memory and the write is repeated from the same place,
+  so nothing is stored twice and nothing unwritten is read. A file of an earlier version gets
+  its counts, from what all its datasets hold, before anything of it is extended. If the
+  samples cannot be stored at the end of a run (another process held the file for ten
+  minutes), the leg fails with its last checkpoint kept and is resumed by running it again.
+- The checkpoint names the iteration and the number of stored rows; records (tail energies,
+  frames) carry the row of their iteration. A checkpoint of an earlier version, whose records
+  show that iterations were run without being stored, cannot say which rows are its own and is
+  refused.
+- Workers are started by one function for the replica exchange, the lambda precalculation and a
+  change of GPUs: if one does not start, every worker that was started is stopped before the
+  error is raised, and the workers and the GPUs the sampler names agree.
+- A leg is repeated on stock OpenMM (`backend.fallback`) only after a failure of the backend:
+  a worker that died, hung, did not start, or failed twice from the same configurations, or an
+  error of OpenMM. Not after a failure to store the samples, and not if the leg had samples
+  from an earlier run (a leg that is continued): its samples stay in `hrex/` and the leg fails
+  with what to do. What a failed cuPotential run left is kept in
+  `hrex_failed_cupotential/`, `hrex_failed_cupotential_2/`, ...
+- The number of MD steps of an iteration and the numbers of iterations of the equilibration
+  and the production follow one rule for the run and for every check of stored samples
+  against a run: 2.5 ps at 3 fs are 833 steps (2.499 ps), and 10 ns are 4000 iterations.
 - The prepared systems, the pre-equilibration and the restraint are used again only if the
   input files and the settings that went into them are the same. Only the lambda windows of a
   leg can be determined again in place, with `--reschedule`.
@@ -727,6 +799,9 @@ belong together:
   the levels of the run: `membrane.area_tolerance`, `membrane.pocket_water_tolerance`,
   `restraints.pose_rmsd_warning_nm`. The three levels are recorded with the settings of the
   analysis, so the result of a leg that a run does not sample is made again if they differ.
+  The lambda windows and samples that `--reschedule` sets aside in `previous_<n>/` take copies
+  of the pre-equilibration and the restraint with them; an archive of an earlier version is
+  read with those of the leg directory above it, which the leg used again.
 
 *The legs of a ligand.*
 
@@ -739,7 +814,10 @@ belong together:
   ends with an error. Backend, time step, number of lambda windows, lengths and REST2 may
   differ between the legs. A run that would sample a leg under another temperature, pressure
   or outer radius than a finished leg it does not sample is refused before it samples
-  anything.
+  anything, and so is a run whose analysis the samples of such a leg cannot give: a tail
+  correction for samples made without its data, or a correction by reweighting for a leg with
+  no tail energies in its production. What an analysis needs from samples is checked in one
+  place for the run, for the legs it does not sample and for `cufep analyze`.
 - A leg that a run does not sample (`--leg`, `--ligand`) keeps the result of an earlier run.
   If that result is of another analysis (another version of the method, other settings of
   the `analysis` section, or other levels for the notes on bilayer and pose), it is made again
@@ -750,8 +828,9 @@ belong together:
   temperature and iteration length of its samples, so it says what the run said. The settings
   are those the result of the leg records; for a leg without a result (running, or
   interrupted) those its run stored with the samples before its first iteration; else those
-  of the result the leg had before. The output names which. `--config` gives other settings.
-  It only prints.
+  of the result the leg had before. The output names which, and the two radii of the tail
+  correction that were used. `--config` gives other settings; an outer radius other than the
+  one the samples recorded their tail energies to is refused. It only prints.
 
 *The record of the directory.*
 
@@ -770,6 +849,7 @@ version wrote without a record of what they were made from are treated as follow
 | file | what happens |
 |---|---|
 | samples (`hrex/samples.h5`) without recorded conditions | read and analysed, never added to, and not written to. That version stored neither the soft-core nor pressure and friction, and it rewrote temperature, backend and states whenever it opened the file, so nothing on the disk shows what the samples were made with. They are held to what their file does hold: a run with another temperature, other lambda states or another length of an iteration is refused, and so is one that asks for more production than they have. A leg that has all its iterations is analysed as it is: the release of the restraint is computed at the temperature of the samples, and the pressure, which they do not record, is named as not compared when the legs are combined. To sample further, the leg is started anew with `--reschedule` |
+| samples without the stored count (`committed`) | read up to the iterations that all their row datasets hold, as before; a run that continues them writes the count from then on |
 | samples that record their conditions with a checksum of the System and without the settings behind it (one version) | before a run, the System is built again from the files of the leg and all recorded conditions are compared, so that a run with another soft-core, restraint or REST2 region is refused before anything is written. If a file needed for that is missing, the run is refused |
 | prepared systems, pre-equilibration, restraint without a record | refused where what the file does hold contradicts the run (bilayer or not, barostat, box shape, ligand; length of the MD, a larger time step than configured; restraint selection and force constants). Otherwise used, and the leg and the ligand result name them (`origin_not_recorded`) |
 | a result without the version of its analysis | made again from the samples, see above |
@@ -825,7 +905,7 @@ source code and papers (see "Sources").
 | default windows | complex 80, solvent 68 | presets Quick / Normal / Accurate; adaptive optional | complex 30, solvent 14 | adaptive; fixed mode: complex 30, solvent 14 |
 | time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 10 ns |
 | runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
-| reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | standard error from blocks of time common to all lambda windows (delete-one-block jackknife of the MBAR estimate on samples decorrelated window by window); standard deviation over repeats if more than one |
+| reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | standard error from blocks of time common to all lambda windows (delete-one-block jackknife of MBAR minus the tail correction, on samples decorrelated window by window), not below the analytical one; standard deviation over repeats if more than one |
 | checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03, independent samples per window, the two halves of the production, BAR against MBAR; messages in the result |
 | a calculation that is not good enough | the user: "Try increasing the length of the simulations (i.e., 10 ns)", "try increasing the number of lambda windows and/or increasing the sampling" | the user runs a further instance of the link "with longer simulation time/more Lambda windows" | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
 | replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 with `sampling.rest2` |

@@ -64,9 +64,10 @@ falls back to files in the output directory and says so.
 | `<ligand>/repeat_<n>/analysis.png` | forward and reverse series, halves and blocks of the production, and overlap matrix of both legs |
 
 One calculation per ligand is run by default, as in FEP+ and Flare. Its uncertainty is the
-standard error from blocks of the production that are the same for all lambda windows; the
-standard error MBAR gives is kept next to it (`mbar_error`). `sampling.repeats` runs the
-calculation several times independently and reports the spread.
+standard error of the free energy as it is reported (MBAR minus the tail correction), from
+blocks of the production that are the same for all lambda windows, and never below the
+analytical one; the standard error MBAR gives is kept next to it (`mbar_error`).
+`sampling.repeats` runs the calculation several times independently and reports the spread.
 
 ## When a result carries a message
 
@@ -80,12 +81,13 @@ you run the leg concerned again, and the rest of the calculation keeps its resul
 | `NOT RELIABLE` | two neighbouring lambda windows overlap by less than 0.03 in the production, among all iterations or among the samples the free energy is estimated from. This is the first condition: without overlap the free energy cannot be used | give that stage more lambda windows and start the leg anew; if only the samples of the estimate are below the level, a longer production also helps |
 | few independent samples | a lambda window gives MBAR fewer than 50 statistically independent samples, counted also by what the standard error from time blocks leaves of them; the free energy and its uncertainty rest on few samples | run the leg longer; it continues from where it stopped |
 | halves of the production differ | the first and the second half of the production give free energies more than 1 kT (0.6 kcal/mol) apart, which indicates poor convergence. The message gives the difference in units of its standard error too: a free energy that is converged still fluctuates | run the leg longer and see whether the difference shrinks |
-| halves not compared | the production is too short to give each half an estimate | run the leg longer |
+| halves not compared | a half of the production has no determined free energy: too few samples in it, or two neighbouring windows that do not overlap among its samples, or no tail energies in it | run the leg longer; where the windows do not overlap in a half, also give that stage more windows |
 | BAR and MBAR differ | the two estimators are more than 1 kcal/mol apart: windows too far apart or too little sampled | more windows, or a longer production |
 | `FAILED` | a leg did not finish, or was interrupted; the command ends with an error and the ligand has no binding free energy from that leg | read the message, then run the leg again |
 | legs made under different conditions | the complex and the solvent leg (or two repeats) differ in temperature, pressure, prepared systems or tail correction; the ligand gets no binding free energy and the command ends with an error | run the legs that differ again under the conditions of the others |
 | old analysis | a leg that this run did not sample has a result of an earlier method of analysis and its samples are gone, so it could not be analysed again | run that leg again |
-| the standard error is the one MBAR gives | the leg is too short for blocks of time, so its standard error takes the samples as independent | run the leg longer |
+| the standard error is the analytical one | the leg is too short for blocks of time, so its standard error (MBAR and the tail correction) takes the samples as independent | run the leg longer |
+| parts of the production without an estimate | some points of the forward and reverse series or some consecutive blocks have no determined free energy, for the same reasons as a half; they are left out of `analysis.png` | nothing, unless the halves are affected too |
 | checks of this version not made | `cufep benchmark report` read a summary that an earlier version of cuFEP wrote | analyse the legs again |
 | origin of files not recorded | the leg used files of an earlier version of cuFEP that do not say what they were made from | a new output directory, if that matters |
 
@@ -168,7 +170,8 @@ cufep benchmark run a2a --tier full       # every ligand
 cufep benchmark report tyk2 runs/benchmark_tyk2_subset
 ```
 
-One calculation per ligand is run, as FEP+ does; `--repeats` runs more. The report compares
+One calculation per ligand is run, as FEP+ does; `--repeats` runs more. The report gives the
+standard error of each calculation and, where several were run, the SD over them. It compares
 cuFEP with experiment and with the FEP+ values of the Schrödinger public benchmark. FEP+ values come from relative calculations shifted to the experimental
 mean, so the report separates raw errors (cuFEP only) from the like-for-like statistics.
 
