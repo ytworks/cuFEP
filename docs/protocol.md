@@ -86,6 +86,23 @@ check.
 The ligand's own nonbonded interactions are kept at every lambda window (decoupling), so
 the decoupled ligand is the same in both legs and no vacuum leg is needed.
 
+### Interactions inside the ligand
+
+To keep them, every pair of ligand atoms is an exception of the `NonbondedForce` with its
+full charge product and Lennard-Jones parameters. An exception has no cutoff. In the original
+System the pairs of ligand atoms that are four or more bonds apart are ordinary pairs, cut
+off at `dynamics.cutoff_nm`; OpenFE (openmmtools) keeps that cutoff for them. The coupled end
+of a cuFEP leg therefore differs from the original System by the Lennard-Jones energy of
+ligand atoms that are further apart than the cutoff. Electrostatics are not affected beyond
+the tolerance of the Ewald sum.
+
+The difference is small and it is the same at both ends of both legs, so it enters a binding
+free energy only through how differently the ligand is folded when bound and when free. In
+the input poses of the benchmark ligands, with OpenFF 2.2.1 and a cutoff of 0.9 nm, the
+energy in question is -0.016 to -0.043 kcal/mol for the 16 TYK2 ligands (longest distance
+inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A ligands (about
+1.0 nm). `spikes/m12_intraligand_lj.py` gives the numbers per ligand.
+
 ## Steps of one leg
 
 1. Pre-equilibration: minimise, 0.25 ns NVT and 0.5 ns NPT on stock OpenMM, then 5 ns NPT
@@ -478,6 +495,7 @@ Further differences from OpenFE, whose protocol cuFEP follows most closely:
 | compute backend | stock OpenMM | cuPotential plugin for the nonbonded force and integrator; stock OpenMM as fallback |
 | standard state correction | analytical | numerical, analytical as a check |
 | ligand-environment dispersion tail | isotropic | explicit, by reweighting the coupled state |
+| Lennard-Jones between atoms of the ligand | cut off as in the original System | no cutoff (hundredths of a kcal/mol; "Interactions inside the ligand") |
 
 Sources: Schrödinger `fep_plus` and `fep_absolute_binding` command help and Python API
 documentation, the "FEP+ troubleshooting" checklist of the FEP+ user manual, Ross et al., Commun. Chem. 2023, 6, 222; Cresset Flare release notes for

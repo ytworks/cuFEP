@@ -162,6 +162,10 @@ def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: floa
         params.append((q.value_in_unit(_E), sig.value_in_unit(_NM), eps.value_in_unit(_KJ)))
 
     # -- ligand-ligand pairs: make every one an explicit, constant exception ---
+    # An exception has no cutoff. Pairs of ligand atoms four or more bonds apart are ordinary
+    # pairs in the original System and cut off there; here their Lennard-Jones energy beyond the
+    # cutoff is kept (hundredths of a kcal/mol for drug-like ligands, the same at both ends of
+    # both legs; OpenFE keeps the cutoff). See protocol.md, "Interactions inside the ligand".
     existing: set[tuple[int, int]] = set()
     for k in range(nb.getNumExceptions()):
         i, j, _qq, _sig, _eps = nb.getExceptionParameters(k)

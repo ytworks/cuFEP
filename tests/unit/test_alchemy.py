@@ -30,6 +30,55 @@ def test_coupled_state_reproduces_the_original_system(water_ligand_system, alch)
     assert potential(ctx) == pytest.approx(e0, abs=2e-3)
 
 
+def test_pairs_inside_the_ligand_have_no_cutoff_at_the_coupled_end():
+    """Review of PR 1. Every pair of ligand atoms is an exception of the NonbondedForce, and an
+    exception has no cutoff: the coupled end has, on top of the original System, the Lennard-Jones
+    energy of ligand atoms that are further apart than the cutoff (protocol.md, "Interactions
+    inside the ligand"). This pins that documented difference, for a pair and for a long molecule.
+    """
+    cutoff, sigma, epsilon, box = 0.9, 0.4, 1.0, 4.0
+
+    def lj(r):
+        x = (sigma / r) ** 6
+        return 4.0 * epsilon * (x * x - x)
+
+    def both_ends(ligand_positions):
+        """Energy of the original System and of the coupled end; two far atoms are the environment."""
+        system = mm.System()
+        system.setDefaultPeriodicBoxVectors(mm.Vec3(box, 0, 0), mm.Vec3(0, box, 0), mm.Vec3(0, 0, box))
+        nb = mm.NonbondedForce()
+        nb.setNonbondedMethod(mm.NonbondedForce.PME)
+        nb.setCutoffDistance(cutoff)
+        nb.setUseDispersionCorrection(False)
+        positions = [mm.Vec3(*p) for p in ligand_positions] + [mm.Vec3(3.0, 3.0, 3.0), mm.Vec3(3.0, 3.0, 3.4)]
+        for _ in positions:
+            system.addParticle(39.9)
+            nb.addParticle(0.0, sigma, epsilon)
+        system.addForce(nb)
+        ligand = list(range(len(ligand_positions)))
+        alch = make_alchemical_system(system, ligand)
+        pos = np.array([[p.x, p.y, p.z] for p in positions])
+        cell = np.eye(3) * box
+        ctx = reference_context(alch.system, pos, cell)
+        set_lambdas(ctx, {LAMBDA_ELECTROSTATICS: 1.0, LAMBDA_STERICS: 1.0})
+        return potential(reference_context(system, pos, cell)), potential(ctx)
+
+    # two ligand atoms inside the cutoff: the coupled end is the original System
+    original, coupled = both_ends([(1.0, 1.0, 1.0), (1.85, 1.0, 1.0)])
+    assert coupled == pytest.approx(original, abs=1e-6) and original == pytest.approx(lj(0.85) + lj(0.4), abs=1e-6)
+    # beyond the cutoff: the original System has no energy for the pair, the coupled end has its tail
+    original, coupled = both_ends([(1.0, 1.0, 1.0), (1.95, 1.0, 1.0)])
+    assert original == pytest.approx(lj(0.4), abs=1e-6)
+    assert coupled - original == pytest.approx(lj(0.95), abs=1e-6) and lj(0.95) == pytest.approx(-0.0222, abs=1e-4)
+    # a long molecule: the difference is the sum over its pairs beyond the cutoff
+    chain = [(0.6 + 0.5 * k, 1.0, 1.0) for k in range(4)]           # 1.5 nm from end to end
+    original, coupled = both_ends(chain)
+    far = sum(lj(0.5 * (b - a)) for a in range(4) for b in range(a + 1, 4) if 0.5 * (b - a) > cutoff)
+    assert far == pytest.approx(2 * lj(1.0) + lj(1.5), abs=1e-9) and far < -1e-2
+    assert original == pytest.approx(3 * lj(0.5) + lj(0.4), abs=1e-6)
+    assert coupled - original == pytest.approx(far, abs=1e-6)
+
+
 def test_decoupled_state_has_no_ligand_environment_interaction(water_ligand_system, alch):
     system, pos, box, ligand = water_ligand_system
     ref = clone_system(system)
