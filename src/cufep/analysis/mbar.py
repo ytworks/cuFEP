@@ -67,12 +67,18 @@ def assemble(u: np.ndarray, states: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     return np.ascontiguousarray(u_kn), n_k
 
 
-def _mbar(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None):
+def _mbar(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None, max_iterations: int = 1000):
     """A solved ``pymbar.MBAR``.
 
     Solving from zeros takes the adaptive solver more than a hundred iterations for a leg of
     thirty windows. It starts from the given free energies instead, or from BAR between
     neighbouring windows, which leaves a few iterations; the solution is the same.
+
+    The solver is pymbar's adaptive one (a Newton-Raphson or a self-consistent step, whichever
+    lowers the gradient more) on its own; the "robust" protocol follows it with L-BFGS-B.
+    ``max_iterations`` bounds it. If a window overlaps with no other, its free energy is not
+    determined and the solver never meets its convergence test; with pymbar's limit of 10,000
+    iterations per stage the analysis of such a leg took most of an hour.
     """
     pymbar, _ = _pymbar()
     # Overlapping-atom configurations give astronomically large energies in coupled states;
@@ -85,19 +91,27 @@ def _mbar(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None):
         start = {"initialize": "BAR"}
     else:
         start = {}
+
+    def solve(**kwargs):
+        # pymbar raises the solver's own limit to maximum_iterations and writes the result into
+        # the protocol it is given, so both are set and the protocol is made anew for each solve
+        protocol = (dict(method="adaptive", options=dict(maxiter=max_iterations)),)
+        return pymbar.MBAR(u_kn, n_k, solver_protocol=protocol, maximum_iterations=max_iterations, **kwargs)
+
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         if start:
             try:
-                return pymbar.MBAR(u_kn, n_k, solver_protocol="robust", **start)
+                return solve(**start)
             except Exception:  # noqa: BLE001  the starting point failed; solve from zeros
                 pass
-        return pymbar.MBAR(u_kn, n_k, solver_protocol="robust")
+        return solve()
 
 
-def solve_mbar(u: np.ndarray, states: np.ndarray, initial_f_k=None, overlap: bool = True):
+def solve_mbar(u: np.ndarray, states: np.ndarray, initial_f_k=None, overlap: bool = True,
+               max_iterations: int = 1000):
     """Return (f_k, df_k relative to state 0, overlap matrix or None) in kT."""
     u_kn, n_k = assemble(u, states)
-    mbar = _mbar(u_kn, n_k, initial_f_k)
+    mbar = _mbar(u_kn, n_k, initial_f_k, max_iterations)
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         res = mbar.compute_free_energy_differences()
         matrix = np.asarray(mbar.compute_overlap()["matrix"]) if overlap else None
@@ -189,18 +203,22 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
 
     def partial(sl):
         try:
-            f, df, _ = solve_mbar(u[sl][::stride], states[sl][::stride], initial_f_k=f_k, overlap=False)
+            # starts from the solution of all data and then converges in a few iterations; a
+            # part that needs more has a window without overlap and no defined answer
+            f, df, _ = solve_mbar(u[sl][::stride], states[sl][::stride], initial_f_k=f_k, overlap=False,
+                                  max_iterations=30)
             return float(f[-1] * kt), float(df[-1] * kt)
         except Exception:  # noqa: BLE001
             return float("nan"), float("nan")
 
     n = u.shape[0]
     forward, reverse = [], []
+    everything = (float(f_k[-1] * kt), float(df_k[-1] * kt))
     for i in range(1, n_fractions + 1):
         frac = i / n_fractions
         m = max(4 * stride, int(round(frac * n)))
-        forward.append((frac, *partial(slice(0, m))))
-        reverse.append((frac, *partial(slice(n - m, n))))
+        forward.append((frac, *(everything if m >= n else partial(slice(0, m)))))
+        reverse.append((frac, *(everything if m >= n else partial(slice(n - m, n)))))
     half = max(4 * stride, n // 2)
     gap = abs(partial(slice(0, half))[0] - partial(slice(n - half, n))[0])
 

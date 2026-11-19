@@ -103,6 +103,23 @@ def test_mbar_start_does_not_change_the_solution_and_jax_is_off():
     assert o.shape == (6, 6) and np.all(np.isfinite(o))
 
 
+def test_analysis_of_a_leg_with_a_window_that_overlaps_no_other_is_bounded():
+    """Such a leg has no defined free energy; the solver must still stop (it once ran for an hour)."""
+    import time
+
+    rng = np.random.default_rng(7)
+    k_spring = np.array([1.0, 1.0, 1.5, 2.2, 3.3, 5.0])
+    x0 = np.array([-60.0, 0.0, 0.3, 0.6, 0.9, 1.2])                  # window 0 is far from all others
+    u, states, _ = harmonic_samples(1500, k_spring, x0, rng)
+    assert np.all(states[:, 0] == 0)                                  # it never exchanges
+    t0 = time.perf_counter()
+    res = analyze_leg({"u": u, "states": states}, 298.15)
+    assert time.perf_counter() - t0 < 60.0
+    assert res.min_overlap < 1e-6 and len(res.forward) == 5 and len(res.reverse) == 5
+    # the last entries of the forward and reverse series are the estimate from all data
+    assert res.forward[-1][1] == res.delta_g and res.reverse[-1][1] == res.delta_g
+
+
 def test_stage_boundaries():
     s = fixed_schedule(["restrain", "discharge", "vanish"], {"restrain": 2, "discharge": 3, "vanish": 4})
     b = stage_boundaries([x.to_dict() for x in s.states])

@@ -31,14 +31,14 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 | 0 | 旧方式の実行を止める。OpenFE の参照計算は続ける | 済 |
 | 1 | 膜判定を削除し、`membrane.enabled` にする | 済 |
 | 2a | 状態エネルギーの正しさ: `setPositions` の直後に soft-core の力グループだけを評価すると neighbor list が古いまま使われる問題を特定して修正 (M0_REPORT.md) | 済 |
-| 2b | TYK2 ejm_31 の complex leg が repeat の間で 4.6 kcal/mol 開く原因の調査 | 原因を特定 (下記)。対策はオーナーと決める |
+| 2b | TYK2 ejm_31 の complex leg が repeat の間で 4.6 kcal/mol 開く原因の調査 | 原因を特定 (下記。complex leg の側鎖の回転異性体と、solvent leg のリガンドの二面角)。対策はオーナーと決める |
 | 3 | 速度の実測: MPS の oversubscription、iteration の内訳、GPU 数に対するスケーリング、pre-equilibration | 済 (GPU 8 個と膜系は後の手順で測る) |
 | 4 | 設定スキーマを作り替える。fixed の推奨値を設定の `windows` で与える | 済 |
-| 5 | GPU の割当を作り替える。MPS、仕事量に比例した配分、worker の増減、`timing.json` | 済 (検証中) |
+| 5 | GPU の割当を作り替える。MPS、仕事量に比例した配分、worker の増減、`timing.json` | 済 |
 | 6 | adaptive lambda scheduling を実装する | 済 |
 | 7 | 文書を仕様と用語に合わせる。`docs/configuration.md` を新設 | 済 |
-| 8 | TYK2 example を既定設定で GPU 8 個と 1 個で走らせ、所要時間を測る | 未 |
-| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | 未 |
+| 8 | TYK2 example を既定設定で GPU 8 個と 1 個で走らせ、所要時間を測る | GPU 1 個と 5 個で実測済み。GPU 8 個は OpenFE の参照計算 (GPU 3 個を使用中) が終わってから測る |
+| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。adaptive の開始 window 数を実測で確定 (protocol.md)。T4 リゾチームは restraint の基準値を最終フレームに直して再実行中。restraint の強さと pre-equilibration の比較は実行中 |
 | 10 | A2A example (`membrane: {enabled: true}`) | 未 |
 | 11 | OpenFE との照合 (TYK2 ejm_31、jmc_23、T4 リゾチーム/トルエン) | 参照計算を実行中 |
 | 12 | ベンチマーク (smoke、subset、full)。1 リガンド 1 回 | 未 |
