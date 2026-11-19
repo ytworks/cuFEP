@@ -195,3 +195,14 @@ def test_solvation_box_meets_the_minimum_height(shape, ratio):
     assert width < 2.9 / ratio + 0.2                               # no larger than needed
     width_free, _ = box_for([0.0, 0.0, 0.0], 0.0)
     assert width_free < width                                      # the rule, not the padding, set the size
+
+
+def test_a_second_run_in_the_same_output_directory_is_refused(tmp_path):
+    from cufep.run import lock_output_directory
+    from cufep.workflow import WorkflowError
+
+    first = lock_output_directory(tmp_path)
+    with pytest.raises(WorkflowError, match="another cufep run is using the output directory"):
+        lock_output_directory(tmp_path)
+    first.close()
+    lock_output_directory(tmp_path).close()                # free again once the first run has ended

@@ -44,10 +44,37 @@ def plan(cfg: Config, log=print) -> tuple[Config, AutoReport, object, list]:
     return resolved, report, protein, ligands
 
 
+def lock_output_directory(out_dir: Path):
+    """Take the lock of an output directory, or stop if another run holds it.
+
+    Two runs writing into one directory overwrite each other's files and fail later with an
+    unrelated message about a file that cannot be opened. The lock is released when the
+    returned file is closed or the process ends.
+    """
+    import fcntl
+
+    handle = open(Path(out_dir) / ".cufep.lock", "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise WorkflowError(f"another cufep run is using the output directory {out_dir}; wait for it to end, "
+                            "or give this run another directory (output.dir or -o)") from None
+    return handle
+
+
 def run(cfg: Config, reschedule: bool = False, log=None) -> list[dict]:
     """Run the whole calculation for every ligand in the SDF. Safe to call again to resume."""
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    lock = lock_output_directory(out_dir)
+    try:
+        return _run(cfg, out_dir, reschedule, log)
+    finally:
+        lock.close()
+
+
+def _run(cfg: Config, out_dir: Path, reschedule: bool, log) -> list[dict]:
     log = log or _Log(out_dir / "cufep.log")
     t_run = time.time()
     resolved, report, protein, ligands = plan(cfg, log)
