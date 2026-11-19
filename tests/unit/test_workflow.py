@@ -260,13 +260,13 @@ def test_a_leg_that_fails_while_it_is_continued_does_not_count_with_its_old_resu
     job = LegJob(ligand="lig", leg="complex", repeat=0, lig_dir=str(lig), devices=[], config={}, production_ns=10.0)
     res = run_leg_safe(job)
     leg_dir = lig / "repeat_0" / "complex"
-    assert "the GPU was lost" in res["error"] and res["last_success"]["production_ns"] == 5.0
+    assert "the GPU was lost" in res["error"] and res["previous_result"]["production_ns"] == 5.0
     assert not (leg_dir / "result.json").exists()
-    assert json.loads((leg_dir / "result.last_success.json").read_text())["delta_g_decouple"] == 160.0
+    assert json.loads((leg_dir / "result.previous.json").read_text())["delta_g_decouple"] == 160.0
     assert leg_state(leg_dir)[0] == "failed" and "error" in read_result(job)
     out = combine_ligand(lig, "lig", 1)
     assert "dg_bind" not in out and out["n_repeats"] == 0 and out["failed_legs"] == ["complex leg"]
-    assert any("FAILED: RuntimeError: the GPU was lost" in w and "result.last_success.json" in w for w in out["warnings"])
+    assert any("FAILED: RuntimeError: the GPU was lost" in w and "result.previous.json" in w for w in out["warnings"])
 
     # the leg runs again and finishes: the error is gone and the new result counts
     begin_leg(leg_dir)
@@ -285,7 +285,7 @@ def test_a_leg_that_fails_while_it_is_continued_does_not_count_with_its_old_resu
     begin_leg(leg_dir)
     (leg_dir / "schedule.yaml").write_text("windows")
     previous = archive_leg(leg_dir)
-    assert (previous / "result.json").exists() and not (previous / "result.last_success.json").exists()
+    assert (previous / "result.json").exists() and not (previous / "result.previous.json").exists()
 
 
 def test_commands_end_with_an_error_when_a_leg_failed(tmp_path, monkeypatch):

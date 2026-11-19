@@ -289,7 +289,7 @@ class LegJob:
 
 #: what a leg directory holds of its lambda windows and its replica-exchange run
 LEG_RUN_FILES = ("schedule.yaml", "start_configs.npz", "hrex", "hrex_failed_cupotential", "result.json", "error.json",
-                 "result.last_success.json", "timing.json")
+                 "result.previous.json", "timing.json")
 
 
 def archive_leg(leg_dir: Path) -> Path | None:
@@ -310,22 +310,22 @@ def archive_leg(leg_dir: Path) -> Path | None:
         f.rename(dest / f.name)
     # a leg that is being run again has had its result set aside by begin_leg: in the archive
     # it is the result of those windows and samples again
-    if (dest / "result.last_success.json").exists() and not (dest / "result.json").exists():
-        (dest / "result.last_success.json").rename(dest / "result.json")
+    if (dest / "result.previous.json").exists() and not (dest / "result.json").exists():
+        (dest / "result.previous.json").rename(dest / "result.json")
     return dest
 
 
 def begin_leg(leg_dir: Path) -> None:
     """Called before a leg runs (again): from here on it has a result only if this run finishes.
 
-    The result of an earlier, finished run is kept as ``result.last_success.json``. It is a
-    record of what the leg gave before and is not used for a binding free energy: if this run
-    fails, for instance while a finished leg is being continued, the leg counts as failed.
+    The result the leg had is kept as ``result.previous.json``: what it gave before this run,
+    for instance at 5 ns when it is continued to 10 ns. It is a record and is never used for
+    a binding free energy: if this run fails, the leg counts as failed.
     """
     leg_dir.mkdir(parents=True, exist_ok=True)
     result = leg_dir / "result.json"
     if result.exists():
-        result.replace(leg_dir / "result.last_success.json")
+        result.replace(leg_dir / "result.previous.json")
     (leg_dir / "error.json").unlink(missing_ok=True)
 
 
@@ -906,10 +906,10 @@ def run_leg_safe(job: LegJob) -> dict:
         err = {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "error": f"{type(exc).__name__}: {exc}",
                "traceback": traceback.format_exc(limit=12)}
         job.leg_dir.mkdir(parents=True, exist_ok=True)
-        before = job.leg_dir / "result.last_success.json"
+        before = job.leg_dir / "result.previous.json"
         if before.exists():
             old = json.loads(before.read_text())
-            err["last_success"] = {"file": before.name, "production_ns": old.get("production_ns"),
+            err["previous_result"] = {"file": before.name, "production_ns": old.get("production_ns"),
                                    "delta_g_decouple_kJ_mol": old.get("delta_g_decouple")}
         (job.leg_dir / "result.json").unlink(missing_ok=True)       # no result of a run that failed
         (job.leg_dir / "error.json").write_text(json.dumps(err, indent=1))
@@ -931,8 +931,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             if state == "failed":
                 where = f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else "")
                 failed_legs.append(where)
-                kept = " An earlier result of this leg is kept in result.last_success.json and is not used." \
-                    if data.get("last_success") else ""
+                kept = " The result this leg had before is kept in result.previous.json and is not used." \
+                    if data.get("previous_result") else ""
                 warnings.append(f"repeat {r} {leg}: FAILED: {str(data.get('error', ''))[:300]}.{kept}")
         if not all(state == "finished" for state, _ in states.values()):
             warnings.append(f"repeat {r} is incomplete")
