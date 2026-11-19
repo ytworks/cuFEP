@@ -1188,8 +1188,11 @@ def run_leg(job: LegJob) -> dict:
         return "none" if value is None else f"{value / scale:.{digits}f}"
 
     slowest = analysis_dict["slowest_window"]
+    blocks = analysis_dict.get("delta_g_error_n_blocks")
+    error_from = (f"standard error from {blocks} time blocks; MBAR's own "
+                  f"{number(analysis_dict['delta_g_error_mbar'], 2, KCAL)}" if blocks else "MBAR's own standard error")
     log(f"dG(decouple) = {number(total, 2, KCAL)} kcal/mol (MBAR {number(analysis_dict['delta_g'], 2, KCAL)} ± "
-        f"{number(analysis_dict['delta_g_error'], 2, KCAL)}, tail {number(-correction, 2, KCAL)}); "
+        f"{number(analysis_dict['delta_g_error'], 2, KCAL)}, {error_from}; tail {number(-correction, 2, KCAL)}); "
         f"min overlap {number(analysis_dict['min_overlap'], 3)} (among the samples of the estimate "
         f"{number(analysis_dict['min_overlap_used'], 3)}), round trips {analysis_dict['round_trips']}, fewest "
         f"independent samples in a window {analysis_dict['effective_samples_per_state']:.0f}, of which MBAR gets "
@@ -1291,6 +1294,7 @@ def analysis_settings_of(record: dict | None):
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
 #: samples gets them anew
 _ANALYSIS_NOTES = ("NOT RELIABLE", "NOT CONVERGED", "convergence not assessed", "few independent samples",
+                   "the standard error of this leg is the one MBAR gives",
                    "the two halves of the production", "half of the production does not",
                    "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record")
 #: what the run of a leg knows and its samples do not hold
@@ -1448,7 +1452,9 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
         "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
         "delta_g_decouple": res.delta_g - correction,          # decoupling with the full LJ range
-        "delta_g_mbar": res.delta_g, "delta_g_mbar_error": res.delta_g_error,
+        # the standard error of the leg (time blocks; cufep.analysis.mbar.block_standard_error) and
+        # the one MBAR gives for the same samples
+        "delta_g_mbar": res.delta_g, "delta_g_error": res.delta_g_error, "delta_g_mbar_error": res.delta_g_error_mbar,
         "lrc": correction, "lrc_method": a.lrc, "lrc_long_cutoff_nm": tail.get("long_cutoff_nm"),
         "lrc_reweight": res.lrc_delta_g,
         "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.lrc_error, "structure": structure,
@@ -1524,11 +1530,22 @@ def quality_warnings(result: dict, cfg) -> list[str]:
     if smp["ok"] is False:
         towards = {-1: "previous", 1: "next"}.get(smp.get("neighbour"), "next")
         kept = "" if smp.get("kept") is None else f" and gives MBAR {smp['kept']} samples"
+        ratio = smp.get("error_ratio")
+        left = ""
+        if ratio is not None and ratio > 1.0:
+            # the windows are decorrelated one by one; what is left is the correlation between them
+            left = (f" The standard error from time blocks is {ratio:.1f} times the one MBAR gives for these samples: "
+                    f"they are correlated between the lambda windows and count as {smp['independent']:.0f} "
+                    f"independent ones.")
         out.append(f"few independent samples: lambda window {smp['window']}{place(smp['window'])} has "
                    f"{smp['fewest']:.0f}{kept} (its energy difference to the {towards} window is correlated over "
-                   f"{smp['statistical_inefficiency']:.0f} iterations); {smp['threshold']:g} are recommended for MBAR. "
-                   f"The free energy, its uncertainty and the comparison of the halves rest on these samples. "
+                   f"{smp['statistical_inefficiency']:.0f} iterations); {smp['threshold']:g} are recommended for MBAR."
+                   f"{left} The free energy, its uncertainty and the comparison of the halves rest on these samples. "
                    f"A longer production gives more: {longer}")
+    if a.get("delta_g_error_note"):
+        out.append("the standard error of this leg is the one MBAR gives, which takes the samples as independent of "
+                   f"each other ({a['delta_g_error_note']}). A longer production allows the error from time blocks: "
+                   f"{longer}")
     halves = q["halves"]
     if halves["ok"] is False:
         if halves.get("difference") is not None:
@@ -1734,9 +1751,16 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
         complete += [(f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else ""), states[leg][1])
                      for leg in ("complex", "solvent")]
         dg = s["delta_g_decouple"] - c["delta_g_decouple"] - c["restraint_release"]
-        err = float(np.hypot(c["delta_g_mbar_error"], s["delta_g_mbar_error"]))
+        # the standard error of a leg (from time blocks since version 4 of the analysis; a result of
+        # an earlier version holds MBAR's alone) and the one MBAR gives
+        reported = [leg["delta_g_error"] if isinstance(leg.get("delta_g_error"), (int, float)) else leg["delta_g_mbar_error"]
+                    for leg in (c, s)]
         per_repeat.append({
-            "repeat": r, "dg_bind": dg, "mbar_error": err, "dg_complex": c["delta_g_decouple"],
+            "repeat": r, "dg_bind": dg, "error": float(np.hypot(*reported)),
+            "mbar_error": float(np.hypot(c["delta_g_mbar_error"], s["delta_g_mbar_error"])),
+            "error_from_time_blocks": all(isinstance(leg.get("delta_g_error"), (int, float))
+                                          and (leg.get("analysis") or {}).get("delta_g_error_n_blocks") for leg in (c, s)),
+            "dg_complex": c["delta_g_decouple"],
             "dg_solvent": s["delta_g_decouple"], "restraint_release": c["restraint_release"],
             "lrc_complex": c["lrc"], "lrc_solvent": s["lrc"], "backend_complex": c["backend"],
             "backend_solvent": s["backend"], "stage_complex": c["analysis"]["stage_delta_g"],
@@ -1792,11 +1816,15 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL
         out["dg_bind"] = float(vals.mean())
         out["dg_bind_std"] = float(vals.std(ddof=1)) if len(vals) > 1 else None
+        # the standard error of one calculation (root mean square over the repeats, if there are several),
+        # and whether it is from time blocks in every leg
+        out["dg_bind_error"] = float(np.sqrt(np.mean([(p["error"] / KCAL) ** 2 for p in per_repeat])))
+        out["dg_bind_error_from_time_blocks"] = all(p["error_from_time_blocks"] for p in per_repeat)
         out["dg_bind_mbar_error"] = float(np.sqrt(np.mean([(p["mbar_error"] / KCAL) ** 2 for p in per_repeat])))
         out["min_overlap"] = float(min(min(p["min_overlap"].values()) for p in per_repeat))
         used = [v for p in per_repeat for v in p["min_overlap_used"].values() if v is not None]
         out["min_overlap_used"] = float(min(used)) if used else None
-        energy_keys = ("dg_bind", "mbar_error", "dg_complex", "dg_solvent", "restraint_release", "lrc_complex",
+        energy_keys = ("dg_bind", "error", "mbar_error", "dg_complex", "dg_solvent", "restraint_release", "lrc_complex",
                        "lrc_solvent")
         converted = []
         for p in per_repeat:

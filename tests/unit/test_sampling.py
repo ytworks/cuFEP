@@ -352,6 +352,145 @@ def test_a_window_is_decorrelated_by_the_slower_of_its_two_neighbours():
     scatter, reported = both[:, 0].std(ddof=1), np.sqrt((both[:, 1] ** 2).mean())
     assert reported > 0.7 * scatter and abs(both[:, 0].mean()) < 3 * scatter / np.sqrt(len(both))
     assert np.sqrt((next_only[:, 1] ** 2).mean()) < 0.5 * next_only[:, 0].std(ddof=1)
+    # the standard error that a leg reports (time blocks where they can be used) agrees with the scatter too
+    kt = 8.31446261815324e-3 * 298.15
+    legs = [analyze_leg(dict(zip(("u", "states"), leg(seed))), 298.15) for seed in range(24)]
+    assert 0.7 * scatter < np.sqrt(np.mean([(r.delta_g_error / kt) ** 2 for r in legs])) < 1.4 * scatter
+    assert sum(r.delta_g_error_n_blocks is not None for r in legs) > 20
+    # 40 blocks of 15 iterations are shorter than the interval at which the slow window keeps its samples
+    assert legs[0].delta_g_error_blocks["40"] is None and legs[0].delta_g_error_blocks["5"] is not None
+    assert legs[0].delta_g_error_blocks_note["40"].startswith("a block of 15 iteration(s) is shorter than the interval of ")
+
+
+def travelling_samples(seed, n_iter=600, rho=0.97, k=8):
+    """The model of the review of PR 1: ``k`` harmonic windows of the same curvature with centres from
+    -0.4 to 0.4 (the end states have the same free energy), started from the stationary distribution.
+    From one iteration to the next a configuration keeps ``rho`` of its distance from the centre of the
+    window it is in, and the replicas exchange: a slow configuration travels from window to window."""
+    rng = np.random.default_rng(seed)
+    centres = np.linspace(-0.4, 0.4, k)
+    state_of = np.arange(k)
+    x = rng.normal(centres[state_of], 1.0)
+    u, states = np.zeros((n_iter, k, k)), np.zeros((n_iter, k), dtype=int)
+    for it in range(n_iter):
+        if it:
+            centre = centres[state_of]
+            x = centre + rho * (x - centre) + np.sqrt(1 - rho ** 2) * rng.normal(size=k)
+        u[it] = 0.5 * (x[:, None] - centres[None, :]) ** 2
+        states[it] = state_of
+        state_of = mix_replicas(u[it], state_of, rng)[0]
+    return {"u": u, "states": states}
+
+
+def test_the_standard_error_of_a_leg_is_that_of_time_blocks_common_to_all_windows():
+    """Review of PR 1: in replica exchange a slow configuration travels between the windows. Every window
+    looked decorrelated on its own, the standard error of MBAR was a quarter of the scatter of independent
+    runs (0.027 against 0.106 kT over 48 seeds), and all four checks passed."""
+    from cufep.analysis.mbar import (BLOCK_COUNTS, block_standard_error, decorrelated, free_energies_from,
+                                     kept_iterations, kept_sample_iterations, quality_checks, solve_decorrelated,
+                                     window_inefficiencies)
+
+    kt = 8.31446261815324e-3 * 298.15
+
+    def rms(values):
+        return float(np.sqrt(np.mean(np.square(values))))
+
+    legs = [analyze_leg(travelling_samples(seed), 298.15) for seed in range(48)]
+    scatter = np.std([leg.delta_g for leg in legs], ddof=1)
+    assert abs(np.mean([leg.delta_g for leg in legs])) < 3 * scatter / np.sqrt(len(legs))      # the truth is 0
+    assert 0.6 * scatter < rms([leg.delta_g_error for leg in legs]) < 1.3 * scatter
+    assert rms([leg.delta_g_error_mbar for leg in legs]) < 0.5 * scatter
+    # the largest of the errors of the four numbers of blocks is the one that is reported
+    first = legs[0]
+    assert list(first.delta_g_error_blocks) == [str(count) for count in BLOCK_COUNTS] == ["40", "20", "10", "5"]
+    assert first.delta_g_error == max(first.delta_g_error_blocks.values())
+    assert first.delta_g_error == first.delta_g_error_blocks[str(first.delta_g_error_n_blocks)]
+    assert first.delta_g_error_note == "" and first.delta_g_error_blocks_note == {} and first.halves_error_blocks == [5, 5]
+    # this leg passed all four checks; the samples check now counts what the standard error leaves
+    checks = quality_checks(first.to_dict())
+    assert checks["overlap"]["ok"] and checks["halves"]["ok"] and checks["estimators"]["ok"]
+    assert first.round_trips > 100 and checks["uncertainty"] == first.delta_g_error
+    samples = checks["samples"]
+    assert samples["kept"] >= 50 and samples["fewest"] >= 50 and samples["ok"] is False
+    assert samples["error_ratio"] == pytest.approx(first.delta_g_error / first.delta_g_error_mbar) and samples["error_ratio"] > 2.0
+    assert samples["independent"] == pytest.approx(min(samples["kept"], samples["fewest"]) / samples["error_ratio"] ** 2)
+    assert not any(quality_checks(leg.to_dict())["samples"]["ok"] for leg in legs)
+
+    # without correlation the blocks give what MBAR gives, and the samples count as they are
+    control = [analyze_leg(travelling_samples(seed, rho=0.0), 298.15) for seed in range(48)]
+    scatter = np.std([leg.delta_g for leg in control], ddof=1)
+    assert 0.9 * scatter < rms([leg.delta_g_error for leg in control]) < 1.35 * scatter
+    assert 0.8 * scatter < rms([leg.delta_g_error_mbar for leg in control]) < 1.2 * scatter
+    assert all(quality_checks(leg.to_dict())["samples"]["ok"] for leg in control)
+
+    # the jackknife itself: ten blocks of 60 iterations, each estimate without one of them by pymbar
+    data = travelling_samples(0)
+    g = window_inefficiencies(data["u"], data["states"])
+    u_kn, n_k = decorrelated(data["u"], data["states"], g)
+    iteration = kept_sample_iterations(600, g)
+    assert len(iteration) == n_k.sum() and np.array_equal(iteration[:n_k[0]], kept_iterations(0, 600, g[0]))
+    assert np.array_equal(kept_sample_iterations(600, g, 300, 600),
+                          np.concatenate([kept_iterations(300, 600, x) for x in g]))
+    f_k, _df = solve_decorrelated(u_kn, n_k)
+    window = np.repeat(np.arange(8), n_k)
+    without = []
+    for b in range(10):
+        keep = (iteration < 60 * b) | (iteration >= 60 * (b + 1))
+        counts = np.bincount(window[keep], minlength=8)
+        f, _df = solve_decorrelated(u_kn[:, keep], counts)
+        without.append(f[-1])
+        if b in (0, 7):                    # the solver of the blocks gives pymbar's free energies
+            assert free_energies_from(u_kn[:, keep], counts, f_k) == pytest.approx(f, abs=1e-6)
+    by_hand = np.sqrt(9 / 10 * np.sum((np.array(without) - np.mean(without)) ** 2))
+    value, why = block_standard_error(u_kn, n_k, iteration, 0, 600, 10, f_k, int(np.ceil(g.max())))
+    assert why == "" and value == pytest.approx(by_hand, abs=1e-6)
+    assert value * kt == pytest.approx(first.delta_g_error_blocks["10"], abs=1e-6)
+    # a number of blocks without which a window keeps too few samples is not used
+    few = np.concatenate([np.arange(0, 100, 2), [0, 1, 2, 3, 50]])           # window 1 has four samples in block 1
+    value, why = block_standard_error(np.zeros((2, 55)), np.array([50, 5]), few, 0, 100, 5, np.zeros(2), 2)
+    assert value is None and why == "without block 1 lambda window 1 keeps 1 sample(s); 4 are needed for an estimate"
+    assert free_energies_from(np.zeros((2, 5)), np.array([5, 0]), np.zeros(2)) is None       # a window without samples
+
+
+def test_a_leg_too_short_for_time_blocks_reports_the_error_of_mbar(monkeypatch):
+    """The standard error is never left without a value: where no number of time blocks can be used it is
+    the one MBAR gives, and the leg says so."""
+    import cufep.analysis.mbar as mbar
+    from cufep.analysis.mbar import quality_checks
+    from cufep.config.schema import AnalysisConfig
+    from cufep.workflow import quality_warnings
+
+    k_spring, x0 = np.array([1.0, 1.3]), np.array([0.0, 0.2])
+    u, states, _ = harmonic_samples(4, k_spring, x0, np.random.default_rng(5))
+    four = analyze_leg({"u": u, "states": states}, 298.15)
+    assert four.delta_g_error == four.delta_g_error_mbar and np.isfinite(four.delta_g_error)
+    assert four.delta_g_error_n_blocks is None and four.delta_g_error_blocks == {"40": None, "20": None, "10": None, "5": None}
+    assert four.delta_g_error_note.startswith("no number of time blocks could be used: 40 blocks: a block of 0 "
+                                              "iteration(s) is shorter than the interval of 1 iterations")
+    assert "; 5 blocks: a block of 0 iteration(s)" in four.delta_g_error_note
+    stored = json.loads(json.dumps(four.to_dict()))
+    samples = quality_checks(stored)["samples"]
+    assert samples["error_ratio"] is None and samples["independent"] == 4.0 and samples["ok"] is False
+    notes = quality_warnings({"analysis": stored, "leg": "solvent"}, AnalysisConfig())
+    assert sum(note.startswith("the standard error of this leg is the one MBAR gives, which takes the samples as "
+                               "independent of each other (no number of time blocks could be used: 40 blocks: ")
+               for note in notes) == 1
+    assert not any("standard error from time blocks is" in note for note in notes)
+
+    # twelve iterations of which every third is kept: a block of five is shorter than that interval
+    u, states, _ = harmonic_samples(12, k_spring, x0, np.random.default_rng(6))
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.full((u.shape[2], 2), 2.125))
+    twelve = analyze_leg({"u": u, "states": states}, 298.15)
+    assert twelve.window_kept_samples == [4, 4] and twelve.delta_g_error == twelve.delta_g_error_mbar
+    assert twelve.delta_g_error_n_blocks is None and twelve.halves_error_blocks == [None, None]
+    assert "5 blocks: a block of 2 iteration(s) is shorter than the interval of 3 iterations at which the slowest " \
+           "lambda window keeps its samples" in twelve.delta_g_error_note
+    # with every iteration kept, five blocks of two or three iterations can be used
+    monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
+    whole = analyze_leg({"u": u, "states": states}, 298.15)
+    assert whole.delta_g_error_n_blocks in (10, 5) and whole.delta_g_error_note == ""
+    assert whole.delta_g_error_blocks["40"] is None and whole.delta_g_error == max(
+        value for value in whole.delta_g_error_blocks.values() if value is not None)
 
 
 def test_the_samples_check_counts_what_mbar_gets(monkeypatch):
@@ -847,7 +986,12 @@ def test_analyze_says_what_the_run_said(tmp_path):
     result = leg_result_from_samples(leg, settings, run)
     # temperature, length and boundary are those of the samples; no configuration is asked for them
     assert result["temperature_K"] == 310.0 and result["production_ns"] == pytest.approx(280 * 2.5 / 1000.0)
-    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION
+    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION == 4
+    # the standard error of the leg is that of time blocks; the one MBAR gives is kept next to it
+    assert result["delta_g_error"] == result["analysis"]["delta_g_error"] == max(
+        value for value in result["analysis"]["delta_g_error_blocks"].values() if value is not None)
+    assert result["delta_g_mbar_error"] == result["analysis"]["delta_g_error_mbar"] != result["delta_g_error"]
+    assert result["quality"]["uncertainty"] == result["delta_g_error"]
     assert result["quality"]["overlap"]["threshold"] == 0.5 and result["quality"]["overlap"]["ok"] is False
     assert len(result["analysis"]["forward"]) == 4 and len(result["analysis"]["blocks"]) == 2
     assert result["notes"][0] == "a note of the run" and result["notes"][1].startswith("NOT RELIABLE")

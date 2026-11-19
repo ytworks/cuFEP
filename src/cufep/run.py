@@ -212,10 +212,15 @@ def result_line(s: dict) -> str:
                 + ("" if flags else "; no complete repeat") + warnings)
     if s.get("dg_bind_std") is not None:
         err = f" ± {s['dg_bind_std']:.2f} kcal/mol (standard deviation over {s['n_repeats']} repeats)"
-    else:
+    elif s.get("dg_bind_error") is not None:
+        # of the one calculation: from time blocks of its two legs, or MBAR's own where a leg is
+        # too short for blocks (that leg carries a note)
+        how = "standard error from time blocks" if s.get("dg_bind_error_from_time_blocks") else "standard error"
+        err = f" ± {s['dg_bind_error']:.2f} kcal/mol ({how}, 1 repeat)"
+    else:                                          # a result of before the standard error from time blocks
         err = f" ± {s['dg_bind_mbar_error']:.2f} kcal/mol (MBAR uncertainty, 1 repeat)"
     # a pair of neighbouring windows without overlap leaves the free energy undefined, whatever the
-    # MBAR uncertainty says; say so next to the number
+    # standard error says; say so next to the number
     lowest = [v for v in (s.get("min_overlap"), s.get("min_overlap_used")) if v is not None]
     if s.get("not_reliable") and lowest:
         flags = [f"{flag} (neighbouring lambda windows overlap by only {min(lowest):.3f})"
@@ -271,11 +276,12 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
     with open(out_dir / "summary.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         # one column for each thing a ligand's result can say about its legs (LEG_FLAGS)
-        w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
+        w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "standard_error", "mbar_error", "n_repeats",
+                    "exp_dg_kcal_mol",
                     "lowest_overlap", "lowest_overlap_of_the_samples_used"] + [key for key, _name in LEG_FLAGS]
                    + ["warnings"])
         for s in summary:
-            w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
+            w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")), _fmt(s.get("dg_bind_error")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
                         _fmt(s.get("min_overlap")), _fmt(s.get("min_overlap_used"))]
                        + ["; ".join(str(item) for item in s.get(key) or []) for key, _name in LEG_FLAGS]

@@ -183,6 +183,16 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
         row = list(csv.DictReader(fh))[0]
     assert row["estimators_disagree"] == "complex leg" and row["few_samples"] == ""
     assert all(key in row for key, _name in LEG_FLAGS)                       # one column per thing that can be said
+    assert row["mbar_error"] == "0.300" and row["standard_error"] == ""      # a result of before the time blocks
+    # the standard error of one calculation is the one from time blocks; that of MBAR stays in its column
+    blocks = dict(only_estimators, dg_bind_error=0.9, dg_bind_error_from_time_blocks=True)
+    assert result_line(blocks).startswith("RESULT jmc_23: dG_bind = -11.00 ± 0.90 kcal/mol (standard error from time "
+                                          "blocks, 1 repeat); BAR and MBAR differ")
+    assert " ± 0.90 kcal/mol (standard error, 1 repeat);" in result_line(dict(blocks, dg_bind_error_from_time_blocks=False))
+    write_summary(tmp_path, [blocks], [SimpleNamespace(name="jmc_23", properties={})])
+    with open(tmp_path / "summary.csv") as fh:
+        row = list(csv.DictReader(fh))[0]
+    assert row["standard_error"] == "0.900" and row["mbar_error"] == "0.300"
 
     # all of them at once, in the order of their weight; the overlap is given with the number
     everything = dict(only_estimators, failed_legs=["solvent leg of repeat 1"], not_reliable=["complex leg"],

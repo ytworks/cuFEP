@@ -169,6 +169,29 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
     # legs written before the checks existed carry no verdict
     assert out["not_reliable"] == [] and out["few_samples"] == [] and out["halves_differ"] == []
     assert out["halves_not_compared"] == [] and out["estimators_disagree"] == []
+    # results of before the standard error from time blocks hold the one of MBAR alone: it is what is combined
+    assert out["dg_bind_error"] == out["dg_bind_mbar_error"] == pytest.approx(np.hypot(0.4, 0.4) / 4.184)
+    assert out["dg_bind_error_from_time_blocks"] is False and out["repeats"][0]["error"] == out["repeats"][0]["mbar_error"]
+
+    # the standard error of a leg is the one from time blocks; that of MBAR is kept next to it
+    def with_blocks(r, name, error, n_blocks):
+        path = tmp_path / f"repeat_{r}" / name / "result.json"
+        data = json.loads(path.read_text())
+        data["delta_g_error"] = error
+        data["analysis"]["delta_g_error_n_blocks"] = n_blocks
+        path.write_text(json.dumps(data))
+    for r in range(2):
+        with_blocks(r, "complex", 1.2, 5)
+        with_blocks(r, "solvent", 0.5, 20)
+    out = combine_ligand(tmp_path, "lig", 2)
+    assert out["dg_bind_error"] == pytest.approx(np.hypot(1.2, 0.5) / 4.184) and out["dg_bind_error_from_time_blocks"] is True
+    assert out["dg_bind_mbar_error"] == pytest.approx(np.hypot(0.4, 0.4) / 4.184)
+    assert out["repeats"][1]["error"] == pytest.approx(1.3 / 4.184) and out["repeats"][1]["error_from_time_blocks"] is True
+    # one leg too short for blocks reports the error of MBAR: the binding free energy says "standard error" alone
+    with_blocks(1, "solvent", 0.4, None)
+    out = combine_ligand(tmp_path, "lig", 2)
+    assert out["dg_bind_error_from_time_blocks"] is False
+    assert out["dg_bind_error"] == pytest.approx(np.sqrt((1.3 ** 2 + np.hypot(1.2, 0.4) ** 2) / 2) / 4.184)
 
 
 def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_path):
@@ -219,7 +242,24 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     assert "--leg complex --production-ns" in notes_thinned[0] and "--reschedule" in notes_thinned[0]
     assert notes_thinned[1].startswith(
         "few independent samples: lambda window 1 has 12 and gives MBAR 12 samples (its energy difference to the "
-        "previous window is correlated over 200 iterations); 50 are recommended for MBAR")
+        "previous window is correlated over 200 iterations); 50 are recommended for MBAR. The free energy, its")
+    # review of PR 1: every window holds enough samples and they are correlated between the windows. The
+    # standard error from time blocks is 3 times the one of MBAR: 90 samples count as 10
+    travelling = dict(steady, window_kept_samples=[400, 90, 300], window_effective_samples=[400.0, 120.0, 300.0],
+                      delta_g_error=0.6 * kcal, delta_g_error_mbar=0.2 * kcal, delta_g_error_n_blocks=5)
+    verdict = quality_checks(travelling)["samples"]
+    assert verdict["ok"] is False and verdict["error_ratio"] == pytest.approx(3.0) and verdict["independent"] == pytest.approx(10.0)
+    assert verdict["kept"] == 90 and verdict["fewest"] == 120.0
+    notes_travelling = quality_warnings({"analysis": travelling}, cfg)
+    assert len(notes_travelling) == 1 and notes_travelling[0].startswith(
+        "few independent samples: lambda window 1 has 120 and gives MBAR 90 samples (its energy difference to the next "
+        "window is correlated over 20 iterations); 50 are recommended for MBAR. The standard error from time blocks is "
+        "3.0 times the one MBAR gives for these samples: they are correlated between the lambda windows and count as 10 "
+        "independent ones. The free energy, its")
+    # an error from blocks below the one of MBAR does not add samples, and without blocks nothing is discounted
+    assert quality_checks(dict(travelling, delta_g_error=0.1 * kcal))["samples"]["independent"] == 90.0
+    assert quality_checks(dict(travelling, delta_g_error_n_blocks=None))["samples"] == dict(
+        verdict, ok=True, error_ratio=None, independent=90.0)
     # the levels are settings
     lenient = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
                                      "analysis": {"min_overlap": 0.01, "min_effective_samples": 10,

@@ -132,7 +132,8 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    analysis").
 
 One calculation is run by default (`sampling.repeats: 1`), as in FEP+ and Flare, and the
-reported uncertainty is then the MBAR standard error. With more repeats, every repeat is a
+reported uncertainty is then the standard error of that calculation, from blocks of its
+production ("Checks of the analysis"). With more repeats, every repeat is a
 completely independent run of steps 1-5 with a different seed, and the reported uncertainty
 is the standard deviation over the repeats, as in OpenFE.
 
