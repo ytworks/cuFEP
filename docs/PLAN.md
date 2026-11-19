@@ -36,7 +36,7 @@ PR #1 のレビュー (行コメント 10 件、評価設定の案 2 件) を受
 | A3 | 最初の checkpoint より前の中断でサンプルが重複する | 済。開始時に storage を空にし、iteration 0 の checkpoint を書く |
 | A4 | 入力や膜の設定を変えても以前の溶媒和系が使われる | 済。prep、pre-equilibration、restraint が何から作られたかを保存して照合する |
 | A5 | solvent 用の schedule を complex leg が受理する | 済。stage と両端の状態を検証する |
-| A6 | 収束判定が同じデータを前半と後半に使う | 済。重なりなく分け、production が短すぎるときは「未判定」と理由を出す。今日の 24 leg の判定は変わらない |
+| A6 | 収束判定が同じデータを前半と後半に使う | 済。重なりなく分け、production が短すぎるときは比較できないことと理由を出す。判定の基準そのものは下の「解析の訂正」で直した |
 | A7 | 中性系の 0 M で水が Cl⁻ に置き換わる | 済 |
 | A8 | 入力ポーズからの移動を見逃す | 済。prepared input の座標と比べる |
 | A9 | FEP+ の平均誤差を常に 0 と表示する | 済。集計対象から計算する |
@@ -49,10 +49,24 @@ PR #1 のレビュー (行コメント 10 件、評価設定の案 2 件) を受
 `check-env`。E1 現行の既定で example 2 件。E2 TYK2 を complex の vanish の開始 13 で 1 回と、
 結果に応じた延長・走らせ直し。それ以上の比較は 1 つずつオーナーの指示を受けてから行う。
 
+### 解析の訂正 (2026-11-19、オーナーの指摘による)
+
+それまでの解析には誤りが 3 つあった。数値と判定の訂正は protocol.md の "Checks of the
+analysis" にある。
+
+| 誤り | 訂正 |
+|---|---|
+| 統計的非効率 g を、全 replica のポテンシャルの和の系列から 1 つだけ求めていた (openmmtools の方式。約 2 iteration)。replica が window の間をほとんど行き来しない cuFEP では、一番遅い window の g は 22〜412 iteration で、標準誤差を約半分に見積もっていた | window ごとに、隣の window とのエネルギー差の系列から g を求めて間引く (alchemlyb の既定、Klimovich 2015 の 2.5 節、Mey 2020 の 8.2 節)。ΔG と標準誤差はその標本から求める |
+| 収束の判定に、出典のない自作の基準 (前半と後半が全体から標準誤差の 2 倍以内) を使い、外れた leg を `NOT CONVERGED` と断定していた | 判定は出典のある 4 つ: overlap 0.03 (Klimovich 2015。これが第一で、`NOT RELIABLE` はこれだけ)、一番遅い window の独立サンプル 50 (Mey 2020)、前半と後半の差 1 kT (Mey 2020 の図 9)、BAR と MBAR の差 1 kcal/mol (Mey 2020)。overlap 以外は「追加のサンプリングを勧める」という報告で、数値と基準を示す |
+| 「REST2 の scale 1.5 が complex leg を 1.0 kcal/mol 押し上げた」と、実行間のばらつきに対する重みを示さずに書いた | 同じ leg の実行間の標準偏差 1.8 kcal/mol に対して標準誤差の約 1.5 倍で、示唆にとどまる |
+
+1 回の実行の検査で収束は証明できない (Grossfield 2018)。同じ complex leg を 3 回走らせたときの
+標準偏差 (0.5〜3.0 kcal/mol) は、直した後の 1 回の標準誤差 (0.2〜0.6) より大きい。
+
 ## 改訂 8 の手順と状態 (2026-11-19 から)
 
 改訂 8 の要点は 3 つ。adaptive lambda scheduling は Cresset の方式のとおり、production の前の
-precalculation だけで window を決める。解析で収束を判定する。結果に判定が付いた leg は、Flare と
+precalculation だけで window を決める。解析で leg を検査する。結果に報告が付いた leg は、Flare と
 同じく、ユーザーが window を増やすか時間を延ばしてその leg だけ走らせ直す。OpenFE との照合は
 オーナーの指示でやめた。
 
@@ -60,12 +74,12 @@ precalculation だけで window を決める。解析で収束を判定する。
 |---|---|---|
 | 0 | 残っていた実行の後始末 | 済 |
 | 1 | adaptive lambda scheduling を Cresset の方式に戻す。改訂 7 の途中で足した「equilibration の間の差し込み」(Cresset に無い動作) を取り除く。開始 window は restrain 3、discharge 5、vanish 9 | 済 |
-| 2 | 収束の解析: overlap、production の前半と後半の ΔG (forward と reverse)、推定量の比較 | 済 (protocol.md の "Checks of the analysis") |
+| 2 | 解析の検査: overlap、production の前半と後半の ΔG (forward と reverse)、推定量の比較 | 済 (protocol.md の "Checks of the analysis")。判定の基準は改訂 9 の「解析の訂正」で出典のあるものに直した |
 | 3 | production の後に、1 つの leg だけを window を増やすか時間を延ばして走らせ直す手段 | 済 (`cufep run --ligand --leg` と `--production-ns` または `--reschedule`。protocol.md の "When a leg is flagged") |
 | 4 | REST2 の既定値を、ベンチマークの数値で判断する | 済。数値は protocol.md の REST2 の "What was measured"。オーナーの判断で scale 1.5 のまま |
 | 5 | イメージの凍結、GPU テスト、TYK2 example の所要時間 (GPU 8 個と 1 個) | 済。GPU 8 個でも 1 個でも完走し、所要時間の目標を満たした |
 | 6 | 確認: TYK2 の 5 リガンドで、window が足されないことと、overlap と収束が保たれることの関係を調べる | 済 (protocol.md の "What was measured on TYK2")。complex leg では 50 ps の precalculation だと window が足されないまま overlap が 0.03 を下回る。オーナーの判断で complex leg の precalculation を長くした (下記)。その設定で同じ 5 リガンドを走らせると、complex leg 5 本中 4 本で window が足され (production の最小 overlap 0.038〜0.105)、足されなかった 1 本は 0.024 だった |
-| 7 | A2A example | 済。完走し、膜の検査に警告なし。dG_bind -12.55 ± 0.34 kcal/mol (実験 -12.07、FEP+ -11.01)。ただし complex leg は NOT CONVERGED (production の前半 36.17、後半 31.61 kcal/mol)。complex leg の precalculation が 50 ps だった版での実行 |
+| 7 | A2A example | 済。完走し、膜の検査に警告なし。dG_bind -12.55 ± 0.34 kcal/mol (実験 -12.07、FEP+ -11.01)。訂正後の解析では -12.04 ± 0.81。complex leg は一番遅い window の独立サンプルが 9 (推奨 50) で、production の前半 34.52、後半 31.60 kcal/mol (差 4.9 kT、差の標準誤差の 0.9 倍)。complex leg の precalculation が 50 ps だった版での実行 |
 | 8 | ベンチマーク: TYK2 16 リガンド、A2A 17 リガンド。1 リガンド 1 回 | 実行しない (オーナーの指示、2026-11-19)。smoke と 5 リガンドの subset は動作を確認済み |
 | 9 | 文書、PR、CI、公式イメージ | 未 |
 

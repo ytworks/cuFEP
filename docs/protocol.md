@@ -128,16 +128,17 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
 3. Lambda windows: adaptive lambda scheduling, or the windows given in the configuration.
 4. Hamiltonian replica exchange, one replica per lambda window, 2.5 ps per iteration: 1 ns
    equilibration and 5 ns production per window.
-5. MBAR on decorrelated samples.
+5. MBAR on samples that are decorrelated lambda window by lambda window ("Checks of the
+   analysis").
 
 One calculation is run by default (`sampling.repeats: 1`), as in FEP+ and Flare, and the
-reported uncertainty is then the MBAR uncertainty. With more repeats, every repeat is a
+reported uncertainty is then the MBAR standard error. With more repeats, every repeat is a
 completely independent run of steps 1-5 with a different seed, and the reported uncertainty
 is the standard deviation over the repeats, as in OpenFE.
 
-The lengths are fixed: nothing extends a run automatically. The analysis checks the overlap
-of the lambda windows and the convergence of every leg and flags a leg that fails
-("Checks of the analysis").
+The lengths are fixed: nothing extends a run automatically. The analysis checks every leg,
+the overlap of its lambda windows first, and the result says what it found ("Checks of the
+analysis").
 
 ## Lambda windows
 
@@ -227,7 +228,7 @@ its own equilibration before the production.
 | initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state. For absolute FEP, Flare states only that the schedule is adaptive "for each stage of the calculation" | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
-| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the analysis checks overlap and convergence ("Checks of the analysis"); the user runs a flagged leg again with more windows or a longer production ("When a leg is flagged") |
+| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the analysis checks the overlap, the number of independent samples and the two halves of the production ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
 | Fast / Normal / Accurate | an option of Flare; its values are not published | `overlap_threshold` is set as a number (the paper tested 0.03, 0.04 and 0.05) |
 
 ### What was measured on TYK2
@@ -273,7 +274,7 @@ finds the region in most legs, not in all.
 If a pair of windows still ends below the warning level in the production, the result says
 `NOT RELIABLE` and names the pair, and the remedy is the one of Flare: more windows in that
 stage (`lambda_schedule.adaptive.initial_windows`, or `lambda_schedule.windows` with
-`mode: fixed`) and a new run of that leg ("When a leg is flagged"). For orientation (50 ps
+`mode: fixed`) and a new run of that leg ("When a leg carries a message"). For orientation (50 ps
 per window in the precalculation unless stated):
 
 | TYK2, complex leg | windows | lowest overlap in production |
@@ -344,16 +345,23 @@ the candidates of adaptive lambda scheduling have it too: the precalculation run
 compares windows with their REST2 scaling, and adds windows where the scaling lowers the
 overlap.
 
-What was measured. On five TYK2 ligands, REST2 with the ligand as the hot region raised the
-free energy of the complex leg relative to runs without REST2: by 1.0 kcal/mol at a scale
-of 1.5 (in five of five ligands, in two independent sets of runs) and by 2.2 kcal/mol at 2.5.
-The solvent leg did not change at 1.5. The binding free energies moved away from experiment
-(mean signed error -2.1 against -1.1 kcal/mol). Both ends of a leg are physical states, so a
-converged leg cannot depend on the scale; the shift says that the windows in between are not
-in equilibrium with each other. The replicas of the complex leg make no round trip between
-the ends, with or without REST2: with the few windows that adaptive lambda scheduling chooses,
+What was measured. On five TYK2 ligands the complex leg with REST2 (the ligand as the hot
+region) was compared with the mean of three runs without REST2. At a scale of 1.5 it came
+out higher by 1.2, 1.1 and 0.7 kcal/mol on average in three sets of runs (in 5, 5 and 3 of
+the 5 ligands), at a scale of 2.5 by 2.3 kcal/mol (4 of 5). The solvent leg did not change
+(+0.1 kcal/mol at 1.5). Runs of one complex leg without REST2 differ among themselves with a
+standard deviation of 1.8 kcal/mol (pooled over the five ligands, three runs each). Against
+that spread the shift at 1.5, 1.0 kcal/mol over 15 runs with and 15 without REST2, is about
+1.5 standard errors: an indication, not an established effect. The mean signed error of the
+binding free energies against experiment was -1.8 to -2.3 kcal/mol in the three sets with
+REST2 and -1.2 without, which is the same observation and carries the same weight.
+
+Both ends of a leg are physical states, so the free energy of a converged leg cannot depend
+on the scale. If the shift is real, it says that the windows in between are not in
+equilibrium with each other. The replicas of the complex leg make no round trip between the
+ends, with or without REST2: with the few windows that adaptive lambda scheduling chooses,
 neighbours exchange too rarely for what is sampled in the hot windows to reach the ends. FEP+
-runs REST2 with 80 windows in the complex leg. As it stands, REST2 does not improve cuFEP's
+runs REST2 with 80 windows in the complex leg. REST2 has not been shown to improve cuFEP's
 results on TYK2.
 
 Only the free energy of a whole leg is a physical quantity then. The scale is not 1 where one
@@ -383,66 +391,155 @@ free energy are not affected, and a leg is sampled by one backend.
 
 ## Checks of the analysis
 
-After the production the analysis of each leg makes three checks. They change nothing in
-what is run. A leg that fails is flagged in the result line, in `result.json` (`quality`),
-in `summary.csv` and in the benchmark report. The checks follow Klimovich, Shirts and Mobley,
-"Guidelines for the analysis of free energy calculations", J. Comput. Aided Mol. Des. 2015,
-29, 397. Flare shows the same quantities after a run: the overlap matrix with a warning
-below 0.03, a convergence analysis, and a comparison of TI and MBAR.
+### Free energy and uncertainty of a leg
 
-| check | rule | flag | what the guideline says |
+MBAR assumes uncorrelated samples. The samples of every lambda window are therefore thinned
+by the statistical inefficiency g of that window. The series is the energy difference
+between the window and the next one (the previous one for the last window), over the
+configurations the window holds from iteration to iteration; the window keeps every
+ceil(g)-th iteration. This is the default of alchemlyb (`decorrelate_u_nk`, method `dE`,
+uniform intervals) and the procedure of Klimovich, Shirts and Mobley 2015 (section 2.5) and
+of Mey et al. 2020 (section 8.2) for simulations whose states have different correlation
+times. The free energy of the leg and its standard error are those of MBAR on the samples
+that are kept. A part of the production (a point of the forward or reverse series, a half, a
+block) is estimated from those kept samples that lie in it.
+
+Of replica-exchange runs Mey et al. say that "the replicas should undergo equivalent random
+walks in alchemical space, and the replicas can be subsampled with the same g". cuFEP's
+replicas do not undergo such walks: with the 15 to 19 windows that adaptive lambda scheduling
+chooses for a complex leg, the replicas made no round trip between the ends in 51 of 53 legs
+of 5 ns on TYK2, and one in the other two. One g for all windows, from the reduced potential
+summed over the replicas (the series of openmmtools 0.26, which OpenFE uses), read about 2
+iterations there, where the slowest window of a complex leg has 22 to 412 (median 74; an
+iteration is 2.5 ps). cuFEP used that g at first. The standard errors of the binding free
+energy were then about half of what they are with one g per window (median 0.20 against 0.37
+kcal/mol in 15 runs on five TYK2 ligands).
+
+The overlap matrix is computed with the same number of samples in every window, so that its
+elements mean the same for every window.
+
+### The checks
+
+After the production the analysis of each leg makes four checks. They change nothing in what
+is run. What they find is written to the result line, to `result.json` (`quality`), to
+`summary.csv` and to the benchmark report. Every level is one that the literature gives:
+Klimovich, Shirts and Mobley, "Guidelines for the analysis of free energy calculations", J.
+Comput. Aided Mol. Des. 2015, 29, 397, and Mey et al., "Best Practices for Alchemical Free
+Energy Calculations", LiveCoMS 2020. Flare shows the same quantities after a run:
+the overlap matrix with a warning below 0.03, a convergence analysis, and a comparison of TI
+and MBAR.
+
+| check | level | message | source |
 |---|---|---|---|
-| overlap | every pair of neighbouring lambda windows overlaps by at least `analysis.min_overlap` (0.03) in the production | `NOT RELIABLE` | "values as low as 0.03 ... tolerable"; "Anything below that number should serve as a caution sign" |
-| convergence | the free energy from the first half of the production alone, and from the second half alone, lies within `analysis.convergence_tolerance_sigma` (2) MBAR standard errors of the free energy from all of it | `NOT CONVERGED` | "In a favorable case, both sets of data should converge rapidly to within uncertainty of the final value." It gives no factor; 2 is cuFEP's own choice |
-| estimators | BAR between neighbouring windows and MBAR agree within the same tolerance | a warning | "we primarily look for disagreement between TI-based methods and BAR-based methods". cuFEP does not record dU/dlambda and has no TI estimate; BAR against MBAR is a weaker comparison |
+| overlap | every pair of neighbouring lambda windows overlaps by at least `analysis.min_overlap` (0.03) in the production | `NOT RELIABLE` | Klimovich et al., section 3.5: "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy estimate (as long as the resulting error is sufficiently low)". "Anything below that number should serve as a caution sign ...; in this case, not only will the estimated variance increase but the free energy estimate itself will likely be substantially incorrect" |
+| independent samples | the lambda window with the fewest has at least `analysis.min_effective_samples` (50); the number is the iterations of the production divided by g of the window | few independent samples | Mey et al., section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used" |
+| halves | the free energies from the first and from the second half of the production differ by at most `analysis.halves_tolerance_kT` (1 kT, 0.59 kcal/mol at 298 K) | the two halves of the production differ | Mey et al., figure 9: the difference between the forward and the reverse free energy "at the midpoint of the simulation time gives an indication of the overall convergence of the simulation, with differences over 1 kBT indicating poor convergence". The figure applies it to each step of a relative perturbation, cuFEP to a leg |
+| estimators | BAR between neighbouring windows and MBAR differ by at most `analysis.estimators_tolerance_kcal_mol` (1 kcal/mol) | a warning | Mey et al.: "differences between methods that are larger than 1 kcal/mol ... would indicate poor convergence". The guides compare TI with BAR-type estimators; cuFEP records no dU/dlambda, and BAR against MBAR is a weaker comparison |
 
-The two halves are the first and the second half of the production in time and share no
-iteration. A part of the production gets an estimate of its own only if it holds at least
-four statistically independent samples per lambda window (the iterations divided by the
-statistical inefficiency). If a half does not, the leg is reported as "convergence not
-assessed", with the number of independent samples a half holds; that is a production too
-short for the check, and it is kept apart from `NOT CONVERGED`.
+The overlap comes first. The overlap matrix is "a quantitative estimator of the phase-space
+overlap" (Klimovich et al., section 3.4), "trustworthy results should in general have at
+least a tridiagonal overlap matrix" (section 3.5), and the other checks presuppose it:
+without overlap the estimate and its standard error mean nothing. `NOT RELIABLE` is
+therefore the only message that says a result cannot be used.
 
-With independent samples a half of the data differs from the whole by about one standard
-error, so at a tolerance of 2 about one leg in twenty is flagged by chance.
+The other messages say that more sampling is advisable, with the number and the level. They
+do not say that a result is wrong:
 
-What the checks say about TYK2. Read again with these checks, 88 legs of earlier runs with
-5 ns of production per window (most with 19 and 21 windows) gave: overlap below 0.03 in 1
-complex leg; `NOT CONVERGED` in 30 of 44 complex legs and in 16 of 44 solvent legs; BAR and
-MBAR never apart. In the complex legs a half of the production typically differs from the
-whole by 0.3 to 0.8 kcal/mol where the tolerance is about 0.3. Longer runs do not simply
-cure this: one complex leg that was continued from 5 to 10 ns moved by 1.4 kcal/mol and its
-uncertainty rose from 0.2 to 0.7 kcal/mol, because a slow change occurred in the second half.
-The complex leg of the A2A example fell steadily during its 5 ns of production: 36.2 kcal/mol
-from the first half and 31.6 from the second.
+- A free energy that is converged still fluctuates: estimates from parts of the production
+  differ by their statistical error. The message about the halves gives the difference in kT
+  and in standard errors of the difference. A difference above 1 kT that is no more than
+  about twice its standard error is what that number of samples allows; it says that the leg
+  is not yet determined to 1 kT, not that it drifts.
+- With few independent samples the comparison of the halves is itself uncertain; the message
+  about the samples then matters more than the one about the halves.
+- The two halves are the first and the second half of the production in time and share no
+  iteration. A part of the production gets an estimate only if every lambda window holds at
+  least four kept samples in it. If a half does not, the result says that the halves could
+  not be compared and why.
+
+What no check of one run can show. "It is difficult to establish with certainty that good
+sampling has been achieved, but it is not difficult to rule out high-quality sampling"
+(Grossfield et al. 2018): the checks can rule convergence out, they cannot prove it. A slow change that occurs once in
+a run, or not at all, leaves no trace in the statistical inefficiency. "The variance in free
+energy afforded by any estimator will always be an underestimate of the true uncertainty"
+(Mey et al., section 8.4), and Rizzi et al. 2020 found the MBAR error from an analysis of
+the autocorrelation at the low end of the spread between independent replica-exchange runs. The guides' way to measure the precision of a
+protocol is "two or three runs of the same perturbation" (Mey et al.): `sampling.repeats`.
+
+### What the checks say about TYK2 and A2A
+
+86 legs of earlier TYK2 runs with 5 ns of production per window (most with 19 and 21
+windows), read again with this analysis:
+
+| | complex legs (43) | solvent legs (43) |
+|---|---|---|
+| overlap below 0.03 | 1 | 0 |
+| statistical inefficiency of the slowest window, in iterations of 2.5 ps | 22-412, median 74 | 1-281, median 25 |
+| independent samples in that window | 5-89, median 27; fewer than 50 in 37 legs | 7-1392, median 80; fewer than 50 in 16 legs |
+| standard error of the leg, kcal/mol | 0.16-0.58, median 0.33 | 0.11-0.44, median 0.13 |
+| halves more than 1 kT apart | 27 legs; in 13 of them by more than 2 standard errors | 8 legs; in 6 of them by more than 2 standard errors |
+| BAR and MBAR more than 1 kcal/mol apart | 0 | 0 |
+
+The overlap holds in all legs but one. What limits these legs is the number of independent
+samples: in 5 ns the slowest window of a complex leg holds about 27 where 50 are recommended,
+and at that number the halves of most complex legs are more than 1 kT apart, about half of
+them by no more than twice the standard error of the difference. In the solvent leg the
+slowest window is the first one, the fully interacting ligand in water, in 38 of the 43 legs.
+
+One run against several. The same complex leg of five TYK2 ligands, run three times with
+different seeds, differs with a standard deviation of 0.5 to 3.0 kcal/mol (pooled 1.8), the
+binding free energy with 0.3 to 3.0 (pooled 1.6); the standard error of a binding free energy
+from one run is 0.3 to 0.5 kcal/mol. The standard error of one run does not contain the slow
+changes described under "What windows do not cure".
+
+Longer runs, and more windows:
+
+| leg | production | free energy, kcal/mol | fewest independent samples | halves apart |
+|---|---|---|---|---|
+| TYK2 ejm_31, complex, 16 windows | 5 ns | 36.77 ± 0.26 | 41 | 3.0 kT (3.4 standard errors) |
+| the same leg continued | 10 ns | 36.25 ± 0.22 | 30 | 0.3 kT (0.4) |
+| TYK2 jmc_23, complex, 15 windows | 5 ns | 37.34 ± 0.53 | 38 | 0.1 kT (0.0) |
+| the same leg continued | 10 ns | 37.12 ± 0.58 | 45 | 0.6 kT (0.3) |
+| A2A 4e, complex, 15 windows | 5 ns | 37.61 ± 0.69 | 9 | 1.3 kT (0.5) |
+| the same leg continued | 10 ns | 36.09 ± 0.47 | 32 | 2.6 kT (1.7) |
+| TYK2 ejm_31, complex, vanish stage started with 13 windows: 19 windows, lowest overlap 0.145 | 5 ns | 36.75 ± 0.26 | 38 | 3.2 kT (3.6) |
+
+The halves of the ejm_31 leg, 3.0 kT apart after 5 ns, agree after 10 ns: what looked like a
+drift was a fluctuation over a few nanoseconds. The number of independent samples can fall
+when a run is continued, because a longer run shows slower changes (in that leg the window
+at which the discharge stage begins, with a statistical inefficiency of 132 iterations). More lambda windows
+raise the overlap; they do not add independent samples. In the A2A leg a window near the end
+of the vanish stage is correlated over 126 to 217 iterations (0.3 to 0.5 ns), so 5 ns give 9
+independent samples and 10 ns give 32; the bilayer of that system had also not settled when
+the alchemical run began (`membrane_settled`).
 
 `analysis.png` in each repeat directory shows, for both legs, the forward and reverse series
 (the free energy from growing parts of the production, counted from its start and from its
 end, at up to `analysis.convergence_points` points, each drawn at the fraction of the
 production it really uses), the two halves, the estimates from `analysis.convergence_blocks`
-consecutive blocks that do not overlap, the band of the tolerance and the overlap matrix. A
-free energy that keeps moving in one direction shows as a staircase of the blocks. The number
-of round trips of the replicas and the exchange between neighbouring windows are in
-`result.json`; no threshold is applied to them.
+consecutive blocks that do not overlap, the band of the standard error and the overlap
+matrix. The number of round trips of the replicas, the exchange between neighbouring windows
+and the statistical inefficiency and the independent samples of every window are in
+`result.json`; no level is applied to round trips and exchange.
 
-### When a leg is flagged
+### When a leg carries a message
 
 cuFEP does not run anything again by itself. The user runs the leg concerned again, as a
 Flare user adds a further instance of a link "with longer simulation time/more Lambda
 windows"; the other legs and ligands keep their results and the binding free energy is put
 together again.
 
-- `NOT CONVERGED`, or convergence not assessed: a longer production. `cufep run CONFIG
-  --ligand NAME --leg complex --production-ns 10` (or a larger `sampling.production_ns`)
-  continues the replica-exchange run of that leg from its last iteration; the analysis then
-  covers the whole production. The number is the length of the production in total, not what
-  is added: a leg that has 5 ns runs 5 ns more.
 - `NOT RELIABLE`: more lambda windows in the stage that the message names
   (`lambda_schedule.adaptive.initial_windows`, a different `overlap_threshold`, or
   `lambda_schedule.windows` with `mode: fixed`), then `cufep run CONFIG --ligand NAME --leg
   complex --reschedule`. The leg starts anew from its pre-equilibration and restraint with
   windows determined again; the windows, samples and result it had are moved to
   `previous_<n>/` in the leg directory.
+- Few independent samples, halves that differ, or halves that could not be compared: a
+  longer production. `cufep run CONFIG --ligand NAME --leg complex --production-ns 10` (or a
+  larger `sampling.production_ns`) continues the replica-exchange run of that leg from its
+  last iteration; the analysis then covers the whole production. The number is the length of
+  the production in total, not what is added: a leg that has 5 ns runs 5 ns more.
 
 A run restricted with `--ligand` or `--leg` writes its timing to `timing_rerun.json` and
 leaves `timing.json` of the whole run in place.
@@ -524,9 +621,9 @@ source code and papers (see "Sources").
 | default windows | complex 80, solvent 68 | presets Quick / Normal / Accurate; adaptive optional | complex 30, solvent 14 | adaptive; fixed mode: complex 30, solvent 14 |
 | time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 5 ns |
 | runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
-| reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | MBAR uncertainty; standard deviation over repeats if more than one |
-| checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03, halves of the production against the whole, BAR against MBAR; flags in the result |
-| a calculation that is not good enough | the user: "Try increasing the length of the simulations (i.e., 10 ns)", "try increasing the number of lambda windows and/or increasing the sampling" | the user runs a further instance of the link "with longer simulation time/more Lambda windows" | left to the user | the user runs the flagged leg again, longer or with more lambda windows |
+| reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | MBAR standard error on samples decorrelated window by window; standard deviation over repeats if more than one |
+| checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03, independent samples per window, the two halves of the production, BAR against MBAR; messages in the result |
+| a calculation that is not good enough | the user: "Try increasing the length of the simulations (i.e., 10 ns)", "try increasing the number of lambda windows and/or increasing the sampling" | the user runs a further instance of the link "with longer simulation time/more Lambda windows" | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
 | replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 with `sampling.rest2` |
 | MD before the alchemical run | 1 ns and a short equilibration | minimisation, equilibration, MD for the restraint search | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
 | restraint | Boresch-type, atoms chosen from hydrogen bonds and salt bridges | Boresch, atoms and strengths chosen automatically | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |
@@ -542,13 +639,18 @@ Further differences from OpenFE, whose protocol cuFEP follows most closely:
 | standard state correction | analytical | numerical, analytical as a check |
 | ligand-environment dispersion tail | isotropic | explicit, by reweighting the coupled state |
 | Lennard-Jones between atoms of the ligand | cut off as in the original System | no cutoff (hundredths of a kcal/mol; "Interactions inside the ligand") |
+| decorrelation of the samples | one statistical inefficiency for all windows, from the reduced potential summed over the replicas (openmmtools) | one per lambda window, from its energy difference to the next window (alchemlyb's default) |
 
 Sources: Schrödinger `fep_plus` and `fep_absolute_binding` command help and Python API
 documentation, the "FEP+ troubleshooting" checklist of the FEP+ user manual, Ross et al., Commun. Chem. 2023, 6, 222; Cresset Flare release notes for
 versions 10 to 12 and the pyflare scripts `feprun.py` and `abferun.py`, Midgley et al. 2025;
 OpenFE 1.13 source and documentation (the plots are those of `multistate_analysis.py`); SOMD2 documentation (oversubscription factor); Mey et
-al., "Best Practices for Alchemical Free Energy Calculations", LiveCoMS 2020. Flare's preset
-values are not public.
+al., "Best Practices for Alchemical Free Energy Calculations", LiveCoMS 2020; Grossfield et
+al., "Best Practices for Quantification of Uncertainty and Sampling Quality in Molecular
+Simulations", LiveCoMS 2018; Rizzi et al., "The SAMPL6 SAMPLing challenge: assessing the
+reliability and efficiency of binding free energy calculations", J. Comput. Aided Mol. Des.
+2020, 34, 601; openmmtools 0.26 source (`multistateanalyzer.py`); alchemlyb documentation
+(`decorrelate_u_nk`). Flare's preset values are not public.
 
 ## Limits of version 0.1
 

@@ -16,8 +16,9 @@ Every other setting has a recommended default and can be changed in YAML
   [docs/protocol.md](docs/protocol.md) compares cuFEP with FEP+, Flare and OpenFE.
 - Lambda windows: adaptive lambda scheduling by default (the method of Cresset Flare), or a
   fixed number or list of lambda values per leg and stage.
-- The analysis checks the overlap of the lambda windows and the convergence of every leg and
-  flags the result; a flagged leg can be run again on its own, longer or with more windows.
+- The analysis checks every leg against the levels of the alchemical best-practice guides,
+  the overlap of the lambda windows first, and says so in the result; a leg can be run again
+  on its own, longer or with more windows.
 - One GPU or many: the replicas of a calculation are spread over all free GPUs, several per
   GPU through NVIDIA MPS.
 - Benchmarks against experiment and FEP+ for a kinase (TYK2) and a GPCR in a bilayer (A2A).
@@ -60,24 +61,28 @@ falls back to files in the output directory and says so.
 | `summary.csv`, `summary.json` | binding free energies, uncertainties, warnings |
 | `timing.json` | time per phase and job, GPU utilization |
 | `<ligand>/repeat_<n>/<leg>/` | restraint, lambda windows (`schedule.yaml`), samples, per-leg result and log |
-| `<ligand>/repeat_<n>/analysis.png` | convergence (forward and reverse series) and overlap matrix of both legs |
+| `<ligand>/repeat_<n>/analysis.png` | forward and reverse series, halves and blocks of the production, and overlap matrix of both legs |
 
 One calculation per ligand is run by default, as in FEP+ and Flare. `sampling.repeats`
 runs it several times independently and reports the spread.
 
-## When a result is flagged
+## When a result carries a message
 
-The analysis checks every leg and marks the result if a check fails
-([docs/protocol.md](docs/protocol.md), "Checks of the analysis"). Nothing is run again
-automatically. As with further instances of a link in Flare, you run the leg concerned
-again, and the rest of the calculation keeps its results.
+The analysis checks every leg ([docs/protocol.md](docs/protocol.md), "Checks of the
+analysis"). The levels are those of the literature (Klimovich, Shirts and Mobley 2015; Mey et
+al. 2020). Nothing is run again automatically. As with further instances of a link in Flare,
+you run the leg concerned again, and the rest of the calculation keeps its results.
 
-| flag | meaning | what to do |
+| message | meaning | what to do |
 |---|---|---|
-| `NOT RELIABLE` | two neighbouring lambda windows overlap by less than 0.03 in the production | give that stage more lambda windows and start the leg anew |
-| `NOT CONVERGED` | the first and the second half of the production give different free energies | run the leg longer; it continues from where it stopped |
-| convergence not assessed | the production is too short for the check (too few independent samples in a half) | run the leg longer |
+| `NOT RELIABLE` | two neighbouring lambda windows overlap by less than 0.03 in the production. This is the first condition: without overlap the free energy cannot be used | give that stage more lambda windows and start the leg anew |
+| few independent samples | a lambda window holds fewer than 50 statistically independent samples; the free energy and its uncertainty rest on few samples | run the leg longer; it continues from where it stopped |
+| halves of the production differ | the first and the second half of the production give free energies more than 1 kT (0.6 kcal/mol) apart, which indicates poor convergence. The message gives the difference in units of its standard error too: a free energy that is converged still fluctuates | run the leg longer and see whether the difference shrinks |
+| halves not compared | the production is too short to give each half an estimate | run the leg longer |
 | `FAILED` | a leg did not finish; the command ends with an error and the ligand has no binding free energy from that leg | read the message, then run the leg again |
+
+No check can show that one run is converged: a slow change that does not occur during the run
+is invisible in it. Independent runs (`sampling.repeats`) show the spread.
 
 ```bash
 # longer: the complex leg of one ligand goes on from 5 to 10 ns per lambda window
@@ -91,7 +96,8 @@ cufep run config.yaml --ligand ejm_31 --leg complex --reschedule
 
 With `--reschedule` the windows and samples the leg had are moved to `previous_<n>/` in its
 directory; its pre-equilibration and restraint are used again. `analysis.png` in each
-repeat directory shows the convergence and the overlap matrix of both legs.
+repeat directory shows the forward and reverse series, the halves and the overlap matrix of
+both legs.
 
 A leg that runs again keeps what it gave before as `result.previous.json`. It continues only
 under the conditions and from the input its files were made with: a run with another
