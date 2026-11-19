@@ -1,6 +1,6 @@
-# cuFEP 実装計画 (改訂 7 の公開版)
+# cuFEP 実装計画 (改訂 8 の公開版)
 
-オーナーが 2026-11-19 に承認した再スタート計画の要約。仕様の本文は
+オーナーが 2026-11-19 に承認した計画の要約。改訂 8 は改訂 7 の続きで、開発完了までの手順を定める。仕様の本文は
 [protocol.md](protocol.md) と [configuration.md](configuration.md) にある。
 cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDIA のライセンス
 (性能の開示には書面の許可が必要) に従い、このリポジトリには載せない。
@@ -24,7 +24,34 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
    GPU の割当。失敗からの回復 (stock OpenMM への退避、2 fs への退避、worker の再起動) は
    必ずログに残す。production の自動延長はしない。
 
-## 手順と状態
+## 改訂 8 の手順と状態 (2026-11-19 から)
+
+改訂 8 の要点は 3 つ。adaptive lambda scheduling は Cresset の方式のとおり、production の前の
+precalculation だけで window を決める。解析で収束を判定する。結果に判定が付いた leg は、Flare と
+同じく、ユーザーが window を増やすか時間を延ばしてその leg だけ走らせ直す。OpenFE との照合は
+オーナーの指示でやめた。
+
+| # | 作業 | 状態 |
+|---|---|---|
+| 0 | 残っていた実行の後始末 | 済 |
+| 1 | adaptive lambda scheduling を Cresset の方式に戻す。改訂 7 の途中で足した「equilibration の間の差し込み」(Cresset に無い動作) を取り除く。開始 window は restrain 3、discharge 5、vanish 9 | 済 |
+| 2 | 収束の解析: overlap、production の前半と後半の ΔG (forward と reverse)、推定量の比較 | 未 |
+| 3 | production の後に、1 つの leg だけを window を増やすか時間を延ばして走らせ直す手段 | 未 |
+| 4 | REST2 の既定値を、ベンチマークの数値で判断する | 未 |
+| 5 | イメージの凍結、GPU テスト、TYK2 example の所要時間 (GPU 8 個と 1 個) | 未 |
+| 6 | 確認: TYK2 の 5 リガンドで、window が足されないことと、overlap と収束が保たれることの関係を調べる | 未 |
+| 7 | A2A example | 未 (改訂 7 の時点の版では完走済み) |
+| 8 | ベンチマーク: TYK2 16 リガンド、A2A 17 リガンド。1 リガンド 1 回 | 未 |
+| 9 | 文書、PR、CI、公式イメージ | 未 |
+
+adaptive lambda scheduling について分かっていること (protocol.md の "What was measured on TYK2"):
+solvent leg では precalculation の overlap が production でも成り立つ。complex leg では 50 ps の
+precalculation が overlap を高く見積もり、window が足されないまま production で 0.03 を下回った
+実行がある。改訂 7 の途中では開始 window を 13 に増やしてこれを避けたが、その設定では adaptive
+lambda scheduling が 88 leg のうち 1 leg でしか window を足さず、実質は固定スケジュールだった。
+開始 window は論文の値に戻してある。
+
+## 改訂 7 までの手順と状態
 
 | # | 作業 | 状態 |
 |---|---|---|
@@ -35,28 +62,14 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 | 3 | 速度の実測: MPS の oversubscription、iteration の内訳、GPU 数に対するスケーリング、pre-equilibration | 済 (GPU 8 個と膜系は後の手順で測る) |
 | 4 | 設定スキーマを作り替える。fixed の推奨値を設定の `windows` で与える | 済 |
 | 5 | GPU の割当を作り替える。MPS、仕事量に比例した配分、worker の増減、`timing.json` | 済 |
-| 6 | adaptive lambda scheduling を実装する | 済。手順 9 の結果を受けて、判定を replica exchange の equilibration の間にも行うようにした (下記) |
+| 6 | adaptive lambda scheduling を実装する | 済 (改訂 8 の手順 1 を参照) |
 | 7 | 文書を仕様と用語に合わせる。`docs/configuration.md` を新設 | 済 |
-| 8 | TYK2 example を既定設定で GPU 8 個と 1 個で走らせ、所要時間を測る | GPU 1 個と 5 個で実測済み。GPU 8 個は OpenFE の参照計算 (GPU 3 個を使用中) が終わってから測る |
-| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。restraint の強さ (固定と自動) と pre-equilibration (5 ns と 1 ns) は TYK2 で差が出ず、既定は変えない (configuration.md)。T4 リゾチーム/トルエンは 9 本中 6 本が -4.2〜-5.2 (実験 -5.52)、3 本は対称なリガンドの反転で無効 (下記) |
+| 8 | TYK2 example を既定設定で GPU 8 個と 1 個で走らせ、所要時間を測る | GPU 1 個と 5 個で実測済み。GPU 8 個は改訂 8 の手順 5 で測る |
+| 9 | プロトコルの検証: TYK2 と T4 リゾチームを 3 repeats で、adaptive と fixed の両方。restraint の強さ、pre-equilibration の長さの比較 | TYK2 は済。adaptive の開始 window 数は改訂 8 で論文の値に戻した (protocol.md)。restraint の強さ (固定と自動) と pre-equilibration (5 ns と 1 ns) は TYK2 で差が出ず、既定は変えない (configuration.md)。T4 リゾチーム/トルエンは 9 本中 6 本が -4.2〜-5.2 (実験 -5.52)、3 本は対称なリガンドの反転で無効 (下記) |
 | 10 | A2A example (`membrane: {enabled: true}`) | 済。既定設定で完走し、dG_bind -12.03 ± 0.23 kcal/mol (1 回。実験 -12.07、FEP+ -11.01)。全ての隣り合う window の overlap は 0.08 以上、警告は対称数の注記のみ |
-| 11 | OpenFE との照合 (TYK2 ejm_31、jmc_23、T4 リゾチーム/トルエン) | 参照計算を実行中 |
-| 12 | ベンチマーク (smoke、subset、full)。1 リガンド 1 回 | 未 |
-| 13 | 公式イメージの作り直しと確認 | 未 |
-
-## adaptive lambda scheduling が働くようにする (2026-11-19)
-
-手順 9 で、論文どおりの 50 ps の precalculation は complex leg の overlap の低下 (数百 ps かけて
-起きる) を見られないことが分かった。そのとき私は開始 window 数を 13 に増やして overlap を確保
-したが、その結果 adaptive lambda scheduling は 94 leg のうち 1 leg でしか window を足さなく
-なり、実質は固定スケジュールになっていた。これは目玉機能を使わないという判断を勝手にした
-ことになる。オーナーの指示で次のように直した。
-
-- 開始 window 数を論文の値に戻す (restrain 3、discharge 5、vanish 9)。
-- 同じ規則を、replica exchange の equilibration (もともと捨てているデータ) にも適用する。
-  250 ps ごとに各 stage の overlap matrix を計算し、閾値以下の組があれば論文の規則で window を
-  1 つ足して equilibration をやり直す。equilibration の全長を閾値以下の組なしで通過したら
-  production に進む。仕様は protocol.md の "The rule goes on during the equilibration"。
+| 11 | OpenFE との照合 (TYK2 ejm_31、jmc_23、T4 リゾチーム/トルエン) | 中止 (オーナーの指示) |
+| 12 | ベンチマーク (smoke、subset、full)。1 リガンド 1 回 | 改訂 8 の手順 8 |
+| 13 | 公式イメージの作り直しと確認 | 改訂 8 の手順 9 |
 
 ## T4 リゾチーム L99A / トルエン (手順 9)
 

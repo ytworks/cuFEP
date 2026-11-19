@@ -75,7 +75,6 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert (a.overlap_threshold, a.candidates, a.window_ps) == (0.04, 101, 50.0)
     assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
     assert a.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 9}
-    assert a.equilibration_check_ps == 250.0
     assert (a.max_windows.complex, a.max_windows.solvent) == (48, 32)
     cfg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {
         "mode": "fixed",

@@ -50,7 +50,7 @@ from cufep.sampling.states import (R_GAS, STAGE_ALIASES, AlchemicalState, StateE
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
            "bad_sections", "choose_section", "redistribute", "als_step", "adaptive_schedule", "run_window",
-           "equilibration_step", "nearest_windows", "STAGE_ALIASES"]
+           "STAGE_ALIASES"]
 
 
 # ============================================================================ the schedule
@@ -77,18 +77,6 @@ class Schedule:
                 vals = [0.0] + vals
             out[name] = [round(float(v), 6) for v in vals]
         return out
-
-    def stage_states(self) -> list[list[int]]:
-        """For every stage the indices of its states, both end windows included."""
-        out: list[list[int]] = []
-        for k in range(len(self.stages)):
-            own = [i for i, st in enumerate(self.stage_of_state) if st == k]
-            out.append(([out[-1][-1]] if k > 0 else []) + own)
-        return out
-
-    def path_positions(self) -> list[float]:
-        """Position of every state along the leg: stage number plus lambda within the stage."""
-        return [float(k + lam) for k, lam in zip(self.stage_of_state, self.stage_lambda)]
 
     def to_dict(self) -> dict:
         return {"mode": self.mode, "stages": self.stages, "windows": self.windows(),
@@ -293,74 +281,6 @@ def stage_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
     except Exception:  # noqa: BLE001 - no solution means no usable overlap
         return np.zeros(len(windows) - 1)
     return np.array([o[i, i + 1] for i in range(len(windows) - 1)])
-
-
-def equilibration_step(schedule: Schedule, u: np.ndarray, states: np.ndarray, settings: "AlsSettings"):
-    """One step of adaptive lambda scheduling on the data of a replica-exchange run.
-
-    The precalculation runs each window for tens of picoseconds. In a complex leg the overlap of
-    two windows can fall over the following hundreds of picoseconds, while the pocket adapts to
-    the half-decoupled ligand, and the precalculation does not see that. So the same rule is
-    applied again to the equilibration of the replica-exchange run: ``u[iteration, replica,
-    state]`` and ``states[iteration, replica]`` are the reduced energies of a block of its
-    iterations. Per stage the overlap matrix of the stage's windows is computed from the samples
-    of those windows, and :func:`als_step` adds a window to the longest section of pairs at or
-    below the threshold.
-
-    Returns ``(new schedule or None, records)``; ``None`` means no pair is deficient (or no
-    window can be added), and the records hold one entry per stage as in the precalculation.
-    """
-    from cufep.analysis.mbar import overlap_matrix
-
-    top = settings.candidates - 1
-    u, states = np.asarray(u), np.asarray(states)
-    n_iter = u.shape[0]
-    it = np.arange(n_iter)
-    room = settings.max_windows - len(schedule.states)
-    windows = schedule.windows()
-    values, records, changed = {}, [], False
-    for k, (name, idx) in enumerate(zip(schedule.stages, schedule.stage_states())):
-        lams = windows[name]
-        cand = [int(round(v * top)) for v in lams]
-        if any(abs(c / top - v) > 1e-6 for c, v in zip(cand, lams)) or len(set(cand)) != len(cand):
-            # windows that are not on the candidate grid (given by hand): nothing to refine here
-            values[name] = list(lams)
-            continue
-        blocks = []
-        for g in idx:                                       # samples of window g at the windows of the stage
-            replica = np.argmax(states == g, axis=1)
-            blocks.append(u[it[:, None], replica[:, None], np.array(idx)[None, :]])
-        u_kn = np.concatenate(blocks, axis=0).T
-        try:
-            o = overlap_matrix(u_kn, np.full(len(idx), n_iter))
-            sup = np.array([o[i, i + 1] for i in range(len(idx) - 1)])
-        except Exception:  # noqa: BLE001 - no solution means no usable overlap
-            sup = np.zeros(len(idx) - 1)
-        new, rec = als_step(cand, sup, settings.overlap_threshold, room=room)
-        rec = {"stage": name, "lambda": [round(i / top, 6) for i in rec.pop("windows")],
-               "superdiagonal": [round(float(v), 4) for v in rec.pop("superdiagonal")],
-               "bad_sections": [[round(a / top, 6), round(b / top, 6)] for a, b in rec.pop("bad_sections")],
-               "status": rec["status"],
-               **({"section": [round(v / top, 6) for v in rec["section"]],
-                   "new_lambda": [round(v / top, 6) for v in rec["new_windows"]]} if new is not None else {})}
-        records.append(rec)
-        if new is None:
-            values[name] = list(lams)
-        else:
-            values[name] = [i / top for i in new]
-            room -= len(new) - len(cand)
-            changed = True
-    if not changed:
-        return None, records
-    new_schedule = _assemble(list(schedule.stages), values, "adaptive", schedule.rest2_scale,
-                             notes=list(schedule.notes), provenance=dict(schedule.provenance))
-    return new_schedule, records
-
-
-def nearest_windows(old: Schedule, new: Schedule) -> list[int]:
-    """For every window of ``new`` the window of ``old`` that is nearest along the leg."""
-    before = np.array(old.path_positions())
-    return [int(np.argmin(np.abs(before - x))) for x in new.path_positions()]
 
 
 def _snapshot(context):

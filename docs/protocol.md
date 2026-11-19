@@ -193,53 +193,62 @@ section, the new lambda values) are written to `schedule.yaml` in the leg direct
 last configuration of each window is the start of its replica; replica exchange then runs
 its own equilibration before the production.
 
-### The rule goes on during the equilibration
+### Where cuFEP follows Cresset and where it differs
 
-The paper's precalculation runs every window for 50 ps. That is enough for a ligand in
-solution, which is what the paper tested; in a complex leg it is not. On the TYK2 complex leg
-the pocket adapts to the half-decoupled ligand within hundreds of picoseconds (the side chains
-of VAL981 and ILE960 change rotamer), and the overlap of two windows falls while it does:
-eight precalculations of 50 to 200 ps read 0.04 to 0.18 for the pairs 0.62-0.75 and 0.75-0.88
-of the vanish stage, differently each time, where the production had 0.084 and 0.022. A
-precalculation of 1 ns per window read 0.105 and 0.015, at the cost of several more windows
-of production.
+| point | Cresset (the paper, and Flare) | cuFEP |
+|---|---|---|
+| when the windows are chosen | in a precalculation before the production: "Once converged, all results from the ALS are discarded, and the converged bespoke λ schedule is used in a production run" | the same. No window is added during the equilibration or the production of the replica-exchange run |
+| rule and values | threshold 0.04, 101 candidates, 50 ps per window, one window per iteration into the longest bad section | the same |
+| initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
+| where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state. For absolute FEP, Flare states only that the schedule is adaptive "for each stage of the calculation" | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
+| replica exchange | none in the paper's runs | Hamiltonian replica exchange |
+| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the result names every pair of windows below `analysis.min_overlap`; the user gives that stage more windows and runs the leg again |
+| Fast / Normal / Accurate | an option of Flare; its values are not published | `overlap_threshold` is set as a number (the paper tested 0.03, 0.04 and 0.05) |
 
-So cuFEP applies the same rule a second time, to data that already exist: the equilibration
-of the replica-exchange run, which is discarded anyway.
+### What was measured on TYK2
 
-1. The precalculation chooses the windows as described above.
-2. Replica exchange starts with these windows. After every `equilibration_check_ps` (250 ps)
-   the overlap matrix of each stage is computed from the samples of that block.
-3. If a pair is at or below `overlap_threshold`, the rule adds one window to the longest bad
-   section of the stage, as in the precalculation. The run starts again with the new windows:
-   a window that stays keeps the configuration of its replica, a new window starts from the
-   nearest old one, and the equilibration begins anew.
-4. When a whole equilibration (`sampling.equilibration_ns`) has passed without a deficient
-   pair, the production follows. No window is added during the production; a pair that falls
-   below `analysis.min_overlap` there is reported with the result.
+The paper's values were set for relative transformations of a ligand in solution, run
+without replica exchange. For absolute binding they were checked on TYK2 with ligand ejm_31
+(5 ns of production per window, replica exchange).
 
-Every check is recorded in `schedule.yaml` next to the iterations of the precalculation
-(`equilibration_checks`: time, windows, overlaps, the section and the new lambda values).
-`equilibration_check_ps: 0` switches this off and leaves the paper's method on its own.
+*The solvent leg.* The overlaps of the precalculation hold in the production: a pair that
+the precalculation read at 0.042 had 0.038 in the production.
 
-The start is the paper's: 9 windows for the vanish stage, and 3 and 5 for the restrain and
-discharge stages, whose energies are linear and quadratic in lambda.
+*The complex leg: what a 50 ps precalculation cannot see.* In the vanish stage, between
+lambda 0.62 and 0.88, side chains of the pocket (VAL981, ILE960) change rotamer once the
+ligand is mostly decoupled, within nanoseconds, and the overlap of the windows falls while
+they do. Eight precalculations of 50 to 200 ps per window read overlaps between 0.04 and
+0.18 for the pairs 0.62-0.75 and 0.75-0.88, differently each time. Two runs in which the
+precalculation read at least 0.14 everywhere and added no window had lowest overlaps of
+0.022 and 0.055 in the production. A precalculation of 1 ns per window read 0.105 and 0.015
+there, and took as long as several more windows of production.
 
-Why the threshold stays at 0.04. An element of the overlap matrix is shared among all windows
-that overlap, so windows that are close have superdiagonal elements near 1 / (number of such
-windows), however close they are: eleven discharge windows of toluene, which has almost no
-charge, read 0.065 each. Above that level a threshold cannot be met and each added window
-lowers the overlaps further; with a threshold of 0.20 the TYK2 complex leg grew to
-`max_windows`.
+So in a complex leg the schedule of the precalculation can leave a pair of windows below
+the warning level. The result then says `NOT RELIABLE` and names the pair, and the remedy
+is the one of Flare: more windows in that stage (`lambda_schedule.adaptive.initial_windows`,
+or `lambda_schedule.windows` with `mode: fixed`) and a new run of that leg. For orientation:
 
-What windows do not cure. Runs of TYK2 ejm_31 differ by the same amount with 13 to 34 windows
-per leg. In the solvent leg the free energy follows the orientation of the ligand's acetamide
-group relative to its pyridine ring, which turns over only once in a few nanoseconds: about
-20.0 kcal/mol in runs where it stays as in the bound pose, about 20.9 where it has turned (13
-runs, correlation 0.8). The complex leg (38.9 to 43.6 kcal/mol over 21 runs, standard
-deviation 1.3) is correlated with the chi1 rotamers of ILE960 and VAL981 (0.4 to 0.5), which
-explain part of its spread. These are limits of the sampling, not of the lambda windows;
-REST2 (below) addresses the ligand's part.
+| TYK2 ejm_31, complex leg | windows | lowest overlap in production |
+|---|---|---|
+| start 3 / 5 / 9 (the default), two runs | 15 | 0.022 and 0.055 |
+| start 3 / 5 / 13, four runs | 19 | 0.092-0.145 |
+| fixed windows (`lambda_schedule.windows`), three runs | 30 | 0.119-0.127 |
+
+*Why the threshold stays at 0.04.* An element of the overlap matrix is shared among all
+windows that overlap. Windows that are close to each other therefore have superdiagonal
+elements near 1 / (number of such windows), however close they are: eleven discharge
+windows of toluene, which has almost no charge, read 0.065 each. Above that level a
+threshold cannot be met and each added window lowers the overlaps further: with a threshold
+of 0.20 the TYK2 complex leg grew to `max_windows`.
+
+*What windows do not cure.* Runs of TYK2 ejm_31 differ by the same amount with 13 to 34
+windows per leg. In the solvent leg the free energy follows the orientation of the ligand's
+acetamide group relative to its pyridine ring, which turns over only once in a few
+nanoseconds: about 20.0 kcal/mol in runs where it stays as in the bound pose, about 20.9
+where it has turned (13 runs, correlation 0.8). The complex leg (38.9 to 43.6 kcal/mol over
+21 runs, standard deviation 1.3) is correlated with the chi1 rotamers of ILE960 and VAL981
+(0.4 to 0.5), which explain part of its spread. These are limits of the sampling, not of the
+lambda windows; see "Limits of version 0.1".
 
 ## REST2
 

@@ -96,7 +96,6 @@ lambda_schedule:
     equilibration_ps: 0.0
     sample_interval_ps: 0.5
     walk_ps: 5.0
-    equilibration_check_ps: 250.0 # the rule is applied again to every block of this length of the equilibration; 0 = off
     max_windows:
       complex: 48
       solvent: 32
@@ -178,7 +177,6 @@ the schedule in fixed mode.
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
 | `lambda_schedule.adaptive.overlap_threshold`, `candidates`, `window_ps` | 0.04, 101, 50 ps | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. The threshold has to stay low: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. On the TYK2 complex leg a threshold of 0.20 added windows until `max_windows` (see protocol.md) |
 | `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 in both legs | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer (cuFEP's own choice for these two) |
-| `lambda_schedule.adaptive.equilibration_check_ps` | 250 ps | cuFEP's own addition to the paper's method. A 50 ps precalculation does not see overlaps that fall within hundreds of picoseconds in a complex leg (protocol.md, "The rule goes on during the equilibration"). 250 ps of replica exchange give 100 samples per window, as many as the precalculation uses |
 | `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
 | `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015; the warning level of Flare and of the alchemical best-practice guide |
 | `analysis.lrc` | reweight | see protocol.md, long-range dispersion |
