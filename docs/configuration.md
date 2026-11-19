@@ -130,7 +130,9 @@ analysis:
   min_overlap: 0.03               # NOT RELIABLE below this overlap of two neighbouring lambda windows
   convergence_points: 10          # points of the forward and reverse series
   convergence_blocks: 5           # consecutive blocks of the production with an estimate of their own
-  convergence_tolerance_sigma: 2.0 # NOT CONVERGED if half of the production differs from the whole by more standard errors
+  min_effective_samples: 50.0     # message if the lambda window with the fewest independent samples has fewer
+  halves_tolerance_kT: 1.0        # message if the two halves of the production differ by more than this many kT
+  estimators_tolerance_kcal_mol: 1.0 # message if BAR and MBAR differ by more
 resources:
   gpus: auto                      # auto | a list of device indices
   oversubscription_factor: auto   # auto | 1 | 2 | 4 | ...
@@ -190,8 +192,10 @@ the schedule in fixed mode.
 | `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 in both legs | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer (cuFEP's own choice for these two) |
 | `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
 | `lambda_schedule.fixed_walk_ps` | 50 ps | cuFEP's own choice: in fixed mode the replicas get their start configurations from a walk through the windows with this much MD in each |
-| `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015; the warning level of Flare and of the alchemical best-practice guide |
-| `analysis.convergence_tolerance_sigma` | 2 | Klimovich, Shirts and Mobley 2015: the free energy from the first part and from the last part of the data "should converge rapidly to within uncertainty of the final value". The guideline gives no factor; 2 standard errors is cuFEP's own choice. The same tolerance is used for BAR against MBAR |
+| `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015, section 3.5: "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy estimate"; below it the estimate "will likely be substantially incorrect". Also the warning level of Flare and of Mey et al. 2020. The first condition for a usable result |
+| `analysis.min_effective_samples` | 50 | Mey et al., Best Practices for Alchemical Free Energy Calculations, 2020, section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used". Counted for each lambda window from the statistical inefficiency of its energy difference to the next window (Klimovich, Shirts and Mobley 2015, section 2.5; alchemlyb's default) |
+| `analysis.halves_tolerance_kT` | 1 | Mey et al. 2020, figure 9: the difference between the forward and the reverse free energy "at the midpoint of the simulation time gives an indication of the overall convergence of the simulation, with differences over 1 kBT indicating poor convergence". The source applies it to each step of a relative perturbation; cuFEP applies it to a leg |
+| `analysis.estimators_tolerance_kcal_mol` | 1 | Mey et al. 2020, section 8.4: "differences between methods that are larger than 1 kcal/mol ... would indicate poor convergence". The guide compares TI with BAR-type estimators; cuFEP compares BAR between neighbouring windows with MBAR |
 | `analysis.convergence_points`, `convergence_blocks` | 10, 5 | cuFEP's own choice for the number of points of the forward and reverse series and for the number of consecutive blocks |
 | `analysis.lrc` | reweight | see protocol.md, long-range dispersion |
 | `resources.oversubscription_factor` | from the size of the system: 16 up to 10,000 atoms, 8 up to 60,000, 4 up to 200,000, else 2 | measured total throughput per GPU under NVIDIA MPS |

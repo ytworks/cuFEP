@@ -74,9 +74,9 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         added = first.get("lambda_windows_added") or {}
         flags = (["FAILED: " + ", ".join(s["failed_legs"])] if s.get("failed_legs") else []) \
             + (["NOT RELIABLE (overlap): " + ", ".join(s["not_reliable"])] if s.get("not_reliable") else []) \
-            + (["NOT CONVERGED: " + ", ".join(s["not_converged"])] if s.get("not_converged") else []) \
-            + (["convergence not assessed: " + ", ".join(s["convergence_not_assessed"])]
-               if s.get("convergence_not_assessed") else [])
+            + (["few independent samples: " + ", ".join(s["few_samples"])] if s.get("few_samples") else []) \
+            + (["halves differ: " + ", ".join(s["halves_differ"])] if s.get("halves_differ") else []) \
+            + (["halves not compared: " + ", ".join(s["halves_not_compared"])] if s.get("halves_not_compared") else [])
         rows.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": s["dg_bind"],
                      "cufep_std": s.get("dg_bind_std"), "n_repeats": s["n_repeats"],
                      "windows_complex": (first.get("lambda_windows") or {}).get("complex"),
@@ -102,7 +102,9 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
 
     lines += ["", "## Lambda windows and checks of the analysis", "",
               "Windows per leg, how many of them adaptive lambda scheduling added to its start, the lowest overlap "
-              "of neighbouring windows in the production, and the legs that fail a check (first repeat).", "",
+              "of neighbouring windows in the production, and the legs that do not meet a level of the checks "
+              "(first repeat). NOT RELIABLE (overlap below 0.03) is the one that makes a result unusable; the "
+              "others say that more sampling is advisable.", "",
               "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | flags |",
               "|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: r["exp"]):

@@ -40,10 +40,9 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         quality = result.get("quality") or {}
         final, error = a["delta_g"] / KCAL, a["delta_g_error"] / KCAL
         ax = axes[row][0]
-        conv = quality.get("convergence") or {}
-        tolerance = conv.get("tolerance", a["delta_g_error"]) / KCAL
-        ax.axhspan(final - tolerance, final + tolerance, color="0.88", zorder=0,
-                   label=f"all of the production ± {tolerance:.2f}")
+        conv = quality.get("halves") or {}
+        ax.axhspan(final - error, final + error, color="0.88", zorder=0,
+                   label=f"all of the production ± {error:.2f} (standard error)")
         ax.axhline(final, color="0.4", lw=1)
         for name, colour, marker in (("forward", "#1f6f8b", "o"), ("reverse", "#c0392b", "s")):
             series = np.array(a.get(name, []), dtype=float)
@@ -59,11 +58,16 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         for k, (start, end, value, _err) in enumerate(blocks):
             ax.plot([start, end], [value / KCAL, value / KCAL], color="0.25", lw=2.5, solid_capstyle="butt",
                     label="consecutive blocks" if k == 0 else None)
-        verdict = {True: "converged", False: "NOT CONVERGED"}.get(conv.get("ok"), "")
+        verdict = ""
+        if conv.get("difference_kT") is not None:
+            verdict = f"halves differ by {conv['difference_kT']:.1f} kT"
         if conv.get("reason"):
-            verdict = "convergence not assessed"
+            verdict = "halves not compared"
             ax.text(0.5, 0.04, conv["reason"], transform=ax.transAxes, ha="center", va="bottom", fontsize=6, wrap=True)
-        ax.set_title(f"{leg} leg: {final:.2f} ± {error:.2f} kcal/mol" + (f", {verdict}" if verdict else ""), fontsize=10)
+        samples = quality.get("samples") or {}
+        if samples.get("fewest") is not None:
+            verdict += (", " if verdict else "") + f"fewest independent samples {samples['fewest']:.0f} (window {samples['window']})"
+        ax.set_title(f"{leg} leg: {final:.2f} ± {error:.2f} kcal/mol" + (f"\n{verdict}" if verdict else ""), fontsize=9)
         ax.set_xlabel("fraction of the production (diamonds: its two halves)")
         ax.set_ylabel("free energy of the leg (kcal/mol)")
         ax.legend(frameon=False, fontsize=8)

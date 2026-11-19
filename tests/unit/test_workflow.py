@@ -167,41 +167,62 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
     assert out["dg_bind"] == pytest.approx((-40.0 - 44.184) / 2 / 4.184)
     assert out["dg_bind_std"] == pytest.approx(np.std([-40.0, -44.184], ddof=1) / 4.184)
     # legs written before the checks existed carry no verdict
-    assert out["not_reliable"] == [] and out["not_converged"] == [] and out["estimators_disagree"] == []
+    assert out["not_reliable"] == [] and out["few_samples"] == [] and out["halves_differ"] == []
+    assert out["halves_not_compared"] == [] and out["estimators_disagree"] == []
 
 
 def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_path):
     from cufep.analysis.mbar import quality_checks
     from cufep.config.schema import Config
-    from cufep.workflow import quality_warnings
+    from cufep.workflow import leg_quality, quality_warnings
 
     cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
     kcal = 4.184
+    # kT is 0.59 kcal/mol: the halves of the steady leg differ by 0.5 kT, those of the other by 2.9 kT
     steady = {"delta_g": 100.0 * kcal, "delta_g_error": 0.2 * kcal, "min_overlap": 0.11, "overlap_neighbour": [0.2, 0.11],
-              "first_half": [100.3 * kcal, 0.3 * kcal], "second_half": [99.8 * kcal, 0.3 * kcal],
-              "bar_delta_g": 100.1 * kcal, "stage_delta_g": {"vanish": 1.0}}
-    drifting = dict(steady, first_half=[100.9 * kcal, 0.3 * kcal], second_half=[99.2 * kcal, 0.3 * kcal],
-                    min_overlap=0.02, overlap_neighbour=[0.2, 0.02], bar_delta_g=101.0 * kcal)
+              "first_half": [100.2 * kcal, 0.3 * kcal], "second_half": [99.9 * kcal, 0.3 * kcal],
+              "bar_delta_g": 100.1 * kcal, "stage_delta_g": {"vanish": 1.0}, "n_states": 3, "temperature_K": 298.15,
+              "window_effective_samples": [400.0, 120.0, 300.0], "window_statistical_inefficiency": [6.0, 20.0, 8.0]}
+    poor = dict(steady, first_half=[100.9 * kcal, 0.3 * kcal], second_half=[99.2 * kcal, 0.3 * kcal],
+                min_overlap=0.02, overlap_neighbour=[0.2, 0.02], bar_delta_g=101.5 * kcal,
+                window_effective_samples=[400.0, 12.0, 300.0], window_statistical_inefficiency=[6.0, 200.0, 8.0])
     assert quality_warnings({"analysis": steady}, cfg) == []
-    notes = quality_warnings({"analysis": drifting}, cfg)
-    assert len(notes) == 3
+    assert leg_quality(steady, cfg) == quality_checks(steady)                  # the defaults are the same
+    notes = quality_warnings({"analysis": poor}, cfg)
+    assert len(notes) == 4
+    # the overlap comes first, and it alone says NOT RELIABLE
     assert notes[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 is 0.020, below 0.03")
-    staged = quality_warnings({"analysis": drifting, "leg": "complex",
+    assert not any("NOT" in note for note in notes[1:])
+    assert notes[1].startswith("few independent samples: lambda window 1 has 12 (its energy difference to the next "
+                               "window is correlated over 200 iterations); 50 are recommended for MBAR")
+    assert notes[2].startswith("the two halves of the production differ by 1.70 kcal/mol (2.9 kT, 4.0 standard errors "
+                               "of the difference; first half 100.90, second half 99.20, all of it 100.00 ± 0.20). "
+                               "More than 1 kT indicates poor convergence")
+    assert "sampling.production_ns" in notes[1] and "sampling.production_ns" in notes[2]
+    assert notes[3].startswith("BAR between neighbouring lambda windows gives 101.50 kcal/mol and MBAR 100.00; a "
+                               "difference above 1 kcal/mol")
+    staged = quality_warnings({"analysis": poor, "leg": "complex",
                                "lambda_windows": {"restrain": [0.0, 1.0], "vanish": [0.0, 0.5, 1.0]}}, cfg)
     assert staged[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 (vanish stage, lambda 0 and 0.5) "
                                 "is 0.020")
-    assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[1]
-    assert notes[1].startswith("NOT CONVERGED: the first half of the production gives 100.90 kcal/mol and the second "
-                               "half 99.20, the whole 100.00 ± 0.20")
-    assert "sampling.production_ns" in notes[1] and notes[2].startswith("BAR between neighbouring lambda windows gives 101.00")
+    assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[2]
+    assert staged[1].startswith("few independent samples: lambda window 1 (vanish stage) has 12")
+    # the levels are settings
+    lenient = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                     "analysis": {"min_overlap": 0.01, "min_effective_samples": 10,
+                                                  "halves_tolerance_kT": 3.0, "estimators_tolerance_kcal_mol": 2.0}})
+    assert quality_warnings({"analysis": poor}, lenient) == []
+    # checks stored by an older version (no "halves") are made again from the analysis
+    assert len(quality_warnings({"analysis": poor, "quality": {"overlap": {"ok": True}, "convergence": {"ok": True}}}, cfg)) == 4
 
-    # a production too short for the check: said so, and kept apart from "not converged"
+    # a production too short to compare its halves: said so, and kept apart from halves that differ
     too_short = dict(steady, first_half=[float("nan")] * 2, second_half=[float("nan")] * 2,
-                     convergence_note="a half of the production holds 2 independent sample(s) per lambda window")
-    verdict = quality_checks(too_short)["convergence"]
+                     convergence_note="lambda window 1 holds 2 independent sample(s) in a half of the production")
+    verdict = quality_checks(too_short)["halves"]
     assert verdict["ok"] is None and "2 independent" in verdict["reason"]
     note = quality_warnings({"analysis": too_short, "leg": "solvent"}, cfg)
-    assert len(note) == 1 and note[0].startswith("convergence not assessed: a half of the production holds 2")
+    assert len(note) == 1 and note[0].startswith("the two halves of the production could not be compared: lambda "
+                                                 "window 1 holds 2")
     assert "--leg solvent --production-ns" in note[0]
     short_dir = tmp_path / "short"
     for name in ("complex", "solvent"):
@@ -212,9 +233,9 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
             "lrc": 0.0, "backend": "openmm", "analysis": too_short if name == "solvent" else steady, "n_states": 15,
             "production_ns": 0.1, "notes": [], "quality": quality_checks(too_short if name == "solvent" else steady)}))
     out = combine_ligand(short_dir, "lig", 1)
-    assert out["convergence_not_assessed"] == ["solvent leg"] and out["not_converged"] == []
+    assert out["halves_not_compared"] == ["solvent leg"] and out["halves_differ"] == [] and out["few_samples"] == []
 
-    for name, analysis in (("complex", drifting), ("solvent", steady)):
+    for name, analysis in (("complex", poor), ("solvent", steady)):
         d = tmp_path / "repeat_0" / name
         d.mkdir(parents=True)
         (d / "result.json").write_text(json.dumps({
@@ -222,9 +243,22 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
             "lrc": 0.0, "backend": "openmm", "analysis": analysis, "n_states": 15, "production_ns": 5.0, "notes": [],
             "quality": quality_checks(analysis), "lambda_windows_added": {"vanish": 2} if name == "solvent" else None}))
     out = combine_ligand(tmp_path, "lig", 1)
-    assert out["not_reliable"] == ["complex leg"] and out["not_converged"] == ["complex leg"]
-    assert out["estimators_disagree"] == ["complex leg"]
+    assert out["not_reliable"] == ["complex leg"] and out["halves_differ"] == ["complex leg"]
+    assert out["few_samples"] == ["complex leg"] and out["estimators_disagree"] == ["complex leg"]
+    assert out["halves_not_compared"] == []
     assert out["repeats"][0]["lambda_windows_added"] == {"complex": None, "solvent": {"vanish": 2}}
+
+    # a result written before these checks: its old verdict on convergence is not carried over
+    old_dir = tmp_path / "old"
+    for name in ("complex", "solvent"):
+        d = old_dir / "repeat_0" / name
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({
+            "leg": name, "delta_g_decouple": 400.0, "delta_g_mbar_error": 0.4, "restraint_release": 0.0, "lrc": 0.0,
+            "backend": "openmm", "analysis": {"min_overlap": 0.02, "stage_delta_g": {}}, "n_states": 15, "production_ns": 5.0, "notes": [],
+            "quality": {"overlap": {"ok": name == "solvent"}, "convergence": {"ok": False}, "estimators": {"ok": False}}}))
+    out = combine_ligand(old_dir, "lig", 1)
+    assert out["not_reliable"] == ["complex leg"] and out["halves_differ"] == [] and out["estimators_disagree"] == []
 
 
 def test_a_leg_that_starts_anew_keeps_what_it_had(tmp_path):
@@ -410,7 +444,9 @@ def test_analysis_figure_is_written(tmp_path):
     analysis = {"delta_g": 400.0, "delta_g_error": 0.8, "min_overlap": 0.02, "overlap_neighbour": [0.2, 0.02],
                 "overlap_matrix": [[0.8, 0.2, 0.0], [0.2, 0.78, 0.02], [0.0, 0.02, 0.98]],
                 "forward": [[0.5, 402.0, 1.1], [1.0, 400.0, 0.8]], "reverse": [[0.5, 398.5, 1.1], [1.0, 400.0, 0.8]],
-                "first_half": [402.0, 1.1], "second_half": [398.5, 1.1], "bar_delta_g": 400.2}
+                "first_half": [402.0, 1.1], "second_half": [398.5, 1.1], "bar_delta_g": 400.2,
+                "window_effective_samples": [300.0, 40.0, 250.0], "window_statistical_inefficiency": [8.0, 60.0, 9.6],
+                "blocks": [[0.0, 0.5, 402.0, 1.1], [0.5, 1.0, 398.5, 1.1]]}
     d = tmp_path / "solvent"
     d.mkdir()
     (d / "result.json").write_text(json.dumps({"ligand": "lig", "repeat": 0, "leg": "solvent", "analysis": analysis,

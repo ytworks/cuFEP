@@ -127,14 +127,75 @@ def test_bar_between_neighbours_agrees_with_mbar():
     k_spring = np.array([1.0, 1.6, 2.6, 4.2, 6.7, 10.7])
     u, states, _ = harmonic_samples(3000, k_spring, np.linspace(0.0, 1.0, 6), rng)
     f, df, _ = solve_mbar(u, states)
-    bar, bar_error = bar_between_neighbours(u, states)
+    bar, bar_error = bar_between_neighbours(*assemble(u, states))
     exact = 0.5 * np.log(k_spring[-1] / k_spring[0])
     assert abs(bar - exact) < 5 * bar_error and abs(bar - f[-1]) < 2 * df[-1]
     assert 0.5 * df[-1] < bar_error < 3 * df[-1]
 
 
-def test_convergence_check_separates_a_steady_leg_from_one_that_drifts():
-    """Half of the production against all of it, as in Klimovich, Shirts and Mobley 2015."""
+def test_each_lambda_window_is_decorrelated_on_its_own():
+    """One slow lambda window: its samples are thinned by its own correlation time.
+
+    The statistical inefficiency of the reduced potential summed over the replicas hides such a
+    window; with it, the uncertainty of the leg came out too small.
+    """
+    from cufep.analysis.mbar import decorrelated, kept_iterations, quality_checks, window_inefficiencies
+
+    rng = np.random.default_rng(31)
+    k_spring = np.array([1.0, 1.6, 2.6, 4.2])
+    x0 = np.linspace(0.0, 0.6, 4)
+    n, k = 4000, 4
+    sig = 1.0 / np.sqrt(k_spring)
+    # window 2 follows an AR(1) process with correlation 0.9 from one iteration to the next: the
+    # statistical inefficiency of x is (1 + 0.9) / (1 - 0.9) = 19, that of x squared 9.5; an energy
+    # difference holds both
+    rho = 0.9
+    z = np.zeros(n)
+    z[0] = rng.normal()
+    for i in range(1, n):
+        z[i] = rho * z[i - 1] + np.sqrt(1 - rho ** 2) * rng.normal()
+    x = rng.normal(x0, sig, size=(n, k))
+    x[:, 2] = x0[2] + sig[2] * z
+    u = 0.5 * k_spring[None, None, :] * (x[:, :, None] - x0[None, None, :]) ** 2
+    states = np.tile(np.arange(k), (n, 1))                           # no exchange
+
+    g = window_inefficiencies(u, states)
+    assert 8.0 < g[2] < 25.0 and np.all(g[[0, 1, 3]] < 1.5)
+    assert statistical_inefficiency(u, states) < 0.5 * g[2]           # the summed potential does not show it
+    u_kn, n_k = decorrelated(u, states, g)
+    assert n_k[2] == int(np.ceil(n / np.ceil(g[2]))) and all(n_k[j] in (n, n // 2) for j in (0, 1, 3))
+    assert u_kn.shape == (k, n_k.sum())
+    # the samples of window 2 are those of every ceil(g)-th iteration, in order
+    first = int(n_k[:2].sum())
+    assert np.array_equal(u_kn[:, first:first + n_k[2]], u[::int(np.ceil(g[2])), 2, :].T)
+    # a part of the production holds those samples of the whole that lie in it
+    stride = int(np.ceil(g[2]))
+    part_kn, part_n = decorrelated(u, states, g, 1000, 3000)
+    inside = [it for it in range(0, n, stride) if 1000 <= it < 3000]
+    assert part_n[2] == len(inside) and kept_iterations(1000, 3000, g[2]).tolist() == inside
+    assert np.array_equal(part_kn[:, int(part_n[:2].sum())], u[inside[0], 2, :])
+    halves = [decorrelated(u, states, g, 0, n // 2)[1], decorrelated(u, states, g, n // 2, n)[1]]
+    assert np.array_equal(halves[0] + halves[1], n_k)                 # the two halves are the whole
+
+    res = analyze_leg({"u": u, "states": states}, 298.15)
+    kt = 8.31446261815324e-3 * 298.15
+    assert res.slowest_window == 2 and res.window_statistical_inefficiency == pytest.approx(g.tolist())
+    assert res.window_effective_samples[2] == pytest.approx(n / g[2])
+    assert res.effective_samples_per_state == pytest.approx(n / g[2])
+    exact = 0.5 * np.log(k_spring[-1] / k_spring[0]) * kt
+    assert abs(res.delta_g - exact) < 5 * res.delta_g_error
+    # the uncertainty is larger than that from all samples taken as independent
+    naive = solve_mbar(u, states)[1][-1] * kt
+    assert res.delta_g_error > 1.15 * naive
+    q = quality_checks(res.to_dict())
+    assert q["samples"]["ok"] and q["samples"]["window"] == 2 and q["samples"]["fewest"] == pytest.approx(n / g[2])
+    assert q["samples"]["statistical_inefficiency"] == pytest.approx(g[2]) and q["samples"]["threshold"] == 50.0
+    few = quality_checks(res.to_dict(), min_effective_samples=1000.0)["samples"]
+    assert few["ok"] is False and few["window"] == 2
+
+
+def test_checks_of_a_leg_use_the_levels_of_the_literature():
+    """Overlap 0.03 first; 50 independent samples; halves within 1 kT; BAR and MBAR within 1 kcal/mol."""
     from cufep.analysis.mbar import quality_checks
 
     k_spring = np.array([1.0, 1.6, 2.6, 4.2, 6.7, 10.7])
@@ -148,8 +209,10 @@ def test_convergence_check_separates_a_steady_leg_from_one_that_drifts():
     assert steady.overlap_neighbour[2] == pytest.approx(steady.overlap_matrix[2][3], abs=1e-4)
     assert steady.forward_reverse_gap == pytest.approx(abs(steady.first_half[0] - steady.second_half[0]))
     q = quality_checks(steady.to_dict())
-    assert q["overlap"]["ok"] and q["convergence"]["ok"] and q["estimators"]["ok"]
-    assert q["convergence"]["tolerance"] == pytest.approx(2.0 * steady.delta_g_error)
+    assert q["overlap"]["ok"] and q["samples"]["ok"] and q["halves"]["ok"] and q["estimators"]["ok"]
+    assert q["halves"]["tolerance"] == pytest.approx(kt) and q["halves"]["tolerance_kT"] == 1.0
+    assert q["halves"]["difference_kT"] == pytest.approx(steady.forward_reverse_gap / kt)
+    assert q["estimators"]["tolerance"] == pytest.approx(4.184) and q["uncertainty"] == steady.delta_g_error
     assert abs(steady.bar_delta_g - steady.delta_g) < 0.1 * kt
 
     # the last state becomes stiffer half way through the production, as when a slow degree of
@@ -157,26 +220,36 @@ def test_convergence_check_separates_a_steady_leg_from_one_that_drifts():
     late = k_spring.copy()
     late[-1] = 30.0
     u2, states2, _ = harmonic_samples(3000, late, x0, np.random.default_rng(4))
-    drifting = analyze_leg({"u": np.concatenate([u, u2]), "states": np.concatenate([states, states2])}, 298.15)
-    assert (drifting.second_half[0] - drifting.first_half[0]) / kt == pytest.approx(0.52, abs=0.1)
+    changed = analyze_leg({"u": np.concatenate([u, u2]), "states": np.concatenate([states, states2])}, 298.15)
+    assert (changed.second_half[0] - changed.first_half[0]) / kt == pytest.approx(0.52, abs=0.1)
     # five consecutive blocks: the first two lie before the change, the last two after it
-    assert [(b[0], b[1]) for b in drifting.blocks] == [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
-    assert (np.mean([b[2] for b in drifting.blocks[3:]]) - np.mean([b[2] for b in drifting.blocks[:2]])) / kt \
+    assert [(b[0], b[1]) for b in changed.blocks] == [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
+    assert (np.mean([b[2] for b in changed.blocks[3:]]) - np.mean([b[2] for b in changed.blocks[:2]])) / kt \
         == pytest.approx(0.52, abs=0.15)
     assert len(steady.blocks) == 5 and max(abs(b[2] - steady.delta_g) for b in steady.blocks) < 0.3 * kt
-    q = quality_checks(drifting.to_dict())
-    assert q["overlap"]["ok"] and q["convergence"]["ok"] is False
-    assert quality_checks(drifting.to_dict(), tolerance_sigma=50.0)["convergence"]["ok"]
+    # 0.52 kT is below the level of 1 kT although it is many standard errors: the level is that of
+    # the literature, in kT, and the difference in standard errors is reported next to it
+    q = quality_checks(changed.to_dict())
+    assert q["overlap"]["ok"] and q["halves"]["ok"] and q["halves"]["difference_sigma"] > 5.0
+    assert q["halves"]["difference_kT"] == pytest.approx(0.52, abs=0.1)
+    assert quality_checks(changed.to_dict(), halves_tolerance_kT=0.3)["halves"]["ok"] is False
 
     # overlap below the threshold, and an analysis that lacks the numbers of a check
     assert quality_checks(steady.to_dict(), min_overlap=0.9)["overlap"]["ok"] is False
     old = {"delta_g": 10.0, "delta_g_error": 0.5, "min_overlap": 0.2, "overlap_neighbour": [0.2, 0.3]}
     q = quality_checks(old)
     assert q["overlap"] == {"ok": True, "lowest": 0.2, "windows": [0, 1], "threshold": 0.03}
-    assert q["convergence"]["ok"] is None and q["estimators"]["ok"] is None
-    half_missing = dict(old, first_half=[float("nan"), float("nan")], second_half=[10.1, 0.7], bar_delta_g=12.0)
-    q = quality_checks(half_missing)
-    assert q["convergence"]["ok"] is False and q["estimators"]["ok"] is False
+    assert q["samples"]["ok"] is None and q["halves"]["ok"] is None and q["estimators"]["ok"] is None
+    # an analysis made before every window was decorrelated on its own: its halves carry no verdict
+    assert quality_checks(dict(old, first_half=[12.0, 0.1], second_half=[8.0, 0.1], bar_delta_g=20.0))["halves"]["ok"] is None
+    new = dict(old, window_effective_samples=[100.0, 30.0, 80.0], window_statistical_inefficiency=[1.0, 3.4, 1.2])
+    q = quality_checks(dict(new, first_half=[float("nan"), float("nan")], second_half=[10.1, 0.7], bar_delta_g=15.0))
+    assert q["halves"]["ok"] is False and "difference" not in q["halves"]      # half of the data gives no estimate
+    assert q["estimators"]["ok"] is False and q["samples"]["ok"] is False and q["samples"]["window"] == 1
+    q = quality_checks(dict(new, first_half=[10.5, 0.4], second_half=[8.5, 0.3], bar_delta_g=12.0))
+    assert q["halves"]["ok"] and q["halves"]["difference_kT"] == pytest.approx(2.0 / kt)   # 0.81 kT
+    assert q["halves"]["difference_sigma"] == pytest.approx(4.0) and q["estimators"]["ok"]
+    assert quality_checks(dict(new, first_half=[10.5, 0.4], second_half=[7.5, 0.3]))["halves"]["ok"] is False
 
 
 def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_not_assessed(monkeypatch):
@@ -192,18 +265,19 @@ def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_n
     kt = 8.31446261815324e-3 * 298.15
 
     # correlated samples (statistical inefficiency 2.125 -> every third iteration): a half holds two
-    monkeypatch.setattr(mbar, "statistical_inefficiency", lambda u, states: 2.125)
+    monkeypatch.setattr(mbar, "window_inefficiencies", lambda u, states: np.full(u.shape[2], 2.125))
     short = analyze_leg(samples, 298.15)
     assert np.isnan(short.first_half[0]) and np.isnan(short.second_half[0]) and np.isnan(short.forward_reverse_gap)
-    assert "a half of the production holds 2 independent sample(s) per lambda window" in short.convergence_note
+    assert "lambda window 0 holds 2 independent sample(s) in a half of the production" in short.convergence_note
     assert "4 are needed" in short.convergence_note
+    # the samples are iterations 0, 3, 6 and 9: no part but the whole holds four of them from both ends
     assert [point[0] for point in short.forward] == [1.0] and short.forward[0][1] == short.delta_g
     assert short.blocks == []
-    verdict = quality_checks(short.to_dict())["convergence"]
+    verdict = quality_checks(short.to_dict())["halves"]
     assert verdict["ok"] is None and verdict["reason"] == short.convergence_note
 
     # independent samples: each half is estimated from its own six iterations
-    monkeypatch.setattr(mbar, "statistical_inefficiency", lambda u, states: 1.0)
+    monkeypatch.setattr(mbar, "window_inefficiencies", lambda u, states: np.ones(u.shape[2]))
     res = analyze_leg(samples, 298.15, n_blocks=3)
     first = solve_mbar(samples["u"][:6], samples["states"][:6])[0][-1] * kt
     second = solve_mbar(samples["u"][6:], samples["states"][6:])[0][-1] * kt

@@ -481,7 +481,7 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, find_boresch_restraint,
                                           ligand_symmetry_number, with_force_constants_from_fluctuations)
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
-    from cufep.analysis.mbar import analyze_leg, quality_checks
+    from cufep.analysis.mbar import analyze_leg
     from cufep.analysis.structure import structural_analysis
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
@@ -873,8 +873,7 @@ def run_leg(job: LegJob) -> dict:
         "restraint_release": release_dg, "restraint_release_analytical": release_dg_analytical,
         "ligand_symmetry_number": symmetry, "analysis": analysis.to_dict(), "notes": notes, "units": "kJ/mol",
     }
-    result["quality"] = quality_checks(result["analysis"], cfg.analysis.min_overlap,
-                                       cfg.analysis.convergence_tolerance_sigma)
+    result["quality"] = leg_quality(result["analysis"], cfg)
     result["lambda_windows"] = schedule.windows()
     result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
     # windows that adaptive lambda scheduling added to its start, per stage (None: fixed windows)
@@ -893,7 +892,8 @@ def run_leg(job: LegJob) -> dict:
     log(f"dG(decouple) = {total / KCAL:.2f} kcal/mol (MBAR {analysis.delta_g / KCAL:.2f} ± "
         f"{analysis.delta_g_error / KCAL:.2f}, tail {-correction / KCAL:+.2f}); "
         f"min overlap {analysis.min_overlap:.3f}, round trips {analysis.round_trips}, "
-        f"N_eff/state {analysis.effective_samples_per_state:.0f}")
+        f"fewest independent samples in a window {analysis.effective_samples_per_state:.0f} "
+        f"(window {analysis.slowest_window})")
     return result
 
 
@@ -960,43 +960,69 @@ def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs:
     return out
 
 
-def quality_warnings(result: dict, cfg: Config) -> list[str]:
-    """Warnings about the sampling of a finished leg, from ``result["quality"]``
-    (:func:`cufep.analysis.mbar.quality_checks`). None of them changes what is run.
-    """
+def leg_quality(analysis: dict, cfg: Config) -> dict:
+    """The checks of :func:`cufep.analysis.mbar.quality_checks` with the levels of the configuration."""
     from cufep.analysis.mbar import quality_checks
 
+    a = cfg.analysis
+    return quality_checks(analysis, a.min_overlap, a.min_effective_samples, a.halves_tolerance_kT,
+                          a.estimators_tolerance_kcal_mol)
+
+
+def quality_warnings(result: dict, cfg: Config) -> list[str]:
+    """Warnings about a finished leg, from its checks. None of them changes what is run.
+
+    The overlap of neighbouring lambda windows comes first: below the level, the free energy is
+    NOT RELIABLE. The other messages give a number and the level the literature names for it;
+    they say that more sampling is advisable, not that the result is wrong.
+    """
     a = result["analysis"]
-    q = result.get("quality") or quality_checks(a, cfg.analysis.min_overlap, cfg.analysis.convergence_tolerance_sigma)
-    sigma = cfg.analysis.convergence_tolerance_sigma
+    q = result.get("quality")
+    if not q or "halves" not in q:                 # none, or the checks of an older version
+        q = leg_quality(a, cfg)
+    leg = result.get("leg", "LEG")
+    windows = result.get("lambda_windows") or {}
+    longer = f"cufep run CONFIG --ligand NAME --leg {leg} --production-ns NS (or sampling.production_ns)"
+
+    def place(k: int) -> str:
+        where = window_stage(windows, min(k, max(0, a.get("n_states", k + 2) - 2)))
+        return "" if where is None else f" ({where[0]} stage)"
+
     out = []
     if not q["overlap"]["ok"]:
         k = q["overlap"]["windows"][0]
-        where = window_stage(result.get("lambda_windows") or {}, k)
+        where = window_stage(windows, k)
         stage = "" if where is None else f" ({where[0]} stage, lambda {where[1]:g} and {where[2]:g})"
         out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1}{stage} is "
                    f"{q['overlap']['lowest']:.3f}, below {cfg.analysis.min_overlap:g}. Give that stage more lambda "
                    f"windows (lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) "
-                   f"and run this leg again: cufep run CONFIG --ligand NAME --leg {result.get('leg', 'LEG')} --reschedule")
-    conv = q["convergence"]
-    if conv["ok"] is False:
-        whole = f"{conv['final'] / KCAL:.2f} ± {a['delta_g_error'] / KCAL:.2f}"
-        if np.isfinite(conv["first_half"]) and np.isfinite(conv["second_half"]):
-            halves = (f"the first half of the production gives {conv['first_half'] / KCAL:.2f} kcal/mol and the "
-                      f"second half {conv['second_half'] / KCAL:.2f}")
+                   f"and run this leg again: cufep run CONFIG --ligand NAME --leg {leg} --reschedule")
+    smp = q["samples"]
+    if smp["ok"] is False:
+        out.append(f"few independent samples: lambda window {smp['window']}{place(smp['window'])} has "
+                   f"{smp['fewest']:.0f} (its energy difference to the next window is correlated over "
+                   f"{smp['statistical_inefficiency']:.0f} iterations); {smp['threshold']:g} are recommended for MBAR. "
+                   f"The free energy, its uncertainty and the comparison of the halves rest on these samples. "
+                   f"A longer production gives more: {longer}")
+    halves = q["halves"]
+    if halves["ok"] is False:
+        if halves.get("difference") is not None:
+            out.append(f"the two halves of the production differ by {halves['difference'] / KCAL:.2f} kcal/mol "
+                       f"({halves['difference_kT']:.1f} kT, {halves['difference_sigma']:.1f} standard errors of the "
+                       f"difference; first half {halves['first_half'] / KCAL:.2f}, second half "
+                       f"{halves['second_half'] / KCAL:.2f}, all of it {halves['final'] / KCAL:.2f} ± "
+                       f"{a['delta_g_error'] / KCAL:.2f}). More than {halves['tolerance_kT']:g} kT indicates poor "
+                       f"convergence; a longer production shows whether it is: {longer}")
         else:
-            halves = "half of the production does not determine the free energy"
-        out.append(f"NOT CONVERGED: {halves}, the whole {whole}; both halves should lie within {sigma:g} standard "
-                   f"errors of the whole. Run this leg longer; it continues from where it stopped: cufep run CONFIG "
-                   f"--ligand NAME --leg {result.get('leg', 'LEG')} --production-ns NS (or sampling.production_ns)")
-    elif conv["ok"] is None and conv.get("reason"):
-        out.append(f"convergence not assessed: {conv['reason']}. A longer production gives the halves enough "
-                   f"samples: cufep run CONFIG --ligand NAME --leg {result.get('leg', 'LEG')} --production-ns NS")
+            out.append(f"half of the production does not determine the free energy of this leg; run it longer: {longer}")
+    elif halves["ok"] is None and halves.get("reason"):
+        out.append(f"the two halves of the production could not be compared: {halves['reason']}. A longer "
+                   f"production gives the halves enough samples: {longer}")
     est = q["estimators"]
     if est["ok"] is False:
         out.append(f"BAR between neighbouring lambda windows gives {est['bar'] / KCAL:.2f} kcal/mol and MBAR "
-                   f"{est['mbar'] / KCAL:.2f}; they should agree within {sigma:g} standard errors. The windows are "
-                   f"too far apart or too little sampled")
+                   f"{est['mbar'] / KCAL:.2f}; a difference above {cfg.analysis.estimators_tolerance_kcal_mol:g} "
+                   f"kcal/mol indicates windows that are too far apart or too little sampled")
     return out
 
 
@@ -1025,9 +1051,9 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
     """Binding free energy from the finished legs of one ligand."""
     per_repeat = []
     warnings: list[str] = []
-    # legs whose analysis fails a check of cufep.analysis.mbar.quality_checks
-    flagged: dict[str, list[str]] = {"overlap": [], "convergence": [], "estimators": []}
-    not_assessed: list[str] = []           # legs too short for the convergence check
+    # legs whose analysis does not meet a level of cufep.analysis.mbar.quality_checks
+    flagged: dict[str, list[str]] = {"overlap": [], "samples": [], "halves": [], "estimators": []}
+    not_assessed: list[str] = []           # legs too short to compare their halves
     failed_legs: list[str] = []
     for r in range(repeats):
         states = {leg: leg_state(lig_dir / f"repeat_{r}" / leg) for leg in ("complex", "solvent")}
@@ -1058,15 +1084,17 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             warnings += [f"repeat {r} {leg_result['leg']}: {n}" for n in leg_result.get("notes", [])]
             where = f"{leg_result['leg']} leg" + (f" of repeat {r}" if repeats > 1 else "")
             quality = leg_result.get("quality") or {}
+            if "halves" not in quality:            # written before these checks: only the overlap is known
+                quality = {"overlap": quality.get("overlap")}
             for check, legs in flagged.items():
                 if (quality.get(check) or {}).get("ok") is False:
                     legs.append(where)
-            if (quality.get("convergence") or {}).get("reason"):
+            if (quality.get("halves") or {}).get("reason"):
                 not_assessed.append(where)
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
                  "failed_legs": failed_legs,
-                 "not_reliable": flagged["overlap"], "not_converged": flagged["convergence"],
-                 "convergence_not_assessed": not_assessed,
+                 "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
+                 "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,
                  "estimators_disagree": flagged["estimators"]}
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL

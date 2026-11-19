@@ -364,10 +364,14 @@ class AnalysisConfig(_Section):
     #: number of consecutive blocks of the production that get a free energy estimate of their
     #: own, to show a free energy that keeps moving in one direction
     convergence_blocks: int = Field(default=5, ge=2)
-    #: a leg is NOT CONVERGED if the free energy from the first half of its production, or from
-    #: the second half, differs from the free energy of the whole by more than this many MBAR
-    #: standard errors; the same tolerance applies to BAR against MBAR
-    convergence_tolerance_sigma: float = Field(default=2.0, gt=0.0)
+    #: the result carries a warning if the lambda window with the fewest independent samples has
+    #: fewer than this (recommended for MBAR by Mey et al. 2020)
+    min_effective_samples: float = Field(default=50.0, gt=0.0)
+    #: ... if the free energies from the first and the second half of the production differ by
+    #: more than this many kT ("differences over 1 kBT indicating poor convergence", Mey et al. 2020)
+    halves_tolerance_kT: float = Field(default=1.0, gt=0.0)
+    #: ... if BAR between neighbouring windows and MBAR differ by more than this (Mey et al. 2020)
+    estimators_tolerance_kcal_mol: float = Field(default=1.0, gt=0.0)
 
 
 class ResourcesConfig(_Section):
