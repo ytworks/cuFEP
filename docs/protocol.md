@@ -252,6 +252,65 @@ where it has turned (13 runs, correlation 0.8). The complex leg (38.9 to 43.6 kc
 (0.4 to 0.5), which explain part of its spread. These are limits of the sampling, not of the
 lambda windows; see "Limits of version 0.1".
 
+## REST2
+
+REST2 is replica exchange with solute scaling (Wang, Friesner and Berne, J. Phys. Chem. B
+2011, 115, 9431). FEP+ runs it between its lambda windows (FEP/REST) and SOMD2, the engine
+of Flare, offers it as `rest2_scale`. It is for degrees of freedom that change too slowly to
+be sampled within one window, such as a ligand torsion or a side-chain rotamer in the
+pocket: in the windows in the middle of a leg a *hot region* is given a higher effective
+temperature, and replica exchange carries what is sampled there to the physical windows at
+the ends.
+
+The Hamiltonian. With s = T / T_hot, the energy inside the hot region is scaled by s, its
+interaction with the rest by sqrt(s), and the rest is unchanged:
+
+    E = s E(hot, hot) + sqrt(s) E(hot, rest) + E(rest, rest)
+
+cuFEP applies it as Sire / SOMD2 do:
+
+| term | scaling |
+|---|---|
+| charge of a hot atom | sqrt(s) |
+| Lennard-Jones epsilon of a hot atom | s (so a pair of two hot atoms scales by s, a pair with one hot atom by sqrt(s)) |
+| 1-4 and other exception pairs | s if both atoms are hot, sqrt(s) if one is |
+| proper torsion with all four atoms hot | s |
+| bonds, angles, improper torsions, the Boresch restraint | not scaled |
+
+The hot region is the ligand and, in the complex leg, the protein residues chosen with
+`sampling.rest2.region` and `sampling.rest2.residues` (whole residues).
+
+The scale along a leg. `sampling.rest2.scale` is T_hot / T in the middle of the leg, as
+SOMD2's `rest2_scale`; 1 switches REST2 off. The leg is treated as one path from 0 to 1 on
+which every stage takes an equal part, and a window at position x has
+
+    T_hot / T = 1 + (scale - 1) (1 - 2 |x - 0.5|)
+
+which is SOMD2's rule: 1 at the first and at the last window, so both end states are the
+physical ones, and `scale` in the middle. Because the scale is a function of the position,
+the candidates of adaptive lambda scheduling have it too: the precalculation runs and
+compares windows with their REST2 scaling, and adds windows where the scaling lowers the
+overlap.
+
+How FEP+ differs: Desmond takes the temperatures of the windows from a ladder predicted for
+an exchange probability of 0.3 between neighbours (the predictor of Patriksson and van der
+Spoel on the atoms of the hot region), rising over the first half of the windows and falling
+over the second; its authors give about 1000 K at the top for a hot region of about 20 heavy
+atoms. Desmond scales a torsion by sqrt(s) for each of its two end atoms in the hot region.
+cuFEP follows SOMD2 in both points, because a ladder that depends on the number of windows
+does not go together with windows chosen adaptively.
+
+In the System the scaling is carried by two global parameters, sqrt(s) - 1 and s - 1 (both
+zero in the physical state): parameter offsets on the charges and epsilons of hot protein
+atoms and on exception pairs in the `NonbondedForce`, a factor per hot atom in the soft-core
+force, and a `CustomTorsionForce` for the scaled torsions. The ligand charges get sqrt(s)
+through `lambda_electrostatics`. The energies of all states are still obtained from a few
+evaluations: the main force group is a quadratic polynomial in the ligand charge factor and
+sqrt(s). One difference between the backends: stock OpenMM does not update the long-range
+dispersion correction when an epsilon offset changes, the cuPotential plugin does. The two
+therefore differ by a constant per window in the scaled windows; the end states and the
+free energy are not affected, and a leg is sampled by one backend.
+
 ## Long-range dispersion
 
 During sampling the soft-core ligand-environment interaction is truncated at the cutoff.
@@ -302,7 +361,7 @@ source code and papers (see "Sources").
 | time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 5 ns |
 | runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
 | reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | MBAR uncertainty; standard deviation over repeats if more than one |
-| replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration |
+| replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 with `sampling.rest2` |
 | MD before the alchemical run | 1 ns and a short equilibration | minimisation, equilibration, MD for the restraint search | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
 | restraint | Boresch-type, atoms chosen from hydrogen bonds and salt bridges | Boresch, atoms and strengths chosen automatically | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |
 | water sampling | grand canonical Monte Carlo by default | grand canonical option | none | none |
