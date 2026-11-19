@@ -142,7 +142,8 @@ def plan(config: str) -> None:
 @click.argument("config", type=click.Path(exists=True, dir_okay=False))
 @click.option("--repeats", type=int, help="Override sampling.repeats.")
 @click.option("--production-ns", type=float, help="Override sampling.production_ns (both legs).")
-@click.option("--gpus", help="Override resources.gpus: 'auto' or a comma separated list of device indices.")
+@click.option("--gpus", help="Override resources.gpus: 'auto' or a comma separated list of CUDA device numbers "
+                             "(as CUDA_VISIBLE_DEVICES leaves them).")
 @click.option("--backend", type=click.Choice(["cupotential", "openmm"]), help="Override backend.name.")
 @click.option("-o", "--output", help="Override output.dir.")
 @click.option("--ligand", "ligands", multiple=True,
@@ -255,7 +256,7 @@ def benchmark_list() -> None:
 @click.option("--tier", type=click.Choice(["smoke", "subset", "full"]), default="smoke", show_default=True,
               help="smoke: one ligand, very short; subset: five ligands; full: every ligand.")
 @click.option("-o", "--output", help="Output directory (default: runs/benchmark_<name>_<tier>).")
-@click.option("--gpus", help="'auto' or a comma separated list of device indices.")
+@click.option("--gpus", help="'auto' or a comma separated list of CUDA device numbers.")
 @click.option("--repeats", type=int, help="Override the number of repeats.")
 def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
     """Run benchmark NAME (resumable)."""

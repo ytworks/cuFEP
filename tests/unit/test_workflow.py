@@ -128,7 +128,10 @@ def test_three_repeats_use_all_gpus_and_every_job_keeps_one_worker():
     load = _loads(plan, demands, gpus)
     assert max(load.values()) <= 1.0 + 1e-9 and min(load.values()) >= 0.75
     crowded = [Demand(job=i, phase="sampling", factor=1, max_workers=18, work=1.0) for i in range(12)]
-    plan = allocate(gpus, crowded)                             # no MPS and more jobs than GPUs
+    # no MPS and more jobs than GPUs: a state the scheduler never makes (a job starts only when its first worker
+    # fits, tests/unit/test_scheduler.py); the strict allocation refuses it, the plain one still gives each a worker
+    assert allocate(gpus, crowded, strict=True) is None
+    plan = allocate(gpus, crowded)
     assert all(len(plan[i]) == 1 for i in range(12))
 
 

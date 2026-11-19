@@ -137,7 +137,7 @@ analysis:
   error_blocks: [40, 20, 10, 5]   # numbers of time blocks for the standard error of a leg; the largest error is reported
   part_error_blocks: 5            # time blocks for the standard error of each part of the production (halves, series, blocks)
 resources:
-  gpus: auto                      # auto | a list of device indices
+  gpus: auto                      # auto | a list of CUDA device numbers (as CUDA_VISIBLE_DEVICES leaves them)
   oversubscription_factor: auto   # auto | 1 | 2 | 4 | ...
   cpu_threads_per_worker: 2
 output:

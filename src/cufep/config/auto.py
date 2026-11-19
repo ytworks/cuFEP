@@ -32,7 +32,7 @@ class AutoReport:
 
 def resolve(cfg: Config, protein=None) -> tuple[Config, AutoReport]:
     """Return a copy of ``cfg`` without static ``auto`` values, and the reasons."""
-    from cufep.scheduler import detect_gpus
+    from cufep.scheduler import check_gpus, detect_gpus
 
     out = cfg.model_copy(deep=True)
     report = AutoReport()
@@ -70,4 +70,6 @@ def resolve(cfg: Config, protein=None) -> tuple[Config, AutoReport]:
         report.add("resources.gpus", gpus or "none", "every visible GPU that is not busy computing")
         if not gpus:
             report.warnings.append("no GPU found; the run will be extremely slow")
+    else:
+        check_gpus(list(out.resources.gpus))          # CUDA device numbers this process has
     return out, report

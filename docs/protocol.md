@@ -913,6 +913,17 @@ exchanged.
   or stop workers at their next iteration. With one ligand the solvent leg therefore uses
   the free GPUs while the complex leg is still in pre-equilibration, and the complex leg
   takes all of them afterwards.
+- A job starts only when its first worker and the first worker of every running job fit on
+  the GPUs: a worker of a job with oversubscription factor f takes 1/f of a GPU, and no GPU
+  is ever given more. Without MPS (factor 1) every GPU runs one worker, so one GPU runs one job
+  at a time.
+- The GPUs are CUDA device numbers as `CUDA_VISIBLE_DEVICES` leaves them (`resources.gpus`,
+  `--gpus`); cuFEP sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` so that a device number names the same
+  GPU as nvidia-smi does, whose load decides which GPUs are free and is reported.
+- If the scheduler fails or is interrupted (Ctrl-C reaches it alone: every job runs in a
+  process group of its own), it stops every job, which stops its workers and closes its
+  files, waits for them (a job that has not ended after 120 s is killed with its workers), and
+  only then gives up the lock of the output directory.
 - With more jobs than can run at once, the others wait; freed capacity goes to waiting
   jobs first. The same code runs on one GPU.
 
