@@ -72,8 +72,11 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             continue
         first = (s.get("repeats") or [{}])[0]
         added = first.get("lambda_windows_added") or {}
-        flags = (["NOT RELIABLE (overlap): " + ", ".join(s["not_reliable"])] if s.get("not_reliable") else []) \
-            + (["NOT CONVERGED: " + ", ".join(s["not_converged"])] if s.get("not_converged") else [])
+        flags = (["FAILED: " + ", ".join(s["failed_legs"])] if s.get("failed_legs") else []) \
+            + (["NOT RELIABLE (overlap): " + ", ".join(s["not_reliable"])] if s.get("not_reliable") else []) \
+            + (["NOT CONVERGED: " + ", ".join(s["not_converged"])] if s.get("not_converged") else []) \
+            + (["convergence not assessed: " + ", ".join(s["convergence_not_assessed"])]
+               if s.get("convergence_not_assessed") else [])
         rows.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": s["dg_bind"],
                      "cufep_std": s.get("dg_bind_std"), "n_repeats": s["n_repeats"],
                      "windows_complex": (first.get("lambda_windows") or {}).get("complex"),

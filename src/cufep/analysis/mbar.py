@@ -10,6 +10,9 @@ import numpy as np
 
 R_GAS = 8.31446261815324e-3   # kJ/mol/K
 KCAL = 4.184
+#: a part of the production gets a free energy estimate of its own only if it holds at least this
+#: many statistically independent samples per lambda window
+MIN_INDEPENDENT_SAMPLES = 4
 
 
 def _pymbar():
@@ -49,11 +52,17 @@ class LegAnalysis:
     #: from its end (reverse): (fraction of the production, dG, error)
     forward: list[tuple[float, float, float]] = field(default_factory=list)
     reverse: list[tuple[float, float, float]] = field(default_factory=list)
-    #: (dG, error) from the first half and from the second half of the production alone
+    #: (dG, error) from the first half and from the second half of the production alone; the
+    #: halves do not share an iteration
     first_half: tuple[float, float] = (float("nan"), float("nan"))
     second_half: tuple[float, float] = (float("nan"), float("nan"))
+    #: why the halves have no estimate, if the production is too short for them
+    convergence_note: str = ""
     #: difference between the two halves
     forward_reverse_gap: float = 0.0
+    #: free energy from consecutive blocks of the production that do not overlap:
+    #: (start, end as fractions of the production, dG, error)
+    blocks: list[tuple[float, float, float, float]] = field(default_factory=list)
     #: sum of BAR between neighbouring windows, a second estimator on the same data
     bar_delta_g: float = float("nan")
     bar_delta_g_error: float = float("nan")
@@ -175,7 +184,9 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, tolerance_sigma: f
     estimators   BAR between neighbouring windows and MBAR agree within the same tolerance (the
                  guideline compares TI with BAR-type estimators; cuFEP records no dU/dlambda).
 
-    ``ok`` is None where the analysis does not hold the numbers for a check.
+    ``ok`` is None where the analysis does not hold the numbers for a check. For the convergence
+    check that includes a production too short to give each half an estimate of its own; the
+    reason is then in ``reason``, and the leg is "not assessed", which is not "not converged".
     """
     final, error = float(analysis["delta_g"]), float(analysis["delta_g_error"])
     tolerance = tolerance_sigma * error
@@ -187,7 +198,9 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, tolerance_sigma: f
 
     halves = [analysis.get("first_half"), analysis.get("second_half")]
     conv = {"ok": None, "tolerance": tolerance, "final": final}
-    if all(h is not None for h in halves):
+    if analysis.get("convergence_note"):
+        conv["reason"] = str(analysis["convergence_note"])
+    elif all(h is not None for h in halves):
         first, second = float(halves[0][0]), float(halves[1][0])
         conv.update(first_half=first, second_half=second)
         if np.isfinite(first) and np.isfinite(second):
@@ -262,10 +275,13 @@ def stage_boundaries(state_dicts: list[dict]) -> dict[str, tuple[int, int]]:
 
 
 def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None = None,
-                n_fractions: int = 10) -> LegAnalysis:
+                n_fractions: int = 10, n_blocks: int = 5) -> LegAnalysis:
     """Analyse samples loaded with :func:`cufep.sampling.storage.read_samples`.
 
-    ``n_fractions`` is the number of points of the forward and reverse series.
+    ``n_fractions`` is the number of points of the forward and reverse series, ``n_blocks``
+    the number of consecutive blocks with an estimate of their own. A part of the production
+    gets an estimate only if it holds ``MIN_INDEPENDENT_SAMPLES`` independent samples; a point
+    or block that does not is left out, and halves that do not are reported with the reason.
     """
     from cufep.alchemy.lrc import tail_free_energy
 
@@ -294,16 +310,31 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
             return float("nan"), float("nan")
 
     n = u.shape[0]
+    smallest = MIN_INDEPENDENT_SAMPLES * stride            # iterations a part needs for an estimate
     forward, reverse = [], []
     everything = (float(f_k[-1] * kt), float(df_k[-1] * kt))
     for i in range(1, n_fractions + 1):
-        frac = i / n_fractions
-        m = max(4 * stride, int(round(frac * n)))
-        forward.append((frac, *(everything if m >= n else partial(slice(0, m)))))
-        reverse.append((frac, *(everything if m >= n else partial(slice(n - m, n)))))
-    half = max(4 * stride, n // 2)
-    first_half, second_half = partial(slice(0, half)), partial(slice(n - half, n))
+        m = int(round(i * n / n_fractions))
+        if m < smallest:
+            continue
+        # the fraction that is really used is the one that is stored and plotted
+        forward.append((m / n, *(everything if m >= n else partial(slice(0, m)))))
+        reverse.append((m / n, *(everything if m >= n else partial(slice(n - m, n)))))
+    # the halves: split in the middle of the time series, no iteration in both
+    mid = n // 2
+    if mid >= smallest:
+        first_half, second_half = partial(slice(0, mid)), partial(slice(mid, n))
+        convergence_note = ""
+    else:
+        first_half = second_half = (float("nan"), float("nan"))
+        convergence_note = (f"a half of the production holds {mid // stride} independent sample(s) per lambda window "
+                            f"({n} iterations, statistical inefficiency {g:.1f} iterations); "
+                            f"{MIN_INDEPENDENT_SAMPLES} are needed")
     gap = abs(first_half[0] - second_half[0])
+    blocks = []
+    edges = [int(round(k * n / n_blocks)) for k in range(n_blocks + 1)] if n_blocks >= 2 else []
+    if edges and min(b - a for a, b in zip(edges[:-1], edges[1:])) >= smallest:
+        blocks = [(a / n, b / n, *partial(slice(a, b))) for a, b in zip(edges[:-1], edges[1:])]
     try:
         bar, bar_error = bar_between_neighbours(u[::stride], states[::stride])
         bar, bar_error = bar * kt, bar_error * kt
@@ -341,6 +372,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         round_trips=count_round_trips(states), swap_acceptance_neighbour=neighbour_swap_fraction(states),
         overlap_matrix=np.round(overlap, 4).tolist(),
         forward=forward, reverse=reverse, first_half=first_half, second_half=second_half,
-        forward_reverse_gap=float(gap), bar_delta_g=float(bar), bar_delta_g_error=float(bar_error),
+        convergence_note=convergence_note, forward_reverse_gap=float(gap), blocks=blocks,
+        bar_delta_g=float(bar), bar_delta_g_error=float(bar_error),
         lrc_delta_g=lrc_dg, lrc_error=lrc_se, lrc_samples=lrc_n, lrc_isotropic=lrc_iso,
         temperature_K=temperature_K)

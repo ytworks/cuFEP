@@ -127,6 +127,7 @@ analysis:
   lrc_cutoff_nm: 2.0
   min_overlap: 0.03               # NOT RELIABLE below this overlap of two neighbouring lambda windows
   convergence_points: 10          # points of the forward and reverse series
+  convergence_blocks: 5           # consecutive blocks of the production with an estimate of their own
   convergence_tolerance_sigma: 2.0 # NOT CONVERGED if half of the production differs from the whole by more standard errors
 resources:
   gpus: auto                      # auto | a list of device indices
@@ -189,7 +190,7 @@ the schedule in fixed mode.
 | `lambda_schedule.fixed_walk_ps` | 50 ps | cuFEP's own choice: in fixed mode the replicas get their start configurations from a walk through the windows with this much MD in each |
 | `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015; the warning level of Flare and of the alchemical best-practice guide |
 | `analysis.convergence_tolerance_sigma` | 2 | Klimovich, Shirts and Mobley 2015: the free energy from the first part and from the last part of the data "should converge rapidly to within uncertainty of the final value". The guideline gives no factor; 2 standard errors is cuFEP's own choice. The same tolerance is used for BAR against MBAR |
-| `analysis.convergence_points` | 10 | cuFEP's own choice for the number of points of the forward and reverse series |
+| `analysis.convergence_points`, `convergence_blocks` | 10, 5 | cuFEP's own choice for the number of points of the forward and reverse series and for the number of consecutive blocks |
 | `analysis.lrc` | reweight | see protocol.md, long-range dispersion |
 | `resources.oversubscription_factor` | from the size of the system: 16 up to 10,000 atoms, 8 up to 60,000, 4 up to 200,000, else 2 | measured total throughput per GPU under NVIDIA MPS |
 | `membrane.equilibration_ns` | 10 ns | cuFEP's own choice for a freshly built bilayer |

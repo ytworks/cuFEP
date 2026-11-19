@@ -850,7 +850,8 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 6. analysis ------------------------------------------------------------------------------
     t_analysis = time.perf_counter()
-    analysis = analyze_leg(samples, T, n_fractions=cfg.analysis.convergence_points)
+    analysis = analyze_leg(samples, T, n_fractions=cfg.analysis.convergence_points,
+                           n_blocks=cfg.analysis.convergence_blocks)
     correction = {"reweight": analysis.lrc_delta_g, "isotropic": analysis.lrc_isotropic, "none": 0.0}[cfg.analysis.lrc]
     total = analysis.delta_g - correction                  # decoupling with the full LJ range
     structure = structural_analysis(samples, int(samples["attrs"].get("n_equilibration_iterations", 0)))
@@ -982,6 +983,9 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
         out.append(f"NOT CONVERGED: {halves}, the whole {whole}; both halves should lie within {sigma:g} standard "
                    f"errors of the whole. Run this leg longer; it continues from where it stopped: cufep run CONFIG "
                    f"--ligand NAME --leg {result.get('leg', 'LEG')} --production-ns NS (or sampling.production_ns)")
+    elif conv["ok"] is None and conv.get("reason"):
+        out.append(f"convergence not assessed: {conv['reason']}. A longer production gives the halves enough "
+                   f"samples: cufep run CONFIG --ligand NAME --leg {result.get('leg', 'LEG')} --production-ns NS")
     est = q["estimators"]
     if est["ok"] is False:
         out.append(f"BAR between neighbouring lambda windows gives {est['bar'] / KCAL:.2f} kcal/mol and MBAR "
@@ -1017,6 +1021,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
     warnings: list[str] = []
     # legs whose analysis fails a check of cufep.analysis.mbar.quality_checks
     flagged: dict[str, list[str]] = {"overlap": [], "convergence": [], "estimators": []}
+    not_assessed: list[str] = []           # legs too short for the convergence check
     failed_legs: list[str] = []
     for r in range(repeats):
         states = {leg: leg_state(lig_dir / f"repeat_{r}" / leg) for leg in ("complex", "solvent")}
@@ -1050,9 +1055,12 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             for check, legs in flagged.items():
                 if (quality.get(check) or {}).get("ok") is False:
                     legs.append(where)
+            if (quality.get("convergence") or {}).get("reason"):
+                not_assessed.append(where)
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
                  "failed_legs": failed_legs,
                  "not_reliable": flagged["overlap"], "not_converged": flagged["convergence"],
+                 "convergence_not_assessed": not_assessed,
                  "estimators_disagree": flagged["estimators"]}
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL

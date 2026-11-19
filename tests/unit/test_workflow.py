@@ -195,6 +195,25 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
                                "half 99.20, the whole 100.00 ± 0.20")
     assert "sampling.production_ns" in notes[1] and notes[2].startswith("BAR between neighbouring lambda windows gives 101.00")
 
+    # a production too short for the check: said so, and kept apart from "not converged"
+    too_short = dict(steady, first_half=[float("nan")] * 2, second_half=[float("nan")] * 2,
+                     convergence_note="a half of the production holds 2 independent sample(s) per lambda window")
+    verdict = quality_checks(too_short)["convergence"]
+    assert verdict["ok"] is None and "2 independent" in verdict["reason"]
+    note = quality_warnings({"analysis": too_short, "leg": "solvent"}, cfg)
+    assert len(note) == 1 and note[0].startswith("convergence not assessed: a half of the production holds 2")
+    assert "--leg solvent --production-ns" in note[0]
+    short_dir = tmp_path / "short"
+    for name in ("complex", "solvent"):
+        d = short_dir / "repeat_0" / name
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({
+            "leg": name, "delta_g_decouple": steady["delta_g"], "delta_g_mbar_error": 0.4, "restraint_release": 0.0,
+            "lrc": 0.0, "backend": "openmm", "analysis": too_short if name == "solvent" else steady, "n_states": 15,
+            "production_ns": 0.1, "notes": [], "quality": quality_checks(too_short if name == "solvent" else steady)}))
+    out = combine_ligand(short_dir, "lig", 1)
+    assert out["convergence_not_assessed"] == ["solvent leg"] and out["not_converged"] == []
+
     for name, analysis in (("complex", drifting), ("solvent", steady)):
         d = tmp_path / "repeat_0" / name
         d.mkdir(parents=True)

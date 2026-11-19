@@ -355,6 +355,9 @@ class AnalysisConfig(_Section):
     #: number of points of the forward and reverse series (free energy from growing parts of the
     #: production, counted from its start and from its end)
     convergence_points: int = Field(default=10, ge=2)
+    #: number of consecutive blocks of the production that get a free energy estimate of their
+    #: own, to show a free energy that keeps moving in one direction
+    convergence_blocks: int = Field(default=5, ge=2)
     #: a leg is NOT CONVERGED if the free energy from the first half of its production, or from
     #: the second half, differs from the free energy of the whole by more than this many MBAR
     #: standard errors; the same tolerance applies to BAR against MBAR

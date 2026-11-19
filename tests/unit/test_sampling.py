@@ -159,6 +159,11 @@ def test_convergence_check_separates_a_steady_leg_from_one_that_drifts():
     u2, states2, _ = harmonic_samples(3000, late, x0, np.random.default_rng(4))
     drifting = analyze_leg({"u": np.concatenate([u, u2]), "states": np.concatenate([states, states2])}, 298.15)
     assert (drifting.second_half[0] - drifting.first_half[0]) / kt == pytest.approx(0.52, abs=0.1)
+    # five consecutive blocks: the first two lie before the change, the last two after it
+    assert [(b[0], b[1]) for b in drifting.blocks] == [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
+    assert (np.mean([b[2] for b in drifting.blocks[3:]]) - np.mean([b[2] for b in drifting.blocks[:2]])) / kt \
+        == pytest.approx(0.52, abs=0.15)
+    assert len(steady.blocks) == 5 and max(abs(b[2] - steady.delta_g) for b in steady.blocks) < 0.3 * kt
     q = quality_checks(drifting.to_dict())
     assert q["overlap"]["ok"] and q["convergence"]["ok"] is False
     assert quality_checks(drifting.to_dict(), tolerance_sigma=50.0)["convergence"]["ok"]
@@ -172,6 +177,46 @@ def test_convergence_check_separates_a_steady_leg_from_one_that_drifts():
     half_missing = dict(old, first_half=[float("nan"), float("nan")], second_half=[10.1, 0.7], bar_delta_g=12.0)
     q = quality_checks(half_missing)
     assert q["convergence"]["ok"] is False and q["estimators"]["ok"] is False
+
+
+def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_not_assessed(monkeypatch):
+    """Review of PR 1: with 12 iterations and a stride of 3 both "halves" were all of the data and agreed."""
+    import cufep.analysis.mbar as mbar
+    from cufep.analysis.mbar import quality_checks
+
+    # two states; in the second half of the production the second state is much stiffer
+    x0 = np.array([0.0, 0.4])
+    u1, s1, _ = harmonic_samples(6, np.array([1.0, 1.0]), x0, np.random.default_rng(21))
+    u2, s2, _ = harmonic_samples(6, np.array([1.0, 30.0]), x0, np.random.default_rng(22))
+    samples = {"u": np.concatenate([u1, u2]), "states": np.concatenate([s1, s2])}
+    kt = 8.31446261815324e-3 * 298.15
+
+    # correlated samples (statistical inefficiency 2.125 -> every third iteration): a half holds two
+    monkeypatch.setattr(mbar, "statistical_inefficiency", lambda u, states: 2.125)
+    short = analyze_leg(samples, 298.15)
+    assert np.isnan(short.first_half[0]) and np.isnan(short.second_half[0]) and np.isnan(short.forward_reverse_gap)
+    assert "a half of the production holds 2 independent sample(s) per lambda window" in short.convergence_note
+    assert "4 are needed" in short.convergence_note
+    assert [point[0] for point in short.forward] == [1.0] and short.forward[0][1] == short.delta_g
+    assert short.blocks == []
+    verdict = quality_checks(short.to_dict())["convergence"]
+    assert verdict["ok"] is None and verdict["reason"] == short.convergence_note
+
+    # independent samples: each half is estimated from its own six iterations
+    monkeypatch.setattr(mbar, "statistical_inefficiency", lambda u, states: 1.0)
+    res = analyze_leg(samples, 298.15, n_blocks=3)
+    first = solve_mbar(samples["u"][:6], samples["states"][:6])[0][-1] * kt
+    second = solve_mbar(samples["u"][6:], samples["states"][6:])[0][-1] * kt
+    assert res.convergence_note == "" and abs(second - first) > 0.5 * kt       # the two halves really differ
+    assert res.first_half[0] == pytest.approx(first, abs=1e-6) and res.second_half[0] == pytest.approx(second, abs=1e-6)
+    assert res.forward_reverse_gap == pytest.approx(abs(first - second), abs=1e-6)
+    # the forward and reverse series: only parts with enough samples, at the fraction that was used
+    used = [round(point[0] * 12) for point in res.forward]
+    assert used == [4, 5, 6, 7, 8, 10, 11, 12] and [round(point[0] * 12) for point in res.reverse] == used
+    assert all(point[0] == m / 12 for point, m in zip(res.forward, used))
+    assert res.forward[2][1] == pytest.approx(first, abs=1e-6) and res.reverse[2][1] == pytest.approx(second, abs=1e-6)
+    assert [(b[0], b[1]) for b in res.blocks] == [(0.0, 4 / 12), (4 / 12, 8 / 12), (8 / 12, 1.0)]
+    assert res.blocks[0][2] == pytest.approx(solve_mbar(samples["u"][:4], samples["states"][:4])[0][-1] * kt, abs=1e-6)
 
 
 def test_stage_boundaries():

@@ -181,6 +181,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
                 + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
                 + (f"; NOT RELIABLE: neighbouring lambda windows overlap by only {s['min_overlap']:.3f}" if low else "")
                 + (f"; NOT CONVERGED: {', '.join(s['not_converged'])}" if s.get("not_converged") else "")
+                + (f"; convergence not assessed: {', '.join(s['convergence_not_assessed'])}"
+                   if s.get("convergence_not_assessed") else "")
                 + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
         else:
             log(f"RESULT {s['ligand']}: no complete repeat"
@@ -208,13 +210,15 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
     with open(out_dir / "summary.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
-                    "lowest_overlap", "failed_legs", "not_reliable", "not_converged", "warnings"])
+                    "lowest_overlap", "failed_legs", "not_reliable", "not_converged", "convergence_not_assessed",
+                    "warnings"])
         for s in summary:
             w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
                         _fmt(s.get("min_overlap")), "; ".join(s.get("failed_legs", [])),
                         "; ".join(s.get("not_reliable", [])),
-                        "; ".join(s.get("not_converged", [])), len(s.get("warnings", []))])
+                        "; ".join(s.get("not_converged", [])), "; ".join(s.get("convergence_not_assessed", [])),
+                        len(s.get("warnings", []))])
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
 
 

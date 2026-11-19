@@ -54,7 +54,15 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
             half = a.get(name)
             if half is not None and np.isfinite(half[0]):
                 ax.plot([x], [half[0] / KCAL], marker="D", ms=8, mfc="none", color=colour)
+        # consecutive blocks that do not overlap: a free energy that keeps moving shows as a staircase
+        blocks = [b for b in a.get("blocks", []) if np.isfinite(b[2])]
+        for k, (start, end, value, _err) in enumerate(blocks):
+            ax.plot([start, end], [value / KCAL, value / KCAL], color="0.25", lw=2.5, solid_capstyle="butt",
+                    label="consecutive blocks" if k == 0 else None)
         verdict = {True: "converged", False: "NOT CONVERGED"}.get(conv.get("ok"), "")
+        if conv.get("reason"):
+            verdict = "convergence not assessed"
+            ax.text(0.5, 0.04, conv["reason"], transform=ax.transAxes, ha="center", va="bottom", fontsize=6, wrap=True)
         ax.set_title(f"{leg} leg: {final:.2f} ± {error:.2f} kcal/mol" + (f", {verdict}" if verdict else ""), fontsize=10)
         ax.set_xlabel("fraction of the production (diamonds: its two halves)")
         ax.set_ylabel("free energy of the leg (kcal/mol)")
