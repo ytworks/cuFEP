@@ -283,7 +283,9 @@ def planned_iterations(iteration_ps: float, timestep_fs: float, equilibration_ns
     stored samples against a run, so that the two cannot round differently."""
     from types import SimpleNamespace
 
-    steps = max(1, int(round(float(iteration_ps) * 1000.0 / float(timestep_fs))))
+    from cufep.steps import md_steps
+
+    steps = md_steps(iteration_ps, timestep_fs)
     return SimpleNamespace(steps_per_iteration=steps, iteration_ps=steps * float(timestep_fs) * 1e-3,
                            n_equilibration=iterations_for(equilibration_ns, iteration_ps, 1),
                            n_production=iterations_for(production_ns, iteration_ps, 4))
@@ -361,7 +363,8 @@ def leg_spec(cfg: Config, built, states: list[dict], barostat: str, timestep_fs:
         name=more.pop("name", "leg"), system_xml=built.xml, states=states, n_atoms=built.alch.system.getNumParticles(), backend=backend_name,
         precision=_precision(cfg, backend_name), platform=cfg.backend.platform,
         temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
-        barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
+        barostat=barostat, barostat_frequency=cfg.dynamics.barostat_frequency,
+        friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
         steps_per_iteration=planned_iterations(iteration_ps, timestep_fs, 0.0, 0.0).steps_per_iteration, seed=seed,
         cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=built.tail, settings=samples_settings(cfg),
         box_safety=1.3 if barostat == "membrane" else None, **more)
@@ -631,11 +634,20 @@ def prep_made_from(cfg: Config, ligand, membrane: bool, box_shape: str) -> dict:
 def equil_made_with(cfg: Config, leg: str, in_membrane: bool, seed: int) -> dict:
     """The settings that the pre-equilibration of a leg depends on."""
     pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
-    return {"temperature_K": cfg.thermodynamics.temperature_K, "pressure_bar": cfg.thermodynamics.pressure_bar,
-            "friction_per_ps": cfg.dynamics.friction_per_ps, "timestep_fs": float(cfg.dynamics.timestep_fs),
-            "pre_equilibration": pre.model_dump(mode="json"),
-            "membrane_equilibration_ns": cfg.membrane.equilibration_ns if in_membrane else None,
-            "backend": cfg.backend.name, "precision": cfg.backend.precision, "seed": int(seed)}
+    out = {"temperature_K": cfg.thermodynamics.temperature_K, "pressure_bar": cfg.thermodynamics.pressure_bar,
+           "friction_per_ps": cfg.dynamics.friction_per_ps, "timestep_fs": float(cfg.dynamics.timestep_fs),
+           "pre_equilibration": pre.model_dump(mode="json"),
+           "membrane_equilibration_ns": cfg.membrane.equilibration_ns if in_membrane else None,
+           "backend": cfg.backend.name, "precision": cfg.backend.precision, "seed": int(seed)}
+    # every version before dynamics.barostat_frequency existed used 25 steps and recorded nothing:
+    # a record without the key was made with 25, so only another value is recorded
+    if int(cfg.dynamics.barostat_frequency) != BAROSTAT_FREQUENCY_BEFORE_THE_SETTING:
+        out["barostat_frequency"] = int(cfg.dynamics.barostat_frequency)
+    return out
+
+
+#: the barostat frequency of every version before ``dynamics.barostat_frequency``
+BAROSTAT_FREQUENCY_BEFORE_THE_SETTING = 25
 
 
 def restraint_made_with(cfg: Config) -> dict:
@@ -690,6 +702,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
         barostat = "membrane"
     else:
         solvate(modeller, forcefield, SolvationSpec(padding_nm=cfg.solvation.padding_complex_nm, box_shape=box_shape,
+                                                    water=cfg.forcefield.water,
                                                     ionic_strength_M=ionic, min_edge_nm=min_edge))
         barostat = "isotropic"
     system = create_system(forcefield, modeller.topology, sysspec)
@@ -700,6 +713,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     # ---- ligand in solvent -----------------------------------------------------------------
     modeller = combine(None, ligand)
     solvate(modeller, forcefield, SolvationSpec(padding_nm=cfg.solvation.padding_solvent_nm, box_shape=solvent_shape,
+                                                water=cfg.forcefield.water,
                                                 ionic_strength_M=ionic, min_edge_nm=min_edge))
     system = create_system(forcefield, modeller.topology, sysspec)
     _write_system(prep_dir, "solvent", modeller, system, ligand_atom_indices(modeller.topology))
@@ -1118,7 +1132,8 @@ def run_leg(job: LegJob) -> dict:
         settings = EquilibrationSettings(
             temperature_K=T, pressure_bar=cfg.thermodynamics.pressure_bar, friction_per_ps=cfg.dynamics.friction_per_ps,
             timestep_fs=timestep_cfg, nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns,
-            production_ns=production, barostat=barostat, platform=cfg.backend.platform,
+            production_ns=production, barostat=barostat, barostat_frequency=cfg.dynamics.barostat_frequency,
+            platform=cfg.backend.platform,
             precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
             md_backend=cfg.backend.name,
             area_tolerance=cfg.membrane.area_tolerance, water_tolerance=cfg.membrane.pocket_water_tolerance,
@@ -1267,9 +1282,11 @@ def run_leg(job: LegJob) -> dict:
             backend = get_backend(backend_name, precision=_precision(cfg, backend_name), platform=cfg.backend.platform)
             prepared = backend.prepare_system(alch.system)
             if barostat == "membrane":
-                prepared.addForce(backend.make_membrane_barostat(pressure * u.bar, T * u.kelvin, 25, seed=seed + 5))
+                prepared.addForce(backend.make_membrane_barostat(pressure * u.bar, T * u.kelvin,
+                                                                  cfg.dynamics.barostat_frequency, seed=seed + 5))
             else:
-                prepared.addForce(backend.make_isotropic_barostat(pressure * u.bar, T * u.kelvin, 25, seed=seed + 5))
+                prepared.addForce(backend.make_isotropic_barostat(pressure * u.bar, T * u.kelvin,
+                                                                  cfg.dynamics.barostat_frequency, seed=seed + 5))
             integ = backend.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond,
                                             timestep_fs * u.femtoseconds, seed=seed + 6)
             ctx = backend.make_context(prepared, integ, device0)
@@ -1308,7 +1325,8 @@ def run_leg(job: LegJob) -> dict:
                                                                    stage_state(stages[-1], 1.0).to_dict()],
                         n_atoms=alch.system.getNumParticles(), backend=backend_name,
                         precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
-                        pressure_bar=pressure, barostat=barostat, friction_per_ps=cfg.dynamics.friction_per_ps,
+                        pressure_bar=pressure, barostat=barostat,
+                        barostat_frequency=cfg.dynamics.barostat_frequency, friction_per_ps=cfg.dynamics.friction_per_ps,
                         timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 23,
                         cpu_threads=cfg.resources.cpu_threads_per_worker,
                         box_safety=1.3 if barostat == "membrane" else None,
@@ -1516,7 +1534,9 @@ def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs:
 
     from cufep.sampling.states import set_state
 
-    steps = max(1, int(round(window_ps * 1000.0 / timestep_fs)))
+    from cufep.steps import md_steps
+
+    steps = md_steps(window_ps, timestep_fs)
     out = []
     for state in schedule.states:
         set_state(context, state)

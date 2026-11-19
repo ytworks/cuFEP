@@ -15,7 +15,7 @@ class SolvationSpec:
     padding_nm: float = 1.0
     box_shape: str = "dodecahedron"        # cube | dodecahedron | octahedron
     ionic_strength_M: float = 0.15
-    water_model: str = "tip3p"
+    water: str = "amber14/tip3p.xml"      # forcefield.water; the box is built from cufep.prep.water
     min_edge_nm: float = 0.0               # e.g. 3 x cutoff for the cuPotential plugin
 
 
@@ -46,8 +46,15 @@ def solvate(modeller: app.Modeller, forcefield: app.ForceField, spec: SolvationS
         min_width = spec.min_edge_nm * (2.0 ** 0.5 if spec.box_shape == "dodecahedron" else 1.0)
         # width >= min_width needs either 2r + padding >= min_width or 2 * padding >= min_width
         padding = max(padding, min(min_width - 2.0 * radius, 0.5 * min_width))
+    from cufep.prep.water import water_model_of
+
+    water = water_model_of(spec.water)
+    if water.sites > 3:
+        # waters that came with the input (crystal waters) have no extra site yet; addSolvent
+        # builds a System of what is there to find its charge, so they get it first
+        modeller.addExtraParticles(forcefield)
     modeller.addSolvent(
-        forcefield, model=spec.water_model, padding=padding * unit.nanometer,
+        forcefield, model=water.box, padding=padding * unit.nanometer,
         boxShape=spec.box_shape, ionicStrength=spec.ionic_strength_M * unit.molar, neutralize=True)
 
 

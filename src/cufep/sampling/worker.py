@@ -58,6 +58,25 @@ class LegSpec:
     frame_ligand: list[int] = field(default_factory=list)
     frame_ca: list[int] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self.check_segment(self.steps_per_iteration, "the MD of one replica in one iteration")
+
+    @property
+    def has_barostat(self) -> bool:
+        return self.pressure_bar is not None and self.barostat != "none"
+
+    def check_segment(self, steps: int, what: str = "a stretch of MD of one configuration") -> None:
+        """ValueError if a configuration that is advanced by ``steps`` MD steps in a Context of
+        this leg, which other configurations share, would not get a move of the barostat
+        (:func:`cufep.steps.barostat_segment_problem`). Checked in the process that plans the
+        steps, before a worker is asked for them."""
+        from cufep.steps import barostat_segment_problem
+
+        if self.has_barostat:
+            problem = barostat_segment_problem(steps, self.barostat_frequency, what)
+            if problem:
+                raise ValueError(problem)
+
     @property
     def n_states(self) -> int:
         return len(self.states)
@@ -237,6 +256,7 @@ class ReplicaWorker:
         t_start = time.perf_counter()
         arrays, nxt = self.arrays, 1 - cur
         n_steps = self.spec.steps_per_iteration if steps is None else int(steps)
+        self.spec.check_segment(n_steps)            # the sampler checks it first; this is the last line
         out: dict = {"recorded": None}
         for replica, state_index in assignments:
             box = arrays.box[cur, replica]

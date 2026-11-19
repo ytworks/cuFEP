@@ -1445,6 +1445,37 @@ def test_analysis_figure_is_written(tmp_path):
     assert out == tmp_path / "analysis.png" and out.stat().st_size > 10000
 
 
+@pytest.mark.parametrize("water", ["amber14/tip3p.xml", "amber14/opc3.xml", "amber14/spce.xml",
+                                   "amber14/tip4pew.xml", "amber14/tip4pfb.xml", "amber14/opc.xml"])
+def test_every_water_model_of_the_table_gives_a_system(water):
+    """Review of PR 1 (P2): ``forcefield.water: amber14/tip4pew.xml`` was solvated with 3-site waters and
+    createSystem found one site too few. A water that comes with the input (a crystal water, 3 sites) gets
+    its extra site too."""
+    import openmm.app as app
+    import openmm.unit as u
+
+    from cufep.prep.solvate import SolvationSpec, solvate
+    from cufep.prep.water import water_model_of
+
+    ff = app.ForceField("amber14/protein.ff14SB.xml", water)
+    seed = app.Modeller(app.Topology(), [])
+    seed.addSolvent(app.ForceField("amber14/tip3p.xml"), boxSize=(2.0, 2.0, 2.0) * u.nanometer)
+    keep = app.Modeller(seed.topology, seed.positions)
+    keep.delete(list(seed.topology.residues())[1:])            # one 3-site crystal water
+    solvate(keep, ff, SolvationSpec(padding_nm=1.0, box_shape="cube", ionic_strength_M=0.0, water=water))
+    system = ff.createSystem(keep.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,
+                             constraints=app.HBonds, rigidWater=True)
+    sites = water_model_of(water).sites
+    assert system.getNumParticles() == sites * keep.topology.getNumResidues()
+    # the reviewer's failure: a 4-site force field with a box of 3-site waters
+    if sites == 4:
+        wrong = app.Modeller(seed.topology, seed.positions)
+        wrong.delete(list(seed.topology.residues())[1:])
+        with pytest.raises(Exception, match="missing 1 extra site"):
+            wrong.addSolvent(ff, model="tip3p", padding=1.0 * u.nanometer)
+            ff.createSystem(wrong.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer)
+
+
 @pytest.mark.parametrize("shape,ratio", [("cube", 1.0), ("dodecahedron", 2 ** -0.5)])
 def test_solvation_box_meets_the_minimum_height(shape, ratio):
     import openmm.app as app

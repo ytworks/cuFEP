@@ -245,6 +245,43 @@ def test_tail_energy_matches_brute_force():
     assert again.energy(pos, box) == pytest.approx(e, rel=1e-12)
 
 
+def test_the_tail_never_begins_inside_the_real_space_cutoff():
+    """Review of PR 1 (P2): with an outer radius of 0.45 nm and a cutoff of 0.9 nm the explicit shell was empty
+    and the homogeneous tail began at 0.45 nm, adding the dispersion between 0.45 and 0.9 nm a second time.
+    The tail begins at the cutoff at the latest; a cell too small for an explicit shell gives the homogeneous
+    tail from the cutoff."""
+    import openmm as mm
+    import openmm.unit as unit
+
+    rng = np.random.default_rng(5)
+    box = np.eye(3) * 5.0
+    pos = rng.uniform(0, 5, size=(200, 3))
+    args = (np.arange(2), np.array([0.33, 0.30]), np.array([0.4, 0.6]), np.arange(2, 200), np.full(198, 0.32),
+            np.full(198, 0.5))
+    at_cutoff = TailEnergy(*args, cutoff_nm=0.9, long_cutoff_nm=0.9)
+    inside = TailEnergy(*args, cutoff_nm=0.9, long_cutoff_nm=0.45)
+    assert inside.outer_radius(box) == 0.9 and inside.energy(pos, box) == pytest.approx(at_cutoff.energy(pos, box))
+    homogeneous = (16.0 * np.pi / 125.0) * (at_cutoff._s12 / (9.0 * 0.9 ** 9) - at_cutoff._s6 / (3.0 * 0.9 ** 3))
+    assert at_cutoff.energy(pos, box) == pytest.approx(homogeneous)
+    small = np.eye(3) * 1.82                       # 0.49 x 1.82 nm = 0.892 nm is inside the cutoff
+    assert TailEnergy(*args, cutoff_nm=0.9, long_cutoff_nm=2.0).outer_radius(small) == 0.9
+    # the tail is made from the System's own cutoff, and an outer radius inside it is refused
+    system = mm.System()
+    nb = mm.NonbondedForce()
+    for _ in range(4):
+        system.addParticle(12.0)
+        nb.addParticle(0.0, 0.3, 0.5)
+    nb.setNonbondedMethod(mm.NonbondedForce.PME)
+    nb.setCutoffDistance(0.9 * unit.nanometer)
+    system.addForce(nb)
+    params = [(0.0, 0.3, 0.5)]
+    TailEnergy.from_system(system, [0], params, 0.9, 2.0)
+    with pytest.raises(ValueError, match="the System cuts the nonbonded interactions at 0.9 nm"):
+        TailEnergy.from_system(system, [0], params, 1.0, 2.0)
+    with pytest.raises(ValueError, match="must be larger than the real-space cutoff"):
+        TailEnergy.from_system(system, [0], params, 0.9, 0.45)
+
+
 def test_tail_free_energy_limits():
     assert tail_free_energy(np.full(50, -3.0), 298.15)[0] == pytest.approx(-3.0)
     dg, se = tail_free_energy(np.array([-2.0, -4.0]), 298.15)

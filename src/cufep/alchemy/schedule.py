@@ -378,9 +378,10 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     if not stages:
         raise ValueError("the Context has no alchemical parameters")
     top = s.candidates - 1
-    steps_per_sample = max(1, int(round(s.sample_interval_ps * 1000.0 / timestep_fs)))
-    n_samples = max(2, int(round(s.window_ps / s.sample_interval_ps)))
-    equilibration_steps = int(round(s.equilibration_ps * 1000.0 / timestep_fs))
+    from cufep.steps import md_steps, precalculation_steps
+
+    equilibration_steps, n_samples, steps_per_sample = precalculation_steps(
+        s.window_ps, s.equilibration_ps, s.sample_interval_ps, timestep_fs)
 
     def node(k: int, idx: int) -> tuple[int, int]:
         """The window at the end of a stage is the window at the start of the next one."""
@@ -413,7 +414,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         if runs:
             starts = [nearest(nd) for nd in todo]
         else:                                             # first iteration: a short walk gives the starts
-            starts, walk_steps = [], max(1, int(round(s.walk_ps * 1000.0 / timestep_fs)))
+            starts, walk_steps = [], md_steps(s.walk_ps, timestep_fs)
             _load(context, start)
             for nd in todo:
                 set_state(context, state_of(nd))

@@ -56,6 +56,14 @@ class TailEnergy:
         import openmm.unit as unit
 
         nb = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
+        # the tail begins where the MD stops: the real-space cutoff of the System itself
+        md_cutoff = nb.getCutoffDistance().value_in_unit(unit.nanometer)
+        if abs(md_cutoff - float(cutoff_nm)) > 1e-9:
+            raise ValueError(f"the tail correction is set up from {float(cutoff_nm):g} nm but the System cuts the "
+                             f"nonbonded interactions at {md_cutoff:g} nm")
+        if not float(long_cutoff_nm) > md_cutoff:
+            raise ValueError(f"the outer radius of the tail correction ({float(long_cutoff_nm):g} nm) must be larger "
+                             f"than the real-space cutoff ({md_cutoff:g} nm), where the tail begins")
         ligand = list(ligand_atoms)
         lig_set = set(ligand)
         env, es, ee = [], [], []
@@ -70,10 +78,18 @@ class TailEnergy:
                    np.array([p[2] for p in ligand_parameters]), np.array(env), np.array(es), np.array(ee),
                    cutoff_nm, long_cutoff_nm)
 
+    def outer_radius(self, box: np.ndarray) -> float:
+        """Where the explicit sum stops and the homogeneous tail begins, nm: ``long_cutoff_nm``,
+        but within the cell (0.49 of its shortest height) so that no pair is counted twice, and
+        never inside the real-space cutoff, whose interactions the MD already has. A cell too small
+        for any explicit shell gives the homogeneous tail from the cutoff (OpenMM's correction)."""
+        box = np.asarray(box, dtype=float)
+        return max(float(self.cutoff_nm), min(float(self.long_cutoff_nm), 0.49 * min(box[0, 0], box[1, 1], box[2, 2])))
+
     def energy(self, positions: np.ndarray, box: np.ndarray) -> float:
         """dU_tail in kJ/mol for one configuration (positions in nm, box rows a, b, c)."""
         box = np.asarray(box, dtype=float)
-        r_long = min(self.long_cutoff_nm, 0.49 * min(box[0, 0], box[1, 1], box[2, 2]))
+        r_long = self.outer_radius(box)
         rc2, rl2 = self.cutoff_nm ** 2, r_long ** 2
         env_pos = positions[self.env]
         total = 0.0

@@ -34,7 +34,7 @@ membrane:
   pocket_water_tolerance: 1.5     # ... or the number of waters near the ligand by more than this
 forcefield:
   protein: amber14/protein.ff14SB.xml
-  water: amber14/tip3p.xml
+  water: amber14/tip3p.xml        # tip3p, tip3pfb, opc3, spce, tip4pew, tip4pfb or opc of amber14/; a bilayer needs a 3-site one
   lipid: amber19/lipid21.xml
   ligand: openff-2.2.1
   ligand_charges: am1bcc          # am1bcc | am1bcc-nagl
@@ -54,6 +54,7 @@ dynamics:
   hmr_mass_amu: 3.0
   friction_per_ps: 1.0
   cutoff_nm: 0.9
+  barostat_frequency: 25          # MD steps between barostat moves; no stretch of MD of one replica or window may be shorter
 solvation:
   box_shape: auto                 # auto | cube | dodecahedron
   padding_complex_nm: 1.0
@@ -126,7 +127,7 @@ sampling:
 analysis:
   estimator: mbar
   lrc: reweight                   # reweight | isotropic | none
-  lrc_cutoff_nm: 2.0
+  lrc_cutoff_nm: 2.0              # outer radius of the explicit tail; larger than dynamics.cutoff_nm
   min_overlap: 0.03               # NOT RELIABLE below this overlap of two neighbouring lambda windows
   convergence_points: 10          # points of the forward and reverse series
   convergence_blocks: 5           # consecutive blocks of the production with an estimate of their own
@@ -201,6 +202,9 @@ the schedule in fixed mode.
 | `analysis.convergence_points`, `convergence_blocks` | 10, 5 | cuFEP's own choice for the number of points of the forward and reverse series and for the number of consecutive blocks |
 | `analysis.error_blocks`, `part_error_blocks` | 40, 20, 10, 5; 5 | cuFEP's own choice. The standard error of a leg is that of a delete-one-block jackknife over blocks of time that are the same for all lambda windows, computed for each of these numbers of blocks, of the free energy as it is reported (MBAR minus the tail correction); the largest is reported, unless the analytical one is larger. `part_error_blocks` is the number of blocks within each half, each point of the forward and reverse series and each consecutive block. Grossfield et al. 2018 (sections 7.3.2 and 7.6) ask for blocks longer than the correlation time, for a standard error that no longer grows with their length, and name the jackknife for few blocks; they give no numbers. 5 is the fewest blocks that still give an error, 40 the most that leaves a block of a leg of 10 ns (4000 iterations) 100 iterations long. On a model with slow configurations that travel between the windows the largest of the four was 0.83 of the scatter between independent runs, the error of MBAR 0.28 (protocol.md, "Free energy and uncertainty of a leg") |
 | `analysis.lrc` | reweight | see protocol.md, long-range dispersion |
+| `analysis.lrc_cutoff_nm` | 2.0 nm | cuFEP's own choice. The explicit sum runs from `dynamics.cutoff_nm` to this radius (within 0.49 of the shortest height of the cell) and a homogeneous tail is added beyond it; a radius at or inside the cutoff is refused, because the interactions between it and the cutoff are already in the MD |
+| `dynamics.barostat_frequency` | 25 steps | default of OpenMM and of OpenFE's ABFE protocol. The replicas that share a GPU take turns in one OpenMM Context, and the Monte Carlo barostat counts the steps of the Context, not of a replica (OpenMM 8.4). Every stretch of MD that one configuration gets in one go (an iteration of a replica, `sampling.time_per_iteration_ps`; a window of the precalculation; the walks that make start configurations) must therefore have at least this many steps, or some replicas would never get a move of the box. A configuration that breaks this is refused before anything is written. The default iteration has 625 steps (2.5 ps at 4 fs) and gives every replica 25 moves |
+| `forcefield.water` | amber14/tip3p.xml | default of OpenFE's ABFE protocol. The water box is built with the model whose number of sites matches the file (measured with OpenMM 8.4: tip3p, tip3pfb, opc3 and spce with 3 sites, tip4pew, tip4pfb and opc with 4); other files are refused before anything is prepared. The bilayer is built with 3-site waters, so `membrane.enabled` needs a 3-site model |
 | `resources.oversubscription_factor` | from the size of the system: 16 up to 10,000 atoms, 8 up to 60,000, 4 up to 200,000, else 2 | measured total throughput per GPU under NVIDIA MPS |
 | `membrane.equilibration_ns` | 10 ns | cuFEP's own choice for a freshly built bilayer |
 | `membrane.area_tolerance`, `pocket_water_tolerance` | 0.01; 1.5 | cuFEP's own choice: the mean area in the membrane plane and the mean number of water molecules within 0.6 nm of the ligand are compared between the last two quarters of the equilibration. A larger change is reported with the result; the run is not made longer |

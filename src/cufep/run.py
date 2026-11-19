@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cufep import jsonio
 from cufep.config.auto import AutoReport, resolve
-from cufep.config.schema import Config, dump_config, read_settings
+from cufep.config.schema import Config, check_configuration, dump_config, read_settings
 from cufep import mps
 from cufep.analysis.plots import plot_repeat
 from cufep.benchmarks.runner import LEG_FLAGS, flags_of
@@ -23,6 +23,7 @@ def plan(cfg: Config, log=print) -> tuple[Config, AutoReport, object, list]:
     from cufep.prep.ligand import load_ligands
     from cufep.prep.protein import prepare_protein
 
+    check_configuration(cfg)
     ff = make_forcefield(ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water), [])
     protein = prepare_protein(cfg.system.protein, forcefield=ff, ph=cfg.thermodynamics.ph)
     for line in protein.report.lines():
@@ -90,6 +91,7 @@ def run(cfg: Config, reschedule: bool = False, log=None, only_ligands=None, only
     this to some legs; the binding free energies are then put together again with the results
     the other legs already have.
     """
+    check_configuration(cfg)                     # before the output directory is made
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)

@@ -37,6 +37,7 @@ class EquilibrationSettings:
     production_ns: float = 5.0
     frame_interval_ps: float = 20.0
     barostat: str = "isotropic"            # isotropic | membrane
+    barostat_frequency: int = 25           # MD steps between barostat moves (dynamics.barostat_frequency)
     platform: str = "CUDA"
     precision: str = "mixed"
     seed: int = 0
@@ -86,9 +87,11 @@ def _context(system: mm.System, backend, settings: EquilibrationSettings, dt_fs:
     if barostat:
         pressure = settings.pressure_bar * u.bar
         if settings.barostat == "membrane":
-            prepared.addForce(backend.make_membrane_barostat(pressure, temperature, 25, seed=seed + 1))
+            prepared.addForce(backend.make_membrane_barostat(pressure, temperature, settings.barostat_frequency,
+                                                              seed=seed + 1))
         else:
-            prepared.addForce(backend.make_isotropic_barostat(pressure, temperature, 25, seed=seed + 1))
+            prepared.addForce(backend.make_isotropic_barostat(pressure, temperature, settings.barostat_frequency,
+                                                              seed=seed + 1))
     if restraint_reference is not None and settings.restrained_atoms:
         force = mm.CustomExternalForce("0.5*k_posres*periodicdistance(x,y,z,x0,y0,z0)^2")
         force.addGlobalParameter("k_posres", settings.restraint_k)
@@ -222,7 +225,9 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
     pos, vel, bx = start
     ctx, integ = _context(system, backend, settings, dt_fs, device, True, None, settings.seed + 200)
     _load(ctx, pos, bx, vel)
-    per_frame = max(1, int(round(settings.frame_interval_ps * 1000.0 / dt_fs)))
+    from cufep.steps import md_steps
+
+    per_frame = md_steps(settings.frame_interval_ps, dt_fs)
     lig = np.asarray(settings.ligand_atoms, dtype=int)
     wat = np.asarray(settings.water_oxygens, dtype=int)
     frames, boxes, volumes, areas, waters = [], [], [], [], []

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Auto = Literal["auto"]
 
@@ -110,6 +110,11 @@ class DynamicsConfig(_Section):
     hmr_mass_amu: float = 3.0
     friction_per_ps: float = 1.0
     cutoff_nm: float = 0.9
+    #: MD steps between the moves of the Monte Carlo barostat (OpenMM's and OpenFE's default). The
+    #: replicas that share a GPU take turns in one OpenMM Context whose barostat counts the steps
+    #: of the Context, so every stretch of MD that one configuration gets in one go (an iteration
+    #: of a replica, a window of the precalculation) must have at least this many steps
+    barostat_frequency: int = Field(default=25, ge=1)
 
 
 class SolvationConfig(_Section):
@@ -421,6 +426,77 @@ class Config(_Section):
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     resources: ResourcesConfig = Field(default_factory=ResourcesConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+
+    @model_validator(mode="after")
+    def _settings_agree(self):
+        problems = configuration_problems(self)
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+
+def md_segments(cfg: "Config") -> list[tuple[str, int]]:
+    """Every stretch of MD that one configuration gets in one go in an OpenMM Context it shares
+    with other configurations, as (what it is in the words of the configuration, MD steps), at
+    the configured time step. A run whose pre-equilibration falls back to a shorter time step
+    makes each of them longer. Only the stretches the configured lambda schedule uses."""
+    from cufep.steps import md_steps, precalculation_steps
+
+    dt = float(cfg.dynamics.timestep_fs)
+    ls = cfg.lambda_schedule
+    out = [("sampling.time_per_iteration_ps (the MD of one replica in one iteration)",
+            md_steps(cfg.sampling.time_per_iteration_ps, dt))]
+    if ls.mode == "fixed" or ls.file is not None:
+        out.append(("lambda_schedule.fixed_walk_ps (the MD in each window that makes its start configuration)",
+                    md_steps(ls.fixed_walk_ps, dt)))
+    if ls.mode == "adaptive" and ls.file is None:
+        a = ls.adaptive
+        for leg in ("complex", "solvent"):
+            eq_steps, n_samples, per_sample = precalculation_steps(a.window(leg), a.equilibration(leg),
+                                                                   a.sample_interval_ps, dt)
+            out.append((f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
+                        "the precalculation)", eq_steps + n_samples * per_sample))
+        out.append(("lambda_schedule.adaptive.walk_ps (the MD in each window before the first iteration of the "
+                    "precalculation)", md_steps(a.walk_ps, dt)))
+    return out
+
+
+class ConfigurationError(ValueError):
+    """Settings that contradict each other."""
+
+
+def check_configuration(cfg: "Config") -> None:
+    """Raise :class:`ConfigurationError` with every problem of :func:`configuration_problems`.
+    The commands call it before they write anything, also after options of the command line have
+    changed settings of a configuration that was valid when it was read."""
+    problems = configuration_problems(cfg)
+    if problems:
+        raise ConfigurationError("; ".join(problems))
+
+
+def configuration_problems(cfg: "Config") -> list[str]:
+    """Settings that contradict each other, found without any input file: every problem in the
+    words of the configuration. :class:`Config` refuses to exist with one of them, so no command
+    gets as far as writing anything."""
+    from cufep.prep.water import water_problem
+    from cufep.steps import barostat_segment_problem
+
+    problems = []
+    # every configuration that shares a Context must get moves of the barostat
+    for what, steps in md_segments(cfg):
+        problem = barostat_segment_problem(steps, cfg.dynamics.barostat_frequency, what)
+        if problem:
+            problems.append(problem)
+    # the explicit tail of the dispersion starts where the real-space cutoff ends: an outer radius
+    # inside the cutoff would count the interactions between them, which the MD has, a second time
+    if cfg.analysis.lrc != "none" and not cfg.analysis.lrc_cutoff_nm > cfg.dynamics.cutoff_nm:
+        problems.append(f"analysis.lrc_cutoff_nm = {cfg.analysis.lrc_cutoff_nm:g} nm must be larger than "
+                        f"dynamics.cutoff_nm = {cfg.dynamics.cutoff_nm:g} nm: the tail correction (analysis.lrc = "
+                        f"{cfg.analysis.lrc}) adds the dispersion beyond the cutoff, from the cutoff outwards")
+    water = water_problem(cfg.forcefield.water, membrane=bool(cfg.membrane.enabled))
+    if water:
+        problems.append(water)
+    return problems
 
 
 #: Settings that earlier versions wrote (``cufep init --full``, ``resolved_config.yaml``) and

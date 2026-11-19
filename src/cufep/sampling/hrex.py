@@ -549,6 +549,8 @@ class ReplicaExchangeSampler:
         """
         if self.unrecorded and store:
             self.storage.refuse_unrecorded()
+        if steps is not None:                        # in this process: never a WorkerError
+            self.spec.check_segment(int(steps), f"the MD of one replica in one iteration ({int(steps)} steps asked)")
         self.start()
         stats: list[IterationStats] = []
         for _ in range(int(n_iterations)):

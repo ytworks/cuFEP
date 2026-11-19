@@ -253,3 +253,61 @@ def test_documented_defaults_are_the_defaults_of_the_code(repo):
             continue
         assert documented[section] == actual[section], f"docs/configuration.md and the code differ in '{section}'"
     assert set(documented) == set(actual)
+
+
+# ---- review of PR 1 on a3462a5: settings that contradict each other are refused when read ----------------
+
+def test_barostat_frequency_is_a_setting_and_every_shared_stretch_of_md_gets_moves(tmp_path):
+    """Review of PR 1 (P1): the barostat counts the steps of a Context that several replicas share, so
+    no replica may get fewer MD steps in one go than ``dynamics.barostat_frequency``."""
+    assert load_config(write(tmp_path, BASE)).dynamics.barostat_frequency == 25
+    # 0.02 ps at 4 fs are 5 steps per replica and iteration, the reviewer's case
+    with pytest.raises(Exception, match=r"time_per_iteration_ps .* 5 MD step\(s\), fewer than "
+                                        r"dynamics.barostat_frequency = 25"):
+        load_config(write(tmp_path, {**BASE, "sampling": {"time_per_iteration_ps": 0.02}}))
+    cfg = load_config(write(tmp_path, {**BASE, "sampling": {"time_per_iteration_ps": 0.02},
+                                       "dynamics": {"barostat_frequency": 5}}))
+    assert cfg.dynamics.barostat_frequency == 5
+    # the stretches of the precalculation count only where the lambda schedule uses them
+    with pytest.raises(Exception, match="walk_ps"):
+        load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"walk_ps": 0.05}}}))
+    load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "adaptive": {"walk_ps": 0.05}}}))
+    with pytest.raises(Exception, match="fixed_walk_ps"):
+        load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "fixed_walk_ps": 0.05}}))
+    with pytest.raises(Exception):
+        load_config(write(tmp_path, {**BASE, "dynamics": {"barostat_frequency": 0}}))
+
+
+def test_the_tail_correction_must_begin_beyond_the_real_space_cutoff(tmp_path):
+    """Review of PR 1 (P2): ``lrc_cutoff_nm`` 0.45 nm with a cutoff of 0.9 nm counted the dispersion
+    between 0.45 and 0.9 nm, which the MD has, a second time."""
+    with pytest.raises(Exception, match=r"analysis.lrc_cutoff_nm = 0.45 nm must be larger than dynamics.cutoff_nm"):
+        load_config(write(tmp_path, {**BASE, "analysis": {"lrc_cutoff_nm": 0.45}}))
+    with pytest.raises(Exception, match="must be larger"):
+        load_config(write(tmp_path, {**BASE, "analysis": {"lrc_cutoff_nm": 0.9}}))
+    load_config(write(tmp_path, {**BASE, "analysis": {"lrc_cutoff_nm": 0.45, "lrc": "none"}}))
+
+
+def test_the_water_model_is_one_cufep_can_build(tmp_path):
+    """Review of PR 1 (P2): ``amber14/tip4pew.xml`` was solvated with 3-site waters and createSystem failed."""
+    load_config(write(tmp_path, {**BASE, "forcefield": {"water": "amber14/tip4pew.xml"}}))
+    with pytest.raises(Exception, match="3-site"):
+        load_config(write(tmp_path, {**BASE, "forcefield": {"water": "amber14/tip4pew.xml"},
+                                     "membrane": {"enabled": True}}))
+    with pytest.raises(Exception, match="not a water model cuFEP can build"):
+        load_config(write(tmp_path, {**BASE, "forcefield": {"water": "amber14/tip5p.xml"}}))
+
+
+def test_settings_changed_after_reading_are_checked_before_anything_is_written(tmp_path):
+    """Options of the command line change a configuration that was valid when it was read; the run checks
+    the whole configuration again before it makes its output directory."""
+    from cufep import run as driver
+    from cufep.config.schema import ConfigurationError
+
+    cfg = load_config(write(tmp_path, {**BASE, "output": {"dir": str(tmp_path / "out")}}))
+    cfg.sampling.time_per_iteration_ps = 0.02           # a section checks its own fields only
+    with pytest.raises(ConfigurationError, match="barostat_frequency"):
+        driver.run(cfg)
+    assert not (tmp_path / "out").exists()
+    with pytest.raises(ConfigurationError, match="barostat_frequency"):
+        driver.plan(cfg)

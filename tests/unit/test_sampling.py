@@ -2143,8 +2143,76 @@ def tiny_leg(water_ligand_system):
     spec = LegSpec(name="tiny", system_xml=mm.XmlSerializer.serialize(alch.system),
                    states=[s.to_dict() for s in schedule.states], n_atoms=system.getNumParticles(),
                    backend="openmm", platform="CPU", precision="mixed", temperature_K=300.0, pressure_bar=1.0,
-                   barostat="isotropic", timestep_fs=2.0, steps_per_iteration=10, seed=5, frame_atoms=list(ligand))
+                   barostat="isotropic", barostat_frequency=5, timestep_fs=2.0, steps_per_iteration=10, seed=5,
+                   frame_atoms=list(ligand))
     return spec, pos, box
+
+
+def _volumes_of_replicas(spec, pos, box, n_replicas: int = 5, iterations: int = 40) -> list[int]:
+    """Advance ``n_replicas`` configurations in turn in one worker's Context without exchange and
+    count the distinct volumes each one took."""
+    import dataclasses as _dc
+
+    from cufep.sampling.worker import ReplicaWorker, SharedArrays
+
+    arrays = SharedArrays(n_replicas, spec.n_atoms, spec.n_states)
+    try:
+        for r in range(n_replicas):
+            arrays.pos[0, r], arrays.box[0, r] = pos, box
+        worker = ReplicaWorker(_dc.replace(spec), None, arrays)
+        assignments = [(r, r % spec.n_states) for r in range(n_replicas)]
+        seen: list[set] = [set() for _ in range(n_replicas)]
+        cur = 0
+        for it in range(iterations):
+            worker.run(cur, assignments, it, False)
+            cur = 1 - cur
+            for r in range(n_replicas):
+                seen[r].add(round(float(np.linalg.det(arrays.box[cur, r])), 12))
+        worker.close()
+        return [len(s) for s in seen]
+    finally:
+        arrays.close()
+
+
+def test_the_barostat_counts_the_steps_of_the_context_not_of_a_replica(tiny_leg, monkeypatch):
+    """Review of PR 1 (P1): five replicas of five steps per iteration and a frequency of 25, no
+    exchange: only the last replica of the worker ever got a move of the box ([1, 1, 1, 1, n]).
+    This is OpenMM's barostat (its counter belongs to the Context); cuFEP now refuses such a leg."""
+    import dataclasses as _dc
+
+    spec, pos, box = tiny_leg
+    monkeypatch.setattr(LegSpec, "check_segment", lambda self, steps, what="": None)   # the old behaviour
+    short = _dc.replace(spec, steps_per_iteration=5, barostat_frequency=25)
+    counts = _volumes_of_replicas(short, pos, box)
+    assert counts[:4] == [1, 1, 1, 1] and counts[4] > 1
+
+
+@pytest.mark.parametrize("steps", [25, 30])
+def test_every_replica_of_a_context_gets_moves_of_the_barostat(tiny_leg, steps):
+    """With at least ``barostat_frequency`` steps per replica and iteration every replica's volume moves,
+    also when the steps are not a multiple of the frequency."""
+    import dataclasses as _dc
+
+    spec, pos, box = tiny_leg
+    counts = _volumes_of_replicas(_dc.replace(spec, steps_per_iteration=steps, barostat_frequency=25), pos, box)
+    assert min(counts) > 1, counts
+
+
+def test_a_leg_whose_replicas_would_miss_the_barostat_is_refused_before_it_runs(tmp_path, tiny_leg):
+    import dataclasses as _dc
+
+    spec, pos, box = tiny_leg
+    with pytest.raises(ValueError, match="fewer than dynamics.barostat_frequency = 25"):
+        _dc.replace(spec, steps_per_iteration=5, barostat_frequency=25)
+    # without a barostat (constant volume) nothing is refused
+    _dc.replace(spec, steps_per_iteration=5, barostat_frequency=25, barostat="none")
+    # a shorter stretch asked of the sampler is refused in this process, before any worker runs it
+    leg = tmp_path / "hrex"
+    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        with pytest.raises(ValueError, match="fewer than dynamics.barostat_frequency = 5"):
+            s.run(1, steps=3)
+        assert s.iteration == 0
 
 
 def test_inline_replica_exchange_runs_resumes_and_analyses(tmp_path, tiny_leg):
