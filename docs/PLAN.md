@@ -37,11 +37,11 @@ precalculation だけで window を決める。解析で収束を判定する。
 | 1 | adaptive lambda scheduling を Cresset の方式に戻す。改訂 7 の途中で足した「equilibration の間の差し込み」(Cresset に無い動作) を取り除く。開始 window は restrain 3、discharge 5、vanish 9 | 済 |
 | 2 | 収束の解析: overlap、production の前半と後半の ΔG (forward と reverse)、推定量の比較 | 済 (protocol.md の "Checks of the analysis") |
 | 3 | production の後に、1 つの leg だけを window を増やすか時間を延ばして走らせ直す手段 | 済 (`cufep run --ligand --leg` と `--production-ns` または `--reschedule`。protocol.md の "When a leg is flagged") |
-| 4 | REST2 の既定値を、ベンチマークの数値で判断する | 未 |
-| 5 | イメージの凍結、GPU テスト、TYK2 example の所要時間 (GPU 8 個と 1 個) | 未 |
-| 6 | 確認: TYK2 の 5 リガンドで、window が足されないことと、overlap と収束が保たれることの関係を調べる | 未 |
-| 7 | A2A example | 未 (改訂 7 の時点の版では完走済み) |
-| 8 | ベンチマーク: TYK2 16 リガンド、A2A 17 リガンド。1 リガンド 1 回 | 未 |
+| 4 | REST2 の既定値を、ベンチマークの数値で判断する | 数値は出た (protocol.md の REST2 の "What was measured")。既定をどうするかはオーナーの判断待ち |
+| 5 | イメージの凍結、GPU テスト、TYK2 example の所要時間 (GPU 8 個と 1 個) | 済。GPU 8 個でも 1 個でも完走し、所要時間の目標を満たした |
+| 6 | 確認: TYK2 の 5 リガンドで、window が足されないことと、overlap と収束が保たれることの関係を調べる | 済 (protocol.md の "What was measured on TYK2")。complex leg では window が足されないまま overlap が 0.03 を下回る。設定の案はオーナーの判断待ち |
+| 7 | A2A example | 実行中 |
+| 8 | ベンチマーク: TYK2 16 リガンド、A2A 17 リガンド。1 リガンド 1 回 | 未 (手順 4 と 6 の判断の後) |
 | 9 | 文書、PR、CI、公式イメージ | 未 |
 
 adaptive lambda scheduling について分かっていること (protocol.md の "What was measured on TYK2"):

@@ -213,7 +213,9 @@ without replica exchange. For absolute binding they were checked on TYK2 with li
 (5 ns of production per window, replica exchange).
 
 *The solvent leg.* The overlaps of the precalculation hold in the production: a pair that
-the precalculation read at 0.042 had 0.038 in the production.
+the precalculation read at 0.042 had 0.038 in the production. On five TYK2 ligands with the
+default settings the precalculation added one window to the vanish stage of every solvent
+leg, and the lowest overlap in the production was 0.033 to 0.051.
 
 *The complex leg: what a 50 ps precalculation cannot see.* In the vanish stage, between
 lambda 0.62 and 0.88, side chains of the pocket (VAL981, ILE960) change rotamer once the
@@ -224,17 +226,26 @@ precalculation read at least 0.14 everywhere and added no window had lowest over
 0.022 and 0.055 in the production. A precalculation of 1 ns per window read 0.105 and 0.015
 there, and took as long as several more windows of production.
 
-So in a complex leg the schedule of the precalculation can leave a pair of windows below
-the warning level. The result then says `NOT RELIABLE` and names the pair, and the remedy
-is the one of Flare: more windows in that stage (`lambda_schedule.adaptive.initial_windows`,
-or `lambda_schedule.windows` with `mode: fixed`) and a new run of that leg ("When a leg is
-flagged"). For orientation:
+The same happened on five other TYK2 ligands with the default settings (one run each). The
+precalculation added no window to any of the five complex legs. In all five the lowest pair
+of the production was lambda 0.75-0.88 of the vanish stage: the precalculation had read 0.058
+to 0.129 there, the production had 0.008 to 0.031, a replica moved between the two windows in
+at most 0.5 % of the iterations, and four of the five results were `NOT RELIABLE`.
 
-| TYK2 ejm_31, complex leg | windows | lowest overlap in production |
+So in a complex leg the schedule of the precalculation can leave a pair of windows below
+the warning level, and on TYK2 it usually does. The result then says `NOT RELIABLE` and
+names the pair, and the remedy is the one of Flare: more windows in that stage
+(`lambda_schedule.adaptive.initial_windows`, or `lambda_schedule.windows` with `mode: fixed`)
+and a new run of that leg ("When a leg is flagged"). The four legs above, started anew with
+13 initial vanish windows, had lowest overlaps of 0.067 to 0.139. For orientation:
+
+| TYK2, complex leg | windows | lowest overlap in production |
 |---|---|---|
-| start 3 / 5 / 9 (the default), two runs | 15 | 0.022 and 0.055 |
-| start 3 / 5 / 13, four runs | 19 | 0.092-0.145 |
-| fixed windows (`lambda_schedule.windows`), three runs | 30 | 0.119-0.127 |
+| start 3 / 5 / 9 (the default), ejm_31, four runs | 15 | 0.022, 0.041, 0.055, 0.070 |
+| start 3 / 5 / 9 (the default), five other ligands | 15 | 0.008-0.031 |
+| start 3 / 5 / 13, ejm_31, four runs | 19 | 0.092-0.145 |
+| start 3 / 5 / 13, four other ligands | 19 | 0.067-0.139 |
+| fixed windows (`lambda_schedule.windows`), ejm_31, three runs | 30 | 0.119-0.127 |
 
 *Why the threshold stays at 0.04.* An element of the overlap matrix is shared among all
 windows that overlap. Windows that are close to each other therefore have superdiagonal
@@ -295,6 +306,18 @@ the candidates of adaptive lambda scheduling have it too: the precalculation run
 compares windows with their REST2 scaling, and adds windows where the scaling lowers the
 overlap.
 
+What was measured. On five TYK2 ligands, REST2 with the ligand as the hot region raised the
+free energy of the complex leg relative to runs without REST2: by 1.0 kcal/mol at a scale
+of 1.5 (in five of five ligands, in two independent sets of runs) and by 2.2 kcal/mol at 2.5.
+The solvent leg did not change at 1.5. The binding free energies moved away from experiment
+(mean signed error -2.1 against -1.1 kcal/mol). Both ends of a leg are physical states, so a
+converged leg cannot depend on the scale; the shift says that the windows in between are not
+in equilibrium with each other. The replicas of the complex leg make no round trip between
+the ends, with or without REST2: with the few windows that adaptive lambda scheduling chooses,
+neighbours exchange too rarely for what is sampled in the hot windows to reach the ends. FEP+
+runs REST2 with 80 windows in the complex leg. As it stands, REST2 does not improve cuFEP's
+results on TYK2.
+
 Only the free energy of a whole leg is a physical quantity then. The scale is not 1 where one
 stage ends and the next begins, so the free energies of the single stages in the results
 (`stage_delta_g`) contain the free energy of scaling the hot region up and down again: the
@@ -337,6 +360,14 @@ below 0.03, a convergence analysis, and a comparison of TI and MBAR.
 
 With independent samples a half of the data differs from the whole by about one standard
 error, so at a tolerance of 2 about one leg in twenty is flagged by chance.
+
+What the checks say about TYK2. Read again with these checks, 88 legs of earlier runs with
+5 ns of production per window (most with 19 and 21 windows) gave: overlap below 0.03 in 1
+complex leg; `NOT CONVERGED` in 30 of 44 complex legs and in 16 of 44 solvent legs; BAR and
+MBAR never apart. In the complex legs a half of the production typically differs from the
+whole by 0.3 to 0.8 kcal/mol where the tolerance is about 0.3. Longer runs do not simply
+cure this: one complex leg that was continued from 5 to 10 ns moved by 1.4 kcal/mol and its
+uncertainty rose from 0.2 to 0.7 kcal/mol, because a slow change occurred in the second half.
 
 `analysis.png` in each repeat directory shows, for both legs, the forward and reverse series
 (the free energy from growing parts of the production, counted from its start and from its
