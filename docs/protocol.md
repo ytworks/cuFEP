@@ -387,9 +387,9 @@ values are not public.
 ## Limits of version 0.1
 
 Neutral ligands only. No cofactors yet. No symmetry correction (the ligand's graph
-symmetry number is reported). Symmetric POPC-type bilayers only. No enhanced sampling of the
-binding site or of the ligand (REST2) and no grand canonical water sampling: slow
-rearrangements, such as a pocket side-chain rotamer that differs with and without the ligand
-or a ligand torsion that turns over once in a few nanoseconds in water, are sampled only as
-far as replica exchange between lambda windows carries them. Where they matter, repeats of a
-calculation differ by more than the reported MBAR uncertainty; `sampling.repeats` shows it.
+symmetry number is reported); a small symmetric ligand that turns over in its pocket leaves
+the unrestrained window without overlap, which the result line reports. Symmetric POPC-type
+bilayers only. No grand canonical water sampling. REST2 covers the ligand by default; slow
+rearrangements of the pocket, such as a side-chain rotamer that differs with and without the
+ligand, are sampled faster only if their residues are put into the hot region
+(`sampling.rest2.region: pocket` or `sampling.rest2.residues`).

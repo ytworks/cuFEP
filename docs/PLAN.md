@@ -31,7 +31,7 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 | 0 | 旧方式の実行を止める。OpenFE の参照計算は続ける | 済 |
 | 1 | 膜判定を削除し、`membrane.enabled` にする | 済 |
 | 2a | 状態エネルギーの正しさ: `setPositions` の直後に soft-core の力グループだけを評価すると neighbor list が古いまま使われる問題を特定して修正 (M0_REPORT.md) | 済 |
-| 2b | TYK2 ejm_31 の complex leg が repeat の間で 4.6 kcal/mol 開く原因の調査 | 原因を特定 (下記。complex leg の側鎖の回転異性体と、solvent leg のリガンドの二面角)。対策は REST2 (オーナーの決定)。実装済みで、推奨値を測定中 |
+| 2b | TYK2 ejm_31 の complex leg が repeat の間で 4.6 kcal/mol 開く原因の調査 | 原因を特定 (下記。complex leg の側鎖の回転異性体と、solvent leg のリガンドの二面角)。対策は REST2 (オーナーの決定)。実装し、既定にした (リガンドを hot region に、leg の中央で 2.5 倍の温度) |
 | 3 | 速度の実測: MPS の oversubscription、iteration の内訳、GPU 数に対するスケーリング、pre-equilibration | 済 (GPU 8 個と膜系は後の手順で測る) |
 | 4 | 設定スキーマを作り替える。fixed の推奨値を設定の `windows` で与える | 済 |
 | 5 | GPU の割当を作り替える。MPS、仕事量に比例した配分、worker の増減、`timing.json` | 済 |
@@ -131,9 +131,9 @@ FEP+ は結合部位とリガンドの REST2 と水の GCMC でこの種の問�
 
 **オーナーの決定 (2026-11-19): REST2 を入れる。** 実装は protocol.md の "REST2" に書いた
 (Wang, Friesner, Berne 2011 の式、Sire / SOMD2 と同じ項の扱い、leg に沿った三角形の
-スケジュール)。`sampling.rest2` で設定する。推奨値 (scale と hot region) は TYK2 ejm_31 で
-測って決める。見る量は、solvent leg のアセトアミドの二面角と complex leg の ILE960 / VAL981 の
-回転異性体が物理状態の window で入れ替わる回数と、同じ設定の実行の間の開きである。
+スケジュール)。`sampling.rest2` で設定する。既定は on で、hot region はリガンド (FEP+ と
+SOMD2 の既定)、scale は 2.5 (298 K で 745 K。根拠は configuration.md)。ポケットの残基は
+`sampling.rest2.region: pocket` か `sampling.rest2.residues` で hot region に足せる。
 
 REST2 を入れる前の 5 リガンドの値 (既定設定、同じ設定で 3 回。開きを測るための実行で、
 ベンチマークではない):
