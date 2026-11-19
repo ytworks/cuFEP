@@ -2,10 +2,12 @@
 replaced manifest, restart state in an atomically written NPZ."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import h5py
 import numpy as np
@@ -206,17 +208,29 @@ SEGMENT_PATTERN = "segment_{:06d}.h5"
 WRITING = ".writing"
 
 
+#: what a system says when it cannot make a directory durable: passed over for directories only
+_NO_DIRECTORY_SYNC = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EBADF, errno.EISDIR, errno.EACCES}
+
+
 def _fsync_path(path: Path) -> None:
-    """Make what was written to ``path`` (a file, or a directory and its entries) durable; where
-    the system cannot, nothing is done."""
+    """Make what was written to ``path`` (a file, or a directory and its entries) durable.
+
+    An error of a file is raised (review of PR 1: an EIO of the fsync of a part was passed over, and
+    the checkpoint that named it replaced the one before). A directory that the system cannot sync
+    (EINVAL, ENOTSUP ...) is passed over; any other error of a directory is raised too."""
+    path = Path(path)
+    directory = path.is_dir()
     try:
         fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
+    except OSError as exc:
+        if directory and exc.errno in _NO_DIRECTORY_SYNC:
+            return
+        raise
     try:
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        if not (directory and exc.errno in _NO_DIRECTORY_SYNC):
+            raise
     finally:
         os.close(fd)
 
@@ -264,6 +278,13 @@ def stored_layout(directory: str | Path) -> tuple[list[tuple[Path, int, int, int
     d = Path(directory)
     manifest = read_manifest(d)
     if manifest is None:
+        parts = sorted(p.name for p in d.glob("segment_*.h5"))
+        if parts:
+            raise StorageError(
+                f"{d} holds parts of samples ({', '.join(parts[:3])}{' ...' if len(parts) > 3 else ''}) but no "
+                f"{MANIFEST} that names them; the leg is damaged and nothing was changed. If its {MANIFEST} was "
+                "moved away, put it back; if the run of an earlier version stopped at its first write, these parts "
+                "were never stored and can be moved away")
         path = d / "samples.h5"
         if not path.exists():
             return [], {}
@@ -371,6 +392,16 @@ def read_samples(directory: str | Path) -> dict:
     return _read(directory, ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS)
 
 
+class _Memory(NamedTuple):
+    """What a LegStorage holds in memory: the rows of the iterations not stored yet, their records,
+    and the part a write was storing them to with how many of each it took (None if no write is
+    under way). Replaced as one object, so that an interrupt (Ctrl-C) leaves either the state before
+    or the state after, never a part of each."""
+    rows: list
+    records: list
+    pending: tuple | None
+
+
 def _segment_number(path: Path) -> int | None:
     name = path.name.split(".")[0]
     if not name.startswith("segment_"):
@@ -419,11 +450,16 @@ class LegStorage:
         self.h5_path = self.dir / "samples.h5"
         self.ckpt_path = self.dir / "checkpoint.npz"
         self.n_replicas, self.n_states, self.n_frame_atoms = n_replicas, n_states, n_frame_atoms
-        #: iterations that are not stored yet: (u, states, volume) each, and the records (row, tail
-        #: energy and frame of the coupled state) that belong to them
-        self._rows: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
-        self._records: list[tuple[int, dict]] = []
+        #: iterations that are not stored yet: (u, states, volume) each, the records (row, tail energy
+        #: and frame of the coupled state) that belong to them, and the write under way (_Memory)
+        self._mem = _Memory([], [], None)
         if not self.h5_path.exists():
+            # an empty samples.h5 is made only for a leg that has nothing else: a leg whose samples.h5 is
+            # gone but that has a manifest or parts is damaged, and nothing is made or removed (review of PR 1)
+            if (self.dir / MANIFEST).exists() or any(self.dir.glob("segment_*.h5")):
+                raise StorageError(f"{self.dir} has a {MANIFEST} or parts of samples but no samples.h5; the leg is "
+                                   "damaged and nothing was changed. Put samples.h5 back, or start the leg anew with "
+                                   "--reschedule")
             part = self.h5_path.with_name(self.h5_path.name + WRITING)
             with h5py.File(part, "w") as h5:
                 k, s = n_replicas, n_states
@@ -447,8 +483,8 @@ class LegStorage:
             if h5["u"].shape[1:] != (n_replicas, n_states):
                 raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")
             self._has_frames = "frames" in h5
+        self._load()                     # refuses parts that no manifest names (stored_layout)
         self._remove_unused()
-        self._load()
 
     def _load(self) -> None:
         """What is stored: the parts and their counts (:func:`stored_layout`)."""
@@ -545,8 +581,30 @@ class LegStorage:
         self._set_attrs({"n_equilibration_iterations": 0}, remove=("n_planned_iterations",))
 
     @property
+    def _rows(self) -> list:
+        return self._mem.rows
+
+    @property
+    def _records(self) -> list:
+        return self._mem.records
+
+    def _settle(self) -> None:
+        """If a write was under way and its part is named by the manifest (an interrupt came after it
+        was stored), drop from memory what that part holds; then no write is under way."""
+        mem = self._mem
+        if mem.pending is None:
+            return
+        target, rows, records = mem.pending
+        self._load()
+        if any(path == target for path, *_counts in self._parts):
+            self._mem = _Memory(mem.rows[rows:], mem.records[records:], None)
+        else:
+            self._mem = _Memory(mem.rows, mem.records, None)
+
+    @property
     def n_iterations(self) -> int:
         """Iterations this storage holds: those stored and those still in memory."""
+        self._settle()
         return self._stored + len(self._rows)
 
     @property
@@ -557,7 +615,7 @@ class LegStorage:
     # -- appending ------------------------------------------------------------------
     def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray) -> int:
         n = self.n_iterations
-        self._rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8")))
+        self._mem.rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8")))
         return n
 
     def append_record(self, iteration: int, record: dict) -> None:
@@ -568,7 +626,7 @@ class LegStorage:
             kept["frame"] = np.array(record["frame"], dtype="f4")
             kept["box"] = np.array(record["box"], dtype="f4")
         if kept:
-            self._records.append((int(iteration), kept))
+            self._mem.records.append((int(iteration), kept))
 
     def _next_segment(self) -> Path:
         """A name no manifest has named: one more than the number of parts made (which the manifest
@@ -584,7 +642,9 @@ class LegStorage:
         opens the leg, does this; a reader that meets a part gone reads the manifest again (_read)."""
         manifest = read_manifest(self.dir)
         named = set() if manifest is None else {str(part["file"]) for part in manifest["parts"]}
-        for path in [*self.dir.glob("segment_*"), self.dir / (MANIFEST + WRITING), self.dir / ("samples.h5" + WRITING)]:
+        # without a manifest there are no parts (stored_layout refuses them): only what writes left
+        leftovers = list(self.dir.glob("segment_*" + WRITING)) if manifest is None else list(self.dir.glob("segment_*"))
+        for path in [*leftovers, self.dir / (MANIFEST + WRITING), self.dir / ("samples.h5" + WRITING)]:
             if path.name not in named and path.exists():
                 try:
                     path.unlink()
@@ -623,12 +683,19 @@ class LegStorage:
         memory; calling it again writes them again, as a part of another name. ``wait_s`` is not
         used: no file is shared with a reader, so nothing has to be waited for.
         """
+        self._settle()                   # what an interrupted write stored is not stored again
         if not self._rows and not self._records:
             return True
         tail = [(it, record["lrc_du"]) for it, record in self._records if "lrc_du" in record]
         frames = [(it, record) for it, record in self._records if "frame" in record]
         target = self._next_segment()
+        mem = self._mem
+        self._mem = _Memory(mem.rows, mem.records, (target, len(mem.rows), len(mem.records)))
         try:
+            if read_manifest(self.dir) is None:
+                # samples of an earlier version get their manifest before their first part, so that no part
+                # exists that no manifest names (stored_layout refuses such parts as damage)
+                _write_manifest(self.dir, self._manifest())
             self._write_segment(target, tail, frames)
             manifest = self._manifest()
             manifest["parts"] = list(manifest["parts"]) + [
@@ -637,23 +704,17 @@ class LegStorage:
             _write_manifest(self.dir, manifest)             # from here on the part is stored
         except BaseException as exc:  # noqa: BLE001  an error or an interrupt (Ctrl-C), at any point
             # what is stored is what the manifest names: if it names the new part, the iterations are
-            # stored and must not stay in memory, whatever ended the write (review of PR 1: an interrupt
-            # after the manifest was replaced left them in memory, and the close stored them twice)
-            self._load()
-            if any(path == target for path, *_counts in self._parts):
-                self._rows.clear()
-                self._records.clear()
+            # stored and leave the memory, whatever ended the write (review of PR 1: an interrupt after
+            # the manifest was replaced left them in memory, and the close stored them twice)
+            self._settle()
+            if any(path == target for path, *_counts in self._parts) or not isinstance(exc, Exception):
                 if isinstance(exc, Exception):
                     return True
-                raise
-            if not isinstance(exc, Exception):
                 raise
             raise StorageError(f"the {len(self._rows)} iteration(s) after iteration {self._stored} could not be "
                                f"stored in {self.dir} ({type(exc).__name__}: {exc}); the {self._stored} before "
                                "them are stored, and these are kept in memory") from exc
-        self._rows.clear()
-        self._records.clear()
-        self._load()
+        self._settle()                   # the part is named: what it holds leaves the memory
         return True
 
     def truncate(self, n_iterations: int) -> None:
@@ -661,8 +722,10 @@ class LegStorage:
         manifest is replaced by one that names that many rows and the records of those rows; no
         part is changed."""
         n_iterations = int(n_iterations)
-        del self._rows[max(0, n_iterations - self._stored):]
-        self._records = [(it, record) for it, record in self._records if it < n_iterations]
+        self._settle()
+        mem = self._mem
+        self._mem = _Memory(mem.rows[:max(0, n_iterations - self._stored)],
+                            [(it, record) for it, record in mem.records if it < n_iterations], None)
         self._load()                                  # the parts and the manifest read together, now
         if n_iterations >= self._stored:
             return
@@ -691,12 +754,25 @@ class LegStorage:
         failure raises (StorageError) with the earlier checkpoint and samples as they were."""
         self.flush(wait_s)
         tmp = self.ckpt_path.with_suffix(".tmp.npz")
-        np.savez(tmp, positions=positions, velocities=velocities, boxes=boxes,
-                 state_of_replica=np.asarray(state_of_replica), iteration=int(iteration),
-                 extra=json.dumps(extra or {}))
-        _fsync_path(tmp)
+        try:
+            np.savez(tmp, positions=positions, velocities=velocities, boxes=boxes,
+                     state_of_replica=np.asarray(state_of_replica), iteration=int(iteration),
+                     extra=json.dumps(extra or {}))
+            _fsync_path(tmp)
+        except Exception as exc:  # noqa: BLE001  the checkpoint before it stays
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise StorageError(f"the checkpoint at iteration {iteration} could not be written in {self.dir} "
+                               f"({type(exc).__name__}: {exc}); the one before it is kept, with the samples it "
+                               "names") from exc
         _replace(tmp, self.ckpt_path)
-        _fsync_path(self.dir)
+        try:
+            _fsync_path(self.dir)
+        except OSError as exc:
+            raise StorageError(f"the checkpoint at iteration {iteration} was written in {self.dir}, but the directory "
+                               f"could not be made durable ({type(exc).__name__}: {exc})") from exc
         return True
 
     def read_checkpoint(self) -> dict | None:

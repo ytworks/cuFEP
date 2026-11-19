@@ -421,8 +421,39 @@ def leg_is_complete(leg_hrex: Path, total: int) -> bool:
     with np.load(path, allow_pickle=False) as data:
         extra = json.loads(str(data["extra"])) if "extra" in data.files else {}
         iteration = int(data["iteration"])
-    named = int(extra["rows"]) if "rows" in extra else iteration
-    return named >= total and stored_attributes(leg_hrex)[0] == named
+    stored, attrs = stored_attributes(leg_hrex)
+    if "rows" in extra:
+        return int(extra["rows"]) >= total and stored == int(extra["rows"])
+    # a checkpoint of an earlier version does not say which rows are its own: after a warm-up that was
+    # not stored, its iteration and the rows stored after it can add up to the same number (review of
+    # PR 1). Such a leg is complete only if the result of its finished run was made from exactly the
+    # rows it holds (result.previous.json once a run of the leg has begun)
+    for name in ("result.json", "result.previous.json"):
+        result_path = Path(leg_hrex).parent / name
+        if result_path.exists():
+            try:
+                data = json.loads(result_path.read_text())
+            except ValueError:
+                return False
+            used = data.get("n_iterations_stored")
+            production = (data.get("analysis") or {}).get("n_iterations_used")
+            if used is None and isinstance(production, int):
+                used = production + int(attrs.get("n_equilibration_iterations", 0))
+            return used == stored == iteration and iteration >= total
+    return False
+
+
+def take_complete_leg(storage, n_equilibration: int, total: int, cfg, log=print) -> None:
+    """A leg that holds all its iterations (:func:`leg_is_complete`) is analysed as it is, with the
+    boundary of the equilibration of this run, which can differ from that of the run that made its
+    samples (review of PR 1: 20 + 100 iterations asked for as 40 + 80 were analysed with 20). The
+    plan of this run is recorded with the samples, so that a later analysis takes the same."""
+    log(f"the leg holds all its {total} iterations; its samples are analysed as they are")
+    before = storage.attributes().get("n_equilibration_iterations")
+    if before is not None and int(before) != int(n_equilibration):
+        log(f"the first {n_equilibration} of its iterations are equilibration in this run ({before} in the run that "
+            "made them)")
+    storage.set_plan(n_equilibration, total, analysis_record(cfg))
 
 
 def old_checkpoint_refusal(leg_hrex: Path) -> str | None:
@@ -1330,7 +1361,7 @@ def run_leg(job: LegJob) -> dict:
             if not sampler.storage.n_iterations - sampler.storage.n_stored and leg_is_complete(hrex_dir, total):
                 # the leg has all its iterations: nothing to continue, its samples are analysed as they are
                 # (whatever version wrote its checkpoint)
-                log(f"the leg holds all its {total} iterations; its samples are analysed as they are")
+                take_complete_leg(sampler.storage, n_equil, total, cfg, log)
                 timed("sampling", t_sampling)
                 return read_samples(hrex_dir), schedule
             if not sampler.restore():
@@ -1891,6 +1922,7 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "prepared_systems_sha256": run.get("prepared_systems_sha256"),
         "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
         "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
+        "n_iterations_stored": int(samples["u"].shape[0]), "n_equilibration_iterations": int(n_equilibration),
         # decoupling with the full LJ range (MBAR minus the tail correction of the same iterations),
         # its standard error (cufep.analysis.mbar.TimeRangeEstimator), and the MBAR part alone
         "delta_g_decouple": res.delta_g, "delta_g_error": res.delta_g_error,
@@ -1947,6 +1979,10 @@ def quality_warnings(result: dict, cfg) -> list[str]:
         return "" if where is None else f" ({where[0]} stage, lambda {where[1]:g} and {where[2]:g})"
 
     out = []
+    if a.get("not_determined"):
+        # the leg has no free energy; the ligand counts it as failed (combine_ligand)
+        out.append(f"NO FREE ENERGY: {a['not_determined']}. Give the lambda windows more overlap and run this "
+                   f"leg again: cufep run CONFIG --ligand NAME --leg {leg} --reschedule")
     ov = q["overlap"]
     all_ok = ov.get("all_ok", ov["ok"])            # the matrix of all iterations, equal numbers per window
     more_windows = (f"lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) "
@@ -2265,9 +2301,13 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
         # an earlier version holds MBAR's alone) and the one MBAR gives
         reported = [leg["delta_g_error"] if isinstance(leg.get("delta_g_error"), (int, float)) else leg["delta_g_mbar_error"]
                     for leg in (c, s)]
+        # MBAR's own error is shown next to the reported one; a leg without it (pymbar gave none) is
+        # combined all the same, and the ligand has none (review of PR 1: np.hypot(None, ...) stopped it)
+        own = [leg.get("delta_g_mbar_error") for leg in (c, s)]
+        own = [float(x) if isinstance(x, (int, float)) and np.isfinite(x) else None for x in own]
         per_repeat.append({
             "repeat": r, "dg_bind": dg, "error": float(np.hypot(*reported)),
-            "mbar_error": float(np.hypot(c["delta_g_mbar_error"], s["delta_g_mbar_error"])),
+            "mbar_error": float(np.hypot(*own)) if None not in own else None,
             "error_from_time_blocks": all(error_from_time_blocks(leg) for leg in (c, s)),
             "dg_complex": c["delta_g_decouple"],
             "dg_solvent": s["delta_g_decouple"], "restraint_release": c["restraint_release"],
@@ -2336,7 +2376,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
         # and whether it is from time blocks in every leg
         out["dg_bind_error"] = float(np.sqrt(np.mean([(p["error"] / KCAL) ** 2 for p in per_repeat])))
         out["dg_bind_error_from_time_blocks"] = all(p["error_from_time_blocks"] for p in per_repeat)
-        out["dg_bind_mbar_error"] = float(np.sqrt(np.mean([(p["mbar_error"] / KCAL) ** 2 for p in per_repeat])))
+        out["dg_bind_mbar_error"] = (float(np.sqrt(np.mean([(p["mbar_error"] / KCAL) ** 2 for p in per_repeat])))
+                                     if all(p["mbar_error"] is not None for p in per_repeat) else None)
         out["min_overlap"] = float(min(min(p["min_overlap"].values()) for p in per_repeat))
         used = [v for p in per_repeat for v in p["min_overlap_used"].values() if v is not None]
         out["min_overlap_used"] = float(min(used)) if used else None
@@ -2346,7 +2387,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
         for p in per_repeat:
             q = dict(p)
             for k in energy_keys:
-                q[k] = p[k] / KCAL
+                q[k] = None if p[k] is None else p[k] / KCAL
             for k in ("stage_complex", "stage_solvent"):
                 q[k] = {name: value / KCAL for name, value in p[k].items()}
             converted.append(q)

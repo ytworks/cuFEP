@@ -129,14 +129,15 @@ def test_analysis_of_a_leg_with_a_window_that_overlaps_no_other_is_bounded():
     assert time.perf_counter() - t0 < 60.0
     assert res.min_overlap < 1e-6
     # no part of such a leg has a determined free energy (review of PR 1: the solver returned its start
-    # value for them): only the whole is shown, flagged by its own overlap; the parts say why they are not
-    assert [point[0] for point in res.forward] == [1.0] == [point[0] for point in res.reverse]
-    assert res.forward[-1][1] == res.delta_g and res.reverse[-1][1] == res.delta_g
-    assert len(res.parts_not_determined) == 18 + 5 and "the samples do not connect the lambda windows" in \
+    # value for them), and neither has the whole (review of PR 1 on f515d9a: windows without connecting
+    # samples gave 0 +- 0): the leg has no free energy and says why; every part says why it has none
+    assert np.isnan(res.delta_g) and np.isnan(res.delta_g_error)
+    assert res.not_determined.startswith("the samples do not connect the lambda windows")
+    assert res.forward == [] and res.reverse == [] and res.blocks == []
+    assert len(res.parts_not_determined) == 20 + 5 and "the samples do not connect the lambda windows" in \
         res.parts_not_determined[0]
-    assert res.blocks == [] and "the first half (iterations 0-750 of the production): the samples do not connect" \
-        in res.convergence_note
-    assert all(value is None for value in res.delta_g_error_blocks.values()) and res.delta_g_error_from == "analytical"
+    assert "the first half (iterations 0-750 of the production): the samples do not connect" in res.convergence_note
+    assert all(value is None for value in res.delta_g_error_blocks.values())
 
 
 def test_bar_between_neighbours_agrees_with_mbar():
@@ -729,10 +730,23 @@ def _two_harmonic_windows(seed, n, separation):
     return {"u": u, "states": np.tile(np.arange(2), (n, 1))}
 
 
+def _connected_only_at_first(seed=3, n=600):
+    """Two windows whose samples share configurations only in the first 120 iterations (afterwards the
+    cross energies are 1500 kT): the whole is determined and well conditioned, the parts without those
+    iterations are exactly unconnected. Numbers that do not depend on the platform (review of PR 1: a
+    weakly connected pair gave an analytical error of 79.8 here and 86.0 on another platform)."""
+    rng = np.random.default_rng(seed)
+    centres = np.array([0.0, 1.0])
+    x = centres[None, :] + rng.normal(size=(n, 2))
+    u = 0.5 * (x[:, :, None] - centres[None, None, :]) ** 2
+    u[120:, 0, 1] = u[120:, 1, 0] = 1500.0
+    return {"u": u, "states": np.tile(np.arange(2), (n, 1))}
+
+
 def golden_analysis():
     """The numbers of the analysis of fixed inputs: a leg with a tail correction whose error comes from time
     blocks; one too short for blocks (the analytical error); a leg whose halves lie below the level of
-    overlap (shown with a warning); and windows that share too little for the halves to be determined."""
+    overlap (shown with a warning); and windows connected only at first, whose later parts are not determined."""
     import dataclasses
     from unittest import mock
 
@@ -744,7 +758,7 @@ def golden_analysis():
     cases = [("long", long_leg, dict(tail="reweight", error_blocks=(40, 20, 10, 5)), False),
              ("short", short_leg, dict(tail="reweight", error_blocks=(1000,)), False),
              ("below the level", _two_harmonic_windows(0, 600, 3.2), dict(min_overlap=0.0813), True),
-             ("hardly connected", _two_harmonic_windows(1, 400, 8.5), {}, True)]
+             ("connected only at first", _connected_only_at_first(), {}, True)]
     for name, samples, settings, independent in cases:
         with mock.patch.object(mbar, "neighbour_inefficiencies",
                                (lambda u, states: np.ones((u.shape[2], 2))) if independent else mbar.neighbour_inefficiencies):
@@ -1521,6 +1535,38 @@ def test_a_leg_cut_to_nothing_reads_as_holding_no_samples(tmp_path):
     assert shown.exit_code == 1 and "no production yet" in shown.output and "Traceback" not in shown.output
 
 
+def test_an_interrupt_after_the_part_is_named_is_read_and_closed_without_twice(tmp_path, monkeypatch):
+    """Review of PR 1 (f515d9a, 3): Ctrl-C after the four new rows were named by the manifest and before the
+    memory was emptied: the close stored them again, and an analysis right after the interrupt read 14
+    iterations of 10. The rows and the write under way are one object (_Memory); any later write first drops
+    what the manifest already names."""
+    import cufep.sampling.storage as storage_module
+
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 6), 0)
+    st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6, {"start": 0, "rows": 6})
+    _fill(st, _rows(6, 4), 6)
+    real_settle, fired = LegStorage._settle, []
+
+    def settle(self):
+        named = self._mem.pending is not None and storage_module.read_manifest(self.dir)["parts"][-1]["file"] == \
+            self._mem.pending[0].name
+        if named and not fired:                       # the moment after the manifest, before the memory is emptied
+            fired.append(1)
+            raise KeyboardInterrupt
+        return real_settle(self)
+
+    monkeypatch.setattr(LegStorage, "_settle", settle)
+    with pytest.raises(KeyboardInterrupt):
+        st.flush()
+    assert fired
+    _assert_exactly(tmp_path / "leg", 10)                       # an analysis right after the interrupt
+    st.close()                                                  # as the sampler does on its way out
+    _assert_exactly(tmp_path / "leg", 10)
+    assert st.n_iterations == st.n_stored == 10
+    _parts_are_distinct_and_whole(tmp_path / "leg")
+
+
 def _earlier_leg(directory, n=8, counts=True):
     """A leg of ``n`` iterations as a version before the manifest left it."""
     from conftest import as_earlier_version
@@ -1585,15 +1631,13 @@ def test_the_first_write_to_a_leg_of_an_earlier_version_that_fails_changes_nothi
     _fill(st, _rows(6, 4), 6)
     failed = []
     _inject(monkeypatch, step, failed)
-    if step == "after the manifest":
+    # the first manifest, which names samples.h5 alone, is written before the first part: a failure "after
+    # the manifest" is one after that first manifest, and nothing new is stored yet
+    with pytest.raises(StorageError, match="injected"):
         st.flush()
-        _assert_exactly(tmp_path / "leg", 10)
-    else:
-        with pytest.raises(StorageError, match="injected"):
-            st.flush()
-        _assert_exactly(tmp_path / "leg", 6)
-        st.close()
-        _assert_exactly(tmp_path / "leg", 10)
+    _assert_exactly(tmp_path / "leg", 6)
+    st.close()
+    _assert_exactly(tmp_path / "leg", 10)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     _parts_are_distinct_and_whole(tmp_path / "leg")
 
@@ -1669,13 +1713,16 @@ def _add_and_die(directory, step):
         storage_module._replace = replace
     elif step == "while the manifest is written":
         def write_manifest(directory, manifest):
+            if not any(part["file"].startswith("segment_") for part in manifest["parts"]):
+                return real_manifest(directory, manifest)      # the first manifest of a file of an earlier version
             (pathlib.Path(directory) / "manifest.json.writing").write_text('{"parts": [')
             os._exit(71)
         storage_module._write_manifest = write_manifest
     else:
         def write_manifest(directory, manifest):
             real_manifest(directory, manifest)
-            os._exit(71)
+            if any(part["file"].startswith("segment_") for part in manifest["parts"]):
+                os._exit(71)                                   # once the manifest names the new part
         storage_module._write_manifest = write_manifest
     st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 10,
                         {"start": 1, "rows": 10})

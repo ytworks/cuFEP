@@ -507,12 +507,12 @@
     }
    }
   },
-  "hardly connected": {
-   "delta_g": 16.97114538071349,
-   "delta_g_error": 79.83864797398941,
+  "connected only at first": {
+   "delta_g": -0.01671437440229874,
+   "delta_g_error": 0.3298061575618888,
    "delta_g_error_from": "analytical",
-   "delta_g_mbar": 16.97114538071349,
-   "delta_g_mbar_error": 79.83864797398941,
+   "delta_g_mbar": -0.01671437440229874,
+   "delta_g_mbar_error": 0.3298061575618888,
    "correction": 0.0,
    "first_half": [
     NaN,
@@ -524,105 +524,102 @@
    ],
    "forward": [
     [
+     0.1,
+     0.055681407974613496,
+     0.23729496899307614
+    ],
+    [
+     0.2,
+     -0.01671437440229874,
+     0.22454758544383446
+    ],
+    [
+     0.3,
+     -0.01671437440229874,
+     0.24693295474876462
+    ],
+    [
+     0.4,
+     -0.01671437440229874,
+     0.34523345693932883
+    ],
+    [
+     0.5,
+     -0.01671437440229874,
+     0.2971329809760068
+    ],
+    [
+     0.6,
+     -0.01671437440229874,
+     0.3084088835367293
+    ],
+    [
+     0.7,
+     -0.01671437440229874,
+     0.3162170211859493
+    ],
+    [
      0.8,
-     16.97114538071349,
-     86.21059177247429
+     -0.01671437440229874,
+     0.49350343022516396
     ],
     [
      0.9,
-     16.97114538071349,
-     86.27761409438632
+     -0.01671437440229874,
+     0.7844290205187064
     ],
     [
      1.0,
-     16.97114538071349,
-     79.83864797398941
+     -0.01671437440229874,
+     0.3298061575618888
     ]
    ],
    "reverse": [
     [
-     0.4,
-     17.12361926478404,
-     89.5668235772365
-    ],
-    [
-     0.5,
-     17.1234331190937,
-     87.4174639642064
-    ],
-    [
-     0.6,
-     16.98140712957505,
-     87.23616038369326
-    ],
-    [
-     0.7,
-     16.97114538071349,
-     85.3590911465071
-    ],
-    [
-     0.8,
-     16.97114538071349,
-     86.60083492370529
-    ],
-    [
      0.9,
-     16.97114538071349,
-     85.30812214059324
+     -0.08767013153389469,
+     0.4828761791047554
     ],
     [
      1.0,
-     16.97114538071349,
-     79.83864797398941
+     -0.01671437440229874,
+     0.3298061575618888
     ]
    ],
    "blocks": [
     [
-     0.6,
-     0.8,
-     17.123908739040626,
-     89.57252682491117
+     0.0,
+     0.2,
+     -0.01671437440229874,
+     0.22454758544383446
     ]
    ],
    "delta_g_error_blocks": {
-    "40": null,
-    "20": null,
-    "10": null,
+    "40": 0.16695518737739867,
+    "20": 0.16263996881063716,
+    "10": 0.09616701756803629,
     "5": null
    },
    "parts_not_determined": [
-    "forward point 0.10 (iterations 0-40 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 4.1 kT (standard error 2.7e+03 kT), more than 0.01 kT, so it is not determined",
-    "reverse point 0.10 (iterations 360-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 5.8 kT (standard error 3.2e+03 kT), more than 0.01 kT, so it is not determined",
-    "forward point 0.20 (iterations 0-80 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 8.1 kT (standard error 2.7e+03 kT), more than 0.01 kT, so it is not determined",
-    "reverse point 0.20 (iterations 320-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 11 kT (standard error 3.2e+03 kT), more than 0.01 kT, so it is not determined",
-    "forward point 0.30 (iterations 0-120 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 12 kT (standard error 2.6e+03 kT), more than 0.01 kT, so it is not determined",
-    "reverse point 0.30 (iterations 280-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.13 kT (standard error 2.8e+02 kT), more than 0.01 kT, so it is not determined",
-    "forward point 0.40 (iterations 0-160 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 1.7 kT (standard error 8.8e+02 kT), more than 0.01 kT, so it is not determined",
-    "forward point 0.50 (iterations 0-200 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.067 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined",
-    "forward point 0.60 (iterations 0-240 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.081 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined",
-    "forward point 0.70 (iterations 0-280 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.034 kT (standard error 93 kT), more than 0.01 kT, so it is not determined",
-    "block 1 of 5 (iterations 0-80 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 8.1 kT (standard error 2.7e+03 kT), more than 0.01 kT, so it is not determined",
-    "block 2 of 5 (iterations 80-160 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 2.4 kT (standard error 1.4e+03 kT), more than 0.01 kT, so it is not determined",
-    "block 3 of 5 (iterations 160-240 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.028 kT (standard error 1.6e+02 kT), more than 0.01 kT, so it is not determined",
-    "block 5 of 5 (iterations 320-400 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 11 kT (standard error 3.2e+03 kT), more than 0.01 kT, so it is not determined"
+    "reverse point 0.10 (iterations 540-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "reverse point 0.20 (iterations 480-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "reverse point 0.30 (iterations 420-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "reverse point 0.40 (iterations 360-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "reverse point 0.50 (iterations 300-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "reverse point 0.60 (iterations 240-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "reverse point 0.70 (iterations 180-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "reverse point 0.80 (iterations 120-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "block 2 of 5 (iterations 120-240 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "block 3 of 5 (iterations 240-360 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "block 4 of 5 (iterations 360-480 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
+    "block 5 of 5 (iterations 480-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined"
    ],
-   "parts_below_level": [
-    "reverse point 0.40 (iterations 240-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "reverse point 0.50 (iterations 200-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "reverse point 0.60 (iterations 160-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "reverse point 0.70 (iterations 120-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "forward point 0.80 (iterations 0-320 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "reverse point 0.80 (iterations 80-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "forward point 0.90 (iterations 0-360 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "reverse point 0.90 (iterations 40-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "the second half (iterations 200-400 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
-    "block 4 of 5 (iterations 240-320 of the production): lambda windows 0 and 1 overlap by 0.000 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
-   ],
-   "convergence_note": "the first half (iterations 0-200 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.067 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined",
+   "parts_below_level": [],
+   "convergence_note": "the second half (iterations 300-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined",
    "halves_warning": "",
    "quality": {
     "overlap": {
-     "ok": false,
+     "ok": true,
      "difference": null,
      "warning": null,
      "reason": null
@@ -637,7 +634,7 @@
      "ok": null,
      "difference": null,
      "warning": null,
-     "reason": "the first half (iterations 0-200 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share fix the difference of their free energies only to within 0.067 kT (standard error 1.5e+02 kT), more than 0.01 kT, so it is not determined"
+     "reason": "the second half (iterations 300-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined"
     },
     "estimators": {
      "ok": true,

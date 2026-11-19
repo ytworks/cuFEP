@@ -143,14 +143,15 @@ def main() -> None:
         level = r["levels"]["min_effective_samples"]
         before = min(r["fewest_samples"], r["kept_samples"]) >= level      # the same level before and after
         source = str(r["error_n_blocks"]) if r["error_from"] == "time blocks" else "anal"
+        mbar = "    -" if r["error_mbar"] is None else f"{r['error_mbar']:5.2f}"   # pymbar may give none
         print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s}          {r['error']:5.2f}  ({source:>4s})  "
-              f"{r['error_mbar']:5.2f} {ratio} | {blocks} |         {r['kept_samples']:5d}    {r['independent']:6.1f}  "
+              f"{mbar} {ratio} | {blocks} |         {r['kept_samples']:5d}    {r['independent']:6.1f}  "
               f"{level:5g}  {'ok   ' if before else 'below'} -> {'ok' if r['samples_ok'] else 'below'}")
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]
         if sub:
             def spread(values) -> str:
-                values = np.asarray(values, dtype=float)
+                values = np.asarray([v for v in values if v is not None], dtype=float)    # the numbers there are
                 if not values.size:
                     return "none"
                 return f"{values.min():.2f}-{values.max():.2f}, median {np.median(values):.2f}"

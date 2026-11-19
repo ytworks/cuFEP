@@ -620,25 +620,26 @@ independent replica-exchange runs. The guides' way to measure the precision of a
 ### What the checks say about TYK2 and A2A
 
 86 legs of earlier TYK2 runs with 5 ns of production per window (most with 19 and 21
-windows), read again with this analysis:
+windows), read again with version 6 of this analysis (about 20 s per leg, eight at a time):
 
 | | complex legs (43) | solvent legs (43) |
 |---|---|---|
 | overlap below 0.03 | 1 (among all iterations) | 0 |
 | statistical inefficiency of the slowest window, in iterations of 2.5 ps | 23-412, median 76 | 1-281, median 25 |
 | samples MBAR gets from that window | 5-87, median 26; fewer than 50 in 37 legs | 7-1000, median 77; fewer than 50 in 16 legs |
-| standard error of the leg from time blocks, kcal/mol | 0.11-1.10, median 0.49 | 0.11-0.38, median 0.18 |
+| standard error of the leg, kcal/mol (from time blocks in 39 and 34 legs, the analytical one in the others) | 0.24-1.10, median 0.49 | 0.11-0.44, median 0.19 |
 | standard error MBAR gives, kcal/mol | 0.17-0.62, median 0.33 | 0.11-0.44, median 0.13 |
 | ratio of the two | 0.28-3.03, median 1.49 | 0.80-2.89, median 1.37 |
 | what the standard error leaves of the samples | 1-48, median 12; fewer than 50 in all 43 legs | 4-696, median 33; fewer than 50 in 25 legs |
-| halves more than 1 kT apart | 24 legs; in 5 of them by more than 2 standard errors | 8 legs; in 4 of them by more than 2 standard errors |
+| halves more than 1 kT apart | 24 legs; in 4 of them by more than 2 standard errors | 8 legs; in 4 of them by more than 2 standard errors |
+| halves not compared; compared below the level of overlap | 1; 3 | 0; 1 |
 | BAR and MBAR more than 1 kcal/mol apart | 0 | 0 |
 
 The overlap holds in all legs but one. What limits these legs is the number of independent
 samples: in 5 ns the slowest window of a complex leg gives MBAR about 26 samples where 50 are
 recommended, and the standard error from time blocks is 1.5 times the one MBAR gives for
 them, which leaves about 12. At that number the halves of most complex legs are more than 1
-kT apart, all but 5 of them by no more than twice the standard error of the difference. In
+kT apart, all but 4 of them by no more than twice the standard error of the difference. In
 the solvent leg the slowest window is the first one, the fully interacting ligand in water,
 in 39 of the 43 legs. In 34 further legs of 5 and 10 ns (17 complex, 17 solvent) the medians
 are 0.48 and 0.27 kcal/mol from time blocks against 0.36 and 0.20 from MBAR, and no complex

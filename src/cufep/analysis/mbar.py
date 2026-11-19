@@ -170,6 +170,9 @@ class LegAnalysis:
     first_half: tuple[float, float] = (float("nan"), float("nan"))
     second_half: tuple[float, float] = (float("nan"), float("nan"))
     halves_error_blocks: list[int | None] = field(default_factory=list)
+    #: why the free energy of the whole production is not determined (its samples do not connect
+    #: the lambda windows, :func:`windows_determined`); delta_g and its errors are then NaN
+    not_determined: str = ""
     #: why the halves have no estimate (too few samples, windows that the samples of a half do
     #: not connect, no tail samples in a half), if they have none
     convergence_note: str = ""
@@ -263,8 +266,17 @@ def solve_mbar(u: np.ndarray, states: np.ndarray, initial_f_k=None, overlap: boo
     mbar = _mbar(u_kn, n_k, initial_f_k, max_iterations)
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         res = mbar.compute_free_energy_differences()
-        matrix = np.asarray(mbar.compute_overlap()["matrix"]) if overlap else None
+        matrix = overlap_of(mbar) if overlap else None
     return np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0]), matrix
+
+
+def overlap_of(mbar) -> np.ndarray:
+    """pymbar's overlap matrix, O[i, j] = N_j sum_n W_ni W_nj (``MBAR.compute_overlap``), without the
+    eigenvalues that method also computes: ``numpy.linalg.eig`` of that matrix does not converge on
+    some platforms for a degenerate one (34 windows of one Hamiltonian failed in CI), and only the
+    matrix is used."""
+    w = np.asarray(mbar.W_nk, dtype=float)
+    return (w.T @ w) * np.asarray(mbar.N_k, dtype=float)[None, :]
 
 
 def neighbour_inefficiencies(u: np.ndarray, states: np.ndarray) -> np.ndarray:
@@ -536,6 +548,27 @@ def windows_determined(reduced_u_kn: np.ndarray, n_k: np.ndarray, f_k: np.ndarra
     return Determinacy(determined, smallest, float(numerical), float(statistical), groups)
 
 
+def not_determined_reason(reduced_u_kn: np.ndarray, n_k: np.ndarray, f_k: np.ndarray) -> str:
+    """Why the samples do not determine the free energies ``f_k`` (:func:`windows_determined`), or
+    "" if they do. The one test of every part of the production and of the whole of it."""
+    try:
+        fixed = windows_determined(reduced_u_kn, n_k, f_k)
+    except Exception:  # noqa: BLE001  a matrix that cannot be decomposed determines nothing
+        fixed = None
+    if fixed is not None and fixed.determined:
+        return ""
+    if fixed is None:
+        why = "whether they do could not be computed"
+    elif not np.isfinite(fixed.numerical):
+        why = "the samples these groups share do not fix the difference of their free energies"
+    else:
+        why = (f"the samples these groups share fix the difference of their free energies only to within "
+               f"{fixed.numerical:.2g} kT (standard error {fixed.statistical:.2g} kT), more than "
+               f"{min(NEGLIGIBLE_FRACTION * fixed.statistical, RESOLUTION_KT):.2g} kT")
+    shown = "" if fixed is None else f" ({_windows_shown(fixed.groups)})"
+    return f"the samples do not connect the lambda windows{shown}: {why}, so it is not determined"
+
+
 def _windows_shown(groups: list[list[int]]) -> str:
     return "; ".join(f"windows {g[0]}-{g[-1]}" if g == list(range(g[0], g[-1] + 1)) else "windows " + ", ".join(map(str, g))
                      for g in groups)
@@ -618,22 +651,9 @@ class TimeRangeEstimator:
             return PartEstimate(reason="the MBAR equations of these samples have no solution", kind="not determined")
         # determined: the samples fix the solution (windows_determined). This does not depend on
         # analysis.min_overlap, which is a level of reliability and a warning of its own below.
-        try:
-            fixed = windows_determined(self.reduced[:, columns], counts, f)
-        except Exception:  # noqa: BLE001  a matrix that cannot be decomposed determines nothing
-            fixed = None
-        if fixed is None or not fixed.determined:
-            if fixed is None:
-                why = "whether they do could not be computed"
-            elif not np.isfinite(fixed.numerical):
-                why = "the samples these groups share do not fix the difference of their free energies"
-            else:
-                why = (f"the samples these groups share fix the difference of their free energies only to within "
-                       f"{fixed.numerical:.2g} kT (standard error {fixed.statistical:.2g} kT), more than "
-                       f"{min(NEGLIGIBLE_FRACTION * fixed.statistical, RESOLUTION_KT):.2g} kT")
-            shown = "" if fixed is None else f" ({_windows_shown(fixed.groups)})"
-            return PartEstimate(reason=f"the samples do not connect the lambda windows{shown}: {why}, so it is not "
-                                       "determined", kind="not determined")
+        reason = not_determined_reason(self.reduced[:, columns], counts, f)
+        if reason:
+            return PartEstimate(reason=reason, kind="not determined")
         try:
             overlap = overlap_with_equal_weights(self.u_kn[:, columns], counts, f)
             neighbour = np.array([overlap[i, i + 1] for i in range(k - 1)])
@@ -705,7 +725,7 @@ class TimeRangeEstimator:
             columns, observations = self.masks(a, b)
             base = self.estimate(columns, observations, self.f_whole, analytic=True)
         out = {"estimate": base, "error": None, "error_from": "", "n_blocks": None, "blocks": {}, "mbar_blocks": {},
-               "block_notes": {}, "note": ""}
+               "block_notes": {}, "note": "", "correlation": None}
         if not base.determined:
             return out
         replicates_of: dict[int, list] = {}
@@ -765,7 +785,7 @@ def solve_decorrelated(u_kn: np.ndarray, n_k: np.ndarray, initial_f_k=None, max_
         matrix = None
         if overlap:
             try:
-                matrix = np.asarray(mbar.compute_overlap()["matrix"], dtype=float)
+                matrix = overlap_of(mbar)
             except Exception:  # noqa: BLE001
                 matrix = None
     f, df = np.asarray(res["Delta_f"][0]), np.asarray(res["dDelta_f"][0])
@@ -803,7 +823,7 @@ def overlap_matrix(u_kn: np.ndarray, n_k: np.ndarray) -> np.ndarray:
     """MBAR overlap matrix for reduced energies ``u_kn[state, sample]`` (samples grouped by state)."""
     mbar = _mbar(u_kn, n_k)
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        return np.asarray(mbar.compute_overlap()["matrix"])
+        return overlap_of(mbar)
 
 
 def bar_between_neighbours(u_kn: np.ndarray, n_k: np.ndarray) -> tuple[float, float]:
@@ -1103,8 +1123,16 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         raise NoCorrection(f"the tail correction ({tail}) cannot be estimated from the production: {why}")
     mbar, mbar_error = float(f_k[-1] * kt), float(df_k[-1] * kt)
     weights = series.weights(everything_obs)
-    base = PartEstimate(f=f_k, mbar=mbar, mbar_error=mbar_error, correction=correction, correction_error=correction_error,
-                        correction_samples=n_obs, value=mbar - correction)
+    # the whole production is determined by the test of every part (review of PR 1: two windows that
+    # shared no sample gave 0 +- 0 at analysis.min_overlap 0, and the ligand a binding free energy).
+    # If it is not, the leg has no free energy and says why (not_determined)
+    not_determined = not_determined_reason(estimator.reduced, n_k, f_k)
+    if not_determined:
+        mbar = mbar_error = float("nan")
+        base = PartEstimate(reason=not_determined, kind="not determined")
+    else:
+        base = PartEstimate(f=f_k, mbar=mbar, mbar_error=mbar_error, correction=correction,
+                            correction_error=correction_error, correction_samples=n_obs, value=mbar - correction)
     whole = estimator.part(0, n, error_blocks, base=base)
 
     parts_not_determined: list[str] = []
@@ -1114,10 +1142,8 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
     def part(a: int, b: int, label: str):
         """(dG, error, number of time blocks behind the error) of the iterations [a, b), or a reason.
         A part below the level of overlap is returned, and its warning listed."""
-        if (a, b) == (0, n):
-            return whole["estimate"].value, whole["error"], whole["n_blocks"]
-        result = estimator.part(a, b, [part_error_blocks])
         where = f"{label} (iterations {a}-{b} of the production)"
+        result = whole if (a, b) == (0, n) else estimator.part(a, b, [part_error_blocks])
         if not result["estimate"].determined:
             return f"{where}: {result['estimate'].reason}"
         if result["error"] is None:
@@ -1170,7 +1196,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
 
     stages = {}
     state_dicts = attrs.get("states", [])
-    if isinstance(state_dicts, list) and len(state_dicts) == n_states:
+    if isinstance(state_dicts, list) and len(state_dicts) == n_states and not not_determined:
         for name, (a, b) in stage_boundaries(state_dicts).items():
             stages[name] = float((f_k[b] - f_k[a]) * kt)
 
@@ -1184,7 +1210,8 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
 
     return LegAnalysis(
         n_states=n_states, n_iterations_used=int(n), statistical_inefficiency=float(g_sum),
-        effective_samples_per_state=float(effective[slowest]), delta_g=float(base.value),
+        effective_samples_per_state=float(effective[slowest]),
+        delta_g=float(base.value) if base.value is not None else float("nan"), not_determined=not_determined,
         # no standard error at all (no time blocks, no finite analytical one): none, never a number
         delta_g_error=float(whole["error"]) if whole["error"] is not None else float("nan"),
         delta_g_mbar=mbar, delta_g_mbar_error=mbar_error,

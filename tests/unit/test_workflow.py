@@ -1310,8 +1310,13 @@ def test_a_leg_is_not_continued_from_a_checkpoint_that_does_not_record_its_rows(
     with pytest.raises(ConditionsError, match="the solvent leg of repeat 0: its checkpoint .* was written by an earlier "
                                               "version.*Nothing was changed"):
         check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
-    leg(6, {"start": 0})                       # all its iterations: analysed as it is
-    check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
+    leg(6, {"start": 0})                       # all its iterations, but nothing shows which rows are its own
+    with pytest.raises(ConditionsError, match="does not record how many of its iterations were stored"):
+        check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
+    result = hrex.parent / "result.json"
+    result.write_text(json.dumps({"n_iterations_stored": 6}))     # the result of its finished run, from these rows
+    check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)   # analysed as it is
+    result.unlink()
     leg(3, {"start": 0, "rows": 3})            # a checkpoint of this version is continued
     assert old_checkpoint_refusal(hrex) is None
     check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
@@ -1324,8 +1329,13 @@ def test_a_leg_is_not_continued_from_a_checkpoint_that_does_not_record_its_rows(
     storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
     storage.close()                            # a row the checkpoint does not name
     assert not leg_is_complete(hrex, 6)
-    leg(6, {"start": 0})                       # an earlier version: its iteration stands for its rows
+    leg(6, {"start": 0})                       # an earlier version: complete only with a result of exactly these rows
+    assert not leg_is_complete(hrex, 6)        # review of PR 1: a warm-up and later rows can add up to its iteration
+    result.write_text(json.dumps({"n_iterations_stored": 6}))
     assert leg_is_complete(hrex, 6)
+    result.write_text(json.dumps({"n_iterations_stored": 4}))
+    assert not leg_is_complete(hrex, 6)
+    result.unlink()
 
 
 def test_the_equilibration_of_cufep_analyze_is_given_one_way_and_is_a_length(tmp_path):
@@ -1344,6 +1354,61 @@ def test_the_equilibration_of_cufep_analyze_is_given_one_way_and_is_a_length(tmp
         assert out.exit_code != 0 and ("nanoseconds of 0 or more" in out.output or "Invalid value" in out.output), bad
     out = json.loads(CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-ns", "0.05"]).output)
     assert out["n_equilibration_iterations"] == 20 and out["n_iterations_used"] == 100
+
+
+def test_a_complete_leg_is_analysed_with_the_boundary_of_this_run(tmp_path):
+    """Review of PR 1 (f515d9a, 1): a leg finished as 20 + 100 iterations, run again as 40 + 80, was taken as
+    complete and analysed with the old boundary (100 rows, 1.686020 kJ/mol where 80 rows give 1.677377)."""
+    from cufep.config.schema import Config
+    from cufep.sampling.storage import LegStorage
+    from cufep.workflow import leg_result_from_samples, take_complete_leg
+
+    from test_sampling import synthetic_leg
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    synthetic_leg(leg, n=120, n_equilibration=20)
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "none"}})
+    run = {"ligand": "lig", "leg": "solvent", "repeat": 0, "backend": "openmm", "notes": []}
+    old = leg_result_from_samples(leg, cfg, run)
+    assert old["analysis"]["n_iterations_used"] == 100 and old["n_equilibration_iterations"] == 20
+    said = []
+    take_complete_leg(LegStorage(leg / "hrex", 4, 4), 40, 120, cfg, said.append)
+    assert any("the first 40 of its iterations are equilibration in this run (20 in the run that made them)" in line
+               for line in said)
+    new = leg_result_from_samples(leg, cfg, run)
+    assert new["analysis"]["n_iterations_used"] == 80 and new["n_equilibration_iterations"] == 40
+    assert new["delta_g_decouple"] != old["delta_g_decouple"]
+
+
+def test_windows_without_connecting_samples_give_no_free_energy_and_no_binding_free_energy(tmp_path):
+    """Review of PR 1 (f515d9a, 2): two windows with no overlap at all (cross energies 1500 kT, 256 iterations)
+    gave each leg 0 +- 0, and summary.csv and the benchmark a binding free energy of 0.000 +- 0.000. The whole
+    production is tested as every part is: such a leg has no free energy, and the ligand none."""
+    from cufep.config.schema import AnalysisConfig
+    from cufep.sampling.storage import LegStorage
+    from cufep.workflow import combine_ligand, leg_result_from_samples, write_leg_result
+
+    lig = tmp_path / "lig"
+    rng = np.random.default_rng(4)
+    for level in (0.03, 0.0):
+        for name in ("complex", "solvent"):
+            leg = lig / f"level_{level}" / "repeat_0" / name
+            storage = LegStorage(leg / "hrex", 2, 2)
+            for _ in range(256):
+                u = np.full((2, 2), 1500.0)
+                u[0, 0], u[1, 1] = rng.normal(0.0, 1.0, 2) ** 2
+                storage.append(u, np.arange(2), np.ones(2))
+            storage.set_meta(temperature_K=298.15, iteration_ps=2.5, backend="openmm", leg=name)
+            storage.set_plan(0, 256)
+            storage.close()
+            run = {"ligand": "lig", "leg": name, "repeat": 0, "backend": "openmm", "notes": [], "pressure_bar": 1.0}
+            result = leg_result_from_samples(leg, AnalysisConfig(lrc="none", min_overlap=level), run)
+            assert result["delta_g_decouple"] != result["delta_g_decouple"]          # NaN: no free energy
+            assert result["analysis"]["not_determined"].startswith("the samples do not connect the lambda windows")
+            assert any(note.startswith("NO FREE ENERGY: the samples do not connect") for note in result["notes"])
+            write_leg_result(leg, result)
+        out = combine_ligand(lig / f"level_{level}", "lig", 1, AnalysisConfig(lrc="none", min_overlap=level))
+        assert "dg_bind" not in out and out["failed_legs"] == ["complex leg", "solvent leg"], level
 
 
 def test_a_run_can_be_restricted_to_ligands_and_legs():

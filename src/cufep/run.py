@@ -217,8 +217,10 @@ def result_line(s: dict) -> str:
         # too short for blocks (that leg carries a note)
         how = "standard error from time blocks" if s.get("dg_bind_error_from_time_blocks") else "standard error"
         err = f" ± {s['dg_bind_error']:.2f} kcal/mol ({how}, 1 repeat)"
-    else:                                          # a result of before the standard error from time blocks
+    elif s.get("dg_bind_mbar_error") is not None:  # a result of before the standard error from time blocks
         err = f" ± {s['dg_bind_mbar_error']:.2f} kcal/mol (MBAR uncertainty, 1 repeat)"
+    else:
+        err = " (no standard error)"
     # a pair of neighbouring windows without overlap leaves the free energy undefined, whatever the
     # standard error says; say so next to the number
     lowest = [v for v in (s.get("min_overlap"), s.get("min_overlap_used")) if v is not None]
