@@ -14,6 +14,15 @@ class ConditionsError(Exception):
     """Stored samples were made under other conditions than those of the run that opens them."""
 
 
+class StorageError(RuntimeError):
+    """The samples of a leg could not be stored or read as they must be. Not a failure of the
+    backend: the samples and the checkpoint that were stored stay as they are."""
+
+
+class StorageBusyError(StorageError):
+    """Another process held the samples file for longer than the run waits."""
+
+
 def _same(a, b) -> bool:
     """Equality of stored and current conditions, with a tolerance for numbers."""
     if isinstance(a, dict) and isinstance(b, dict):
@@ -58,6 +67,46 @@ def open_samples(path: str | Path, mode: str = "r", wait_s: float = READ_WAIT_S)
             pause = min(0.5, 2.0 * pause)
 
 
+#: the datasets of the samples file: one row per iteration, and the records of some iterations
+#: (the tail energy and the frame of the coupled state), which carry their iteration
+ROW_DATASETS = ("u", "states", "volume")
+TAIL_DATASETS = ("lrc_iter", "lrc_du")
+FRAME_DATASETS = ("frame_iter", "frames", "frame_box")
+#: the attribute that says how much of every dataset is stored (:func:`committed_counts`)
+COMMITTED = "committed"
+
+
+def committed_counts(h5) -> tuple[int, int, int]:
+    """(iterations, tail records, frame records) that an open samples file holds as stored.
+
+    :class:`LegStorage` writes the datasets first and then this count, in one attribute, so the
+    file holds one state of the run up to the count, whatever happened to a write after it; every
+    reader takes this many and no more. A file of an earlier version has no such attribute: it
+    holds the iterations that all three row datasets hold, and the records of those iterations
+    that all datasets of the records hold. A count that a dataset is shorter than is a damaged
+    file and raises StorageError.
+    """
+    lengths = {name: int(h5[name].shape[0]) for name in ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS if name in h5}
+    if COMMITTED in h5.attrs:
+        raw = h5.attrs[COMMITTED]
+        counts = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        rows, tail, frames = int(counts["iterations"]), int(counts["tail_records"]), int(counts["frame_records"])
+        short = [name for names, need in ((ROW_DATASETS, rows), (TAIL_DATASETS, tail), (FRAME_DATASETS, frames))
+                 for name in names if name in lengths and lengths[name] < need]
+        if short:
+            raise StorageError(f"{h5.filename}: the datasets {', '.join(short)} are shorter than the {rows} iterations, "
+                               f"{tail} tail records and {frames} frame records the file says it holds; it is damaged")
+        return rows, tail, frames
+    rows = min(lengths[name] for name in ROW_DATASETS)
+
+    def records(names) -> int:
+        present = [name for name in names if name in lengths]
+        keep = min(lengths[name] for name in present)
+        return int(np.sum(h5[names[0]][:keep] < rows))
+
+    return rows, records(TAIL_DATASETS), records(FRAME_DATASETS)
+
+
 def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
     """(number of iterations, conditions) of the samples in ``directory``, read without changing
     anything; (0, None) if there are no samples, (n, None) if their conditions are not recorded."""
@@ -65,7 +114,7 @@ def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
     if not path.exists():
         return 0, None
     with open_samples(path) as h5:
-        n = int(h5["u"].shape[0])
+        n = committed_counts(h5)[0]
         if n == 0 or "conditions" not in h5.attrs:
             return n, None
         return n, json.loads(h5.attrs["conditions"])
@@ -120,9 +169,22 @@ def stored_backend(directory: str | Path) -> str | None:
     if not path.exists():
         return None
     with open_samples(path) as h5:
-        if h5["u"].shape[0] == 0 or "backend" not in h5.attrs:
+        if committed_counts(h5)[0] == 0 or "backend" not in h5.attrs:
             return None
         return str(h5.attrs["backend"])
+
+
+def _write_at(dataset, offset: int, values) -> None:
+    """Make ``dataset`` hold ``values`` from row ``offset`` on and nothing after them."""
+    dataset.resize(offset + len(values), axis=0)
+    if len(values):
+        dataset[offset:offset + len(values)] = np.stack([np.asarray(v) for v in values])
+
+
+def _publish(h5, rows: int, tail: int, frames: int) -> None:
+    """Say how much of every dataset is stored (:func:`committed_counts`): one attribute, written
+    after the data it counts."""
+    h5.attrs[COMMITTED] = json.dumps({"iterations": int(rows), "tail_records": int(tail), "frame_records": int(frames)})
 
 
 class LegStorage:
@@ -134,18 +196,24 @@ class LegStorage:
         volume   (n_iter, n_replicas)            box volume, nm^3
         lrc_iter, lrc_du                         coupled-state tail energies (kJ/mol)
         frame_iter, frames, frame_box            coupled-state coordinates of selected atoms
+        committed (attribute)                    how many rows and records are stored
     ``checkpoint.npz``
         positions, velocities and boxes of every replica, the state permutation and the
         number of committed iterations.
 
     The rows of the iterations are kept in memory and go to ``samples.h5`` when a checkpoint
     is written, and when the storage is closed; in between the file is closed. Another process
-    can therefore read the samples of a leg that is being sampled (``cufep analyze``), and what
-    it reads is one state of the run: all datasets to the iteration of the last checkpoint. A
-    run that is resumed drops the rows after its checkpoint anyway, so a run that is killed
-    loses nothing it would have kept. (HDF5's single-writer-multiple-reader mode was not taken:
-    a writer that is killed leaves such a file unreadable until it is repaired, attributes
-    cannot be added in that mode, and files of earlier versions could not use it.)
+    can therefore read the samples of a leg that is being sampled (``cufep analyze``).
+
+    A write is a transaction. Every dataset is written from the stored count on (overwriting
+    whatever a failed write left there), and only then is the new count published
+    (:func:`committed_counts`), which every reader goes by. A write that fails at any point
+    leaves the file at its earlier state for every reader, keeps the rows in memory, and the
+    next write starts again from the same place: nothing is stored twice and nothing that was
+    not written is read. Truncation publishes the smaller count first and shortens the
+    datasets after it. (HDF5's single-writer-multiple-reader mode was not taken: a writer that
+    is killed leaves such a file unreadable until it is repaired, attributes cannot be added in
+    that mode, and files of earlier versions could not use it.)
     """
 
     def __init__(self, directory: str | Path, n_replicas: int, n_states: int, n_frame_atoms: int = 0) -> None:
@@ -173,12 +241,13 @@ class LegStorage:
                                       compression_opts=1)
                     h5.create_dataset("frame_box", shape=(0, 3, 3), maxshape=(None, 3, 3), dtype="f4")
                 h5.attrs["n_equilibration_iterations"] = 0
-            self._stored = 0                               # iterations in the file
-        else:
-            with open_samples(self.h5_path) as h5:
-                if h5["u"].shape[1:] != (n_replicas, n_states):
-                    raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")
-                self._stored = int(h5["u"].shape[0])
+                _publish(h5, 0, 0, 0)
+        with open_samples(self.h5_path) as h5:
+            if h5["u"].shape[1:] != (n_replicas, n_states):
+                raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")
+            #: what the file holds as stored: iterations, tail records, frame records
+            self._stored, self._stored_tail, self._stored_frames = committed_counts(h5)
+            self._has_frames = "frames" in h5
 
     def _file_for_writing(self, wait_s: float = WRITE_WAIT_S):
         return open_samples(self.h5_path, "a", wait_s)
@@ -250,8 +319,13 @@ class LegStorage:
 
     @property
     def n_iterations(self) -> int:
-        """Iterations this storage holds: those in the file and those still in memory."""
+        """Iterations this storage holds: those stored in the file and those still in memory."""
         return self._stored + len(self._rows)
+
+    @property
+    def n_stored(self) -> int:
+        """Iterations stored in the file (:func:`committed_counts`)."""
+        return self._stored
 
     # -- appending ------------------------------------------------------------------
     def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray) -> int:
@@ -263,17 +337,18 @@ class LegStorage:
         kept = {}
         if "lrc_du" in record:
             kept["lrc_du"] = float(record["lrc_du"])
-        if "frame" in record and self.n_frame_atoms:
+        if "frame" in record and self.n_frame_atoms and self._has_frames:
             kept["frame"] = np.array(record["frame"], dtype="f4")
             kept["box"] = np.array(record["box"], dtype="f4")
         if kept:
             self._records.append((int(iteration), kept))
 
     def flush(self, wait_s: float = WRITE_WAIT_S) -> bool:
-        """Write the iterations that are in memory to the file.
+        """Store the iterations that are in memory: a transaction (see the class).
 
         False, with nothing written and everything still in memory, if another process held the
-        file for all of ``wait_s``.
+        file for all of ``wait_s``. Any other failure is raised with the file at its earlier
+        state and everything still in memory; calling it again repeats the same write.
         """
         if not self._rows and not self._records:
             return True
@@ -283,56 +358,53 @@ class LegStorage:
             if _held_by_another_process(exc):
                 return False
             raise
+        tail = [(it, record["lrc_du"]) for it, record in self._records if "lrc_du" in record]
+        frames = [(it, record) for it, record in self._records if "frame" in record]
+        rows = self._stored + len(self._rows)
+        n_tail, n_frames = self._stored_tail + len(tail), self._stored_frames + len(frames)
         with h5:
-            if self._rows:
-                n, m = int(h5["u"].shape[0]), len(self._rows)
-                for column, name in enumerate(("u", "states", "volume")):
-                    h5[name].resize(n + m, axis=0)
-                    h5[name][n:n + m] = np.stack([row[column] for row in self._rows])
-            tail = [(it, record["lrc_du"]) for it, record in self._records if "lrc_du" in record]
-            if tail:
-                n = int(h5["lrc_du"].shape[0])
-                for name, values in (("lrc_iter", [it for it, _ in tail]), ("lrc_du", [du for _, du in tail])):
-                    h5[name].resize(n + len(tail), axis=0)
-                    h5[name][n:n + len(tail)] = values
-            frames = [(it, record) for it, record in self._records if "frame" in record]
-            if frames and "frames" in h5:
-                n = int(h5["frames"].shape[0])
-                for name, values in (("frame_iter", [it for it, _ in frames]),
-                                     ("frames", np.stack([record["frame"] for _, record in frames])),
-                                     ("frame_box", np.stack([record["box"] for _, record in frames]))):
-                    h5[name].resize(n + len(frames), axis=0)
-                    h5[name][n:n + len(frames)] = values
+            for column, name in enumerate(ROW_DATASETS):
+                _write_at(h5[name], self._stored, [row[column] for row in self._rows])
+            _write_at(h5["lrc_iter"], self._stored_tail, [it for it, _ in tail])
+            _write_at(h5["lrc_du"], self._stored_tail, [du for _, du in tail])
+            _write_at(h5["frame_iter"], self._stored_frames, [it for it, _ in frames])
+            if self._has_frames:
+                _write_at(h5["frames"], self._stored_frames, [record["frame"] for _, record in frames])
+                _write_at(h5["frame_box"], self._stored_frames, [record["box"] for _, record in frames])
+            _publish(h5, rows, n_tail, n_frames)
             h5.flush()
-        self._stored += len(self._rows)
+        self._stored, self._stored_tail, self._stored_frames = rows, n_tail, n_frames
         self._rows.clear()
         self._records.clear()
         return True
 
     def truncate(self, n_iterations: int) -> None:
-        """Drop everything after ``n_iterations`` committed iterations, in memory and in the file."""
+        """Drop everything after ``n_iterations`` iterations, in memory and in the file: the
+        smaller count is published first, the datasets are shortened after it."""
         n_iterations = int(n_iterations)
         del self._rows[max(0, n_iterations - self._stored):]
         self._records = [(it, record) for it, record in self._records if it < n_iterations]
         with open_samples(self.h5_path) as h5:
-            beyond = h5["u"].shape[0] > n_iterations or any(
-                h5[name].shape[0] and int(h5[name][-1]) >= n_iterations for name in ("lrc_iter", "frame_iter"))
-        if not beyond:
+            tail_its = h5["lrc_iter"][:self._stored_tail]
+            frame_its = h5["frame_iter"][:self._stored_frames]
+            lengths = {name: int(h5[name].shape[0]) for name in ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS
+                       if name in h5}
+            published = COMMITTED in h5.attrs
+        rows = min(self._stored, n_iterations)
+        tail, frames = int(np.sum(tail_its < n_iterations)), int(np.sum(frame_its < n_iterations))
+        wanted = {**{name: rows for name in ROW_DATASETS}, **{name: tail for name in TAIL_DATASETS},
+                  **{name: frames for name in FRAME_DATASETS}}
+        if published and (rows, tail, frames) == (self._stored, self._stored_tail, self._stored_frames) and all(
+                lengths[name] == wanted[name] for name in lengths):
             return                                         # nothing to cut: the file is not opened for writing
         with self._file_for_writing() as h5:
-            for name in ("u", "states", "volume"):
-                if h5[name].shape[0] > n_iterations:
-                    h5[name].resize(n_iterations, axis=0)
-            for it_name, data in (("lrc_iter", ("lrc_du",)), ("frame_iter", ("frames", "frame_box"))):
-                its = h5[it_name][:]
-                keep = int(np.sum(its < n_iterations))
-                if keep < len(its):
-                    h5[it_name].resize(keep, axis=0)
-                    for d in data:
-                        if d in h5:
-                            h5[d].resize(keep, axis=0)
+            _publish(h5, rows, tail, frames)
             h5.flush()
-        self._stored = min(self._stored, n_iterations)
+            self._stored, self._stored_tail, self._stored_frames = rows, tail, frames
+            for name in lengths:
+                if h5[name].shape[0] != wanted[name]:
+                    h5[name].resize(wanted[name], axis=0)
+            h5.flush()
 
     # -- checkpoint -------------------------------------------------------------------
     def write_checkpoint(self, positions, velocities, boxes, state_of_replica, iteration: int,
@@ -361,13 +433,27 @@ class LegStorage:
             out["extra"] = json.loads(str(data["extra"]))
         return out
 
-    def close(self) -> None:
-        """Store what is in memory. (Iterations after the last checkpoint are dropped by a run that
-        resumes; a leg that is only read afterwards has them.)"""
+    def close(self, wait_s: float = CHECKPOINT_WAIT_S) -> None:
+        """Store what is in memory.
+
+        These are the iterations after the last checkpoint (a run that resumes drops them; a
+        leg that is only read afterwards has them). If they cannot be stored, StorageError says
+        so (StorageBusyError if another process held the file for ``wait_s``); the file keeps
+        what it held, and the rows stay in memory, so that the caller can try again.
+        """
+        if not self._rows and not self._records:
+            return
+        pending, stored = len(self._rows), self._stored
         try:
-            self.flush()
-        except Exception:  # noqa: BLE001
-            pass
+            written = self.flush(wait_s)
+        except Exception as exc:  # noqa: BLE001  said, and raised as what it means for the samples
+            raise StorageError(f"the {pending} iteration(s) after iteration {stored} could not be stored in "
+                               f"{self.h5_path} ({type(exc).__name__}: {exc}); the file holds the {stored} "
+                               "before them") from exc
+        if not written:
+            raise StorageBusyError(f"the {pending} iteration(s) after iteration {stored} could not be stored: another "
+                                   f"process held {self.h5_path} open for {wait_s:g} s; the file holds the {stored} "
+                                   "before them")
 
 
 def equilibration_boundary(attrs: dict, leg_dir: str | Path | None = None) -> int | None:
@@ -397,6 +483,8 @@ def decoded_attributes(h5) -> dict:
                 out[key] = json.loads(text)
             except (json.JSONDecodeError, TypeError):
                 out[key] = text
+        elif isinstance(value, np.ndarray) and value.size != 1:
+            out[key] = value.tolist()
         else:
             out[key] = value.item() if hasattr(value, "item") else value
     return out
@@ -409,31 +497,18 @@ def stored_attributes(directory: str | Path) -> tuple[int, dict]:
     if not path.exists():
         return 0, {}
     with open_samples(path) as h5:
-        return int(h5["u"].shape[0]), decoded_attributes(h5)
+        return committed_counts(h5)[0], decoded_attributes(h5)
 
 
 def read_samples(directory: str | Path) -> dict:
-    """Load everything analysis needs from a leg directory.
-
-    Also while the leg is being sampled: the file then holds the iterations up to the last
-    checkpoint (:class:`LegStorage`). Should a file hold its datasets to different lengths (a
-    process killed in the middle of storing a checkpoint), the iterations that all of them hold
-    are returned.
-    """
+    """Load everything analysis needs from a leg directory: what the file holds as stored
+    (:func:`committed_counts`), also while the leg is being sampled (then up to its last
+    checkpoint) and after a write that failed half-way."""
     path = Path(directory) / "samples.h5"
     with open_samples(path) as h5:
-        out = {name: h5[name][:] for name in ("u", "states", "volume", "lrc_iter", "lrc_du", "frame_iter")}
-        for name in ("frames", "frame_box"):
-            if name in h5:
-                out[name] = h5[name][:]
+        rows, tail, frames = committed_counts(h5)
+        out = {name: h5[name][:rows] for name in ROW_DATASETS}
+        out.update({name: h5[name][:tail] for name in TAIL_DATASETS})
+        out.update({name: h5[name][:frames] for name in FRAME_DATASETS if name in h5})
         out["attrs"] = decoded_attributes(h5)
-    n = min(len(out[name]) for name in ("u", "states", "volume"))
-    for name in ("u", "states", "volume"):
-        out[name] = out[name][:n]
-    for iterations, data in (("lrc_iter", ("lrc_du",)), ("frame_iter", ("frames", "frame_box"))):
-        present = [name for name in data if name in out]
-        keep = min([len(out[iterations])] + [len(out[name]) for name in present])
-        keep = int(np.sum(out[iterations][:keep] < n))
-        for name in (iterations, *present):
-            out[name] = out[name][:keep]
     return out

@@ -692,6 +692,50 @@ LEG_RUN_FILES = ("schedule.yaml", "start_configs.npz", "hrex", "hrex_failed_cupo
                  "result.previous.json", "timing.json")
 
 
+#: where the samples of a cuPotential run that failed are kept: the first of these names that is free
+FAILED_BACKEND_DIR = "hrex_failed_cupotential"
+
+
+def set_aside_failed_backend(leg_dir: Path) -> Path:
+    """Move the samples, lambda windows and start configurations of a leg whose cuPotential run
+    failed into ``hrex_failed_cupotential/`` (or ``hrex_failed_cupotential_<n>/`` if that is
+    taken), so that the leg can start anew on stock OpenMM. Nothing is deleted."""
+    dest, n = leg_dir / FAILED_BACKEND_DIR, 1
+    while dest.exists():
+        n += 1
+        dest = leg_dir / f"{FAILED_BACKEND_DIR}_{n}"
+    if (leg_dir / "hrex").exists():
+        (leg_dir / "hrex").rename(dest)
+    dest.mkdir(exist_ok=True)
+    for name in ("schedule.yaml", "start_configs.npz"):
+        if (leg_dir / name).exists():
+            (leg_dir / name).rename(dest / name)
+    return dest
+
+
+def backend_fallback_refusal(exc: BaseException, backend_name: str, fallback: str, had_samples: bool) -> str | None:
+    """Whether a leg whose run raised ``exc`` is repeated on stock OpenMM: None if it is, else why not.
+
+    Only a failure of the backend is a reason: a worker that failed, hung or did not start
+    (:class:`cufep.sampling.hrex.WorkerError`), or an error of OpenMM in the controller. A leg
+    that already had samples before this run is not repeated from its start automatically:
+    that would set its finished samples aside.
+    """
+    import openmm as mm
+
+    from cufep.sampling.hrex import WorkerError
+
+    if not isinstance(exc, (WorkerError, mm.OpenMMException)):
+        return "not a failure of the backend"
+    if backend_name != "cupotential":
+        return "the leg runs on stock OpenMM already"
+    if fallback == "none":
+        return "backend.fallback is none"
+    if had_samples:
+        return "the leg had samples from an earlier run"
+    return None
+
+
 def archive_leg(leg_dir: Path) -> Path | None:
     """Move the lambda windows, samples and result of a leg into ``previous_<n>/`` in its directory.
 
@@ -699,6 +743,7 @@ def archive_leg(leg_dir: Path) -> Path | None:
     are. Nothing is deleted. Returns the new directory, or None if the leg had none of these.
     """
     present = [leg_dir / name for name in LEG_RUN_FILES if (leg_dir / name).exists()]
+    present += sorted(path for path in leg_dir.glob(f"{FAILED_BACKEND_DIR}_*") if path.is_dir())
     if not present:
         return None
     n = 1
@@ -883,9 +928,9 @@ def run_leg(job: LegJob) -> dict:
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
     from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
-    from cufep.sampling.hrex import ReplicaExchangeSampler, SamplerError, WindowPool
+    from cufep.sampling.hrex import ReplicaExchangeSampler, WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
-    from cufep.sampling.storage import read_samples, stored_backend
+    from cufep.sampling.storage import read_samples, stored_backend, stored_conditions
     from cufep.sampling.worker import LegSpec
 
     cfg = Config.model_validate(job.config)
@@ -1231,20 +1276,25 @@ def run_leg(job: LegJob) -> dict:
         timed("sampling", t_sampling)
         return read_samples(hrex_dir), schedule
 
+    # a leg that has samples from an earlier run is continued, never repeated from its start
+    had_samples = stored_conditions(leg_dir / "hrex")[0] > 0
     try:
         samples, schedule = run_with(backend_name)
-    except (SamplerError, mm.OpenMMException) as exc:
-        if backend_name != "cupotential" or cfg.backend.fallback == "none":
+    except Exception as exc:  # noqa: BLE001  classified here; everything that is not repeated is raised
+        refusal = backend_fallback_refusal(exc, backend_name, cfg.backend.fallback, had_samples)
+        if refusal is not None:
+            if refusal == "the leg had samples from an earlier run":
+                raise WorkflowError(
+                    f"the cuPotential run of this leg failed ({str(exc)[:300]}). The leg had samples from an earlier "
+                    "run, so it is not repeated on stock OpenMM from its start: its samples and checkpoint are left "
+                    "in hrex/. Run the leg again to continue it on cuPotential, or start it anew on stock OpenMM "
+                    "with backend.name: openmm and --reschedule (its samples are then kept in previous_<n>/)") from exc
             raise
-        log(f"cuPotential run failed ({str(exc)[:300]}); repeating this leg on stock OpenMM")
+        kept = set_aside_failed_backend(leg_dir)
+        log(f"cuPotential run failed ({str(exc)[:300]}); repeating this leg on stock OpenMM; what the failed run "
+            f"left is kept in {kept.name}/")
         notes.append("the cuPotential run failed; the whole leg was repeated on stock OpenMM "
-                     "(samples from the two backends are never mixed)")
-        failed = leg_dir / "hrex_failed_cupotential"
-        shutil.rmtree(failed, ignore_errors=True)
-        if (leg_dir / "hrex").exists():
-            (leg_dir / "hrex").rename(failed)
-        for f in ("schedule.yaml", "start_configs.npz"):
-            (leg_dir / f).unlink(missing_ok=True)
+                     f"(samples from the two backends are never mixed; the failed run is kept in {kept.name}/)")
         backend_name = "openmm"
         samples, schedule = run_with(backend_name)
 

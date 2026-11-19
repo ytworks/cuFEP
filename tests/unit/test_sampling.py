@@ -626,6 +626,251 @@ def test_storage_append_truncate_and_checkpoint(tmp_path):
         LegStorage(tmp_path / "leg", 4, 4)
 
 
+def _rows(n0, n, k=3):
+    """``n`` distinct rows from ``n0`` on: (u, states, volume) with values that name their iteration."""
+    return [(np.full((k, k), float(it)), np.roll(np.arange(k), it), np.full(k, 10.0 + it)) for it in range(n0, n0 + n)]
+
+
+def _fill(storage, rows, n0):
+    for i, row in enumerate(rows):
+        storage.append(*row)
+        it = n0 + i
+        if it % 2 == 0:
+            storage.append_record(it, {"lrc_du": -float(it), "frame": np.full((2, 3), it, np.float32),
+                                       "box": np.eye(3, dtype=np.float32) * it})
+
+
+def _assert_exactly(directory, n):
+    """The file holds iterations 0 .. n-1 once each, with their records, and nothing else."""
+    data = read_samples(directory)
+    assert data["u"].shape[0] == data["states"].shape[0] == data["volume"].shape[0] == n
+    assert [float(x) for x in data["u"][:, 0, 0]] == [float(it) for it in range(n)]
+    assert [list(row) for row in data["states"]] == [list(np.roll(np.arange(3), it)) for it in range(n)]
+    assert data["volume"][:, 0].tolist() == [10.0 + it for it in range(n)]
+    assert data["lrc_iter"].tolist() == list(range(0, n, 2)) and data["lrc_du"].tolist() == [-float(it) for it in range(0, n, 2)]
+    assert data["frame_iter"].tolist() == list(range(0, n, 2)) and data["frames"][:, 0, 0].tolist() == list(range(0, n, 2))
+    assert data["frame_box"].shape[0] == len(data["frame_iter"])
+
+
+WRITE_STEPS = ("/u", "/states", "/volume", "/lrc_iter", "/lrc_du", "/frame_iter", "/frames", "/frame_box", "publish")
+
+
+@pytest.mark.parametrize("step", WRITE_STEPS)
+def test_a_write_that_fails_at_any_step_stores_nothing_twice_and_nothing_unwritten(tmp_path, monkeypatch, step):
+    """Review of PR 1: 6 iterations stored, 4 more in memory; the write of `states` failed once after `u`
+    had been extended. The retry at close appended the 4 rows after the 10 of `u`: 14 rows, rows 7-10 twice
+    in the energies and four rows of zeros in the states. Every step of a write fails once here."""
+    import cufep.sampling.storage as storage_module
+
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 6), 0)
+    assert st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6)
+    _fill(st, _rows(6, 4), 6)
+    real_write, real_publish, failed = storage_module._write_at, storage_module._publish, []
+
+    def write_at(dataset, offset, values):
+        real_write(dataset, offset, values)                       # the data reaches the file, then it fails
+        if dataset.name == step and not failed and len(values):
+            failed.append(step)
+            raise OSError(f"injected failure after writing {step}")
+
+    def publish(h5, *counts):
+        if step == "publish" and not failed:
+            failed.append(step)
+            raise OSError("injected failure while publishing")
+        real_publish(h5, *counts)
+
+    monkeypatch.setattr(storage_module, "_write_at", write_at)
+    monkeypatch.setattr(storage_module, "_publish", publish)
+    with pytest.raises(OSError, match="injected"):
+        st.flush()
+    assert failed == [step] and st.n_iterations == 10 and st.n_stored == 6
+    _assert_exactly(tmp_path / "leg", 6)                          # every reader sees the state before the write
+    assert LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2).n_iterations == 6
+    st.close()                                                    # the retry, as when the sampler is closed
+    _assert_exactly(tmp_path / "leg", 10)
+    again = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)   # opened again, it goes on from there
+    assert again.n_iterations == 10
+    _fill(again, _rows(10, 2), 10)
+    again.close()
+    _assert_exactly(tmp_path / "leg", 12)
+
+
+@pytest.mark.parametrize("step", ("publish", "resize"))
+def test_a_truncation_that_fails_leaves_one_state_of_the_samples(tmp_path, monkeypatch, step):
+    import h5py
+
+    import cufep.sampling.storage as storage_module
+
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 10), 0)
+    st.close()
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    real_publish = storage_module._publish
+    if step == "publish":
+        def publish(h5, *counts):
+            raise OSError("injected failure while publishing")
+        monkeypatch.setattr(storage_module, "_publish", publish)
+    else:
+        real_resize = h5py.Dataset.resize
+
+        def resize(self, *args, **kwargs):
+            if self.name == "/volume":
+                raise OSError("injected failure while shortening")
+            return real_resize(self, *args, **kwargs)
+        monkeypatch.setattr(h5py.Dataset, "resize", resize)
+    with pytest.raises(OSError, match="injected"):
+        st.truncate(7)
+    monkeypatch.setattr(storage_module, "_publish", real_publish)
+    if step == "publish":
+        _assert_exactly(tmp_path / "leg", 10)                     # nothing changed
+        assert st.n_stored == 10
+        st.truncate(7)
+    else:
+        _assert_exactly(tmp_path / "leg", 7)                      # the smaller count was published first
+        assert st.n_stored == 7
+        monkeypatch.undo()
+    _fill(st, _rows(7, 3), 7)
+    st.close()
+    _assert_exactly(tmp_path / "leg", 10)
+
+
+def test_samples_of_earlier_versions_are_read_and_continued_from_what_all_their_datasets_hold(tmp_path):
+    """A file without the stored count (earlier versions) holds the iterations that all three row
+    datasets hold; it is continued from there, and from then on it has the count."""
+    import h5py
+
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    _fill(st, _rows(0, 8), 0)
+    st.close()
+    with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:   # as an earlier version killed while writing left it
+        del h5.attrs["committed"]
+        h5["u"].resize(10, axis=0)
+        h5["lrc_iter"].resize(5, axis=0)
+        h5["lrc_iter"][4] = 8
+        h5["lrc_du"].resize(5, axis=0)
+    _assert_exactly(tmp_path / "leg", 8)
+    st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
+    assert st.n_iterations == 8
+    _fill(st, _rows(8, 4), 8)
+    st.close()
+    _assert_exactly(tmp_path / "leg", 12)
+    from cufep.sampling.storage import stored_attributes, stored_conditions
+    assert stored_attributes(tmp_path / "leg")[0] == 12 and stored_conditions(tmp_path / "leg")[0] == 12
+    assert read_samples(tmp_path / "leg")["attrs"]["committed"] == {"iterations": 12, "tail_records": 6, "frame_records": 6}
+    # a count that the datasets do not hold is a damaged file, not a smaller sample
+    with h5py.File(tmp_path / "leg" / "samples.h5", "a") as h5:
+        h5["states"].resize(11, axis=0)
+    from cufep.sampling.storage import StorageError
+    with pytest.raises(StorageError, match="states are shorter than the 12 iterations"):
+        read_samples(tmp_path / "leg")
+
+
+def test_the_storage_says_when_it_could_not_store_and_restore_refuses_a_file_shorter_than_its_checkpoint(
+        tmp_path, tiny_leg, monkeypatch):
+    import cufep.sampling.storage as storage_module
+    from cufep.sampling.hrex import SamplerError
+    from cufep.sampling.storage import StorageError
+
+    st = LegStorage(tmp_path / "leg", 3, 3)
+    _fill(st, _rows(0, 2), 0)
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(storage_module, "_publish", broken)
+    with pytest.raises(StorageError, match="the 2 iteration.s. after iteration 0 could not be stored .* disk full"):
+        st.close()
+    monkeypatch.undo()
+    st.close()                                                     # the rows stayed in memory: stored now
+    assert read_samples(tmp_path / "leg")["u"].shape[0] == 2
+
+    spec, pos, box = tiny_leg
+    log = []
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append) as s:
+        s.initialize(pos, box)
+        s.run(4, record_stride=2, checkpoint_stride=2)
+    # the sampler: an error of the storage at close is raised, unless another error is already on its way
+    s = ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append)
+    s.storage.append(np.zeros((4, 4)), np.arange(4), np.ones(4))
+    monkeypatch.setattr(storage_module, "_publish", broken)
+    with pytest.raises(StorageError, match="disk full"):
+        s.close()
+    s = ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append)
+    s.storage.append(np.zeros((4, 4)), np.arange(4), np.ones(4))
+    with pytest.raises(ValueError, match="the error of the run"):
+        with s:
+            raise ValueError("the error of the run")
+    assert any("could not be stored" in line for line in log)
+    monkeypatch.undo()
+    assert not issubclass(StorageError, SamplerError)
+    # a file that holds fewer iterations than its checkpoint names is not continued
+    import h5py
+    with h5py.File(tmp_path / "hrex" / "samples.h5", "a") as h5:
+        frames = int(np.sum(h5["frame_iter"][:] < 2))
+        h5.attrs["committed"] = json.dumps({"iterations": 2, "tail_records": 0, "frame_records": frames})
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append) as s:
+        with pytest.raises(StorageError, match="holds 2 iterations, fewer than the 4 that its checkpoint names"):
+            s.restore()
+
+
+def test_a_final_checkpoint_that_cannot_be_stored_is_no_failure_of_the_backend(tmp_path, tiny_leg, monkeypatch):
+    """Review of PR 1: the last checkpoint met a reader that held samples.h5 for the whole wait; the error was
+    a SamplerError, which run_leg took for a failure of cuPotential: it set the samples aside and repeated
+    the whole leg on stock OpenMM."""
+    import openmm as mm
+
+    import cufep.sampling.storage as storage_module
+    from cufep.sampling.hrex import SamplerError, WorkerError
+    from cufep.sampling.storage import StorageBusyError
+    from cufep.workflow import backend_fallback_refusal
+
+    spec, pos, box = tiny_leg
+    monkeypatch.setattr(storage_module, "WRITE_WAIT_S", 0.3)
+    monkeypatch.setattr(storage_module, "CHECKPOINT_WAIT_S", 0.1)
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(2, record_stride=2, checkpoint_stride=2)
+        reader = hold_samples(tmp_path / "hrex" / "samples.h5", "r")
+        try:
+            with pytest.raises(StorageBusyError, match="the samples up to iteration 5 could not be stored: another "
+                                                       "process held .* The checkpoint at iteration 2 and the samples "
+                                                       "up to it are kept; running the leg again resumes it"):
+                s.run(3, record_stride=2, checkpoint_stride=100)
+        finally:
+            release(reader)
+    assert s.storage.read_checkpoint()["iteration"] == 2
+    # what run_leg makes of each kind of error
+    busy = StorageBusyError("held")
+    assert backend_fallback_refusal(busy, "cupotential", "openmm", False) == "not a failure of the backend"
+    assert backend_fallback_refusal(SamplerError("the checkpoint does not match"), "cupotential", "openmm", False) \
+        == "not a failure of the backend"
+    assert backend_fallback_refusal(WorkerError("worker 3 died"), "cupotential", "openmm", False) is None
+    assert backend_fallback_refusal(mm.OpenMMException("CUDA error"), "cupotential", "openmm", False) is None
+    assert backend_fallback_refusal(WorkerError("died"), "cupotential", "openmm", True) == "the leg had samples from an earlier run"
+    assert backend_fallback_refusal(WorkerError("died"), "openmm", "openmm", False) == "the leg runs on stock OpenMM already"
+    assert backend_fallback_refusal(WorkerError("died"), "cupotential", "none", False) == "backend.fallback is none"
+    assert backend_fallback_refusal(OSError("disk"), "cupotential", "openmm", False) == "not a failure of the backend"
+
+
+def test_the_samples_of_a_failed_backend_run_are_kept_and_archived(tmp_path):
+    """The samples of every cuPotential run that failed are kept (earlier ones were deleted), and they go
+    with the leg into previous_<n>/."""
+    from cufep.workflow import archive_leg, set_aside_failed_backend
+
+    leg = tmp_path / "leg"
+    for n in range(3):
+        (leg / "hrex").mkdir(parents=True)
+        (leg / "hrex" / "samples.h5").write_text(f"run {n}")
+        (leg / "schedule.yaml").write_text(f"schedule {n}")
+        kept = set_aside_failed_backend(leg)
+        assert kept.name == ("hrex_failed_cupotential" if n == 0 else f"hrex_failed_cupotential_{n + 1}")
+        assert (kept / "samples.h5").read_text() == f"run {n}" and (kept / "schedule.yaml").read_text() == f"schedule {n}"
+        assert not (leg / "hrex").exists() and not (leg / "schedule.yaml").exists()
+    previous = archive_leg(leg)
+    assert sorted(p.name for p in previous.iterdir()) == ["hrex_failed_cupotential", "hrex_failed_cupotential_2",
+                                                          "hrex_failed_cupotential_3"]
+
+
 HOLD_SAMPLES = ("import sys, h5py\n"
                 "handle = h5py.File(sys.argv[1], sys.argv[2])\n"
                 "print('open', flush=True)\n"

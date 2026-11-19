@@ -18,12 +18,20 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cufep.sampling.storage import LegStorage
+from cufep.sampling.storage import LegStorage, StorageBusyError, StorageError
 from cufep.sampling.worker import LegSpec, ReplicaWorker, SharedArrays, worker_main
 
 
 class SamplerError(RuntimeError):
-    """A worker failed or hung."""
+    """The sampler cannot go on: a worker failed (:class:`WorkerError`), or the sampler was used
+    in a way it does not allow, or a checkpoint does not belong to the leg. Failures to store
+    the samples are :class:`cufep.sampling.storage.StorageError`, which is not a SamplerError."""
+
+
+class WorkerError(SamplerError):
+    """A worker process failed, hung or did not start: the only kind of failure that says
+    something about the backend (and so the only one after which a leg may be repeated on
+    another backend)."""
 
 
 @dataclass
@@ -80,10 +88,10 @@ class _Process:
 
     def wait_ready(self, timeout: float) -> str:
         if not self.parent.poll(timeout):
-            raise SamplerError(f"worker {self.worker_id} (device {self.device}) did not start in {timeout:.0f} s")
+            raise WorkerError(f"worker {self.worker_id} (device {self.device}) did not start in {timeout:.0f} s")
         msg = self.parent.recv()
         if msg[0] != "ready":
-            raise SamplerError(f"worker {self.worker_id} failed to start: {msg[1]}")
+            raise WorkerError(f"worker {self.worker_id} failed to start: {msg[1]}")
         return msg[1]
 
     def submit(self, *args) -> None:
@@ -95,15 +103,15 @@ class _Process:
 
     def result(self, timeout: float) -> dict:
         if getattr(self, "_dead", False):
-            raise SamplerError(f"worker {self.worker_id} (device {self.device}) is not running")
+            raise WorkerError(f"worker {self.worker_id} (device {self.device}) is not running")
         if not self.parent.poll(timeout):
-            raise SamplerError(f"worker {self.worker_id} (device {self.device}) gave no answer in {timeout:.0f} s")
+            raise WorkerError(f"worker {self.worker_id} (device {self.device}) gave no answer in {timeout:.0f} s")
         try:
             msg = self.parent.recv()
         except EOFError as exc:
-            raise SamplerError(f"worker {self.worker_id} (device {self.device}) died") from exc
+            raise WorkerError(f"worker {self.worker_id} (device {self.device}) died") from exc
         if msg[0] != "done":
-            raise SamplerError(f"worker {self.worker_id} (device {self.device}): {msg[1]}")
+            raise WorkerError(f"worker {self.worker_id} (device {self.device}): {msg[1]}")
         return msg[1]
 
     def stop(self) -> None:
@@ -150,12 +158,12 @@ class WindowPool:
                         continue
                     msg = worker.parent.recv()
                 except (EOFError, OSError) as exc:
-                    raise SamplerError(f"a worker of the lambda precalculation died (device {worker.device})") from exc
+                    raise WorkerError(f"a worker of the lambda precalculation died (device {worker.device})") from exc
                 if msg[0] != "done":
-                    raise SamplerError(f"lambda precalculation on device {worker.device}: {msg[1]}")
+                    raise WorkerError(f"lambda precalculation on device {worker.device}: {msg[1]}")
                 results[busy.pop(pos)] = msg[1]
             if time.time() > deadline:
-                raise SamplerError("the lambda precalculation did not finish in time")
+                raise WorkerError("the lambda precalculation did not finish in time")
         return results
 
     def close(self) -> None:
@@ -228,6 +236,8 @@ class ReplicaExchangeSampler:
         #: how often this leg has been started: 0 for a new run, one more with every resume from a
         #: checkpoint (stored in the checkpoint). Part of the seed of every worker, see stream_seed
         self.start_number = 0
+        #: the iteration of the last checkpoint that was written (None before the first)
+        self.last_checkpoint: int | None = None
         self._iter_seconds: float | None = None
         #: seconds the workers were busy, summed, and (iteration, devices) whenever the workers changed
         self.busy_seconds = 0.0
@@ -309,21 +319,33 @@ class ReplicaExchangeSampler:
         self.device_history.append((self.iteration, list(self.devices)))
         return True
 
-    def close(self) -> None:
+    def close(self, failing: bool = False) -> None:
+        """Stop the workers, store the samples that are still in memory and free the arrays.
+
+        If those samples cannot be stored (they are the iterations after the last checkpoint),
+        that is logged, and raised unless ``failing`` says that the sampler is being closed
+        because of another error, which then stays the one that is raised.
+        """
         for w in self.workers:
             try:
                 w.stop()
             except Exception:  # noqa: BLE001
                 pass
         self.workers = []
-        self.storage.close()
-        self.arrays.close()
+        try:
+            self.storage.close()
+        except StorageError as exc:
+            self.log(f"[{self.spec.name}] {exc}")
+            if not failing:
+                raise
+        finally:
+            self.arrays.close()
 
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc) -> None:
-        self.close()
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close(failing=exc_type is not None)
 
     def _write_meta(self) -> None:
         spec = self.spec
@@ -379,8 +401,14 @@ class ReplicaExchangeSampler:
         self.arrays.pos[self.cur] = ckpt["positions"]
         self.arrays.vel[self.cur] = ckpt["velocities"]
         self.arrays.box[self.cur] = ckpt["boxes"]
+        if self.storage.n_iterations < ckpt["iteration"]:
+            raise StorageError(
+                f"{self.storage.h5_path} holds {self.storage.n_iterations} iterations, fewer than the "
+                f"{ckpt['iteration']} that its checkpoint names: the file was changed after the checkpoint was written. "
+                "Nothing was changed; the samples can be analysed (cufep analyze), and --reschedule starts the leg anew")
         self.state_of_replica = ckpt["state_of_replica"].astype(int)
         self.iteration = ckpt["iteration"]
+        self.last_checkpoint = int(ckpt["iteration"])
         # one more start of this leg: its workers get random streams that no earlier start used
         self.start_number = int((ckpt.get("extra") or {}).get("start", 0)) + 1
         self.storage.truncate(self.iteration)
@@ -405,10 +433,16 @@ class ReplicaExchangeSampler:
         written = self.storage.write_checkpoint(
             self.arrays.pos[self.cur], self.arrays.vel[self.cur], self.arrays.box[self.cur], self.state_of_replica,
             self.iteration, extra={"start": self.start_number}, wait_s=wait)
-        if not written and must:
-            raise SamplerError(f"the samples of iteration {self.iteration} could not be stored: another process held "
-                               f"{self.storage.h5_path} open for {wait:g} s")
-        if not written:
+        if written:
+            self.last_checkpoint = int(self.iteration)
+        elif must:
+            kept = "no checkpoint" if self.last_checkpoint is None else \
+                f"the checkpoint at iteration {self.last_checkpoint} and the samples up to it"
+            raise StorageBusyError(
+                f"the samples up to iteration {self.iteration} could not be stored: another process held "
+                f"{self.storage.h5_path} open for {wait:g} s. {kept[0].upper() + kept[1:]} are kept; running the "
+                "leg again resumes it from there on the same backend")
+        else:
             self.log(f"[{self.spec.name}] the checkpoint at iteration {self.iteration} is postponed to the next one: "
                      f"another process holds {self.storage.h5_path.name} open; the samples stay in memory")
         return written
@@ -452,11 +486,11 @@ class ReplicaExchangeSampler:
             worker.submit(self.cur, self._assignments(w), self.iteration, record, steps)
         timeout = self._timeout()
         results: list[dict | None] = [None] * len(self.workers)
-        failed: list[tuple[int, SamplerError]] = []
+        failed: list[tuple[int, WorkerError]] = []
         for w, worker in enumerate(self.workers):
             try:
                 results[w] = worker.result(timeout)
-            except SamplerError as exc:
+            except WorkerError as exc:
                 failed.append((w, exc))
         for w, exc in failed:
             if self.inline:
@@ -468,9 +502,9 @@ class ReplicaExchangeSampler:
             self.workers[w].submit(self.cur, self._assignments(w), self.iteration, record, steps)
             try:
                 results[w] = self.workers[w].result(timeout)
-            except SamplerError as again:
-                raise SamplerError(f"worker {w} failed twice from the same configurations at iteration "
-                                   f"{self.iteration}: {again}") from again
+            except WorkerError as again:
+                raise WorkerError(f"worker {w} failed twice from the same configurations at iteration "
+                                  f"{self.iteration}: {again}") from again
         return results
 
     def run(self, n_iterations: int, record_stride: int = 4, checkpoint_stride: int = 100,
