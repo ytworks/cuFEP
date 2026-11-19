@@ -186,6 +186,11 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     notes = quality_warnings({"analysis": drifting}, cfg)
     assert len(notes) == 3
     assert notes[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 is 0.020, below 0.03")
+    staged = quality_warnings({"analysis": drifting, "leg": "complex",
+                               "lambda_windows": {"restrain": [0.0, 1.0], "vanish": [0.0, 0.5, 1.0]}}, cfg)
+    assert staged[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 (vanish stage, lambda 0 and 0.5) "
+                                "is 0.020")
+    assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[1]
     assert notes[1].startswith("NOT CONVERGED: the first half of the production gives 100.90 kcal/mol and the second "
                                "half 99.20, the whole 100.00 ± 0.20")
     assert "sampling.production_ns" in notes[1] and notes[2].startswith("BAR between neighbouring lambda windows gives 101.00")
@@ -201,6 +206,47 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     assert out["not_reliable"] == ["complex leg"] and out["not_converged"] == ["complex leg"]
     assert out["estimators_disagree"] == ["complex leg"]
     assert out["repeats"][0]["lambda_windows_added"] == {"complex": None, "solvent": {"vanish": 2}}
+
+
+def test_a_leg_that_starts_anew_keeps_what_it_had(tmp_path):
+    """--reschedule on a finished leg: nothing is deleted, pre-equilibration and restraint stay."""
+    from cufep.workflow import archive_leg, window_stage
+
+    leg = tmp_path / "repeat_0" / "complex"
+    assert archive_leg(leg) is None                                   # nothing there yet
+    (leg / "hrex").mkdir(parents=True)
+    for name in ("hrex/samples.h5", "schedule.yaml", "start_configs.npz", "result.json", "timing.json", "equil.npz",
+                 "restraint.json", "log.txt"):
+        (leg / name).write_text(name)
+    first = archive_leg(leg)
+    assert first == leg / "previous_1"
+    assert sorted(f.name for f in first.iterdir()) == ["hrex", "result.json", "schedule.yaml", "start_configs.npz",
+                                                       "timing.json"]
+    assert (first / "hrex" / "samples.h5").read_text() == "hrex/samples.h5"
+    assert sorted(f.name for f in leg.iterdir()) == ["equil.npz", "log.txt", "previous_1", "restraint.json"]
+    assert archive_leg(leg) is None                                   # only what must stay is left
+    (leg / "schedule.yaml").write_text("new")
+    assert archive_leg(leg) == leg / "previous_2" and (first / "schedule.yaml").read_text() == "schedule.yaml"
+
+    windows = {"restrain": [0.0, 0.5, 1.0], "discharge": [0.0, 0.25, 0.5, 0.75, 1.0], "vanish": [0.0, 0.5, 1.0]}
+    assert window_stage(windows, 0) == ("restrain", 0.0, 0.5)
+    assert window_stage(windows, 2) == ("discharge", 0.0, 0.25)       # window 2 ends restrain and starts discharge
+    assert window_stage(windows, 5) == ("discharge", 0.75, 1.0)
+    assert window_stage(windows, 7) == ("vanish", 0.5, 1.0) and window_stage(windows, 8) is None
+
+
+def test_a_run_can_be_restricted_to_ligands_and_legs():
+    from cufep.run import select_jobs
+    from cufep.workflow import WorkflowError
+
+    names = ["a", "b"]
+    assert select_jobs(names, 1) == [("a", 0, "complex"), ("a", 0, "solvent"), ("b", 0, "complex"), ("b", 0, "solvent")]
+    assert select_jobs(names, 2, only_ligands=("b",), only_legs=("complex",)) == [("b", 0, "complex"), ("b", 1, "complex")]
+    assert select_jobs(names, 1, only_legs=["solvent"]) == [("a", 0, "solvent"), ("b", 0, "solvent")]
+    with pytest.raises(WorkflowError, match="not among the ligands"):
+        select_jobs(names, 1, only_ligands=["c"])
+    with pytest.raises(WorkflowError, match="neither complex nor solvent"):
+        select_jobs(names, 1, only_legs=["bound"])
 
 
 def test_analysis_figure_is_written(tmp_path):

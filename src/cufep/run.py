@@ -64,21 +64,47 @@ def lock_output_directory(out_dir: Path):
     return handle
 
 
-def run(cfg: Config, reschedule: bool = False, log=None) -> list[dict]:
-    """Run the whole calculation for every ligand in the SDF. Safe to call again to resume."""
+def select_jobs(names: list[str], repeats: int, only_ligands=None, only_legs=None) -> list[tuple[str, int, str]]:
+    """(ligand, repeat, leg) of the jobs of a run, restricted to the given ligands and legs."""
+    only_ligands, only_legs = list(only_ligands or []), list(only_legs or [])
+    unknown = [n for n in only_ligands if n not in names]
+    if unknown:
+        raise WorkflowError(f"--ligand: not among the ligands of this run: {', '.join(unknown)}")
+    wrong = [leg for leg in only_legs if leg not in ("complex", "solvent")]
+    if wrong:
+        raise WorkflowError(f"--leg: {', '.join(wrong)} is neither complex nor solvent")
+    return [(name, r, leg) for name in names if not only_ligands or name in only_ligands
+            for r in range(repeats) for leg in ("complex", "solvent") if not only_legs or leg in only_legs]
+
+
+def run(cfg: Config, reschedule: bool = False, log=None, only_ligands=None, only_legs=None) -> list[dict]:
+    """Run the whole calculation for every ligand in the SDF. Safe to call again to resume.
+
+    Called again in the same output directory, a leg goes on from where it stopped: an
+    unfinished leg resumes, and a finished leg runs on if ``sampling.production_ns`` is now
+    longer. With ``reschedule`` a leg starts anew with windows determined again; what it had is
+    moved to ``previous_<n>/`` in its directory. ``only_ligands`` and ``only_legs`` restrict
+    this to some legs; the binding free energies are then put together again with the results
+    the other legs already have.
+    """
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)
     try:
-        return _run(cfg, out_dir, reschedule, log)
+        return _run(cfg, out_dir, reschedule, log, only_ligands, only_legs)
     finally:
         lock.close()
 
 
-def _run(cfg: Config, out_dir: Path, reschedule: bool, log) -> list[dict]:
+def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, only_legs=None) -> list[dict]:
     log = log or _Log(out_dir / "cufep.log")
     t_run = time.time()
     resolved, report, protein, ligands = plan(cfg, log)
+    selected = select_jobs([lig.name for lig in ligands], resolved.sampling.repeats, only_ligands, only_legs)
+    partial = bool(only_ligands or only_legs)
+    if partial:
+        log("only " + ", ".join(sorted({f"{name}/{leg}" for name, _, leg in selected}))
+            + " is run; the other legs keep the results they have")
     resolved.output.dir = out_dir
     dump_config(resolved, out_dir / "resolved_config.yaml")
     (out_dir / "auto_report.md").write_text(report.to_markdown())
@@ -92,18 +118,20 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log) -> list[dict]:
     cfg_dict = resolved.model_dump(mode="json")
 
     lig_dirs = {}
+    to_run = {name for name, _, _ in selected}
     for lig in ligands:
         lig_dir = out_dir / safe_name(lig.name)
-        prepare_ligand(resolved, lig, protein, lig_dir, membrane, resolved.solvation.box_shape, log)
+        if lig.name in to_run:
+            prepare_ligand(resolved, lig, protein, lig_dir, membrane, resolved.solvation.box_shape, log)
         lig_dirs[lig.name] = lig_dir
 
     t_prepared = time.time()
     repeats = resolved.sampling.repeats
-    sizes = {lig.name: json.loads((lig_dirs[lig.name] / "prep" / "prep.json").read_text()) for lig in ligands}
-    jobs = [LegJob(ligand=lig.name, leg=leg, repeat=r, lig_dir=str(lig_dirs[lig.name]), devices=[], config=cfg_dict,
+    sizes = {name: json.loads((lig_dirs[name] / "prep" / "prep.json").read_text()) for name in to_run}
+    jobs = [LegJob(ligand=name, leg=leg, repeat=r, lig_dir=str(lig_dirs[name]), devices=[], config=cfg_dict,
                    production_ns=resolved.sampling.production(leg), reschedule=reschedule,
-                   n_atoms=int(sizes[lig.name].get(f"n_atoms_{leg}", 0)))
-            for lig in ligands for r in range(repeats) for leg in ("complex", "solvent")]
+                   n_atoms=int(sizes[name].get(f"n_atoms_{leg}", 0)))
+            for name, r, leg in selected]
     log(f"{len(jobs)} job(s): {len(ligands)} ligand(s) x 2 legs x {repeats} repeat(s); per lambda window "
         f"{resolved.sampling.equilibration('complex'):g} ns equilibration and "
         f"{resolved.sampling.production('complex'):g} ns production (complex leg)")
@@ -120,9 +148,13 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log) -> list[dict]:
     for r in results:
         if "error" in r:
             log(f"FAILED {r['ligand']}/r{r['repeat']}/{r['leg']}: {r['error']}")
-    write_timing(out_dir, jobs, t_run, t_prepared, monitor, daemon is not None, log)
+    # a run of some legs only leaves the timing of the whole run in place
+    write_timing(out_dir, jobs, t_run, t_prepared, monitor, daemon is not None, log,
+                 file_name="timing_rerun.json" if partial else "timing.json")
 
-    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats) for lig in ligands]
+    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats) if lig_dirs[lig.name].exists()
+               else {"ligand": lig.name, "units": "kcal/mol", "n_repeats": 0, "warnings": ["not run"]}
+               for lig in ligands]
     write_summary(out_dir, summary, ligands)
     for lig in ligands:
         for r in range(repeats):
@@ -171,8 +203,9 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
 
 
-def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, mps_used: bool, log) -> None:
-    """Where the time went: per phase and per job, and how busy the GPUs were (timing.json)."""
+def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, mps_used: bool, log,
+                 file_name: str = "timing.json") -> None:
+    """Where the time went: per phase and per job, and how busy the GPUs were (``file_name``)."""
     legs = []
     for job in jobs:
         f = job.leg_dir / "timing.json"
@@ -190,7 +223,7 @@ def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, 
             "jobs_seconds": now - t_prepared, "mps": mps_used, "gpus": list(monitor.gpus),
             "gpu_utilization_percent": {"whole_run": monitor.mean(), "while_sampling": monitor.mean_over(intervals)},
             "phase_seconds_summed_over_jobs": phases, "jobs": legs}
-    (out_dir / "timing.json").write_text(json.dumps(data, indent=1))
+    (out_dir / file_name).write_text(json.dumps(data, indent=1))
     log(f"timing: {data['wall_seconds'] / 60:.1f} min in total; preparation {data['preparation_seconds'] / 60:.1f} min; "
         + "; ".join(f"{name} {seconds / 60:.1f} min" for name, seconds in phases.items()) + " (summed over jobs)")
     util = data["gpu_utilization_percent"]["while_sampling"]

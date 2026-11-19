@@ -58,9 +58,35 @@ falls back to files in the output directory and says so.
 | `summary.csv`, `summary.json` | binding free energies, uncertainties, warnings |
 | `timing.json` | time per phase and job, GPU utilization |
 | `<ligand>/repeat_<n>/<leg>/` | restraint, lambda windows (`schedule.yaml`), samples, per-leg result and log |
+| `<ligand>/repeat_<n>/analysis.png` | convergence (forward and reverse series) and overlap matrix of both legs |
 
 One calculation per ligand is run by default, as in FEP+ and Flare. `sampling.repeats`
 runs it several times independently and reports the spread.
+
+## When a result is flagged
+
+The analysis checks every leg and marks the result if a check fails
+([docs/protocol.md](docs/protocol.md), "Checks of the analysis"). Nothing is run again
+automatically. As with further instances of a link in Flare, you run the leg concerned
+again, and the rest of the calculation keeps its results.
+
+| flag | meaning | what to do |
+|---|---|---|
+| `NOT RELIABLE` | two neighbouring lambda windows overlap by less than 0.03 in the production | give that stage more lambda windows and start the leg anew |
+| `NOT CONVERGED` | the first and the second half of the production give different free energies | run the leg longer; it continues from where it stopped |
+
+```bash
+# longer: the complex leg of one ligand goes on from 5 to 10 ns per lambda window
+cufep run config.yaml --ligand ejm_31 --leg complex --production-ns 10
+
+# more lambda windows: change lambda_schedule in config.yaml (for example
+# adaptive.initial_windows.complex.vanish: 13), then start that leg anew
+cufep run config.yaml --ligand ejm_31 --leg complex --reschedule
+```
+
+With `--reschedule` the windows and samples the leg had are moved to `previous_<n>/` in its
+directory; its pre-equilibration and restraint are used again. `analysis.png` in each
+repeat directory shows the convergence and the overlap matrix of both legs.
 
 ## Configuration
 

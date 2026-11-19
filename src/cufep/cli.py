@@ -139,14 +139,26 @@ def plan(config: str) -> None:
 @click.option("--gpus", help="Override resources.gpus: 'auto' or a comma separated list of device indices.")
 @click.option("--backend", type=click.Choice(["cupotential", "openmm"]), help="Override backend.name.")
 @click.option("-o", "--output", help="Override output.dir.")
-@click.option("--reschedule", is_flag=True, help="Determine the lambda windows again instead of reusing schedule.yaml.")
-def run(config: str, repeats, production_ns, gpus, backend, output, reschedule: bool) -> None:
-    """Run (or resume) the calculation described by CONFIG."""
+@click.option("--ligand", "ligands", multiple=True,
+              help="Run only this ligand (may be given more than once). The other ligands keep their results.")
+@click.option("--leg", "legs", multiple=True, type=click.Choice(["complex", "solvent"]),
+              help="Run only this leg (may be given more than once). The other leg keeps its result.")
+@click.option("--reschedule", is_flag=True,
+              help="Determine the lambda windows again and start the legs anew; the windows and samples a leg "
+                   "already has are moved to previous_<n>/ in its directory.")
+def run(config: str, repeats, production_ns, gpus, backend, output, ligands, legs, reschedule: bool) -> None:
+    """Run (or resume) the calculation described by CONFIG.
+
+    Run again in the same output directory, a leg goes on from where it stopped: an unfinished
+    leg resumes, and a finished leg runs on if the production is now longer
+    (sampling.production_ns or --production-ns). To run one flagged leg again, combine --ligand
+    and --leg with --production-ns (longer) or --reschedule (lambda windows determined again).
+    """
     from cufep import run as driver
 
     cfg = _apply_overrides(_load(config), repeats, production_ns, gpus, output, backend)
     try:
-        summary = driver.run(cfg, reschedule=reschedule)
+        summary = driver.run(cfg, reschedule=reschedule, only_ligands=ligands, only_legs=legs)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
     if not any("dg_bind" in s for s in summary):

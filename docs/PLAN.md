@@ -35,8 +35,8 @@ precalculation だけで window を決める。解析で収束を判定する。
 |---|---|---|
 | 0 | 残っていた実行の後始末 | 済 |
 | 1 | adaptive lambda scheduling を Cresset の方式に戻す。改訂 7 の途中で足した「equilibration の間の差し込み」(Cresset に無い動作) を取り除く。開始 window は restrain 3、discharge 5、vanish 9 | 済 |
-| 2 | 収束の解析: overlap、production の前半と後半の ΔG (forward と reverse)、推定量の比較 | 未 |
-| 3 | production の後に、1 つの leg だけを window を増やすか時間を延ばして走らせ直す手段 | 未 |
+| 2 | 収束の解析: overlap、production の前半と後半の ΔG (forward と reverse)、推定量の比較 | 済 (protocol.md の "Checks of the analysis") |
+| 3 | production の後に、1 つの leg だけを window を増やすか時間を延ばして走らせ直す手段 | 済 (`cufep run --ligand --leg` と `--production-ns` または `--reschedule`。protocol.md の "When a leg is flagged") |
 | 4 | REST2 の既定値を、ベンチマークの数値で判断する | 未 |
 | 5 | イメージの凍結、GPU テスト、TYK2 example の所要時間 (GPU 8 個と 1 個) | 未 |
 | 6 | 確認: TYK2 の 5 リガンドで、window が足されないことと、overlap と収束が保たれることの関係を調べる | 未 |

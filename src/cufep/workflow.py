@@ -287,6 +287,44 @@ class LegJob:
         return f"{self.ligand}/r{self.repeat}/{self.leg}"
 
 
+#: what a leg directory holds of its lambda windows and its replica-exchange run
+LEG_RUN_FILES = ("schedule.yaml", "start_configs.npz", "hrex", "hrex_failed_cupotential", "result.json", "error.json",
+                 "timing.json")
+
+
+def archive_leg(leg_dir: Path) -> Path | None:
+    """Move the lambda windows, samples and result of a leg into ``previous_<n>/`` in its directory.
+
+    The leg then starts anew from its pre-equilibration and restraint, which stay where they
+    are. Nothing is deleted. Returns the new directory, or None if the leg had none of these.
+    """
+    present = [leg_dir / name for name in LEG_RUN_FILES if (leg_dir / name).exists()]
+    if not present:
+        return None
+    n = 1
+    while (leg_dir / f"previous_{n}").exists():
+        n += 1
+    dest = leg_dir / f"previous_{n}"
+    dest.mkdir()
+    for f in present:
+        f.rename(dest / f.name)
+    return dest
+
+
+def window_stage(lambda_windows: dict, k: int) -> tuple[str, float, float] | None:
+    """Stage and the two lambda values of the pair of windows ``k`` and ``k + 1`` of a leg.
+
+    ``lambda_windows`` maps the stages, in order, to their lambda values; the last window of a
+    stage is the first of the next.
+    """
+    first = 0
+    for stage, values in lambda_windows.items():
+        if first <= k < first + len(values) - 1:
+            return stage, float(values[k - first]), float(values[k - first + 1])
+        first += len(values) - 1
+    return None
+
+
 def read_result(job: LegJob) -> dict:
     """The result of a finished job, or its error."""
     for name in ("result.json", "error.json"):
@@ -348,6 +386,10 @@ def run_leg(job: LegJob) -> dict:
     leg_dir = job.leg_dir
     leg_dir.mkdir(parents=True, exist_ok=True)
     log = _Log(leg_dir / "log.txt", prefix=f"[{job.tag}] ")
+    if job.reschedule:
+        previous = archive_leg(leg_dir)
+        if previous is not None:
+            log(f"the lambda windows are determined again; the windows and samples this leg had are in {previous.name}/")
     is_complex = job.leg == "complex"
     lig_dir = Path(job.lig_dir)
     prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())
@@ -523,8 +565,6 @@ def run_leg(job: LegJob) -> dict:
         start_file = leg_dir / "start_configs.npz"
         # ---- 4. lambda schedule ----------------------------------------------------------------
         ls = cfg.lambda_schedule
-        if job.reschedule and not (hrex_dir / "samples.h5").exists():
-            sched_file.unlink(missing_ok=True)
         if ls.file is not None and not sched_file.exists():
             # one file for every leg, or a directory of frozen schedules: <ligand>/<leg>_r<repeat>.yaml
             src = Path(ls.file)
@@ -701,8 +741,8 @@ def run_leg(job: LegJob) -> dict:
     }
     result["quality"] = quality_checks(result["analysis"], cfg.analysis.min_overlap,
                                        cfg.analysis.convergence_tolerance_sigma)
-    result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
     result["lambda_windows"] = schedule.windows()
+    result["notes"] = notes + list(schedule.notes) + quality_warnings(result, cfg)
     # windows that adaptive lambda scheduling added to its start, per stage (None: fixed windows)
     start = schedule.provenance.get("initial_windows") if schedule.mode == "adaptive" else None
     result["lambda_windows_added"] = (
@@ -786,9 +826,12 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
     out = []
     if not q["overlap"]["ok"]:
         k = q["overlap"]["windows"][0]
-        out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1} is {q['overlap']['lowest']:.3f}, "
-                   f"below {cfg.analysis.min_overlap:g}; add lambda windows there (lambda_schedule.windows with "
-                   f"mode: fixed, or more lambda_schedule.adaptive.initial_windows) and run this leg again")
+        where = window_stage(result.get("lambda_windows") or {}, k)
+        stage = "" if where is None else f" ({where[0]} stage, lambda {where[1]:g} and {where[2]:g})"
+        out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1}{stage} is "
+                   f"{q['overlap']['lowest']:.3f}, below {cfg.analysis.min_overlap:g}. Give that stage more lambda "
+                   f"windows (lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) "
+                   f"and run this leg again: cufep run CONFIG --ligand NAME --leg {result.get('leg', 'LEG')} --reschedule")
     conv = q["convergence"]
     if conv["ok"] is False:
         whole = f"{conv['final'] / KCAL:.2f} ± {a['delta_g_error'] / KCAL:.2f}"
@@ -798,7 +841,8 @@ def quality_warnings(result: dict, cfg: Config) -> list[str]:
         else:
             halves = "half of the production does not determine the free energy"
         out.append(f"NOT CONVERGED: {halves}, the whole {whole}; both halves should lie within {sigma:g} standard "
-                   f"errors of the whole. Run this leg longer (sampling.production_ns)")
+                   f"errors of the whole. Run this leg longer; it continues from where it stopped: cufep run CONFIG "
+                   f"--ligand NAME --leg {result.get('leg', 'LEG')} --production-ns NS (or sampling.production_ns)")
     est = q["estimators"]
     if est["ok"] is False:
         out.append(f"BAR between neighbouring lambda windows gives {est['bar'] / KCAL:.2f} kcal/mol and MBAR "

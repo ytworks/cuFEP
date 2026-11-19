@@ -203,7 +203,7 @@ its own equilibration before the production.
 | initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state. For absolute FEP, Flare states only that the schedule is adaptive "for each stage of the calculation" | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
-| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the result names every pair of windows below `analysis.min_overlap`; the user gives that stage more windows and runs the leg again |
+| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the analysis checks overlap and convergence ("Checks of the analysis"); the user runs a flagged leg again with more windows or a longer production ("When a leg is flagged") |
 | Fast / Normal / Accurate | an option of Flare; its values are not published | `overlap_threshold` is set as a number (the paper tested 0.03, 0.04 and 0.05) |
 
 ### What was measured on TYK2
@@ -227,7 +227,8 @@ there, and took as long as several more windows of production.
 So in a complex leg the schedule of the precalculation can leave a pair of windows below
 the warning level. The result then says `NOT RELIABLE` and names the pair, and the remedy
 is the one of Flare: more windows in that stage (`lambda_schedule.adaptive.initial_windows`,
-or `lambda_schedule.windows` with `mode: fixed`) and a new run of that leg. For orientation:
+or `lambda_schedule.windows` with `mode: fixed`) and a new run of that leg ("When a leg is
+flagged"). For orientation:
 
 | TYK2 ejm_31, complex leg | windows | lowest overlap in production |
 |---|---|---|
@@ -336,6 +337,26 @@ error, so at a tolerance of 2 about one leg in twenty is flagged by chance.
 end, at `analysis.convergence_points` points), the two halves, the band of the tolerance and
 the overlap matrix. The number of round trips of the replicas and the exchange between
 neighbouring windows are in `result.json`; no threshold is applied to them.
+
+### When a leg is flagged
+
+cuFEP does not run anything again by itself. The user runs the leg concerned again, as a
+Flare user adds a further instance of a link "with longer simulation time/more Lambda
+windows"; the other legs and ligands keep their results and the binding free energy is put
+together again.
+
+- `NOT CONVERGED`: a longer production. `cufep run CONFIG --ligand NAME --leg complex
+  --production-ns 10` (or a larger `sampling.production_ns`) continues the replica-exchange
+  run of that leg from its last iteration; the analysis then covers the whole production.
+- `NOT RELIABLE`: more lambda windows in the stage that the message names
+  (`lambda_schedule.adaptive.initial_windows`, a different `overlap_threshold`, or
+  `lambda_schedule.windows` with `mode: fixed`), then `cufep run CONFIG --ligand NAME --leg
+  complex --reschedule`. The leg starts anew from its pre-equilibration and restraint with
+  windows determined again; the windows, samples and result it had are moved to
+  `previous_<n>/` in the leg directory.
+
+A run restricted with `--ligand` or `--leg` writes its timing to `timing_rerun.json` and
+leaves `timing.json` of the whole run in place.
 
 ## Long-range dispersion
 
