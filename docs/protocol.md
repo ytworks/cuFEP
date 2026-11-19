@@ -276,10 +276,10 @@ exchanged.
   MPS daemon. The oversubscription factor is the number of workers of a job per GPU; it is
   chosen from the size of the system (small systems leave most of a GPU idle). Without MPS
   it is 1.
-- All GPUs form one pool. A job that is in pre-equilibration, restraint search or the
-  lambda precalculation holds one worker. The rest is divided among the jobs that are
-  sampling, in proportion to the work they still have to do and never more than one worker
-  per replica. When a job starts sampling or ends, the shares are recomputed, and jobs start
+- All GPUs form one pool. A job that is in pre-equilibration or in the restraint search
+  holds one worker. The rest is divided among the jobs that are in the lambda precalculation
+  (its new windows of an iteration run at the same time) or sampling, in proportion to the
+  work they still have to do and never more than one worker per window or replica. When a job starts sampling or ends, the shares are recomputed, and jobs start
   or stop workers at their next iteration. With one ligand the solvent leg therefore uses
   the free GPUs while the complex leg is still in pre-equilibration, and the complex leg
   takes all of them afterwards.
@@ -313,7 +313,6 @@ Further differences from OpenFE, whose protocol cuFEP follows most closely:
 | | OpenFE | cuFEP |
 |---|---|---|
 | compute backend | stock OpenMM | cuPotential plugin for the nonbonded force and integrator; stock OpenMM as fallback |
-| restraint reference values | last frame of the pre-equilibration | circular mean over the trajectory |
 | standard state correction | analytical | numerical, analytical as a check |
 | ligand-environment dispersion tail | isotropic | explicit, by reweighting the coupled state |
 
