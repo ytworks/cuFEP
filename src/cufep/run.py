@@ -166,8 +166,9 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         f"{resolved.sampling.production('complex'):g} ns production (complex leg)")
     real_gpus = [g for g in gpus if g is not None]
     factor = resolved.resources.oversubscription_factor
+    monitor = GpuMonitor(real_gpus)              # maps the run's devices to nvidia-smi's before MPS starts
     daemon = mps.start(log) if real_gpus and factor != 1 else None
-    monitor = GpuMonitor(real_gpus).start()
+    monitor.start()
     try:
         results = run_jobs(jobs, gpus, log, oversubscription=factor, mps=daemon is not None)
     finally:

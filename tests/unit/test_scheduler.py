@@ -266,3 +266,33 @@ def test_a_second_interrupt_does_not_release_the_lock_while_jobs_stop(tmp_path):
     proc.wait(timeout=60)
     assert (legs[0] / "stopped").exists() and _gone(int((legs[0] / "pid").read_text()))
     assert _lock_is_free(out)
+
+
+def test_the_clients_of_cufeps_mps_daemon_do_not_carry_the_device_mask(monkeypatch):
+    """Found by the check chain of plan revision 13 (B1): with CUDA_VISIBLE_DEVICES=2 the run chose CUDA device 0,
+    GPU 2, and every job failed with CUDA_ERROR_NO_DEVICE: the clients of an MPS server number its GPUs from 0 and
+    look for a client's mask among them. While cuFEP's daemon runs, its processes drop the mask; the monitor keeps
+    the map from CUDA device numbers to nvidia-smi's that it took before."""
+    import subprocess as sp
+
+    from cufep import mps
+
+    rows = [(0, "GPU-a", 0.0), (1, "GPU-b", 0.0), (2, "GPU-c", 77.0), (3, "GPU-d", 0.0)]
+    monkeypatch.setattr(scheduler, "query_gpus", lambda: rows)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    monkeypatch.setattr(mps.shutil, "which", lambda name: "/usr/bin/" + name)
+    seen = []
+    monkeypatch.setattr(mps.subprocess, "run", lambda args, **kw: seen.append(kw.get("env", {}).get("CUDA_VISIBLE_DEVICES"))
+                        or sp.CompletedProcess(args, 0, "", ""))
+    monitor = scheduler.GpuMonitor([0], interval=0.01)
+    daemon = mps.start(lambda m: None)
+    try:
+        assert seen == ["2"]                                 # the server sees GPU 2 alone
+        assert "CUDA_VISIBLE_DEVICES" not in os.environ      # its clients find it as their device 0
+        monitor.start()
+        time.sleep(0.2)
+        monitor.stop()
+        assert monitor.samples and all(row == {0: 77.0} for _, row in monitor.samples)
+    finally:
+        daemon.stop()
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "2"

@@ -271,6 +271,9 @@ class GpuMonitor:
 
     def __init__(self, gpus: list[int], interval: float = 5.0) -> None:
         self.gpus, self.interval = list(gpus), interval
+        # nvidia-smi's number of every CUDA device of the run, taken now: once cuFEP's MPS daemon
+        # runs, the processes of the run no longer carry CUDA_VISIBLE_DEVICES (cufep.mps)
+        self.physical = {g.logical: g.physical for g in visible_gpus()}
         self.samples: list[tuple[float, dict[int, float]]] = []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -284,7 +287,8 @@ class GpuMonitor:
         while not self._stop.wait(self.interval):
             try:
                 # by CUDA device number, the numbers of the run, not by nvidia-smi's own
-                row = {g.logical: g.utilization for g in visible_gpus() if g.logical in self.gpus}
+                load = {index: util for index, _uuid, util in query_gpus()}
+                row = {g: load[self.physical[g]] for g in self.gpus if self.physical.get(g) in load}
                 self.samples.append((time.time(), row))
             except Exception:  # noqa: BLE001 - monitoring must never disturb the run
                 pass

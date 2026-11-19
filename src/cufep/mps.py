@@ -75,6 +75,13 @@ def start(log=print) -> MpsDaemon | None:
         shutil.rmtree(directory, ignore_errors=True)
         log(f"NVIDIA MPS could not be started ({why[:200]}): one worker per GPU")
         return None
+    # The server sees the GPUs of CUDA_VISIBLE_DEVICES; its clients number those GPUs 0, 1, ... in
+    # that order, and a client that keeps the mask looks for its GPUs among the server's and finds
+    # none (measured: server and client with CUDA_VISIBLE_DEVICES=5, CUDA_ERROR_NO_DEVICE; client
+    # without the mask, the GPU 5). The processes of the run therefore drop the mask while the daemon
+    # runs; their device numbers stay the CUDA device numbers of the run.
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        previous["CUDA_VISIBLE_DEVICES"] = os.environ.pop("CUDA_VISIBLE_DEVICES")
     return MpsDaemon(directory, previous)
 
 
