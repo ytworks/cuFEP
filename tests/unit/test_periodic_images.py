@@ -1,0 +1,128 @@
+"""Every geometric quantity between the ligand and the protein is the same for a ligand that is one
+or more cells away (review of PR 1 on a3462a5: the manual Boresch restraint and the pose check).
+
+Coordinates are not wrapped into the cell, and the frames of a leg come from whichever replica is
+in the coupled state, so a ligand may be any number of lattice vectors away from the protein. The
+forces measure across the periodic boundary; everything cuFEP computes from coordinates must too.
+"""
+import numpy as np
+import openmm as mm
+import openmm.unit as unit
+import pytest
+
+from cufep.alchemy.restraints import BoreschRestraint, nearest_image_of_ligand
+from cufep.analysis.structure import structural_analysis
+from cufep.workflow import WorkflowError, manual_boresch_restraint
+
+K_R = 10.0 * 4.184 * 100.0          # restraints.k_r_kcal_per_A2 = 10 in kJ/mol/nm^2
+K_A = 80.0 * 4.184
+
+CUBE = np.eye(3) * 5.0
+D = 5.0                              # rhombic dodecahedron of image distance 5 nm, OpenMM's reduced form
+DODECAHEDRON = np.array([[D, 0.0, 0.0], [0.0, D, 0.0], [D / 2, D / 2, D * np.sqrt(2) / 2]])
+
+# three host atoms and a ligand of three atoms whose first atom is 0.4 nm from the first host atom
+POSITIONS = np.array([[1.0, 1.0, 1.0], [1.0, 1.15, 1.0], [1.15, 1.15, 1.0],
+                      [0.6, 1.0, 1.0], [0.6, 0.85, 1.0], [0.6, 0.85, 1.15]])
+HOST, GUEST, LIGAND = (0, 1, 2), (3, 4, 5), np.array([3, 4, 5])
+
+
+def lattice_shifts(box):
+    a, b, c = box
+    return {"none": np.zeros(3), "-a": -a, "a+b": a + b, "2c": 2 * c, "-a-2b+c": -a - 2 * b + c}
+
+
+def restraint_energy(restraint: BoreschRestraint, positions, box) -> float:
+    """The energy of the restraint's own OpenMM force, which measures across the periodic boundary."""
+    system = mm.System()
+    for _ in range(len(positions)):
+        system.addParticle(12.0)
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])
+    system.addForce(restraint.create_force())
+    context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    context.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])
+    context.setPositions(positions * unit.nanometer)
+    return context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+
+
+def equilibration_with(positions, box):
+    return {"frame_atoms": np.arange(len(positions)), "frames": np.array([positions, positions]),
+            "frame_boxes": np.array([box, box])}
+
+
+def test_the_reviewers_manual_restraint_one_cell_away():
+    """5 nm cell, ligand 0.4 nm from the host, moved by one cell: from the raw coordinates r0 was 5.4 nm and
+    the restraint held its own reference configuration with 52,300 kJ/mol."""
+    moved = POSITIONS.copy()
+    moved[LIGAND] -= CUBE[0]
+    raw_values = BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0).values(moved)
+    old = BoreschRestraint(HOST, GUEST, *[float(x) for x in raw_values], K_R, K_A, K_A, K_A, K_A, K_A)
+    assert old.r0 == pytest.approx(5.4) and restraint_energy(old, moved, CUBE) == pytest.approx(52300.0, rel=1e-6)
+    new = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(moved, CUBE), len(POSITIONS), K_R, K_A)
+    assert new.r0 == pytest.approx(0.4) and restraint_energy(new, moved, CUBE) == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("box", [CUBE, DODECAHEDRON], ids=["cube", "dodecahedron"])
+def test_the_manual_restraint_is_the_same_in_every_image(box):
+    reference = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(POSITIONS, box), len(POSITIONS),
+                                         K_R, K_A)
+    for name, shift in lattice_shifts(box).items():
+        moved = POSITIONS.copy()
+        moved[LIGAND] += shift
+        r = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(moved, box), len(POSITIONS), K_R, K_A)
+        fields = ("r0", "theta_a0", "theta_b0", "phi_a0", "phi_b0", "phi_c0")
+        assert [getattr(r, f) for f in fields] == pytest.approx([getattr(reference, f) for f in fields]), name
+        assert restraint_energy(r, moved, box) == pytest.approx(0.0, abs=1e-6), name
+
+
+def test_a_manual_restraint_needs_the_boxes_of_the_frames():
+    eq = equilibration_with(POSITIONS, CUBE)
+    del eq["frame_boxes"]
+    with pytest.raises(WorkflowError, match="holds no boxes of its frames"):
+        manual_boresch_restraint(HOST, GUEST, LIGAND, eq, len(POSITIONS), K_R, K_A)
+
+
+def _coupled_frames(box, shifts):
+    """Frames of a protein of eight C-alpha atoms and a ligand of three atoms that never moves, with the
+    ligand put some lattice vectors away in some frames."""
+    rng = np.random.default_rng(3)
+    ca = rng.normal(scale=0.6, size=(8, 3)) + 2.5
+    ligand = np.array([[2.5, 2.5, 3.1], [2.6, 2.5, 3.2], [2.5, 2.6, 3.3]])
+    frames = []
+    for shift in shifts:
+        frames.append(np.vstack([ca, ligand + shift]) + rng.normal(scale=0.002, size=(11, 3)))
+    n = len(frames)
+    return {"frames": np.array(frames, dtype=np.float32), "frame_iter": np.arange(n) * 4,
+            "frame_box": np.repeat(np.asarray(box, dtype=np.float32)[None], n, axis=0),
+            "attrs": {"frame_ca": list(range(8)), "frame_ligand": [8, 9, 10]}}
+
+
+def test_the_reviewers_pose_check_one_cell_away():
+    """5 nm cell, the same pose in every frame, the ligand one cell away in every other frame: the pose check
+    reported an RMSD and a drift of the centre of 50 A and said the ligand may have left the pocket."""
+    shifts = [np.zeros(3) if f % 2 == 0 else CUBE[0] for f in range(12)]
+    samples = _coupled_frames(CUBE, shifts)
+    without_boxes = structural_analysis({k: v for k, v in samples.items() if k != "frame_box"})
+    assert without_boxes["ligand_rmsd_max_A"] == pytest.approx(50.0, abs=0.2) and without_boxes["warnings"]
+    assert without_boxes["periodic_images_checked"] is False
+    result = structural_analysis(samples)
+    assert result["ligand_rmsd_max_A"] < 0.1 and result["ligand_com_drift_max_A"] < 0.1
+    assert result["warnings"] == [] and result["periodic_images_checked"] is True
+
+
+@pytest.mark.parametrize("box", [CUBE, DODECAHEDRON], ids=["cube", "dodecahedron"])
+def test_the_pose_check_is_the_same_in_every_image(box):
+    shifts = list(lattice_shifts(box).values())
+    result = structural_analysis(_coupled_frames(box, shifts * 2))
+    still = structural_analysis(_coupled_frames(box, [np.zeros(3)] * (2 * len(shifts))))
+    assert result["ligand_rmsd_max_A"] == pytest.approx(still["ligand_rmsd_max_A"], abs=0.05)
+    assert result["ligand_com_drift_max_A"] < 0.1 and result["warnings"] == []
+
+
+@pytest.mark.parametrize("box", [CUBE, DODECAHEDRON], ids=["cube", "dodecahedron"])
+def test_the_nearest_image_is_found_however_many_cells_away(box):
+    for name, shift in lattice_shifts(box).items():
+        moved = POSITIONS.copy()
+        moved[LIGAND] += shift + 3 * box[0] - 2 * box[2]
+        back = nearest_image_of_ligand(moved, LIGAND, POSITIONS[list(HOST)].mean(axis=0), box)
+        assert np.allclose(back, POSITIONS, atol=1e-9), name

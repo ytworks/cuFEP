@@ -650,6 +650,37 @@ def equil_made_with(cfg: Config, leg: str, in_membrane: bool, seed: int) -> dict
 BAROSTAT_FREQUENCY_BEFORE_THE_SETTING = 25
 
 
+def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms: int, k_r: float, k_angle: float,
+                             where: Path | str = "equil.npz"):
+    """The Boresch restraint of ``restraints.selection: manual``: the given anchors, with the
+    reference values of the last frame of the pre-equilibration.
+
+    The force of the restraint measures across the periodic boundary, so the reference values
+    are taken with the ligand in the periodic image nearest to the host anchors (the same rule
+    as the restraint search, :func:`cufep.alchemy.restraints.nearest_image_of_ligand`). From the
+    raw coordinates a ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, and the restraint
+    held the reference configuration with 52,300 kJ/mol (review of PR 1).
+    """
+    from cufep.alchemy.restraints import BoreschRestraint, nearest_image_of_ligand
+
+    if "frame_boxes" not in eq:
+        raise WorkflowError(f"{where} holds no boxes of its frames (an earlier version wrote it): the reference "
+                            "values of a manual restraint cannot be measured across the periodic boundary. Nothing "
+                            "was changed; run the calculation in a new output.dir")
+    frame_atoms = np.asarray(eq["frame_atoms"], dtype=int)
+    missing = sorted(set(int(i) for i in (*host_atoms, *guest_atoms)) - set(frame_atoms.tolist()))
+    if missing:
+        raise WorkflowError(f"restraints.host_atoms / guest_atoms {missing} are not among the atoms whose positions the "
+                            f"pre-equilibration kept ({where}); the anchors must be atoms of the protein and the ligand")
+    last = np.zeros((int(n_atoms), 3))
+    last[frame_atoms] = eq["frames"][-1]
+    host, guest = tuple(int(i) for i in host_atoms), tuple(int(i) for i in guest_atoms)
+    last = nearest_image_of_ligand(last, np.asarray(ligand_atoms, dtype=int), last[list(host)].mean(axis=0),
+                                   np.asarray(eq["frame_boxes"][-1], dtype=float))
+    values = BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0).values(last)
+    return BoreschRestraint(host, guest, *[float(x) for x in values], k_r, k_angle, k_angle, k_angle, k_angle, k_angle)
+
+
 def restraint_made_with(cfg: Config) -> dict:
     """The settings that the choice of the Boresch restraint depends on."""
     data = cfg.restraints.model_dump(mode="json")
@@ -1188,11 +1219,8 @@ def run_leg(job: LegJob) -> dict:
             if rc.selection == "manual":
                 if not (rc.host_atoms and rc.guest_atoms):
                     raise WorkflowError("restraints.selection is 'manual' but host_atoms/guest_atoms are not given")
-                last = np.zeros((system.getNumParticles(), 3))
-                last[eq["frame_atoms"]] = eq["frames"][-1]
-                v = BoreschRestraint(tuple(rc.host_atoms), tuple(rc.guest_atoms), 0, 0, 0, 0, 0, 0).values(last)
-                restraint = BoreschRestraint(tuple(rc.host_atoms), tuple(rc.guest_atoms), *[float(x) for x in v],
-                                             k_r, k_a, k_a, k_a, k_a, k_a)
+                restraint = manual_boresch_restraint(rc.host_atoms, rc.guest_atoms, prep["ligand"], eq,
+                                                     system.getNumParticles(), k_r, k_a, equil_file)
                 info = {"selection": "manual"}
             else:
                 full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))

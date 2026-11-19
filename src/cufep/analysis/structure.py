@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from cufep.alchemy.restraints import kabsch_align
+from cufep.alchemy.restraints import kabsch_align, nearest_image_of_ligand
 
 LIGAND_RMSD_WARN_A = 3.0
 COM_DRIFT_WARN_A = 5.0
@@ -24,6 +24,14 @@ def structural_analysis(samples: dict, n_equilibration: int = 0) -> dict | None:
     frames = np.asarray(samples["frames"][keep], dtype=float)
     if len(frames) < 2 or len(ca) < 4 or len(lig) < 1:
         return None
+    # the frames come from whichever replica was in the coupled state, and coordinates are not
+    # wrapped: a ligand one cell away from the protein is the same pose. Each frame's ligand is
+    # put into the periodic image nearest to the protein first (the rule of the restraint search)
+    boxes = samples.get("frame_box")
+    images_checked = boxes is not None and len(boxes) == len(samples["frame_iter"])
+    if images_checked:
+        frames = nearest_image_of_ligand(frames, lig, frames[:, ca, :].mean(axis=1),
+                                         np.asarray(boxes, dtype=float)[keep])
     aligned = kabsch_align(frames, frames[0], ca)
     d_lig = aligned[:, lig, :] - aligned[0, lig, :]
     lig_rmsd = 10.0 * np.sqrt((d_lig ** 2).sum(axis=2).mean(axis=1))
@@ -34,7 +42,8 @@ def structural_analysis(samples: dict, n_equilibration: int = 0) -> dict | None:
     out = {"n_frames": int(len(frames)), "ligand_rmsd_mean_A": float(lig_rmsd[1:].mean()),
            "ligand_rmsd_last_half_A": float(lig_rmsd[half:].mean()), "ligand_rmsd_max_A": float(lig_rmsd.max()),
            "ligand_com_drift_last_half_A": float(com[half:].mean()), "ligand_com_drift_max_A": float(com.max()),
-           "protein_ca_rmsd_last_half_A": float(ca_rmsd[half:].mean()), "warnings": []}
+           "protein_ca_rmsd_last_half_A": float(ca_rmsd[half:].mean()),
+           "periodic_images_checked": bool(images_checked), "warnings": []}
     if out["ligand_rmsd_last_half_A"] > LIGAND_RMSD_WARN_A:
         out["warnings"].append(f"the ligand moved {out['ligand_rmsd_last_half_A']:.1f} A (heavy-atom RMSD) from its "
                                "starting pose in the coupled state; the pose may have changed")
