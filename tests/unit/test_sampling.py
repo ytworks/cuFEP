@@ -294,3 +294,33 @@ def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tm
         assert s.conditions_of_storage == "older file" and s.restore() and s.iteration == 8
     with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
         assert s.conditions_of_storage == "same"                       # recorded from then on
+
+
+def test_an_interruption_before_the_first_checkpoint_does_not_leave_samples_twice(tmp_path, tiny_leg):
+    """Review of PR 1: two iterations before the first checkpoint stayed in front of the rerun's six."""
+    spec, pos, box = tiny_leg
+    for name, remove_checkpoint in (("with_start_checkpoint", False), ("as_older_versions_left_it", True)):
+        leg = tmp_path / name
+        with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+            s.initialize(pos, box)
+            at_start = (leg / "checkpoint.npz").read_bytes()
+            s.run(2, record_stride=1, checkpoint_stride=5)
+            assert s.storage.n_iterations == 2
+        # the process is killed during its third iteration: two iterations are in the storage and
+        # the checkpoint on disk is the one of the start (older versions had written none yet)
+        if remove_checkpoint:
+            (leg / "checkpoint.npz").unlink()
+        else:
+            (leg / "checkpoint.npz").write_bytes(at_start)
+        with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+            if not s.restore():
+                assert remove_checkpoint
+                s.initialize(pos, box)
+            assert s.iteration == 0 and s.storage.n_iterations == 0
+            s.run(6, record_stride=1, checkpoint_stride=5)
+            s.storage.set_meta(n_equilibration_iterations=2)
+        data = read_samples(leg)
+        assert data["u"].shape[0] == 6 and data["frame_iter"].tolist() == sorted(set(data["frame_iter"].tolist()))
+        assert len(data["lrc_iter"]) == len(set(data["lrc_iter"].tolist()))
+        assert analyze_leg(data, 300.0).n_iterations_used == 4
+

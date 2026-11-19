@@ -325,7 +325,16 @@ class ReplicaExchangeSampler:
 
     # -- state ------------------------------------------------------------------------
     def initialize(self, positions: np.ndarray, boxes: np.ndarray, velocities: np.ndarray | None = None) -> None:
-        """Set replica coordinates: one configuration for all, or one per replica."""
+        """Start the run: set replica coordinates, one configuration for all or one per replica.
+
+        The storage is emptied: samples of a run that was interrupted before its first
+        checkpoint would otherwise stay in front of the samples of this one. A checkpoint of
+        the start is written, so that such an interruption resumes from here.
+        """
+        self.iteration = 0
+        self.state_of_replica = np.arange(self.k)
+        self.storage.truncate(0)
+        self.storage.set_meta(n_equilibration_iterations=0)
         positions, boxes = np.asarray(positions, dtype=float), np.asarray(boxes, dtype=float)
         if positions.ndim == 2:
             positions = np.broadcast_to(positions, (self.k, *positions.shape))
@@ -338,6 +347,7 @@ class ReplicaExchangeSampler:
         else:
             v = np.asarray(velocities, dtype=float)
             self.arrays.vel[self.cur] = np.broadcast_to(v, (self.k, *v.shape)) if v.ndim == 2 else v
+        self.checkpoint()
 
     def restore(self) -> bool:
         """Resume from the checkpoint in the storage directory, if there is one."""
