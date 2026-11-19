@@ -1068,9 +1068,42 @@ def run_leg_safe(job: LegJob) -> dict:
 
 
 # =============================================================================== combination
+#: What the legs of a binding free energy must have in common: the key in a leg's result and how
+#: a message names it. A complex and a solvent leg, and the repeats of a ligand, are legs of one
+#: thermodynamic cycle only under the same temperature and with the same correction for the
+#: dispersion tail. Backend, time step, number of lambda windows, lengths, REST2 and the kind of
+#: barostat may differ between the legs and are not listed.
+CYCLE_CONDITIONS = (("temperature_K", "temperature (K)"), ("lrc_method", "correction for the dispersion tail"))
+
+
+def cycle_differences(legs: list[tuple[str, dict]]) -> tuple[list[str], list[str]]:
+    """What differs among leg results that are to be combined, and what could not be compared.
+
+    ``legs`` holds (name of the leg in a message, its result). Returns two lists of sentences;
+    the second names conditions that a result of an earlier version does not record.
+    """
+    from cufep.sampling.storage import _same
+
+    differing, not_compared = [], []
+    for key, name in CYCLE_CONDITIONS:
+        known = [(where, result[key]) for where, result in legs if result.get(key) is not None]
+        missing = [where for where, result in legs if result.get(key) is None]
+        if any(not _same(value, known[0][1]) for _where, value in known[1:]):
+            differing.append(f"{name}: " + ", ".join(f"{where} {value}" for where, value in known))
+        if missing and legs:
+            not_compared.append(f"{name}: not recorded for the {', the '.join(missing)}")
+    return differing, not_compared
+
+
 def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
-    """Binding free energy from the finished legs of one ligand."""
+    """Binding free energy from the finished legs of one ligand.
+
+    The legs of all complete repeats must have been made under the same conditions
+    (:data:`CYCLE_CONDITIONS`); if they were not, the ligand gets no binding free energy and the
+    result says what differs.
+    """
     per_repeat = []
+    complete: list[tuple[str, dict]] = []      # the legs of the complete repeats
     warnings: list[str] = []
     # legs whose analysis does not meet a level of cufep.analysis.mbar.quality_checks
     flagged: dict[str, list[str]] = {"overlap": [], "samples": [], "halves": [], "estimators": []}
@@ -1097,6 +1130,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
             warnings.append(f"repeat {r} is incomplete")
             continue
         c, s = states["complex"][1], states["solvent"][1]
+        complete += [(f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else ""), states[leg][1])
+                     for leg in ("complex", "solvent")]
         dg = s["delta_g_decouple"] - c["delta_g_decouple"] - c["restraint_release"]
         err = float(np.hypot(c["delta_g_mbar_error"], s["delta_g_mbar_error"]))
         per_repeat.append({
@@ -1123,8 +1158,16 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int) -> dict:
                     legs.append(where)
             if (quality.get("halves") or {}).get("reason"):
                 not_assessed.append(where)
+    inconsistent, not_compared = cycle_differences(complete)
+    if inconsistent:
+        # these legs are not legs of one thermodynamic cycle: no number is made from them
+        warnings.insert(0, "NO BINDING FREE ENERGY: the legs were not made under the same conditions ("
+                        + "; ".join(inconsistent) + "). Run the legs that differ again under the conditions of "
+                        "the others, in a new output.dir if their samples are to be kept")
+        per_repeat = []
+    warnings += [f"could not be compared between the legs: {item}" for item in not_compared]
     out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
-                 "failed_legs": failed_legs,
+                 "failed_legs": failed_legs, "inconsistent_legs": inconsistent, "not_compared": not_compared,
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
                  "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,
                  "estimators_disagree": flagged["estimators"]}

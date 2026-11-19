@@ -188,7 +188,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
                 + (f"; halves not compared: {', '.join(s['halves_not_compared'])}" if s.get("halves_not_compared") else "")
                 + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
         else:
-            log(f"RESULT {s['ligand']}: no complete repeat"
+            log(f"RESULT {s['ligand']}: " + ("no binding free energy: the legs were made under different conditions"
+                                             if s.get("inconsistent_legs") else "no complete repeat")
                 + (f"; FAILED: {', '.join(s['failed_legs'])}" if s.get("failed_legs") else "")
                 + (f"; {len(s['warnings'])} warning(s):" if s.get("warnings") else ""))
         for w in s.get("warnings", []):
@@ -197,8 +198,11 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
 
 
 def failed_legs(summary: list[dict]) -> list[str]:
-    """The legs that the run was to do and that failed, as "ligand: leg" (empty if none)."""
-    return [f"{s['ligand']}: {leg}" for s in summary for leg in s.get("failed_in_this_run", [])]
+    """Why the command ends with an error, as "ligand: ..." (empty if it does not): the legs that the
+    run was to do and that failed, and ligands whose legs were made under different conditions."""
+    return [f"{s['ligand']}: {leg}" for s in summary for leg in s.get("failed_in_this_run", [])] \
+        + [f"{s['ligand']}: legs made under different conditions ({'; '.join(s['inconsistent_legs'])})"
+           for s in summary if s.get("inconsistent_legs")]
 
 
 def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
@@ -213,13 +217,13 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
     with open(out_dir / "summary.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["ligand", "dg_bind_kcal_mol", "std_over_repeats", "mbar_error", "n_repeats", "exp_dg_kcal_mol",
-                    "lowest_overlap", "lowest_overlap_of_the_samples_used", "failed_legs", "not_reliable",
-                    "few_samples", "halves_differ", "halves_not_compared", "warnings"])
+                    "lowest_overlap", "lowest_overlap_of_the_samples_used", "failed_legs", "inconsistent_legs",
+                    "not_reliable", "few_samples", "halves_differ", "halves_not_compared", "warnings"])
         for s in summary:
             w.writerow([s["ligand"], _fmt(s.get("dg_bind")), _fmt(s.get("dg_bind_std")),
                         _fmt(s.get("dg_bind_mbar_error")), s.get("n_repeats", 0), _fmt(exp.get(s["ligand"])),
                         _fmt(s.get("min_overlap")), _fmt(s.get("min_overlap_used")),
-                        "; ".join(s.get("failed_legs", [])),
+                        "; ".join(s.get("failed_legs", [])), "; ".join(s.get("inconsistent_legs", [])),
                         "; ".join(s.get("not_reliable", [])),
                         "; ".join(s.get("few_samples", [])), "; ".join(s.get("halves_differ", [])),
                         "; ".join(s.get("halves_not_compared", [])),

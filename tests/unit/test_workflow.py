@@ -307,6 +307,61 @@ def _leg_result(dg, production_ns=5.0, leg="complex"):
             "production_ns": production_ns, "notes": []}
 
 
+def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
+    """Review of PR 1: a solvent leg at 298.15 K and a complex leg at 315 K gave a binding free energy
+    without a word, and so did two legs with different corrections for the dispersion tail."""
+    from cufep.run import failed_legs
+
+    def write(lig, repeat, leg, **fields):
+        d = lig / f"repeat_{repeat}" / leg
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "result.json").write_text(json.dumps(dict(_leg_result(160.0 if leg == "complex" else 80.0, leg=leg),
+                                                       **fields)))
+
+    usual = {"temperature_K": 298.15, "lrc_method": "reweight"}
+    write(tmp_path / "a", 0, "solvent", **usual)
+    write(tmp_path / "a", 0, "complex", temperature_K=315.0, lrc_method="reweight")
+    out = combine_ligand(tmp_path / "a", "lig", 1)
+    assert "dg_bind" not in out and out["n_repeats"] == 0
+    assert out["inconsistent_legs"] == ["temperature (K): complex leg 315.0, solvent leg 298.15"]
+    assert out["warnings"][0].startswith("NO BINDING FREE ENERGY: the legs were not made under the same conditions "
+                                         "(temperature (K): complex leg 315.0, solvent leg 298.15)")
+    # the command ends with an error because of it
+    assert failed_legs([dict(out, failed_in_this_run=[])]) == [
+        "lig: legs made under different conditions (temperature (K): complex leg 315.0, solvent leg 298.15)"]
+
+    write(tmp_path / "b", 0, "solvent", **usual)
+    write(tmp_path / "b", 0, "complex", temperature_K=298.15, lrc_method="isotropic")
+    out = combine_ligand(tmp_path / "b", "lig", 1)
+    assert "dg_bind" not in out
+    assert out["inconsistent_legs"] == ["correction for the dispersion tail: complex leg isotropic, solvent leg reweight"]
+
+    # two repeats, each consistent in itself, at two temperatures: they are not repeats of one calculation
+    for repeat, temperature in ((0, 298.15), (1, 315.0)):
+        for leg in ("complex", "solvent"):
+            write(tmp_path / "c", repeat, leg, temperature_K=temperature, lrc_method="reweight")
+    out = combine_ligand(tmp_path / "c", "lig", 2)
+    assert "dg_bind" not in out and len(out["inconsistent_legs"]) == 1
+    assert "complex leg of repeat 0 298.15" in out["inconsistent_legs"][0]
+    assert "solvent leg of repeat 1 315.0" in out["inconsistent_legs"][0]
+
+    # what may differ between the legs of one calculation does not stop the combination
+    write(tmp_path / "d", 0, "solvent", backend="cupotential", timestep_fs=4.0, n_states=14, **usual)
+    write(tmp_path / "d", 0, "complex", backend="openmm", timestep_fs=2.0, n_states=19, rest2={"scale": 1.5}, **usual)
+    out = combine_ligand(tmp_path / "d", "lig", 1)
+    assert out["dg_bind"] == pytest.approx((80.0 - 160.0) / 4.184) and out["inconsistent_legs"] == []
+    assert out["not_compared"] == [] and failed_legs([dict(out, failed_in_this_run=[])]) == []
+
+    # results of an earlier version that lack the fields: combined, and the result says what was not compared
+    write(tmp_path / "e", 0, "solvent")
+    write(tmp_path / "e", 0, "complex", temperature_K=298.15)
+    out = combine_ligand(tmp_path / "e", "lig", 1)
+    assert "dg_bind" in out and out["inconsistent_legs"] == []
+    assert out["not_compared"] == ["temperature (K): not recorded for the solvent leg",
+                                   "correction for the dispersion tail: not recorded for the complex leg, the solvent leg"]
+    assert sum("could not be compared between the legs" in w for w in out["warnings"]) == 2
+
+
 def test_a_leg_whose_analysis_gave_no_free_energy_is_a_failed_leg(tmp_path):
     """Windows without any overlap: the result file holds null, and the ligand gets no number from it."""
     from cufep import jsonio
