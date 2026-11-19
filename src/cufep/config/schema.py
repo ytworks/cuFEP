@@ -328,7 +328,7 @@ class SamplingConfig(_Section):
     equilibration_ns: float | LegLengths = 1.0
     #: per lambda window, used for the estimate; one number or {complex: ..., solvent: ...}.
     #: 10 ns is the default of OpenFE's ABFE protocol (FEP+ uses 5 ns): with 5 ns the lambda
-    #: window with the fewest independent samples of a TYK2 complex leg held about 27, where
+    #: window with the fewest independent samples of a TYK2 complex leg held about 29, where
     #: 50 are recommended for MBAR (docs/protocol.md, "Checks of the analysis")
     production_ns: float | LegLengths = 10.0
     #: number of completely independent repeats of the whole calculation (as OpenFE's protocol_repeats)

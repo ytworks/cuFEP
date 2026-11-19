@@ -1,5 +1,6 @@
+"""Ions of a membrane system, and notes on a bilayer made again from stored data."""
 import json
-"""Ions of a membrane system."""
+
 import numpy as np
 import openmm as mm
 import openmm.app as app

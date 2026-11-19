@@ -347,13 +347,13 @@ overlap.
 
 What was measured. On five TYK2 ligands the complex leg with REST2 (the ligand as the hot
 region) was compared with the mean of three runs without REST2. At a scale of 1.5 it came
-out higher by 1.2, 1.1 and 0.7 kcal/mol on average in three sets of runs (in 5, 5 and 3 of
+out higher by 1.1, 0.9 and 0.7 kcal/mol on average in three sets of runs (in 5, 5 and 3 of
 the 5 ligands), at a scale of 2.5 by 2.3 kcal/mol (4 of 5). The solvent leg did not change
 (+0.1 kcal/mol at 1.5). Runs of one complex leg without REST2 differ among themselves with a
 standard deviation of 1.8 kcal/mol (pooled over the five ligands, three runs each). Against
-that spread the shift at 1.5, 1.0 kcal/mol over 15 runs with and 15 without REST2, is about
+that spread the shift at 1.5, 0.9 kcal/mol over 15 runs with and 15 without REST2, is about
 1.5 standard errors: an indication, not an established effect. The mean signed error of the
-binding free energies against experiment was -1.8 to -2.3 kcal/mol in the three sets with
+binding free energies against experiment was -1.8 to -2.2 kcal/mol in the three sets with
 REST2 and -1.2 without, which is the same observation and carries the same weight.
 
 Both ends of a leg are physical states, so the free energy of a converged leg cannot depend
@@ -394,15 +394,25 @@ free energy are not affected, and a leg is sampled by one backend.
 ### Free energy and uncertainty of a leg
 
 MBAR assumes uncorrelated samples. The samples of every lambda window are therefore thinned
-by the statistical inefficiency g of that window. The series is the energy difference
-between the window and the next one (the previous one for the last window), over the
-configurations the window holds from iteration to iteration; the window keeps every
-ceil(g)-th iteration. This is the default of alchemlyb (`decorrelate_u_nk`, method `dE`,
-uniform intervals) and the procedure of Klimovich, Shirts and Mobley 2015 (section 2.5) and
-of Mey et al. 2020 (section 8.2) for simulations whose states have different correlation
-times. The free energy of the leg and its standard error are those of MBAR on the samples
-that are kept. A part of the production (a point of the forward or reverse series, a half, a
-block) is estimated from those kept samples that lie in it.
+by the statistical inefficiency g of that window: the window keeps every ceil(g)-th
+iteration. g is taken from the energy difference between the window and a neighbouring one,
+over the configurations the window holds from iteration to iteration. For a window with two
+neighbours both differences are examined and the larger g is used; the result records both
+values and which neighbour gave it. The free energy of the leg and its standard error are
+those of MBAR on the samples that are kept. A part of the production (a point of the forward
+or reverse series, a half, a block) is estimated from those kept samples that lie in it.
+
+This is the procedure of Klimovich, Shirts and Mobley 2015 (section 2.5: the series may be
+dU/dlambda or "any of the potential energy differences") and of Mey et al. 2020 (section 8.2)
+for simulations whose states have different correlation times, and it is what alchemlyb does
+(`decorrelate_u_nk`, method `dE`, uniform intervals), with one difference: alchemlyb takes the
+difference to the next window only. MBAR uses the energies of a configuration in both
+neighbours, and a degree of freedom that is slow can change the difference to one neighbour
+and leave the other alone. In a model with three windows where only the difference to the
+previous window is slow, the standard error from the next window alone was a third of the
+scatter of the estimate between independent runs (0.05 against 0.16 kT); with both neighbours
+the two agree (0.06 against 0.07 kT). On 86 stored TYK2 legs the slowest window was found
+through the previous window in 23.
 
 Of replica-exchange runs Mey et al. say that "the replicas should undergo equivalent random
 walks in alchemical space, and the replicas can be subsampled with the same g". cuFEP's
@@ -410,13 +420,27 @@ replicas do not undergo such walks: with the 15 to 19 windows that adaptive lamb
 chooses for a complex leg, the replicas made no round trip between the ends in 51 of 53 legs
 of 5 ns on TYK2, and one in the other two. One g for all windows, from the reduced potential
 summed over the replicas (the series of openmmtools 0.26, which OpenFE uses), read about 2
-iterations there, where the slowest window of a complex leg has 22 to 412 (median 74; an
-iteration is 2.5 ps). cuFEP used that g at first. The standard errors of the binding free
-energy were then about half of what they are with one g per window (median 0.20 against 0.37
-kcal/mol in 15 runs on five TYK2 ligands).
+iterations there, where the slowest window of a complex leg has 23 to 412 (median 76; an
+iteration is 2.5 ps). cuFEP used that g at first; the standard errors of the binding free
+energy were then about half of what they are with one g per window.
 
-The overlap matrix is computed with the same number of samples in every window, so that its
-elements mean the same for every window.
+Two overlap matrices are computed, both in the normalisation in which every window holds the
+same number of samples:
+
+- from all iterations, thinned by the one g of the summed potential, the same number in every
+  window. This is the matrix of the figure;
+- from the samples the free energy is estimated from. pymbar's matrix is O_ij = N_j sum_n
+  W_ni W_nj with the MBAR weights W and the numbers of samples N; its rows sum to 1. With the
+  same N in every window it is symmetric. With different N it measures the numbers as well: a
+  window that keeps 30 samples next to one that keeps 3000 reads about 0.003 in one direction
+  however well the two overlap, and on 18 stored legs the smaller direction of a pair was
+  below 0.03 in 15, of which 13 have a lowest overlap of 0.038 to 0.105 with equal numbers.
+  The numbers of samples have a check of their own, so cuFEP evaluates the matrix with every
+  window's samples weighing the
+  same in total: O_ij = sum_n w_n P_ni P_nj, where P_ni = exp(f_i - u_i(x_n)) / sum_k
+  exp(f_k - u_k(x_n)) and w_n = 1 / N_s for a sample of window s. For equal numbers this is
+  pymbar's matrix exactly. pymbar's own matrix of these samples is stored in the result too
+  (`overlap_used_weighted_by_number`); no level is applied to it.
 
 ### The checks
 
@@ -431,10 +455,10 @@ and MBAR.
 
 | check | level | message | source |
 |---|---|---|---|
-| overlap | every pair of neighbouring lambda windows overlaps by at least `analysis.min_overlap` (0.03) in the production | `NOT RELIABLE` | Klimovich et al., section 3.5: "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy estimate (as long as the resulting error is sufficiently low)". "Anything below that number should serve as a caution sign ...; in this case, not only will the estimated variance increase but the free energy estimate itself will likely be substantially incorrect" |
-| independent samples | the lambda window with the fewest has at least `analysis.min_effective_samples` (50); the number is the iterations of the production divided by g of the window | few independent samples | Mey et al., section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used" |
+| overlap | every pair of neighbouring lambda windows overlaps by at least `analysis.min_overlap` (0.03) in the production, in both matrices above; the message says which one is below | `NOT RELIABLE` | Klimovich et al., section 3.5: "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy estimate (as long as the resulting error is sufficiently low)". "Anything below that number should serve as a caution sign ...; in this case, not only will the estimated variance increase but the free energy estimate itself will likely be substantially incorrect" |
+| independent samples | the lambda window with the fewest has at least `analysis.min_effective_samples` (50), both as estimated (iterations of the production divided by g of the window) and as the number of samples MBAR gets from it (every ceil(g)-th iteration) | few independent samples | Mey et al., section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used" |
 | halves | the free energies from the first and from the second half of the production differ by at most `analysis.halves_tolerance_kT` (1 kT, 0.59 kcal/mol at 298 K) | the two halves of the production differ | Mey et al., figure 9: the difference between the forward and the reverse free energy "at the midpoint of the simulation time gives an indication of the overall convergence of the simulation, with differences over 1 kBT indicating poor convergence". The figure applies it to each step of a relative perturbation, cuFEP to a leg |
-| estimators | BAR between neighbouring windows and MBAR differ by at most `analysis.estimators_tolerance_kcal_mol` (1 kcal/mol) | a warning | Mey et al.: "differences between methods that are larger than 1 kcal/mol ... would indicate poor convergence". The guides compare TI with BAR-type estimators; cuFEP records no dU/dlambda, and BAR against MBAR is a weaker comparison |
+| estimators | BAR between neighbouring windows and MBAR differ by at most `analysis.estimators_tolerance_kcal_mol` (1 kcal/mol) | BAR and MBAR differ | Mey et al.: "differences between methods that are larger than 1 kcal/mol ... would indicate poor convergence". The guides compare TI with BAR-type estimators; cuFEP records no dU/dlambda, and BAR against MBAR is a weaker comparison |
 
 The overlap comes first. The overlap matrix is "a quantitative estimator of the phase-space
 overlap" (Klimovich et al., section 3.4), "trustworthy results should in general have at
@@ -457,14 +481,20 @@ do not say that a result is wrong:
   least four kept samples in it. If a half does not, the result says that the halves could
   not be compared and why.
 
+A value that cannot be estimated (a half of a production that is too short, a BAR estimate
+for windows without overlap) is `null` in the result files, with the reason in a text field
+next to it; the files hold no NaN or Infinity and are read by any JSON parser. A leg whose
+analysis gives no free energy at all is a failed leg.
+
 What no check of one run can show. "It is difficult to establish with certainty that good
 sampling has been achieved, but it is not difficult to rule out high-quality sampling"
-(Grossfield et al. 2018): the checks can rule convergence out, they cannot prove it. A slow change that occurs once in
-a run, or not at all, leaves no trace in the statistical inefficiency. "The variance in free
-energy afforded by any estimator will always be an underestimate of the true uncertainty"
-(Mey et al., section 8.4), and Rizzi et al. 2020 found the MBAR error from an analysis of
-the autocorrelation at the low end of the spread between independent replica-exchange runs. The guides' way to measure the precision of a
-protocol is "two or three runs of the same perturbation" (Mey et al.): `sampling.repeats`.
+(Grossfield et al. 2018): the checks can rule convergence out, they cannot prove it. A slow
+change that occurs once in a run, or not at all, leaves no trace in the statistical
+inefficiency. "The variance in free energy afforded by any estimator will always be an
+underestimate of the true uncertainty" (Mey et al., section 8.4), and Rizzi et al. 2020 found
+the MBAR error from an analysis of the autocorrelation at the low end of the spread between
+independent replica-exchange runs. The guides' way to measure the precision of a protocol is
+"two or three runs of the same perturbation" (Mey et al.): `sampling.repeats`.
 
 ### What the checks say about TYK2 and A2A
 
@@ -473,49 +503,52 @@ windows), read again with this analysis:
 
 | | complex legs (43) | solvent legs (43) |
 |---|---|---|
-| overlap below 0.03 | 1 | 0 |
-| statistical inefficiency of the slowest window, in iterations of 2.5 ps | 22-412, median 74 | 1-281, median 25 |
-| independent samples in that window | 5-89, median 27; fewer than 50 in 37 legs | 7-1392, median 80; fewer than 50 in 16 legs |
-| standard error of the leg, kcal/mol | 0.16-0.58, median 0.33 | 0.11-0.44, median 0.13 |
-| halves more than 1 kT apart | 27 legs; in 13 of them by more than 2 standard errors | 8 legs; in 6 of them by more than 2 standard errors |
+| overlap below 0.03 | 1 (among all iterations) | 0 |
+| statistical inefficiency of the slowest window, in iterations of 2.5 ps | 23-412, median 76 | 1-281, median 25 |
+| samples of that window | 5-87, median 26; fewer than 50 in 37 legs | 7-1000, median 77; fewer than 50 in 16 legs |
+| standard error of the leg, kcal/mol | 0.17-0.62, median 0.33 | 0.11-0.44, median 0.13 |
+| halves more than 1 kT apart | 24 legs; in 13 of them by more than 2 standard errors | 8 legs; in 6 of them by more than 2 standard errors |
 | BAR and MBAR more than 1 kcal/mol apart | 0 | 0 |
 
 The overlap holds in all legs but one. What limits these legs is the number of independent
-samples: in 5 ns the slowest window of a complex leg holds about 27 where 50 are recommended,
+samples: in 5 ns the slowest window of a complex leg holds about 26 where 50 are recommended,
 and at that number the halves of most complex legs are more than 1 kT apart, about half of
 them by no more than twice the standard error of the difference. In the solvent leg the
-slowest window is the first one, the fully interacting ligand in water, in 38 of the 43 legs.
+slowest window is the first one, the fully interacting ligand in water, in 39 of the 43 legs.
 
 One run against several. The same complex leg of five TYK2 ligands, run three times with
-different seeds, differs with a standard deviation of 0.5 to 3.0 kcal/mol (pooled 1.8), the
-binding free energy with 0.3 to 3.0 (pooled 1.6); the standard error of a binding free energy
+different seeds, differs with a standard deviation of 0.7 to 2.9 kcal/mol (pooled 1.8), the
+binding free energy with 0.3 to 2.9 (pooled 1.6); the standard error of a binding free energy
 from one run is 0.3 to 0.5 kcal/mol. The standard error of one run does not contain the slow
 changes described under "What windows do not cure".
 
-Longer runs, and more windows:
+Runs that were continued, and one with more windows:
 
-| leg | production | free energy, kcal/mol | fewest independent samples | halves apart |
+| leg | production | free energy, kcal/mol | samples of the slowest window | halves apart |
 |---|---|---|---|---|
-| TYK2 ejm_31, complex, 16 windows | 5 ns | 36.77 ± 0.26 | 41 | 3.0 kT (3.4 standard errors) |
-| the same leg continued | 10 ns | 36.25 ± 0.22 | 30 | 0.3 kT (0.4) |
-| TYK2 jmc_23, complex, 15 windows | 5 ns | 37.34 ± 0.53 | 38 | 0.1 kT (0.0) |
-| the same leg continued | 10 ns | 37.12 ± 0.58 | 45 | 0.6 kT (0.3) |
-| A2A 4e, complex, 15 windows | 5 ns | 37.61 ± 0.69 | 9 | 1.3 kT (0.5) |
-| the same leg continued | 10 ns | 36.09 ± 0.47 | 32 | 2.6 kT (1.7) |
-| TYK2 ejm_31, complex, vanish stage started with 13 windows: 19 windows, lowest overlap 0.145 | 5 ns | 36.75 ± 0.26 | 38 | 3.2 kT (3.6) |
+| TYK2 ejm_31, complex, 16 windows | 5 ns | 37.05 ± 0.27 | 36 | 1.8 kT (2.0 standard errors) |
+| the same leg continued | 10 ns | 36.46 ± 0.23 | 30 | 0.7 kT (0.9) |
+| TYK2 jmc_23, complex, 15 windows | 5 ns | 37.78 ± 0.62 | 32 | 1.9 kT (0.8) |
+| the same leg continued | 10 ns | 36.41 ± 0.51 | 38 | 6.2 kT (3.4) |
+| A2A 4e, complex, 15 windows | 5 ns | 38.20 ± 0.63 | 9 | 3.1 kT (1.3) |
+| the same leg continued | 10 ns | 36.74 ± 0.44 | 32 | 1.4 kT (0.9) |
+| TYK2 ejm_31, complex, vanish stage started with 13 windows: 19 windows, lowest overlap 0.145 | 5 ns | 36.86 ± 0.26 | 38 | 2.2 kT (2.4) |
 
-The halves of the ejm_31 leg, 3.0 kT apart after 5 ns, agree after 10 ns: what looked like a
-drift was a fluctuation over a few nanoseconds. The number of independent samples can fall
-when a run is continued, because a longer run shows slower changes (in that leg the window
-at which the discharge stage begins, with a statistical inefficiency of 132 iterations). More lambda windows
-raise the overlap; they do not add independent samples. In the A2A leg a window near the end
-of the vanish stage is correlated over 126 to 217 iterations (0.3 to 0.5 ns), so 5 ns give 9
-independent samples and 10 ns give 32; the bilayer of that system had also not settled when
-the alchemical run began (`membrane_settled`).
+These are observations of single continuations. In the ejm_31 leg the difference of the
+halves went from 1.8 to 0.7 kT while the samples of its slowest window went from 36 to 30
+(a slower window came into view: the one at which the discharge stage begins, with a
+statistical inefficiency of 132 iterations); in the jmc_23 leg the difference rose from 1.9
+to 6.2 kT. The two halves of 5 ns and the two halves of 10 ns are the same trajectory cut at
+other places, so these numbers cannot tell a slow fluctuation from a change in how often slow
+conformations are visited; that takes independent runs and the conformations they visit.
+More lambda windows raise the overlap; they do not add independent samples. In the A2A leg a
+window near the end of the vanish stage is correlated over 126 to 214 iterations (0.3 to 0.5
+ns), so 5 ns give 9 independent samples and 10 ns give 32; the bilayer of that system had
+also not settled when the alchemical run began.
 
 Why the default production is 10 ns per window. It is the default of OpenFE's ABFE protocol;
-FEP+ uses 5 ns. Of 55 TYK2 complex legs with 5 ns, 12 had 50 independent samples in their
-slowest window; the statistical inefficiencies of that window (quartiles 44, 68 and 116
+FEP+ uses 5 ns. Of 55 TYK2 complex legs with 5 ns, 11 had 50 independent samples in their
+slowest window; the statistical inefficiencies of that window (quartiles 52, 68 and 116
 iterations) put 33 of them there with 10 ns, if they stay as they are, and 46 with 20 ns. Of
 54 solvent legs, 33 had 50 with 5 ns. A longer run can also show a slower change, as the
 ejm_31 leg above did, so 10 ns do not guarantee the 50.
@@ -526,8 +559,8 @@ end, at up to `analysis.convergence_points` points, each drawn at the fraction o
 production it really uses), the two halves, the estimates from `analysis.convergence_blocks`
 consecutive blocks that do not overlap, the band of the standard error and the overlap
 matrix. The number of round trips of the replicas, the exchange between neighbouring windows
-and the statistical inefficiency and the independent samples of every window are in
-`result.json`; no level is applied to round trips and exchange.
+and the statistical inefficiency and the samples of every window are in `result.json`; no
+level is applied to round trips and exchange.
 
 ### When a leg carries a message
 
@@ -542,6 +575,10 @@ together again.
   complex --reschedule`. The leg starts anew from its pre-equilibration and restraint with
   windows determined again; the windows, samples and result it had are moved to
   `previous_<n>/` in the leg directory.
+- `NOT RELIABLE` "among the samples the free energy is estimated from": the windows overlap
+  when all iterations are taken, but not in the samples that are left after every window was
+  thinned by its correlation. A longer production gives the slow window more samples; more
+  lambda windows in that stage raise the overlap.
 - Few independent samples, halves that differ, or halves that could not be compared: a
   longer production. `cufep run CONFIG --ligand NAME --leg complex --production-ns 20` (or a
   larger `sampling.production_ns`) continues the replica-exchange run of that leg from its
@@ -553,31 +590,82 @@ leaves `timing.json` of the whole run in place.
 
 ### Running again in the same output directory
 
-A leg that runs again goes on from what it has. So that this cannot give a wrong number:
+A leg that runs again goes on from what it has, and the legs of a ligand are put together
+again from what the directory holds. So that this cannot give a number from parts that do not
+belong together:
+
+*A leg and its own files.*
 
 - What a leg gave before is set aside as `result.previous.json` when it runs again, for
   instance its result at 10 ns when it is continued to 20 ns. If the run fails, the leg is
   `FAILED`: it has no result, the ligand has no binding free energy from it, and the command
   ends with an error. The earlier result is a record and is never used in its place.
+- A leg writes `started.json` when it begins and removes it with its result or its error. A leg
+  that holds only that file was interrupted (the process was killed, the machine stopped,
+  Ctrl-C) and is `FAILED` until it has run to its end. For a job process that ended without a
+  result the scheduler writes the error itself, with the exit code. Result files are written in
+  one step; one that cannot be read is a failed leg.
 - A leg gets a result only if it has reached the length that was asked for, with every
   iteration stored once. A run that was interrupted before its first checkpoint starts again
-  from iteration 0 with an empty storage.
+  from iteration 0 with an empty storage. Where the production begins is recorded before the
+  first iteration, so that an interrupted leg is not analysed with its equilibration (`cufep
+  analyze` says "no production yet" for a leg that has not reached it).
 - Samples are continued only under the conditions they were made under: the lambda states,
   temperature, pressure and barostat, friction, time step, length of an iteration, backend,
-  precision, and the System with its restraint and REST2 region. If a run gives something
-  else, it stops before anything is written and names what differs. A leg that has samples
-  keeps their backend.
+  precision, the System with its restraint and REST2 region (a checksum of its XML), and the
+  settings behind it in the words of the configuration (soft-core, REST2, tail). A leg that has
+  samples keeps their backend. The XML of a System names the version of OpenMM that wrote it,
+  so samples are also not continued after OpenMM has been upgraded.
 - The prepared systems, the pre-equilibration and the restraint are used again only if the
-  input files and the settings that went into them are the same; otherwise the run stops and
-  asks for a new `output.dir`. Only the lambda windows of a leg can be determined again in
-  place, with `--reschedule`.
+  input files and the settings that went into them are the same. Only the lambda windows of a
+  leg can be determined again in place, with `--reschedule`.
 - A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg: its
   stages and its two end states are checked. Give a directory as written by `cufep benchmark
   freeze`, or the file of one leg together with `--leg`.
+- Notes that depend on a level (whether the bilayer had settled, whether the ligand had left
+  its pose) are made again from what the files hold with the levels of the run:
+  `membrane.area_tolerance`, `membrane.pocket_water_tolerance`,
+  `restraints.pose_rmsd_warning_nm`.
 
-Output directories written before these checks existed do not hold the records to compare
-with. They can still be continued: what they do hold (states, temperature, backend, length
-of an iteration) is compared, and the log says which files could not be compared.
+*The legs of a ligand.*
+
+- A complex and a solvent leg, and the repeats of a ligand, are combined only if they were
+  made under the same temperature and pressure, from the same prepared systems, and with the
+  same correction for the dispersion tail. If they were not, the ligand gets no binding free
+  energy, the result names what differs, and the command ends with an error. Backend, time
+  step, number of lambda windows, lengths and REST2 may differ between the legs. A run that
+  would sample a leg under another temperature or pressure than a finished leg it does not
+  sample is refused before it samples anything.
+- A leg that a run does not sample (`--leg`, `--ligand`) keeps the result of an earlier run.
+  If that result is of another analysis (another version of the method, or other settings of
+  the `analysis` section), it is made again from the samples of the leg before the legs are
+  combined; the result it replaces is kept as `result.replaced.json`. If the samples are no
+  longer there, the leg is combined as it is, and the result names it (`old_analysis`) with the
+  checks its result does not hold.
+- `cufep analyze LEG_DIRECTORY` analyses a leg with the settings its result records and with
+  the temperature and iteration length of its samples, so it says what the run said; `--config`
+  gives other analysis settings. It only prints.
+
+*The record of the directory.*
+
+- Everything that can refuse a run is checked for all its ligands and legs before anything is
+  written. A run that is refused leaves `resolved_config.yaml` and the results as they were and
+  writes its own configuration to `resolved_config.refused.yaml`.
+- If a run is accepted and its configuration differs from the one of the earlier run in the
+  directory in more than resources and output, the earlier record is kept as
+  `resolved_config.previous_<n>.yaml`.
+
+*Output directories of earlier versions.* A configuration file of an earlier version is read
+if the settings it holds still exist or held their defaults; a removed setting that the user
+had changed stops the reading with the settings that replaced it. Files that an earlier
+version wrote without a record of what they were made from are treated as follows:
+
+| file | what happens |
+|---|---|
+| samples (`hrex/samples.h5`) without recorded conditions | read and analysed, never added to, and not written to. That version stored neither the soft-core nor pressure and friction, and it rewrote temperature, backend and states whenever it opened the file, so nothing on the disk shows what the samples were made with. A leg that has all its iterations is analysed as it is; to sample further, the leg is started anew with `--reschedule` |
+| prepared systems, pre-equilibration, restraint without a record | refused where what the file does hold contradicts the run (bilayer or not, barostat, box shape, ligand; length of the MD, a larger time step than configured; restraint selection and force constants). Otherwise used, and the leg and the ligand result name them (`origin_not_recorded`) |
+| a result without the version of its analysis | made again from the samples, see above |
+| an interrupted run that did not record where its production begins | `cufep analyze` asks for `--equilibration-ns` |
 
 ## Long-range dispersion
 
@@ -646,7 +734,7 @@ Further differences from OpenFE, whose protocol cuFEP follows most closely:
 | standard state correction | analytical | numerical, analytical as a check |
 | ligand-environment dispersion tail | isotropic | explicit, by reweighting the coupled state |
 | Lennard-Jones between atoms of the ligand | cut off as in the original System | no cutoff (hundredths of a kcal/mol; "Interactions inside the ligand") |
-| decorrelation of the samples | one statistical inefficiency for all windows, from the reduced potential summed over the replicas (openmmtools) | one per lambda window, from its energy difference to the next window (alchemlyb's default) |
+| decorrelation of the samples | one statistical inefficiency for all windows, from the reduced potential summed over the replicas (openmmtools) | one per lambda window, the larger of those of its energy differences to the two neighbouring windows (alchemlyb's default takes the next window only) |
 
 Sources: Schrödinger `fep_plus` and `fep_absolute_binding` command help and Python API
 documentation, the "FEP+ troubleshooting" checklist of the FEP+ user manual, Ross et al., Commun. Chem. 2023, 6, 222; Cresset Flare release notes for
