@@ -159,6 +159,46 @@ def test_a_report_is_that_of_the_run_as_it_is_now(tmp_path):
         assert [row["ligand"] for row in csv.DictReader(fh)] == ["jmc_30", "jmc_23", "ejm_45"]
 
 
+def test_a_summary_of_an_earlier_version_is_not_shown_as_if_it_had_passed_the_checks(tmp_path):
+    """Review of PR 1: `benchmark report` on a summary.json of an earlier version (not_converged:
+    ["complex leg"], convergence_not_assessed: ["solvent leg"]) gave empty flags in the table and the CSV:
+    that version's verdicts were dropped and the checks of this version, which it had not made, looked passed."""
+    from types import SimpleNamespace
+
+    from cufep.benchmarks.runner import LEG_FLAGS, NOT_CHECKED, flags_of
+    from cufep.run import result_line, write_summary
+
+    assert NOT_CHECKED == "checks of this version not made (analysed by an earlier version of cuFEP)"
+    # as the versions before the corrected analysis wrote it
+    earlier = {"ligand": "jmc_23", "units": "kcal/mol", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3,
+               "n_repeats": 1, "warnings": [], "failed_legs": [], "not_reliable": [], "not_converged": ["complex leg"],
+               "convergence_not_assessed": ["solvent leg"], "estimators_disagree": [], "min_overlap": 0.08,
+               "repeats": [{"lambda_windows": {"complex": 16, "solvent": 13}}]}
+    said = ["NOT CONVERGED by the check of an earlier version: complex leg",
+            "convergence not assessed by an earlier version: solvent leg", NOT_CHECKED]
+    assert flags_of(earlier) == said
+    (tmp_path / "summary.json").write_text(json.dumps([earlier]))
+    text = report("tyk2", tmp_path)
+    assert f"| 16 | 13 | 0.080 |  | {'; '.join(said)} |" in text
+    assert "A result that an earlier version of cuFEP analysed carries the verdicts of that version" in text
+    with open(tmp_path / "benchmark_report.csv") as fh:
+        assert list(csv.DictReader(fh))[0]["flags"] == "; ".join(said)
+    assert result_line(earlier).endswith("(MBAR uncertainty, 1 repeat); " + "; ".join(said))
+    # a result of the first versions, with no key of any check, and one of the analysis before the time blocks
+    oldest = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3, "n_repeats": 1}
+    assert flags_of(oldest) == [NOT_CHECKED]
+    before_blocks = dict(oldest, few_samples=["complex leg"], halves_differ=[], estimators_disagree=[], not_reliable=[])
+    assert flags_of(before_blocks) == ["few independent samples: complex leg", NOT_CHECKED]
+    # a result of this version with nothing to say has no flag, and a ligand without a result is not "checked" either
+    current = dict(before_blocks, few_samples=[], dg_bind_error=0.5, dg_bind_error_from_time_blocks=True)
+    assert flags_of(current) == [] and flags_of({"ligand": "x", "n_repeats": 0, "warnings": ["not run"]}) == []
+    # the keys of earlier versions are no columns of the table this version writes
+    write_summary(tmp_path, [current], [SimpleNamespace(name="jmc_23", properties={})])
+    with open(tmp_path / "summary.csv") as fh:
+        columns = list(csv.DictReader(fh).fieldnames)
+    assert "not_converged" not in columns and all(key in columns for key, _name in LEG_FLAGS)
+
+
 def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path):
     """Review of PR 1: a leg whose only failed check was BAR against MBAR was named in summary.json and
     nowhere a person looks: not in the flags of the report, not in summary.csv, not in the result line."""
@@ -168,6 +208,7 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
     from cufep.run import result_line, write_summary
 
     only_estimators = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3,
+                       "dg_bind_error": 0.5, "dg_bind_error_from_time_blocks": True,
                        "n_repeats": 1, "warnings": ["repeat 0 complex: BAR between neighbouring lambda windows gives ..."],
                        "failed_legs": [], "not_reliable": [], "few_samples": [], "halves_differ": [],
                        "halves_not_compared": [], "estimators_disagree": ["complex leg"], "min_overlap": 0.08}
@@ -176,14 +217,14 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
     assert "| BAR and MBAR differ: complex leg |" in report("tyk2", tmp_path)
     with open(tmp_path / "benchmark_report.csv") as fh:
         assert list(csv.DictReader(fh))[0]["flags"] == "BAR and MBAR differ: complex leg"
-    assert result_line(only_estimators) == ("RESULT jmc_23: dG_bind = -11.00 ± 0.30 kcal/mol (MBAR uncertainty, 1 repeat)"
-                                            "; BAR and MBAR differ: complex leg; 1 warning(s):")
+    assert result_line(only_estimators) == ("RESULT jmc_23: dG_bind = -11.00 ± 0.50 kcal/mol (standard error from time "
+                                            "blocks, 1 repeat); BAR and MBAR differ: complex leg; 1 warning(s):")
     write_summary(tmp_path, [only_estimators], [SimpleNamespace(name="jmc_23", properties={})])
     with open(tmp_path / "summary.csv") as fh:
         row = list(csv.DictReader(fh))[0]
     assert row["estimators_disagree"] == "complex leg" and row["few_samples"] == ""
     assert all(key in row for key, _name in LEG_FLAGS)                       # one column per thing that can be said
-    assert row["mbar_error"] == "0.300" and row["standard_error"] == ""      # a result of before the time blocks
+    assert row["mbar_error"] == "0.300" and row["standard_error"] == "0.500"
     # the standard error of one calculation is the one from time blocks; that of MBAR stays in its column
     blocks = dict(only_estimators, dg_bind_error=0.9, dg_bind_error_from_time_blocks=True)
     assert result_line(blocks).startswith("RESULT jmc_23: dG_bind = -11.00 ± 0.90 kcal/mol (standard error from time "

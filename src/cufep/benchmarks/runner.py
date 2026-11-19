@@ -69,14 +69,32 @@ LEG_FLAGS = (("failed_legs", "FAILED"), ("inconsistent_legs", "LEGS MADE UNDER D
              ("origin_not_recorded", "origin of files not recorded"))
 
 
+#: what a ligand's result of an earlier version of cuFEP says with keys that this version no longer
+#: writes: the verdicts of checks that were replaced. They are shown as what that version said;
+#: they are not columns of summary.csv, which only this version writes.
+EARLIER_FLAGS = (("not_converged", "NOT CONVERGED by the check of an earlier version"),
+                 ("convergence_not_assessed", "convergence not assessed by an earlier version"))
+#: a binding free energy without this key was not analysed by this version: the standard error
+#: from time blocks is part of every result since version 4 of the analysis
+CURRENT_RESULT_KEY = "dg_bind_error"
+NOT_CHECKED = "checks of this version not made (analysed by an earlier version of cuFEP)"
+
+
 def flags_of(ligand_summary: dict) -> list[str]:
-    """The flags of one ligand, in the order of :data:`LEG_FLAGS`."""
+    """The flags of one ligand, in the order of :data:`LEG_FLAGS`.
+
+    A result that an earlier version of cuFEP analysed is not shown as if it had passed the
+    checks of this one: it carries the verdicts of that version (:data:`EARLIER_FLAGS`) and the
+    flag that the checks of this version were not made.
+    """
     out = []
-    for key, name in LEG_FLAGS:
+    for key, name in LEG_FLAGS + EARLIER_FLAGS:
         items = ligand_summary.get(key) or []
         if items:
             out.append(f"{name}: " + ", ".join(str(item).split(":")[0] if key in ("old_analysis", "origin_not_recorded")
                                                else str(item) for item in items))
+    if "dg_bind" in ligand_summary and CURRENT_RESULT_KEY not in ligand_summary:
+        out.append(NOT_CHECKED)
     return out
 
 
@@ -159,7 +177,9 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
               "of neighbouring windows in the production (from all iterations with equal numbers of samples per "
               "window, and among the samples the free energy is estimated from), and the legs that do not meet a "
               "level of the checks (first repeat). NOT RELIABLE (overlap below 0.03) is the one that makes a result "
-              "unusable; the others say that more sampling is advisable.", "",
+              "unusable; the others say that more sampling is advisable. A result that an earlier version of cuFEP "
+              "analysed carries the verdicts of that version and the flag that the checks of this version were not "
+              "made; they are made when its legs are analysed again.", "",
               "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags |",
               "|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: r["exp"]):
