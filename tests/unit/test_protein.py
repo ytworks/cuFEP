@@ -319,3 +319,19 @@ def test_a_missing_backbone_atom_is_rebuilt_and_does_not_break_the_chain(repo, t
     residue = next(r for r in prepared.topology.residues() if r.id == "892" and r.chain.id == "A")
     assert "N" in {a.name for a in residue.atoms()}
     assert any("backbone atom missing" in n for n in prepared.report.notes)
+
+
+def test_one_input_gives_one_prepared_protein(repo):
+    """Review of 771a7ab (B5, the A2A example): two preparations of one input placed the caps up to 1.8 A apart
+    (PDBFixer's integrator had the seed 0, which OpenMM reads as a new seed every time, on whatever platform), so
+    the bilayer was trimmed to another box each time. The minimisations of the preparation run on the Reference
+    platform with a fixed seed."""
+    first = prepare_protein(repo / "examples/membrane_a2a/protein.pdb")
+    second = prepare_protein(repo / "examples/membrane_a2a/protein.pdb")
+    assert [(a.residue.name, a.name) for a in first.topology.atoms()] == [(a.residue.name, a.name)
+                                                                         for a in second.topology.atoms()]
+    assert np.array_equal(first.positions_nm(), second.positions_nm())
+    caps = [a.index for a in first.topology.atoms() if a.residue.name in ("ACE", "NME")]
+    assert len(caps) == 18
+    with pytest.raises(ValueError, match="must not be 0"):
+        prepare_protein(repo / "examples/membrane_a2a/protein.pdb", seed=0)

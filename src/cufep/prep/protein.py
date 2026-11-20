@@ -227,11 +227,51 @@ def infer_variant(res) -> str | None:
 
 
 # --------------------------------------------------------------------------- main
+#: the seed of PDBFixer's integrator when it places missing atoms and caps. OpenMM reads 0 as "a new seed
+#: for every Context", which made the caps of one input land up to 1.8 A apart from one preparation to the
+#: next (review of PR 1)
+PREPARATION_SEED = 1
+
+
+class _SeededPythonRandom:
+    """Python's own random numbers seeded with ``seed`` while the block runs, and as they were after it:
+    OpenMM's Modeller.addHydrogens starts every new hydrogen from random.random(), so the hydrogens of
+    the caps of one input landed up to 1.9 A apart from one preparation to the next."""
+
+    def __init__(self, seed: int) -> None:
+        self.seed = int(seed)
+
+    def __enter__(self):
+        import random
+
+        self.state = random.getstate()
+        random.seed(self.seed)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        import random
+
+        random.setstate(self.state)
+
+
+def _preparation_platform():
+    """The platform of the small minimisations of the preparation (missing atoms, caps, hydrogens): the
+    Reference platform, whose results do not depend on the GPU or the order of summation, so that one
+    input gives one prepared protein."""
+    import openmm as mm
+
+    return mm.Platform.getPlatformByName("Reference")
+
+
 def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = None, ph: float = 7.4,
-                    keep_water: bool = True, seed: int = 0) -> PreparedProtein:
-    """Prepare a protein PDB for simulation. See the module docstring for the rules."""
+                    keep_water: bool = True, seed: int = PREPARATION_SEED) -> PreparedProtein:
+    """Prepare a protein PDB for simulation. See the module docstring for the rules. The result is
+    the same every time for one input: the minimisations that place missing atoms, caps and
+    hydrogens run on the Reference platform with the integrator seed ``seed`` (never 0)."""
     from pdbfixer import PDBFixer
 
+    if int(seed) == 0:
+        raise ValueError("the seed of the preparation must not be 0: OpenMM reads 0 as a new seed every time")
     pdb_path = Path(pdb_path)
     if not pdb_path.exists():
         raise ProteinError(f"protein file not found: {pdb_path}")
@@ -448,7 +488,7 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
     buf.seek(0)
 
     # ---- 6. PDBFixer: missing heavy atoms, caps, charged C-termini ----------------------------
-    fixer = PDBFixer(pdbfile=buf)
+    fixer = PDBFixer(pdbfile=buf, platform=_preparation_platform())
     fixer.missingResidues = dict(cap_plan)
     fixer.findMissingAtoms()
     capped_last = {(_CHAIN_IDS[s], *residue_key(seg[-1])[1:]) for s, seg in enumerate(segments) if seg[-1].index in no_oxt}
@@ -477,10 +517,12 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
     if waters:
         water_part = app.Modeller(fixer.topology, fixer.positions)
         water_part.delete([r for r in water_part.topology.residues() if r.name != "HOH"])
-        water_part.addHydrogens(app.ForceField("amber14/tip3p.xml"))
+        with _SeededPythonRandom(seed):
+            water_part.addHydrogens(app.ForceField("amber14/tip3p.xml"), platform=_preparation_platform())
         modeller.delete(waters)
         variants = [v for r, v in zip(fixer.topology.residues(), variants) if r.name != "HOH"]
-    actual = modeller.addHydrogens(forcefield, pH=ph, variants=variants)
+    with _SeededPythonRandom(seed):
+        actual = modeller.addHydrogens(forcefield, pH=ph, variants=variants, platform=_preparation_platform())
     for res, variant, given in zip(modeller.topology.residues(), actual, variants):
         base = _CANONICAL.get(res.name, res.name)
         if given is None and base in TITRATABLE and (before.get((*residue_key(res), res.name), 0) == 0
