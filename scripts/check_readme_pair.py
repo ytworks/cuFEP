@@ -2,10 +2,10 @@
 """Check that README.md (English) and README.ja.md (Japanese) say the same thing.
 
 The two cannot be compared word for word, so what can be compared is: the outline (the levels of
-the `##` and `###` headings, in order), the commands and configuration in the code blocks (with
+the headings from `##` down, in order), the commands and configuration in the code blocks (with
 their comments removed, since the comments are translated), the links to files of the repository,
-and that each names the other at the top. Every relative link and every anchor of both must
-resolve. Run by the `harness` job of CI. Standard library only.
+and that each names the other. Every relative link and every anchor of both must resolve, as
+GitHub resolves them. Run by the `harness` job of CI. Standard library only.
 """
 from __future__ import annotations
 
@@ -13,76 +13,143 @@ import re
 import sys
 import unicodedata
 from pathlib import Path
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent.parent
 PAIR = ("README.md", "README.ja.md")
-LINK = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
-FENCE = re.compile(r"^\s*```")
+
+FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+ATX = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+SETEXT = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
+CODE_SPAN = re.compile(r"(`+)(.+?)\1")
+INLINE_LINK = re.compile(r"\]\(\s*(<[^>\n]*>|(?:[^\s()]|\([^\s()]*\))+)(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)")
+REFERENCE_USE = re.compile(r"\[([^\]]+)\]\[([^\]]*)\]")
+DEFINITION = re.compile(r"^ {0,3}\[([^\]]+)\]:\s*(<[^>\n]*>|\S+)")
+HREF = re.compile(r"<a\s[^>]*\bhref\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+HTML_ANCHOR = re.compile(r"<a\s[^>]*\b(?:id|name)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+EXTERNAL = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
 
 
 def blocks_and_text(text: str) -> tuple[list[list[str]], list[str]]:
-    """The code blocks (their lines) and the lines outside code blocks."""
-    blocks, outside, current = [], [], None
+    """The fenced code blocks (their lines) and the lines outside them, as CommonMark reads fences:
+    three or more backticks or tildes, indented by at most three spaces; a backtick fence has no
+    backtick in its info string; it is closed by a line of the same character, at least as long."""
+    blocks, outside, current, fence = [], [], None, ""
     for line in text.splitlines():
-        if FENCE.match(line):
-            if current is None:
-                current = []
+        if current is None:
+            m = FENCE_OPEN.match(line)
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                current, fence = [], m.group(1)
             else:
-                blocks.append(current)
-                current = None
-        elif current is not None:
-            current.append(line)
+                outside.append(line)
+        elif re.match(r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$", line):
+            blocks.append(current)
+            current = None
         else:
-            outside.append(line)
+            current.append(line)
+    if current is not None:              # an unclosed fence runs to the end of the document
+        blocks.append(current)
     return blocks, outside
 
 
-def outline(text: str) -> list[int]:
-    """The levels of the `##` and `###` headings, in order."""
+def headings(text: str) -> list[tuple[int, str]]:
+    """The headings (level, text), ATX and setext, outside code blocks."""
     _, lines = blocks_and_text(text)
-    return [len(m.group(1)) for m in (re.match(r"^(#{2,3}) ", ln) for ln in lines) if m]
+    found = []
+    for i, line in enumerate(lines):
+        m = ATX.match(line)
+        if m:
+            found.append((len(m.group(1)), (m.group(2) or "").strip()))
+            continue
+        s = SETEXT.match(line)
+        prev = lines[i - 1] if i else ""
+        if s and prev.strip() and not ATX.match(prev) and not re.match(r"^ {0,3}([-*+]|\d+[.)])\s", prev) \
+                and not SETEXT.match(prev):
+            found.append((1 if s.group(1)[0] == "=" else 2, prev.strip()))   # the paragraph line above
+    return found
+
+
+def outline(text: str) -> list[int]:
+    """The levels of the headings from `##` down, in order."""
+    return [level for level, _ in headings(text) if level >= 2]
 
 
 def uncommented(block: list[str]) -> list[str]:
-    """The lines of a code block without comments and blank lines (comments are translated)."""
+    """The lines of a code block without comments and blank lines (comments are translated). A `#`
+    starts a comment at the start of a line or after a space, outside quotes."""
     kept = []
     for line in block:
-        line = re.sub(r"(^|\s)#.*$", "", line).rstrip()
+        quote, cut = "", len(line)
+        for i, c in enumerate(line):
+            if quote:
+                if c == quote:
+                    quote = ""
+            elif c in "\"'":
+                quote = c
+            elif c == "#" and (i == 0 or line[i - 1].isspace()):
+                cut = i
+                break
+        line = line[:cut].rstrip()
         if line.strip():
             kept.append(line)
     return kept
 
 
 def links(text: str) -> list[str]:
-    """Link targets outside code blocks, in order."""
+    """Link targets outside code blocks and code spans, in order: inline links and images,
+    reference links with their definitions, and HTML links."""
     _, lines = blocks_and_text(text)
-    return [m.group(1) for ln in lines for m in LINK.finditer(ln)]
+    prose = [CODE_SPAN.sub("", ln) for ln in lines]
+    definitions = {}
+    for ln in prose:
+        m = DEFINITION.match(ln)
+        if m:
+            definitions[m.group(1).strip().lower()] = m.group(2)
+    found = []
+    for ln in prose:
+        if DEFINITION.match(ln):
+            continue
+        found += [m.group(1) for m in INLINE_LINK.finditer(ln)]
+        for m in REFERENCE_USE.finditer(ln):
+            key = (m.group(2) or m.group(1)).strip().lower()
+            found.append(definitions.get(key, f"[undefined reference {key}]"))
+        found += [m.group(1) for m in HREF.finditer(ln)]
+    return [t[1:-1] if t.startswith("<") and t.endswith(">") else t for t in found]
 
 
 def is_external(target: str) -> bool:
-    return bool(re.match(r"^[a-z][a-z0-9+.-]*:", target))
+    return bool(EXTERNAL.match(target))
 
 
-def slug(heading: str) -> str:
-    """The anchor GitHub gives a heading: lower case; letters, numbers, spaces, hyphens and
-    underscores kept, everything else dropped; spaces to hyphens."""
-    text = heading.strip().lower()
+def slugify(heading: str) -> str:
+    """The anchor GitHub gives a heading text: links and images by their text, code spans by their
+    content, HTML tags dropped; lower case; letters, numbers, spaces, hyphens and underscores kept,
+    everything else dropped; spaces to hyphens."""
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", heading)
+    text = CODE_SPAN.sub(r"\2", text)
+    text = re.sub(r"<[^>]+>", "", text).strip().lower()
     text = "".join(c for c in text if c in " -_" or unicodedata.category(c)[0] in "LNM")
     return text.replace(" ", "-")
 
 
+def slug(heading: str) -> str:
+    return slugify(heading)
+
+
 def anchors(text: str) -> set[str]:
-    _, lines = blocks_and_text(text)
-    seen: dict[str, int] = {}
+    """The anchors of a document: of every heading, numbered on repetition as github-slugger
+    numbers them, and of every HTML element with an id or a name."""
+    occurrences: dict[str, int] = {}
     found = set()
-    for line in lines:
-        m = re.match(r"^#{1,6} (.+?)\s*#*\s*$", line)
-        if not m:
-            continue
-        base = slug(m.group(1))
-        n = seen.get(base, 0)
-        seen[base] = n + 1
-        found.add(base if n == 0 else f"{base}-{n}")
+    for _, title in headings(text):
+        base = result = slugify(title)
+        while result in occurrences:
+            occurrences[base] += 1
+            result = f"{base}-{occurrences[base]}"
+        occurrences[result] = 0
+        found.add(result)
+    _, lines = blocks_and_text(text)
+    found |= {m.group(1) for ln in lines for m in HTML_ANCHOR.finditer(ln)}
     return found
 
 
@@ -90,14 +157,18 @@ def link_problems(name: str, text: str, root: Path) -> list[str]:
     """Relative links of a Markdown file whose file or anchor does not exist."""
     problems = []
     for target in links(text):
+        if target.startswith("[undefined reference"):
+            problems.append(f"{name}: {target[1:-1]}")
+            continue
         if is_external(target):
             continue
         path, _, anchor = target.partition("#")
+        anchor = unquote(anchor)
         if not path:                                   # an anchor of this file
             if anchor not in anchors(text):
                 problems.append(f"{name}: link to {target}: no such heading")
             continue
-        file = (root / name).parent / path
+        file = (root / name).parent / unquote(path)
         if not file.exists():
             problems.append(f"{name}: link to {target}: no such file")
         elif anchor and file.suffix == ".md" and anchor not in anchors(file.read_text(encoding="utf-8")):
@@ -120,7 +191,7 @@ def pair_problems(english: str, japanese: str, root: Path = ROOT) -> list[str]:
         if en != ja:
             first = next((a, b) for a, b in zip(en + [""], ja + [""]) if a != b)
             problems.append(f"code block {i} differs apart from comments: {first[0]!r} / {first[1]!r}")
-    files = [[t.partition("#")[0] for t in links(x) if not is_external(t) and not t.startswith("#")]
+    files = [[unquote(t.partition("#")[0]) for t in links(x) if not is_external(t) and not t.startswith(("#", "["))]
              for x in (english, japanese)]
     en_files, ja_files = (sorted(set(f) - set(PAIR)) for f in files)
     if en_files != ja_files:

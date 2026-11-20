@@ -79,3 +79,91 @@ def test_anchors_are_those_github_gives():
     assert check_readme_pair.slug("`sampling.rest2` and REST2 (pocket)") == "samplingrest2-and-rest2-pocket"
     assert check_readme_pair.slug("結果の読み方") == "結果の読み方"
     assert check_readme_pair.anchors("## Notes\n\n## Notes\n") == {"notes", "notes-1"}
+
+
+def test_progress_log_reads_fenced_code_as_text_and_checks_the_budgets_of_the_sections():
+    """Review of PR 2: a fenced `## Example` was taken for a section and a fenced `###` line for an
+    entry; the budgets of Product (25 lines) and Current Status (80) were not checked."""
+    entry = "### 2026-01-01 — [progress] x\n- What: y\n"
+    good = "# Progress\n\n## Product\n\n## Current Status\n\n## Change Log\n\n" + entry * 10
+    fenced = good.replace("## Current Status\n", "## Current Status\n```markdown\n## Example\n### 2026\n```\n")
+    assert check_progress_size.problems_in(fenced) == []
+    assert any("## Product has 26 lines" in p
+               for p in check_progress_size.problems_in(good.replace("## Product\n", "## Product\n" + "x\n" * 25)))
+    assert any("## Current Status has 81 lines" in p for p in check_progress_size.problems_in(
+        good.replace("## Current Status\n", "## Current Status\n" + "x\n" * 80)))
+
+
+def test_the_readme_check_reads_markdown_as_github_does(tmp_path):
+    """Review of PR 2: inputs on which the check of the README pair was wrong."""
+    c = check_readme_pair
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "a (b).md").write_text("# A\n")
+    # commands in ~~~ fences are compared; a `#` inside quotes is no comment
+    assert c.blocks_and_text("~~~bash\ncufep run x\n~~~\n")[0] == [["cufep run x"]]
+    assert c.uncommented(['cufep run --label "run #1"  # comment']) == ['cufep run --label "run #1"']
+    # a line that opens with an inline code span is no fence and hides nothing after it
+    assert c.outline("```cufep``` runs it\n\n## A\n\n#### B\n") == [2, 4]
+    # link targets: angle brackets, titles, references, HTML; percent-encoded paths; not in code spans
+    text = ("[x](<docs/missing file.md>) [y](f.md 'title') [z][r] <a href=\"g.md\">g</a> "
+            "[w](docs/a%20(b).md) `[v](docs/nothing.md)`\n\n[r]: h.md\n")
+    assert sorted(c.links(text)) == sorted(["docs/missing file.md", "f.md", "h.md", "g.md", "docs/a%20(b).md"])
+    missing = c.link_problems("README.md", text, tmp_path)
+    assert sorted(p.split(": ")[1] for p in missing) == sorted([
+        "link to docs/missing file.md", "link to f.md", "link to h.md", "link to g.md"])
+    # anchors: headings with links and code, setext, indented ATX, HTML ids, numbering of repeats
+    doc = ("### See [protocol](docs/protocol.md)\n\nTitle\n=====\n\n   ## Indented\n\n<a id=\"here\"></a>\n\n"
+           "## Notes\n\n## Notes 1\n\n## Notes\n\n## `sampling.rest2` and REST2\n")
+    assert c.anchors(doc) == {"see-protocol", "title", "indented", "here", "notes", "notes-1", "notes-2",
+                              "samplingrest2-and-rest2"}
+
+
+def fake_docker(tmp_path, missing=""):
+    """A `docker` that records its arguments; `image inspect` fails for the image named missing."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "docker.log"
+    script = bin_dir / "docker"
+    script.write_text(f"""#!/bin/bash
+echo "$*" >> {log}
+if [[ "$1 $2" == "image inspect" && "$3" == "{missing}" ]]; then exit 1; fi
+if [[ "$1 $2" == "container inspect" ]]; then exit 1; fi
+if [[ "$1" == run ]]; then printf '%s\\n' "$@"; fi
+exit 0
+""")
+    script.chmod(0o755)
+    return {**__import__("os").environ, "PATH": f"{bin_dir}:" + __import__("os").environ["PATH"]}, log
+
+
+def test_spikes_run_sh_calls_the_image_as_it_did_before_the_wrapper(tmp_path):
+    """Review of PR 2: GPUS=2 is a count of GPUs for docker, as in the old spikes/run.sh, and the
+    script runs in /work from any directory."""
+    import subprocess
+
+    env, _ = fake_docker(tmp_path)
+    run = lambda gpus=None: subprocess.run(  # noqa: E731
+        ["bash", str(ROOT / "spikes" / "run.sh"), "x.py"], cwd=ROOT / "spikes", capture_output=True, text=True,
+        env={**env, **({"GPUS": gpus} if gpus is not None else {})}).stdout.splitlines()
+    args = run("2")
+    assert args[args.index("--gpus") + 1] == "2" and args[args.index("-w") + 1] == "/work"
+    assert args[-5:] == ["--entrypoint", "/usr/bin/env", "cufep:dev", "python", "x.py"]
+    assert run()[run().index("--gpus") + 1] == "all"
+    assert run('"device=1"')[run('"device=1"').index("--gpus") + 1] == '"device=1"'
+
+
+def test_the_wrapper_never_builds_an_image_it_was_not_asked_to_build(tmp_path):
+    """Review of PR 2: a missing tag was built from the working tree, so IMAGE=cufep:<commit> named a
+    tree that was not that commit."""
+    import subprocess
+
+    env, log = fake_docker(tmp_path, missing="cufep:missing")
+    wrapper = str(ROOT / "scripts" / "in_docker.sh")
+    done = subprocess.run(["bash", wrapper, "--image", "cufep:missing", "python", "-V"], capture_output=True,
+                          text=True, env=env)
+    assert done.returncode == 2 and "not found" in done.stderr
+    assert not any(line.startswith(("build", "run")) for line in log.read_text().splitlines())
+    for bad in (["--gpus"], ["--gpus", '"device=1"'], ["--gpus", "0", "--docker-gpus", "2"]):
+        assert subprocess.run(["bash", wrapper, *bad, "python"], capture_output=True, env=env).returncode == 2
+    args = subprocess.run(["bash", wrapper, "--gpus", "6,7", "python"], capture_output=True, text=True,
+                          env=env).stdout.splitlines()
+    assert args[args.index("--gpus") + 1] == '"device=6,7"'
