@@ -310,8 +310,36 @@ def test_validate_gives_the_differences_of_every_pair_without_a_verdict(compared
     reference, other = rows("Reference", 80.0), rows("CPU", compared_kT)
     found = between_state_differences(reference, other, [0])
     assert found["worst"] == pytest.approx(worst, abs=1e-4)
-    assert found["compared"] == 2 and found["one_sided"] == 0 and set(found) == {"worst", "relative", "compared",
+    assert found["compared"] == 1 and found["one_sided"] == 0 and set(found) == {"worst", "relative", "compared",
                                                                                 "one_sided"}
-    # a state that is not finite on one backend only is counted and named, not compared
+    # a state that is not finite on one backend only is counted and named, not compared; the state a configuration
+    # was sampled in is no pair (its difference is zero by definition)
     one = between_state_differences([[0.0, 1.0]], [[0.0, float("nan")]], [0])
-    assert one == {"worst": 0.0, "relative": None, "compared": 1, "one_sided": 1}     # no energy to relate to
+    assert one == {"worst": None, "relative": None, "compared": 0, "one_sided": 1}
+
+
+def test_a_leg_without_a_pair_finite_on_both_backends_is_not_compared():
+    """Review of 7b49066 (P2): with every energy of the backend compared not finite, validate printed "max none over 0
+    pairs" and counted the leg as compared (18 pairs finite on one side only). A leg is compared when every backend
+    has at least one pair of a configuration and another state finite on both sides; how large the differences are
+    decides nothing (0 and 80.7 kT alike)."""
+    from cufep.validate import between_state_differences, not_compared_reason, verdict
+
+    rng = np.random.default_rng(5)
+    reference = rng.normal(size=(9, 3))
+    own = [k % 3 for k in range(9)]
+    lost = np.full_like(reference, np.nan)
+    compared = {"stock mixed": between_state_differences(reference, reference, own),
+                "cuPotential": between_state_differences(reference, lost, own)}
+    assert compared["cuPotential"]["compared"] == 0 and compared["cuPotential"]["one_sided"] == 18
+    reason = not_compared_reason(compared)
+    assert reason == "no pair of states has finite energies on both backends for cuPotential (18 pair(s) finite on one " \
+                     "backend only)"
+    assert verdict({"complex": None, "solvent": True}) is False
+    for offset in (0.0, 80.679):
+        shifted = reference + np.where(np.arange(3) == 2, offset, 0.0)
+        found = {"cuPotential": between_state_differences(reference, shifted, own)}
+        assert not_compared_reason(found) is None and found["cuPotential"]["compared"] == 18
+    # a backend whose own states are finite and every other one is not: still no pair
+    own_only = np.where(np.arange(3)[None, :] == np.array(own)[:, None], reference, np.nan)
+    assert not_compared_reason({"cuPotential": between_state_differences(reference, own_only, own)}) is not None

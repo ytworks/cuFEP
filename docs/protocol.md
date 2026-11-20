@@ -259,7 +259,7 @@ its own equilibration before the production.
 | point | Cresset (the paper, and Flare) | cuFEP |
 |---|---|---|
 | when the windows are chosen | in a precalculation before the production: "Once converged, all results from the ALS are discarded, and the converged bespoke λ schedule is used in a production run" | the same. No window is added during the equilibration or the production of the replica-exchange run |
-| rule and values | threshold 0.04, 101 candidates, one window per iteration into the longest bad section | the same |
+| rule and values | threshold 0.04, 101 candidates, one window per iteration into the longest bad section | the same rule and 101 candidates; threshold 0.18 by default (the owner's choice of 2026-11-20, configuration.md) |
 | MD per new window of the precalculation | 50 ps | solvent leg: 50 ps. Complex leg: 500 ps recorded after 500 ps of equilibration, because the pocket adapts to a partly decoupled ligand over hundreds of picoseconds ("What was measured on TYK2") |
 | initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state. For absolute FEP, Flare states only that the schedule is adaptive "for each stage of the calculation" | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
@@ -271,7 +271,9 @@ its own equilibration before the production.
 
 The paper's values were set for relative transformations of a ligand in solution, run
 without replica exchange. For absolute binding they were checked on TYK2 with ligand ejm_31
-(5 ns of production per window, replica exchange).
+(5 ns of production per window, replica exchange). The measurements of this section were made
+with the paper's threshold of 0.04, the default until 2026-11-20; the default is 0.18 since then
+(configuration.md, where the runs at 0.10 to 0.20 are given).
 
 *The solvent leg.* The overlaps of the precalculation hold in the production: a pair that
 the precalculation read at 0.042 had 0.038 in the production. On five other TYK2 ligands
@@ -310,8 +312,8 @@ finds the region in most legs, not in all.
 If a pair of windows still ends below the warning level in the production, the result says
 `NOT RELIABLE` and names the pair, and the remedy is the one of Flare: more windows in that
 stage (`lambda_schedule.adaptive.initial_windows`, or `lambda_schedule.windows` with
-`mode: fixed`) and a new run of that leg ("When a leg carries a message"). For orientation (50 ps
-per window in the precalculation unless stated):
+`mode: fixed`) and a new run of that leg ("When a leg carries a message"). For orientation (threshold
+0.04, 50 ps per window in the precalculation unless stated):
 
 | TYK2, complex leg | windows | lowest overlap in production |
 |---|---|---|
@@ -322,12 +324,14 @@ per window in the precalculation unless stated):
 | start 3 / 5 / 13, four other ligands | 19 | 0.067-0.139 |
 | fixed windows (`lambda_schedule.windows`), ejm_31, three runs | 30 | 0.119-0.127 |
 
-*Why the threshold stays at 0.04.* An element of the overlap matrix is shared among all
-windows that overlap. Windows that are close to each other therefore have superdiagonal
+*Why the threshold cannot go much higher.* An element of the overlap matrix is shared among
+all windows that overlap. Windows that are close to each other therefore have superdiagonal
 elements near 1 / (number of such windows), however close they are: eleven discharge
 windows of toluene, which has almost no charge, read 0.065 each. Above that level a
 threshold cannot be met and each added window lowers the overlaps further: with a threshold
-of 0.20 the TYK2 complex leg grew to `max_windows`.
+of 0.20 the TYK2 complex leg grew to `max_windows` (measured while 0.04 was the default), and
+with 5 ns of production the TYK2 solvent leg grew to 32 windows (2026-11-20). The default of
+0.18 is the owner's choice from those runs.
 
 *What windows do not cure.* Runs of TYK2 ejm_31 differ by the same amount with 13 to 34
 windows per leg. In the solvent leg the free energy follows the orientation of the ligand's

@@ -41,6 +41,10 @@ def between_state_differences(reference_rows, rows, own_states) -> dict:
     and without a selection of the pairs (earlier versions compared the pairs below 60 kT and judged
     0.15 kT and 1e-4, levels of cuFEP's own: removed by the owner's order of 2026-11-20).
 
+    A pair is a configuration and a state other than its own: the difference of a state to itself
+    is zero by definition and compares nothing (review of 7b49066: a backend whose other states were
+    all not finite would otherwise have been compared over the configurations' own states).
+
     Returns ``worst`` (kT; over the pairs that are finite on both backends), the largest relative
     difference of the energies themselves (``relative``), the number of pairs compared and the
     number that are finite on one backend only (``one_sided``)."""
@@ -48,14 +52,27 @@ def between_state_differences(reference_rows, rows, own_states) -> dict:
     n = np.arange(ref.shape[0])
     own = np.asarray(own_states, dtype=int)
     ref_d, d = ref - ref[n, own][:, None], x - x[n, own][:, None]
-    both = np.isfinite(ref_d) & np.isfinite(d)
-    one_sided = int((np.isfinite(ref_d) != np.isfinite(d)).sum())
+    other = np.ones(ref.shape, dtype=bool)
+    other[n, own] = False
+    both = np.isfinite(ref_d) & np.isfinite(d) & other
+    one_sided = int(((np.isfinite(ref_d) != np.isfinite(d)) & other).sum())
     if not both.any():
         return {"worst": None, "relative": None, "compared": 0, "one_sided": one_sided}
     worst = float(np.abs(d - ref_d)[both].max())
     scale = np.abs(ref[both])
     relative = float(np.abs(x - ref)[both].max() / scale.max()) if scale.max() > 0 else None
     return {"worst": worst, "relative": relative, "compared": int(both.sum()), "one_sided": one_sided}
+
+
+def not_compared_reason(compared: dict[str, dict]) -> str | None:
+    """Why a leg was not compared although its energies were evaluated: a backend of which no pair of
+    states is finite on both sides (:func:`between_state_differences` with ``compared`` 0), or None.
+    A comparison needs at least one pair; how large the differences are decides nothing (review of
+    7b49066: 18 pairs finite on one backend only were shown as "max none over 0 pairs" and the leg
+    counted as compared)."""
+    empty = [f"{name} ({c['one_sided']} pair(s) finite on one backend only)" for name, c in compared.items()
+             if not c["compared"]]
+    return ("no pair of states has finite energies on both backends for " + ", ".join(empty)) if empty else None
 
 
 def verdict(results: dict[str, bool | None]) -> bool:
@@ -159,7 +176,12 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
         own = [schedule.states.index(f[0]) for f in frames]
         compared = {name: between_state_differences(rows["stock double"], rows[name], own)
                     for name in ("stock mixed", "cuPotential")}
-        results[leg] = True                     # compared; the numbers below are no verdict
+        # compared if every backend has a pair to compare; the numbers below are no verdict
+        reason = not_compared_reason(compared)
+        if reason:
+            not_compared[leg] = reason
+        else:
+            results[leg] = True
         region = (f"REST2 scale {schedule.rest2_scale:g}, {len(built.hot_atoms)} protein atoms hot"
                   if built.rest2_on else "no REST2")
 

@@ -235,6 +235,7 @@ def test_waters_that_overlap_across_the_boundary_of_a_trimmed_bilayer_are_remove
     from cufep.prep.membrane import CLASH_NM, _kind, _molecules, boundary_water_overlaps
 
     edge, height = 3.0, 4.0
+    built = (6.0, 6.0, 8.0)                                             # the box before trimming: none of these met
     oxygens = [[0.0046, 1.0, 1.0], [3.0 - 0.0046, 1.0, 1.0],            # 0.092 A apart through x
                [1.5, 0.1, 2.0], [1.5, 2.95, 2.0],                         # 0.15 nm apart through y
                [1.0, 1.0, 0.05], [1.0, 1.0, 3.93],                        # 0.12 nm apart through z
@@ -244,7 +245,7 @@ def test_waters_that_overlap_across_the_boundary_of_a_trimmed_bilayer_are_remove
     kinds = np.array([_kind(a.residue) for a in atoms])
     heavy = np.array([a.element != app.element.hydrogen for a in atoms])
     molecules = _molecules(top)
-    removed = boundary_water_overlaps(pos, kinds, heavy, molecules, set(), (edge, edge, height))
+    removed = boundary_water_overlaps(pos, kinds, heavy, molecules, set(), (edge, edge, height), built)
     gone = sorted({atoms[i].residue.index for i in removed})
     assert len(gone) == 3 and {0, 1} & set(gone) and {2, 3} & set(gone) and {4, 5} & set(gone)
     assert 6 not in gone and 7 not in gone and all(len([i for i in removed if atoms[i].residue.index == r]) == 3
@@ -256,13 +257,41 @@ def test_waters_that_overlap_across_the_boundary_of_a_trimmed_bilayer_are_remove
     assert d[np.triu_indices(len(left), 1)].min() >= CLASH_NM
     # atoms that are already removed do not count: with the first water gone, its partner stays
     without_first = {atoms[i].residue.index for i in boundary_water_overlaps(
-        pos, kinds, heavy, molecules, {a.index for a in atoms if a.residue.index == 0}, (edge, edge, height))}
+        pos, kinds, heavy, molecules, {a.index for a in atoms if a.residue.index == 0}, (edge, edge, height), built)}
     assert 1 not in without_first and len(without_first) == 2
-    # a water overlapping the protein goes whatever else
+    # a water that the new boundary brings within 0.1 nm of the protein goes whatever else
     protein_kinds = kinds.copy()
     protein_kinds[[a.index for a in list(top.residues())[7].atoms()]] = "protein"
     close = pos.copy()
-    close[[a.index for a in list(top.residues())[6].atoms()]] += pos[21] - pos[18] + [0.1, 0.0, 0.0]   # 0.1 nm from it
+    close[[a.index for a in list(top.residues())[6].atoms()]] += pos[21] - pos[18] + [0.1, 0.0, -height]
     taken = {atoms[i].residue.index for i in boundary_water_overlaps(close, protein_kinds, heavy, molecules, set(),
-                                                                     (edge, edge, height))}
+                                                                     (edge, edge, height), built)}
     assert 6 in taken and 7 not in taken
+    # review of 7b49066: a contact that the built system had is not the new boundary's, and stays
+    close[[a.index for a in list(top.residues())[6].atoms()]] += [0.0, 0.0, height]
+    taken = {atoms[i].residue.index for i in boundary_water_overlaps(close, protein_kinds, heavy, molecules, set(),
+                                                                     (edge, edge, height), built)}
+    assert 6 not in taken
+
+
+def test_trimming_keeps_the_contacts_of_the_built_system():
+    """Review of 7b49066 (P2): every close pair in the trimmed box was resolved, so a water coordinating a Mg ion in
+    the middle of the box (0.194 nm, the distance of Amber/TIP3P minimised on OpenMM's Reference platform) was removed
+    when a 6 nm box was cut to 3 nm. Only pairs that the new boundary brings together are resolved: the Mg water stays,
+    and of two waters 0.04 nm apart through the new boundary one goes. The same rule holds for lipids and the waters
+    near them (contact_is_new)."""
+    from cufep.prep.membrane import _kind, _molecules, boundary_water_overlaps, contact_is_new
+
+    top, pos = _waters([[1.5, 1.5 + 0.194, 3.0], [0.02, 1.0, 1.0], [2.98, 1.0, 1.0]])
+    chain = list(top.chains())[0]
+    mg = top.addAtom("MG", app.element.magnesium, top.addResidue("MG", chain, id="9"))
+    pos = np.vstack([pos, [[1.5, 1.5, 3.0]]])
+    atoms = list(top.atoms())
+    kinds = np.array([_kind(a.residue) for a in atoms])
+    assert kinds[mg.index] == "ion"
+    heavy = np.array([a.element != app.element.hydrogen for a in atoms])
+    molecules = _molecules(top)
+    gone = {atoms[i].residue.index for i in boundary_water_overlaps(pos, kinds, heavy, molecules, set(),
+                                                                      (3.0, 3.0, 6.0), (6.0, 6.0, 6.0))}
+    assert 0 not in gone and len(gone & {1, 2}) == 1 and len(gone) == 1
+    assert not contact_is_new(pos, 0, mg.index, (6.0, 6.0, 6.0)) and contact_is_new(pos, 3, 6, (6.0, 6.0, 6.0))

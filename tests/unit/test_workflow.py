@@ -1712,6 +1712,41 @@ def test_a_ligand_not_part_of_a_run_keeps_its_own_repeats_and_analysis_settings(
         "not part of this run, and no result of an earlier run"]
 
 
+@pytest.mark.parametrize("version", ["this", "earlier"])
+def test_a_ligand_not_part_of_a_run_shows_the_verdicts_of_this_version(tmp_path, version):
+    """Review of 7b49066 (P2): a ligand B combined by analysis version 8 whose legs had not changed was shown as stored
+    in a run of ligand A alone: the summary listed B's legs under the verdicts of that version and the log carried
+    its warnings on the halves and BAR, checks that are no longer made. A stored result of another version is combined
+    again, read-only, with its repeats and analysis settings: the same free energy, the checks of this version, and
+    none of B's files written. The same for a result of an earlier version without a record of its combination."""
+    from cufep import workflow
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+    from cufep.config.schema import Config
+
+    lig = tmp_path / "b"
+    _write_ligand_legs(lig, [-1.0, -2.0, -3.0])
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
+    stored = workflow.combine_ligand(lig, "b", 3, cfg)
+    old_verdicts = ["repeat 0 complex: NOT CONVERGED: the two halves of the production differ by 2.5 kT",
+                    "repeat 1 solvent: BAR between neighbouring lambda windows and MBAR differ by 1.2 kcal/mol"]
+    old = dict(stored, warnings=stored["warnings"] + old_verdicts, not_converged=["complex leg of repeat 0"],
+               analysis_record=dict(stored["analysis_record"], version=8, halves_tolerance_kT=1.0))
+    if version == "earlier":
+        old = {k: v for k, v in old.items() if k not in RECORD_OF_THE_COMBINATION}
+    (lig / "result.json").write_text(json.dumps(old))
+    before = {p: p.read_bytes() for p in sorted(lig.rglob("*")) if p.is_file()}
+    shown = workflow.stored_ligand_result(lig, "b")
+    assert shown["dg_bind"] == pytest.approx(-2.0) and shown["n_repeats"] == 3 and shown["not_part_of_this_run"]
+    assert not any(w in shown["warnings"] for w in old_verdicts) and "not_converged" not in shown
+    assert {p: p.read_bytes() for p in sorted(lig.rglob("*")) if p.is_file()} == before     # nothing of B written
+    if version == "this":
+        assert shown["analysis_record"]["version"] == 8 and shown["repeats_planned"] == 3   # B's own settings
+    # a result of this version with unchanged legs is shown as it is stored
+    (lig / "result.json").write_text(json.dumps(dict(stored, warnings=stored["warnings"] + ["a stored note"])))
+    assert stored["analysis_record"]["version"] == ANALYSIS_VERSION
+    assert "a stored note" in workflow.stored_ligand_result(lig, "b")["warnings"]
+
+
 def test_a_new_result_replaces_the_old_one_only_when_it_is_complete(tmp_path, monkeypatch):
     """Review of PR 1 (P2): the result was moved aside before the new one was written; a failed write left the leg
     with none, and later runs read it as not finished."""

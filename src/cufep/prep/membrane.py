@@ -193,6 +193,17 @@ def _kind(residue) -> str:
 CLASH_NM = 0.24
 
 
+def contact_is_new(pos, i: int, j: int, built_box_nm) -> bool:
+    """Whether heavy atoms ``i`` and ``j``, within :data:`CLASH_NM` of each other in the trimmed box,
+    were not in the box the bilayer was built in (rectangular, minimum image): only such contacts are
+    made by the new periodic boundary, and only they are resolved by trimming (review of 7b49066: a
+    water coordinating a Mg ion at 0.19 nm, a contact of the built system, was removed)."""
+    built = np.asarray(built_box_nm, dtype=float)
+    d = np.asarray(pos[i], dtype=float) - np.asarray(pos[j], dtype=float)
+    d -= built * np.round(d / built)
+    return float(np.linalg.norm(d)) >= CLASH_NM
+
+
 def trim_membrane(modeller, padding_nm: float, log=print) -> dict:
     """Cut the bilayer and solvent down to a square box just large enough for the protein.
 
@@ -257,7 +268,7 @@ def trim_membrane(modeller, padding_nm: float, log=print) -> dict:
     # waters that overlap another molecule across the new periodic boundary, in the final box (review of
     # PR 1: waters were removed only where they overlapped a lipid; two waters on the two sides of the new
     # boundary ended 0.09 A apart, and the minimisation could not separate them)
-    across = boundary_water_overlaps(pos, kinds, heavy, molecules, doomed, (edge, edge, new_z))
+    across = boundary_water_overlaps(pos, kinds, heavy, molecules, doomed, (edge, edge, new_z), old)
     doomed.update(across)
     removed_across = len({atoms[i].residue.index for i in across})
     modeller.delete([atoms[i] for i in sorted(doomed)])
@@ -274,27 +285,31 @@ def trim_membrane(modeller, padding_nm: float, log=print) -> dict:
             "waters_removed_for_overlap": plan["removed_waters"] + removed_across}
 
 
-def boundary_water_overlaps(pos, kinds, heavy, molecules, doomed, box_nm) -> set[int]:
-    """Atoms of the water molecules to remove so that no kept water has a heavy atom within
-    :data:`CLASH_NM` of a heavy atom of another kept molecule in the periodic box ``box_nm``
-    (lengths of a rectangular box). Of two overlapping waters the one with more overlaps goes, then
-    the later one; a water overlapping a lipid, the protein or the ligand goes."""
+def boundary_water_overlaps(pos, kinds, heavy, molecules, doomed, box_nm, built_box_nm) -> set[int]:
+    """Atoms of the water molecules to remove so that no kept water comes within :data:`CLASH_NM`
+    (heavy atoms) of another kept molecule through the new periodic boundary: in the trimmed box
+    ``box_nm`` but not in the box the bilayer was built in, ``built_box_nm`` (lengths of rectangular
+    boxes, minimum images). A contact that the built system already had is its own (a water
+    coordinating an ion, 0.19 nm) and is left alone (review of 7b49066: a Mg coordination water was
+    removed). Of two overlapping waters the one with more overlaps goes, then the later one; a water
+    overlapping a lipid, the protein, the ligand or an ion goes."""
     from scipy.spatial import cKDTree
 
     box = np.asarray(box_nm, dtype=float)
+    pos = np.asarray(pos, dtype=float)
     mol_of = np.full(len(kinds), -1, dtype=int)
     for m, mol in enumerate(molecules):
         mol_of[mol] = m
     kept = np.array([i for i in range(len(kinds)) if heavy[i] and i not in doomed], dtype=int)
     if len(kept) < 2:
         return set()
-    tree = cKDTree(np.mod(np.asarray(pos, dtype=float)[kept], box), boxsize=box)
+    tree = cKDTree(np.mod(pos[kept], box), boxsize=box)
     overlaps: dict[int, set[int]] = {}
     forced: set[int] = set()
     for a, b in tree.query_pairs(CLASH_NM):
         i, j = kept[a], kept[b]
         mi, mj = mol_of[i], mol_of[j]
-        if mi == mj:
+        if mi == mj or not contact_is_new(pos, i, j, built_box_nm):
             continue
         wi, wj = kinds[i] == "water", kinds[j] == "water"
         if wi and wj:
@@ -351,7 +366,7 @@ def _select_for_box(edge, old, rel, pos, atoms, kinds, heavy, molecules) -> dict
         clashes: dict[int, dict[int, int]] = {}
         for a, b in tree.query_pairs(CLASH_NM):
             ma, mb = mol_of[lip_heavy[a]], mol_of[lip_heavy[b]]
-            if ma != mb:
+            if ma != mb and contact_is_new(pos, lip_heavy[a], lip_heavy[b], old):
                 clashes.setdefault(ma, {}).setdefault(mb, 0)
                 clashes.setdefault(mb, {}).setdefault(ma, 0)
                 clashes[ma][mb] += 1
@@ -382,10 +397,10 @@ def _select_for_box(edge, old, rel, pos, atoms, kinds, heavy, molecules) -> dict
     removed_waters = 0
     if len(lip_heavy) and len(water_o):
         tree = cKDTree(wrapped[lip_heavy], boxsize=[edge, edge, old[2]])
-        close = tree.query(wrapped[water_o], k=1)[0] < CLASH_NM
-        for o in water_o[close]:
-            doomed.update(a.index for a in atoms[o].residue.atoms())
-            removed_waters += 1
+        for o, near in zip(water_o, tree.query_ball_point(wrapped[water_o], CLASH_NM)):
+            if any(contact_is_new(pos, o, lip_heavy[k], old) for k in near):
+                doomed.update(a.index for a in atoms[o].residue.atoms())
+                removed_waters += 1
     return {"doomed": doomed, "upper": upper, "lower": lower, "removed_lipids": removed_lipids,
             "removed_waters": removed_waters, "n_inside_per_leaflet": n_inside_per_leaflet}
 

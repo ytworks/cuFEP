@@ -278,6 +278,60 @@ def test_the_prepared_pose_is_held_to_openfes_rule_of_every_frame(tmp_path, monk
     with pytest.raises(WorkflowError, match="in the prepared pose: the anchor angle H1-H0-G0 .* comes within 22 degrees"):
         workflow.check_before_jobs(cfg, tmp_path, {(0, "complex")})
 
+    # review of 7b49066 (P2): theta_A of 25 degrees in the prepared pose (on a line by is_collinear, a rule of a
+    # trajectory) and 25, 31, 36 and 40 degrees in the stored pre-equilibration: refused before any job although its
+    # frames give the restraint. The prepared pose is held to the rule of every frame alone
+    pose["positions"] = _pose_with_theta_a(25.0)
+    workflow.check_before_jobs(cfg, tmp_path, {(0, "complex")})                  # accepted now
+    stored = np.array([_pose_with_theta_a(t) for t in (25.0, 31.0, 36.0, 40.0)])
+    restraint, _ = manual_boresch_restraint(HOST, GUEST, LIGAND, {"frame_atoms": np.arange(6), "frames": stored,
+                                                                  "frame_boxes": np.repeat(CUBE[None], 4, axis=0)},
+                                            6, K_R, K_A)
+    assert np.isfinite(restraint_energy(restraint, stored[-1], CUBE))
+    on_line = np.array([_pose_with_theta_a(25.0)] * 4)                         # 25 degrees in every frame: on a line
+    with pytest.raises(WorkflowError, match="on a straight line in every frame"):
+        manual_boresch_restraint(HOST, GUEST, LIGAND, {"frame_atoms": np.arange(6), "frames": on_line,
+                                                      "frame_boxes": np.repeat(CUBE[None], 4, axis=0)}, 6, K_R, K_A)
+
+
+def test_anchors_whose_dihedrals_are_not_defined_in_the_last_frame_are_refused():
+    """Review of 7b49066 (P2): the automatic choice took guest anchors bent in the earlier frames and exactly on a line
+    in the last, from which the reference values come; the force of the restraint was NaN on OpenMM's Reference
+    platform. Such anchors are refused, by whether the plane of the dihedral exists (the cross product of the two bond
+    vectors is zero), not by a level; the search goes on with other anchors."""
+    from cufep.alchemy.restraints import (RestraintSearchSettings, anchor_geometry_problem, anchor_margins,
+                                          undefined_dihedral_planes)
+
+    frames = []
+    for bend in (90.0, 70.0, 50.0, 30.0, 0.0):                  # the angle of G1-G2 away from the line G0-G1
+        x = POSITIONS.copy()
+        x[4] = x[3] + [0.0, -0.15, 0.0]
+        a = np.radians(bend)
+        x[5] = x[4] + 0.15 * np.array([0.0, -np.cos(a), np.sin(a)])
+        frames.append(x)
+    frames = np.array(frames)
+    probe = BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0)
+    assert undefined_dihedral_planes(probe, frames[-1]) == ["G0-G1-G2"] and undefined_dihedral_planes(probe, frames[0]) == []
+    margin = anchor_margins(RestraintSearchSettings(k_r=K_R, k_angle=K_A), 298.15)
+    problem = anchor_geometry_problem(probe, frames, margin)
+    assert problem.startswith("the anchors G0-G1-G2 are exactly on a line in the last frame")
+    assert anchor_geometry_problem(probe, frames[:-1], margin) is None              # bent in the last frame: kept
+    # the restraint that the last frame would give has a force of NaN
+    values = probe.values(frames[-1])
+    straight = BoreschRestraint(HOST, GUEST, *[float(v) for v in values], K_R, K_A, K_A, K_A, K_A, K_A)
+    system = mm.System()
+    for _ in range(6):
+        system.addParticle(12.0)
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in CUBE])
+    system.addForce(straight.create_force())
+    context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    context.setPositions(frames[-1] * unit.nanometer)
+    forces = context.getState(getForces=True).getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
+    assert not np.all(np.isfinite(forces))
+    eq = {"frame_atoms": np.arange(6), "frames": frames, "frame_boxes": np.repeat(CUBE[None], len(frames), axis=0)}
+    with pytest.raises(WorkflowError, match="exactly on a line in the last frame"):
+        manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A)
+
 
 def test_anchors_on_a_straight_line_are_refused_only_if_they_are_in_every_frame():
     """OpenFE's EvaluateBoreschAtoms: ``not all(collinear)``. Anchors with three in a row whose bond vectors have |cos|

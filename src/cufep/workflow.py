@@ -148,11 +148,11 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
     check_manual_anchors(cfg, lig_dir)
     stored = all((Path(lig_dir) / f"repeat_{r}" / "complex" / "restraint.json").exists() for r in complex_repeats)
     if cfg.restraints.selection == "manual" and not stored:
-        # anchors that OpenFE's rules refuse already in the prepared pose, from which the pre-equilibration
-        # starts, are refused before it (anchor_geometry_problem: theta_A and theta_B within 10 kT of a
-        # straight line, the six anchors on one line); the frames of the pre-equilibration are checked
-        # when the restraint is made. A run whose legs all have their restraint is not checked here
-        # (review of PR 1)
+        # anchors whose theta_A or theta_B is within 10 kT of a straight line already in the prepared pose,
+        # from which the pre-equilibration starts, are refused before it (OpenFE's check_angle_not_flat, a
+        # rule of every frame). The rule of a trajectory (on a line in every frame) and the reference frame
+        # are checked when the restraint is made from the frames of the pre-equilibration (review of
+        # 7b49066). A run whose legs all have their restraint is not checked here (review of PR 1)
         from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, anchor_geometry_problem,
                                               anchor_margins, nearest_image_of_ligand)
 
@@ -164,7 +164,7 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
                                        np.asarray(prep["box"], dtype=float))
         settings = RestraintSearchSettings(k_r=rc.k_r_kcal_per_A2 * KCAL * 100.0, k_angle=rc.k_angle_kcal_per_rad2 * KCAL)
         problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None],
-                                          anchor_margins(settings, cfg.thermodynamics.temperature_K))
+                                          anchor_margins(settings, cfg.thermodynamics.temperature_K), trajectory=False)
         if problem:
             raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)} in the prepared pose: "
                                 f"{problem}. Choose other anchors; nothing was changed")
@@ -2709,7 +2709,18 @@ def stored_ligand_result(lig_dir: Path, name: str) -> dict:
     interrupted). Nothing in the ligand's directory is written. A result of an earlier version
     records neither its repeats nor its legs: the repeats are those it names, and it is combined
     again and kept if that gives the same numbers.
+
+    The verdicts of a stored result are those of the version of the analysis that combined it;
+    of another version (one that judged the halves or BAR, for example) it is combined again too,
+    read-only, with its repeats and analysis settings, so that only the checks of this version
+    reach the summary (review of 7b49066: a ligand combined by analysis version 8 kept its
+    verdicts on the halves and BAR in a run of another ligand).
     """
+    from cufep.analysis.mbar import ANALYSIS_VERSION
+
+    def verdicts_current(result: dict) -> bool:
+        return (result.get("analysis_record") or {}).get("version") == ANALYSIS_VERSION
+
     lig_dir = Path(lig_dir)
     path = lig_dir / "result.json"
     stored = _read_json(path) if path.exists() else None
@@ -2731,9 +2742,11 @@ def stored_ligand_result(lig_dir: Path, name: str) -> dict:
         repeats, recorded = int(stored["repeats_planned"]), stored["leg_digests"]
         changed = [(r, leg) for r in range(repeats) for leg in ("complex", "solvent")
                    if recorded.get(f"{r}/{leg}") != leg_digest(lig_dir / f"repeat_{r}" / leg)]
-        if not changed:
+        if not changed and verdicts_current(stored):
             return dict(stored, not_part_of_this_run=True)
         out = combine_ligand(lig_dir, name, repeats, publish=False, record=stored.get("analysis_record"))
+        if not changed:                         # the same legs; the verdicts of this version
+            return dict(out, not_part_of_this_run=True)
         legs = ", ".join(f"the {leg} leg of repeat {r}" for r, leg in changed)
         out["warnings"].insert(0, f"not part of this run; its legs changed after its result was combined ({legs}): "
                                   "shown as its legs give it now, with the repeats and the analysis settings of the "
@@ -2744,7 +2757,8 @@ def stored_ligand_result(lig_dir: Path, name: str) -> dict:
     repeats = present if repeats is None else repeats
     out = combine_ligand(lig_dir, name, repeats, publish=False)
     if _same_combination(stored, out):
-        return dict(stored, not_part_of_this_run=True, repeats_planned=repeats)
+        # the same numbers: the stored result, unless its verdicts are of another version
+        return dict(stored if verdicts_current(stored) else out, not_part_of_this_run=True, repeats_planned=repeats)
     out["warnings"].insert(0, f"not part of this run; its legs no longer give the result it has (made by an earlier "
                               f"version of cuFEP): shown as its legs give it now, over the {repeats} repeat(s) its "
                               "result names; its result.json is unchanged")

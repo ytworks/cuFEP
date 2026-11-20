@@ -247,7 +247,29 @@ def collinear_frames(restraint: "BoreschRestraint", frames: np.ndarray) -> np.nd
     return out
 
 
-def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin: float) -> str | None:
+#: the three atoms in a row of the chain H2-H1-H0-G0-G1-G2 whose two bond vectors span the planes of
+#: the dihedral angles phi_A (the first two), phi_B (the middle two) and phi_C (the last two)
+ANCHOR_TRIPLES = ("H2-H1-H0", "H1-H0-G0", "H0-G0-G1", "G0-G1-G2")
+
+
+def undefined_dihedral_planes(restraint: "BoreschRestraint", positions: np.ndarray) -> list[str]:
+    """The rows of three anchors (:data:`ANCHOR_TRIPLES`) that span no plane in ``positions`` (one
+    frame): the cross product of their two bond vectors is zero or not finite, so a dihedral angle
+    of the restraint is not defined there and its force is NaN (review of 7b49066: a nitrile whose
+    three atoms were exactly on a line in the last frame). Whether a plane exists, not a level."""
+    chain = [*reversed(restraint.host_atoms), *restraint.guest_atoms]
+    p = np.asarray(positions, dtype=float)
+    out = []
+    for k, name in enumerate(ANCHOR_TRIPLES):
+        cross = np.cross(p[chain[k + 1]] - p[chain[k]], p[chain[k + 2]] - p[chain[k + 1]])
+        norm = float(np.linalg.norm(cross))
+        if not (np.isfinite(norm) and norm > 0.0):
+            out.append(name)
+    return out
+
+
+def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin: float,
+                            trajectory: bool = True) -> str | None:
     """Why the anchors of ``restraint`` are refused over ``frames`` (positions with the ligand in the
     periodic image nearest the host), or None. The rules are two of OpenFE's (EvaluateBoreschAtoms in
     openfe.protocols.restraint_utils.geometry.boresch.host) and nothing of cuFEP's own (the owner,
@@ -260,9 +282,18 @@ def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, f
       ``not all(collinear)`` with is_collinear, from Yank: :func:`collinear_frames`): an acetonitrile
       whose N-C-C was chosen as guest anchors gave forces of NaN (review of PR 1).
 
+    The second rule is one of a trajectory: ``trajectory=False`` (a single pose, such as the
+    prepared one before the pre-equilibration) applies the first alone (review of 7b49066: a
+    prepared pose with theta_A of 25 degrees, on a line by is_collinear, was refused although the
+    frames of the pre-equilibration, 25 to 40 degrees, give the restraint). For a trajectory the
+    dihedral angles must also be defined in its last frame, from which the reference values come
+    (:func:`undefined_dihedral_planes`).
+
     OpenFE's other conditions there (each dihedral within +-150 degrees, limits on the circular
     variance of the angles and dihedrals) were never part of cuFEP and are not applied."""
     frames = np.asarray(frames, dtype=float)
+    if frames.ndim == 2:
+        frames = frames[None]
     angles = np.atleast_2d(anchor_angles(restraint, frames))
     for k in (1, 2):
         name = ANCHOR_ANGLES[k]
@@ -271,10 +302,16 @@ def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, f
             return (f"the anchor angle {name} comes within {np.degrees(flat_margin):.0f} degrees of a straight line "
                     f"({np.degrees(low):.1f} to {np.degrees(high):.1f} degrees over the frames), where the restraint "
                     "energy is below 10 kT (OpenFE's check_angle_not_flat)")
+    if not trajectory:
+        return None
     if bool(np.all(collinear_frames(restraint, frames))):
         return ("the six anchors H2-H1-H0-G0-G1-G2 are on a straight line in every frame (three in a row with "
                 f"|cos| above {COLLINEAR_THRESHOLD:g}, OpenFE's is_collinear): the dihedral angles of the restraint "
                 "are not defined there")
+    flat = undefined_dihedral_planes(restraint, frames[-1])
+    if flat:
+        return (f"the anchors {', '.join(flat)} are exactly on a line in the last frame, from which the reference values "
+                "come: the dihedral angles of the restraint are not defined there")
     return None
 
 

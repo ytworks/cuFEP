@@ -31,7 +31,7 @@ import numpy as np
 
 from stored_frames import stored_frames
 
-KT = 0.0083144626 * 298.15            # kJ/mol
+from cufep.alchemy.restraints import R_GAS
 
 
 def g_of(x: np.ndarray) -> float:
@@ -92,10 +92,13 @@ def main() -> None:
         attrs = samples["attrs"]
         n_eq = equilibration_boundary(attrs, leg)
         u, states = np.asarray(samples["u"]), np.asarray(samples["states"])
+        # the length of an iteration and the temperature of this run, as its samples record them (review of
+        # 7b49066: fixed at 2.5 ps and 298.15 K, a run of 5 ps at 330 K was read wrong)
+        iteration_ps, kt = float(attrs["iteration_ps"]), R_GAS * float(attrs["temperature_K"])   # kJ/mol
         rows = np.arange(n_eq, u.shape[0])
         rep0 = np.array([int(np.nonzero(states[n] == 0)[0][0]) for n in rows])
         du = u[rows, rep0, 1] - u[rows, rep0, 0]
-        prod_ns = len(rows) * 2.5 / 1000.0
+        prod_ns = len(rows) * iteration_ps / 1000.0
         print(f"\n=== {run} ({name}): production {len(rows)} iterations ({prod_ns:g} ns), equilibration {n_eq}")
         print(f"u1 - u0 in window 0 (kT): mean {du.mean():.2f}, sd {du.std():.2f}, g {g_of(du):.0f} iterations, "
               f"block means {blocks(du)}")
@@ -129,7 +132,7 @@ def main() -> None:
         ks = np.array([r.k_r, r.k_theta_a, r.k_theta_b, r.k_phi_a, r.k_phi_b, r.k_phi_c])
         dev = values - ref
         dev[:, 3:] = (dev[:, 3:] + np.pi) % (2 * np.pi) - np.pi
-        terms = 0.5 * ks * dev ** 2 / KT
+        terms = 0.5 * ks * dev ** 2 / kt
         total = terms.sum(axis=1)
         print(f"restraint energy at full strength (kT): mean {total.mean():.2f}, g {g_of(total):.0f}; correlation with "
               f"u1 - u0: {corr(total, du_at):.2f}; mean of u1 - u0 over these frames {du_at.mean():.2f} "
