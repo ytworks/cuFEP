@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cufep"
+version = "0.1.0.dev0"
+description = "Absolute binding free energy engine on OpenMM with NVIDIA cuPotential as the default compute backend"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+# The heavy scientific stack (OpenMM, OpenFF, pymbar, ...) is provided by the
+# conda environment in docker/environment.yml and is intentionally not listed here.
+dependencies = ["numpy", "pyyaml", "pydantic>=2", "click"]
+
+[project.scripts]
+cufep = "cufep.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cufep = ["benchmarks/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+markers = [
+  "gpu: needs an NVIDIA GPU and the CUDA platform",
+  "cupotential: needs the cuPotential OpenMM plugin",
+  "physical: long physical validation run",
+]

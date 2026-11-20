@@ -1,0 +1,32 @@
+# Pinned runtime environment for cuFEP.
+# The cuPotential plugin (nv-openmm-plugin) is NOT on conda-forge; the Dockerfile
+# installs it from NVIDIA's release channel on top of this environment.
+name: cufep
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - openmm=8.4.*
+  - cuda-version=13.4
+  # numerics / io
+  - numpy
+  - scipy
+  - h5py
+  - pyyaml
+  - pydantic>=2
+  - click
+  - matplotlib-base
+  # free energy analysis
+  - pymbar>=4
+  # system preparation
+  - pdbfixer
+  - mdtraj
+  - rdkit
+  - openff-toolkit>=0.16
+  - openff-nagl
+  - openff-nagl-models
+  - openmmforcefields>=0.14
+  - pytorch-cpu
+  # development / tests
+  - pytest
+  - pip

@@ -1,0 +1,10 @@
+# Adenosine A2A receptor (GPCR, PDB 5OLZ) with compound 4e from the Schrödinger public benchmark.
+# Experimental binding free energy: -12.07 kcal/mol.
+# `membrane.enabled: true` asks cuFEP to embed the complex in a POPC bilayer.
+system:
+  protein: protein.pdb
+  ligand: ligand.sdf
+membrane:
+  enabled: true
+output:
+  dir: runs/a2a_4e
