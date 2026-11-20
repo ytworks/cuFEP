@@ -154,3 +154,55 @@ def test_the_ligand_records_which_legs_have_no_free_energy(tmp_path):
             (d / "result.json").write_text(json.dumps(result))
     out = combine_ligand(tmp_path, "lig", 1)
     assert sorted(map(tuple, out["failed_leg_ids"])) == [(0, "complex"), (0, "solvent")]
+
+
+# ---- review of PR 1 on 64751ca: the isotropic tail and the acceptance of exchange -------------------------
+
+def test_the_isotropic_tail_is_averaged_over_the_volumes_of_the_coupled_state():
+    """P2: in NPT the homogeneous tail is C / V in every configuration; 298.15 K, volumes 90, 90, 110, 110 nm^3,
+    s6 = 120, s12 = 0, cutoff 1 nm: C / <V> gave -20.106 kJ/mol, -kT ln <exp(-C / (kT V))> is -21.062."""
+    series = mbar.TailSeries("isotropic", np.arange(4), np.array([90.0, 90.0, 110.0, 110.0]), 298.15,
+                             s6=120.0, s12=0.0, cutoff_nm=1.0)
+    value, error, n, why = series.estimate(slice(None))
+    assert why == "" and n == 4 and value == pytest.approx(-21.062, abs=0.001)
+    c = 16.0 * np.pi * (-120.0 / 3.0)
+    assert c / 100.0 == pytest.approx(-20.106, abs=0.001)                    # what was reported before
+    assert series.weights(slice(None))[0] is not None
+
+
+def test_the_acceptance_of_exchange_counts_the_proposals():
+    """P2: ten windows of one Hamiltonian mixed for 100 iterations accept every proposed swap; the measure reported
+    as the acceptance (replicas that had moved to a neighbouring window after an iteration) gave 0.14-0.23."""
+    from cufep.sampling.hrex import mix_replicas
+
+    rng = np.random.default_rng(3)
+    k, n = 10, 100
+    state = np.arange(k)
+    states, swaps = [], []
+    for _ in range(n):
+        counts = np.zeros((k - 1, 2), dtype="i8")
+        states.append(state.copy())
+        state, _acc, _att = mix_replicas(np.zeros((k, k)), state, rng, neighbour_counts=counts)
+        swaps.append(counts)
+    samples = {"swaps": np.array(swaps), "states": np.array(states)}
+    acceptance = mbar.swap_acceptance(samples, 0, n)
+    assert acceptance == [1.0] * (k - 1)
+    fraction = mbar.neighbour_swap_fraction(np.array(states))
+    assert max(fraction) < 0.35                                             # far from the true acceptance
+    assert mbar.swap_acceptance({"states": np.array(states)}, 0, n) is None  # samples of an earlier version
+
+
+def test_swaps_are_stored_with_their_rows_and_absent_where_a_part_lacks_them(tmp_path):
+    from cufep.sampling.storage import LegStorage, read_samples
+
+    leg = tmp_path / "hrex"
+    s = LegStorage(leg, 2, 2)
+    s.append(np.zeros((2, 2)), np.arange(2), np.ones(2), swaps=np.array([[3, 2]]))
+    s.append(np.zeros((2, 2)), np.arange(2), np.ones(2), swaps=np.array([[4, 1]]))
+    s.flush()
+    assert read_samples(leg)["swaps"].tolist() == [[[3, 2]], [[4, 1]]]
+    s.append(np.zeros((2, 2)), np.arange(2), np.ones(2))                    # a part without them
+    s.flush()
+    s.close()
+    data = read_samples(leg)
+    assert "swaps" not in data and data["u"].shape[0] == 3

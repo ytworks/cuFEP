@@ -47,11 +47,15 @@ class IterationStats:
 
 
 def mix_replicas(u: np.ndarray, state_of_replica: np.ndarray, rng: np.random.Generator,
-                 n_attempts: int | None = None) -> tuple[np.ndarray, int, int]:
+                 n_attempts: int | None = None, neighbour_counts: np.ndarray | None = None) -> tuple[np.ndarray, int, int]:
     """Gibbs-style mixing: many Metropolis swaps between random replica pairs.
 
     ``u[r, k]`` is the reduced potential of replica ``r``'s configuration in state ``k``.
-    Returns the new assignment and (accepted, attempted) counts.
+    Returns the new assignment and (accepted, attempted) counts. ``neighbour_counts`` (states - 1
+    rows of [proposed, accepted]) counts the proposals between the replicas in neighbouring states
+    k and k + 1, row k, and how many of them were accepted: the acceptance of exchange between
+    neighbouring windows (review of PR 1: what was reported as such was the fraction of iterations
+    after which a replica had moved to a neighbouring state).
     """
     k = len(state_of_replica)
     if k < 2:
@@ -71,9 +75,14 @@ def mix_replicas(u: np.ndarray, state_of_replica: np.ndarray, rng: np.random.Gen
         si, sj = s[i], s[j]
         ui, uj = rows[i], rows[j]
         log_p = -(ui[sj] + uj[si] - ui[si] - uj[sj])
+        neighbours = neighbour_counts is not None and abs(si - sj) == 1
+        if neighbours:
+            neighbour_counts[min(si, sj), 0] += 1
         if log_p >= 0.0 or lr < log_p:
             s[i], s[j] = sj, si
             accepted += 1
+            if neighbours:
+                neighbour_counts[min(si, sj), 1] += 1
     return np.array(s, dtype=int), accepted, attempted
 
 
@@ -574,21 +583,24 @@ class ReplicaExchangeSampler:
             self.cur = 1 - self.cur
             u = self.arrays.u.copy()
             sampled_states = self.state_of_replica.copy()
+            # the exchange proposed on the configurations of this iteration, counted with its row
+            swaps = np.zeros((max(0, len(sampled_states) - 1), 2), dtype="i8")
+            frac = 0.0
+            new = sampled_states
+            if self.exchange:
+                rng = np.random.default_rng([int(self.spec.seed) & 0x7FFFFFFF, self.iteration, 0x5EED])
+                new, acc, att = mix_replicas(u, self.state_of_replica, rng, neighbour_counts=swaps)
+                frac = float(np.mean(new != self.state_of_replica))
+                self.accepted += acc
+                self.attempted += att
             if store:
                 # records carry the row of their iteration: iterations that are not stored (a warm-up
                 # with store=False) have no row
-                row = self.storage.append(u, sampled_states, self.arrays.vol.copy())
+                row = self.storage.append(u, sampled_states, self.arrays.vol.copy(), swaps=swaps)
                 for res in results:
                     if res.get("recorded"):
                         self.storage.append_record(row, res["recorded"])
-            frac = 0.0
-            if self.exchange:
-                rng = np.random.default_rng([int(self.spec.seed) & 0x7FFFFFFF, self.iteration, 0x5EED])
-                new, acc, att = mix_replicas(u, self.state_of_replica, rng)
-                frac = float(np.mean(new != self.state_of_replica))
-                self.state_of_replica = new
-                self.accepted += acc
-                self.attempted += att
+            self.state_of_replica = new
             self.iteration += 1
             if store and checkpoint_stride > 0 and self.iteration % checkpoint_stride == 0:
                 self.checkpoint()

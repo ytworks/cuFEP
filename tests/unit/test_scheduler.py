@@ -231,6 +231,7 @@ def test_a_run_ended_by_a_signal_stops_its_jobs_before_its_lock_goes(tmp_path, h
     assert _lock_is_free(out)
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="the signal at the end of the parent (PR_SET_PDEATHSIG) is Linux's")
 def test_a_run_that_is_killed_leaves_no_job_behind_and_no_second_run_meets_one(tmp_path):
     """SIGKILL cannot be caught: the jobs get a signal from the kernel when their scheduler ends and stop in
     order, and while one still stops, a new run in the same directory is refused."""

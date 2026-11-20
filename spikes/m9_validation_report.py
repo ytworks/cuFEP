@@ -41,7 +41,7 @@ for run in map(Path, args):
             for leg, r in legs.items():
                 a = r["analysis"]
                 windows = r.get("lambda_windows", {})
-                acc = a.get("swap_acceptance_neighbour", [])
+                acc = [x for x in (a.get("swap_acceptance_neighbour") or a.get("neighbour_transition_fraction") or []) if x is not None]
                 stage = ", ".join(f"{k} {v / KJ:.2f}" for k, v in a["stage_delta_g"].items())
                 print(f"    {leg:8s} {r['n_states']:2d} windows ("
                       + ", ".join(f"{k} {len(v)}" for k, v in windows.items()) + f"); stages {stage}; "

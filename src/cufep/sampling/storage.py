@@ -72,6 +72,10 @@ def open_samples(path: str | Path, mode: str = "r", wait_s: float = READ_WAIT_S)
 #: the datasets of the samples file: one row per iteration, and the records of some iterations
 #: (the tail energy and the frame of the coupled state), which carry their iteration
 ROW_DATASETS = ("u", "states", "volume")
+#: rows that only samples of later versions have: proposals and acceptances of exchange between the
+#: replicas in neighbouring states, per iteration ((states - 1) x [proposed, accepted]); samples in
+#: which any part lacks them have none (no part is refused for it)
+OPTIONAL_ROW_DATASETS = ("swaps",)
 TAIL_DATASETS = ("lrc_iter", "lrc_du")
 FRAME_DATASETS = ("frame_iter", "frames", "frame_box")
 #: the dataset in which samples of the previous version say how much of every dataset is stored
@@ -314,7 +318,7 @@ def _read_once(directory: str | Path, names: tuple[str, ...]) -> dict:
     parts, attrs = stored_layout(directory)
     if not parts:
         raise StorageError(f"{directory}: no samples")
-    count_of = {**{name: 1 for name in ROW_DATASETS}, **{name: 2 for name in TAIL_DATASETS},
+    count_of = {**{name: 1 for name in ROW_DATASETS + OPTIONAL_ROW_DATASETS}, **{name: 2 for name in TAIL_DATASETS},
                 **{name: 3 for name in FRAME_DATASETS}}
     pieces: dict[str, list] = {name: [] for name in names}
     lacking: dict[str, int] = {name: 0 for name in names}
@@ -332,6 +336,8 @@ def _read_once(directory: str | Path, names: tuple[str, ...]) -> dict:
                 pieces[name].append(h5[name][:need])
     out = {}
     for name in names:
+        if name in OPTIONAL_ROW_DATASETS and lacking[name]:
+            continue                                    # some parts are of an earlier version: none
         if pieces[name] and lacking[name]:
             raise StorageError(f"{directory}: {lacking[name]} entries of {name} are in parts that do not have it; "
                                "the leg is damaged")
@@ -376,7 +382,7 @@ def read_samples(directory: str | Path) -> dict:
     """Load everything analysis needs from a leg directory: the stored parts, each to its count
     (:func:`stored_layout`), also while the leg is being sampled (then up to its last checkpoint)
     and after a write that failed or a writer that was killed at any point."""
-    return _read(directory, ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS)
+    return _read(directory, ROW_DATASETS + OPTIONAL_ROW_DATASETS + TAIL_DATASETS + FRAME_DATASETS)
 
 
 class _Memory(NamedTuple):
@@ -600,9 +606,10 @@ class LegStorage:
         return self._stored
 
     # -- appending ------------------------------------------------------------------
-    def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray) -> int:
+    def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray, swaps: np.ndarray | None = None) -> int:
         n = self.n_iterations
-        self._mem.rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8")))
+        self._mem.rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8"),
+                               None if swaps is None else np.array(swaps, dtype="i8")))
         return n
 
     def append_record(self, iteration: int, record: dict) -> None:
@@ -647,6 +654,9 @@ class LegStorage:
             h5.create_dataset("states", data=np.stack([row[1] for row in self._rows]) if m else
                               np.zeros((0, k), dtype="i4"))
             h5.create_dataset("volume", data=np.stack([row[2] for row in self._rows]) if m else np.zeros((0, k)))
+            if all(len(row) > 3 and row[3] is not None for row in self._rows):
+                h5.create_dataset("swaps", data=np.stack([row[3] for row in self._rows]) if m else
+                                  np.zeros((0, max(0, s - 1), 2), dtype="i8"))
             h5.create_dataset("lrc_iter", data=np.array([it for it, _ in tail], dtype="i8"))
             h5.create_dataset("lrc_du", data=np.array([du for _, du in tail], dtype="f8"))
             h5.create_dataset("frame_iter", data=np.array([it for it, _ in frames], dtype="i8"))

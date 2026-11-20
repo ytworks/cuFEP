@@ -78,7 +78,7 @@ def main() -> None:
                 out.append(f"\n    {leg:7s} {r['n_states']:2d} windows (" + "/".join(str(len(v)) for v in r["lambda_windows"].values())
                            + f"), REST2 scale {rest.get('scale', 1.0):g}"
                            + (f" with {len(rest.get('hot_residues', []))} residues" if rest.get("hot_residues") else "")
-                           + f"; lowest overlap {a['min_overlap']:.3f}, lowest exchange {min(a['swap_acceptance_neighbour']):.3f}, "
+                           + f"; lowest overlap {a['min_overlap']:.3f}, lowest exchange {min(x for x in (a.get('swap_acceptance_neighbour') or a.get('neighbour_transition_fraction') or [float('nan')]) if x is not None):.3f}, "
                            f"round trips {a['round_trips']}, forward/reverse gap {a['forward_reverse_gap'] / KJ:.2f}")
                 eq = np.load(rep / leg / "equil.npz")
                 frames = frames_of(rep / leg)

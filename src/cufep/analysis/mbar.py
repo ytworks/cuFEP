@@ -32,7 +32,11 @@ KCAL = 4.184
 #:      (too_few_samples); the standard error of the sum of BAR between neighbouring windows comes
 #:      from the same time blocks as that of MBAR (neighbouring pairs share a window, so the errors
 #:      of the pairs are not independent)
-ANALYSIS_VERSION = 7
+#:   8  the isotropic tail correction is -kT ln < exp(-C / (kT V)) > over the volumes of the coupled
+#:      state, not C / <V>; the acceptance of exchange between neighbouring windows is accepted /
+#:      proposed swaps where the samples record them (the measure reported before is kept as
+#:      neighbour_transition_fraction)
+ANALYSIS_VERSION = 8
 #: numbers of time blocks the standard error of a leg is computed with; the largest of the errors
 #: they give is the one reported (:meth:`TimeRangeEstimator.part`). The numbers are cuFEP's choice:
 #: the literature asks for blocks longer than the correlation time and for a standard error that
@@ -148,7 +152,14 @@ class LegAnalysis:
     overlap_neighbour: list[float] = field(default_factory=list)
     min_overlap: float = 0.0
     round_trips: int = 0
-    swap_acceptance_neighbour: list[float] = field(default_factory=list)
+    #: acceptance of exchange between the replicas in neighbouring windows over the production:
+    #: accepted / proposed swaps per pair; None where the samples do not record them (earlier
+    #: versions) or nothing was proposed
+    swap_acceptance_neighbour: list[float | None] | None = None
+    #: fraction of production iterations after which a replica had moved from window k to k + 1 or
+    #: back (what earlier versions reported as the acceptance; it misses moves undone within one
+    #: iteration of mixing)
+    neighbour_transition_fraction: list[float] = field(default_factory=list)
     #: the whole overlap matrix of the windows (overlap_neighbour is its first off-diagonal),
     #: from all iterations with the same number of samples in every window
     overlap_matrix: list[list[float]] = field(default_factory=list)
@@ -443,18 +454,30 @@ class TailSeries:
 
             value, error = tail_free_energy(values, self.temperature_K)
             return float(value), float(error), int(values.size), ""
-        volume = float(values.mean())
-        value = (16.0 * np.pi / volume) * (self.s12 / (9.0 * self.cutoff_nm ** 9) - self.s6 / (3.0 * self.cutoff_nm ** 3))
-        error = abs(value) * float(values.std(ddof=1)) / (volume * np.sqrt(values.size))
+        # the homogeneous tail is C / V in every configuration; in NPT the free energy of adding it is
+        # -kT ln < exp(-C / (kT V)) >, the same estimate as for the recorded tail energies, not C / <V>
+        # (review of PR 1: 4 volumes 90, 90, 110, 110 nm^3 gave -20.106 instead of -21.062 kJ/mol)
+        from cufep.alchemy.lrc import tail_free_energy
+
+        value, error = tail_free_energy(self.isotropic_energies(values), self.temperature_K)
         return float(value), float(error), int(values.size), ""
 
+    def isotropic_energies(self, volumes: np.ndarray) -> np.ndarray:
+        """The homogeneous dispersion tail of every configuration, kJ/mol, from its box volume."""
+        c = 16.0 * np.pi * (self.s12 / (9.0 * self.cutoff_nm ** 9) - self.s6 / (3.0 * self.cutoff_nm ** 3))
+        return c / np.asarray(volumes, dtype=float)
+
     def weights(self, select) -> tuple[float | None, float | None]:
-        """For the correction by reweighting: the effective number of its observations, 1 / sum w^2
-        with the normalised exponential weights w (the effective sample number of pymbar's
-        ``compute_effective_sample_number``), and the largest weight. None for other methods."""
-        if self.method != "reweight":
+        """For a correction by exponential averaging (reweight, isotropic): the effective number of its
+        observations, 1 / sum w^2 with the normalised exponential weights w (the effective sample
+        number of pymbar's ``compute_effective_sample_number``), and the largest weight. None for
+        the method none."""
+        if self.method == "none":
             return None, None
-        x = -np.asarray(self.values[select], dtype=float) / (R_GAS * self.temperature_K)
+        energies = np.asarray(self.values[select], dtype=float)
+        if self.method == "isotropic":
+            energies = self.isotropic_energies(energies)
+        x = -energies / (R_GAS * self.temperature_K)
         if not x.size or not np.all(np.isfinite(x)):
             return None, None
         w = np.exp(x - x.max())
@@ -1118,6 +1141,16 @@ def count_round_trips(states: np.ndarray) -> int:
     return trips
 
 
+def swap_acceptance(samples: dict, n_equilibration: int, n: int) -> list[float | None] | None:
+    """Accepted / proposed swaps between the replicas in neighbouring windows over the iterations of
+    the production, per pair (None for a pair without proposals); None if the samples do not record
+    the swaps (samples of earlier versions)."""
+    if "swaps" not in samples:
+        return None
+    counts = np.asarray(samples["swaps"][n_equilibration:n_equilibration + n], dtype=float).sum(axis=0)
+    return [float(a / p) if p > 0 else None for p, a in counts]
+
+
 def neighbour_swap_fraction(states: np.ndarray) -> list[float]:
     """Fraction of iterations after which a replica left state k for state k+1 (or back)."""
     n_states = int(states.max()) + 1
@@ -1325,7 +1358,8 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         slowest_window=slowest,
         f_k=(f_k * kt).tolist(), df_k=(df_k * kt).tolist(), stage_delta_g=stages,
         overlap_neighbour=neighbour, min_overlap=float(min(neighbour)) if neighbour else 1.0,
-        round_trips=count_round_trips(states), swap_acceptance_neighbour=neighbour_swap_fraction(states),
+        round_trips=count_round_trips(states), neighbour_transition_fraction=neighbour_swap_fraction(states),
+        swap_acceptance_neighbour=swap_acceptance(samples, n_equilibration, n),
         overlap_matrix=np.round(overlap, 4).tolist(),
         overlap_used_matrix=[] if used is None else np.round(used, 4).tolist(),
         overlap_used_weighted_by_number=[] if by_number is None else np.round(by_number, 4).tolist(),

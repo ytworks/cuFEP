@@ -2956,3 +2956,15 @@ def test_the_exchange_of_replicas_is_a_condition_of_the_samples(tiny_leg):
     earlier = {k: v for k, v in hrex.items() if k != "exchange"}          # samples of an earlier version
     assert conditions_differences(earlier, independent) == ["exchange: hrex -> none"]
     assert conditions_differences(earlier, hrex) == []
+
+
+def test_replica_exchange_stores_the_swaps_of_every_iteration(tmp_path, tiny_leg):
+    spec, pos, box = tiny_leg
+    leg = tmp_path / "hrex"
+    with ReplicaExchangeSampler(spec, leg, devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(4, record_stride=2, checkpoint_stride=2)
+    data = read_samples(leg)
+    assert data["swaps"].shape == (4, spec.n_states - 1, 2)
+    proposed, accepted = data["swaps"][..., 0], data["swaps"][..., 1]
+    assert proposed.sum() > 0 and np.all(accepted <= proposed)

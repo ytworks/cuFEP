@@ -718,7 +718,12 @@ production it really uses), the two halves, the estimates from `analysis.converg
 consecutive blocks that do not overlap, the band of the standard error and the overlap
 matrix. The number of round trips of the replicas, the exchange between neighbouring windows
 and the statistical inefficiency and the samples of every window are in `result.json`; no
-level is applied to round trips and exchange.
+level is applied to round trips and exchange. The acceptance of exchange
+(`swap_acceptance_neighbour`) is accepted / proposed swaps between the replicas in each pair of
+neighbouring windows over the production, as the samples record them per iteration; samples of
+earlier versions do not, and have none. `neighbour_transition_fraction` is the fraction of
+iterations after which a replica had moved to a neighbouring window, which earlier versions
+reported as the acceptance; it misses moves that are undone within one iteration of mixing.
 
 ### When a leg carries a message
 
@@ -898,7 +903,10 @@ During sampling the soft-core ligand-environment interaction is truncated at the
 The missing energy is evaluated explicitly on coupled-state configurations out to 2 nm
 (plus a homogeneous estimate beyond) and its free energy is added at the coupled end
 state of each leg. An isotropic tail correction would assume the same atom density
-around the ligand in the protein and in water.
+around the ligand in the protein and in water. With `analysis.lrc: isotropic` the homogeneous
+tail is C / V in every configuration, and the free energy of adding it under constant pressure is
+-kT ln < exp(-C / (kT V)) > over the volumes of the coupled state, the same estimate as for the
+tail energies by reweighting (analysis version 8; earlier versions took C / <V>).
 
 ## Use of GPUs
 
