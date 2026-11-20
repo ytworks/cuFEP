@@ -1,4 +1,4 @@
-"""Ions of a membrane system, and notes on a bilayer made again from stored data."""
+"""Ions of a membrane system, the numbers of a bilayer, and the notes of stored data."""
 import json
 
 import numpy as np
@@ -67,177 +67,147 @@ def test_reported_ions_are_the_ions_in_the_topology(peptides_in_water):
     assert (after["NA"], after["CL"], after["water"], after["charge"]) == (1, 1, before["water"] - 1, 0.0)
 
 
-def test_a_bilayer_that_still_changes_is_recognised():
-    from cufep.sampling.equilibrate import membrane_settled
+def test_how_the_bilayer_changed_is_given_as_numbers_without_a_verdict():
+    """The owner, 2026-11-20: no verdict with a level of cuFEP's own. How the area of the bilayer and the
+    waters near the ligand changed from the third to the fourth quarter of its equilibration are numbers;
+    nothing says "settled" (earlier: 1 % and 1.5 waters), and nothing makes the run longer for it."""
+    from cufep.sampling.equilibrate import EquilibrationResult, EquilibrationSettings, membrane_drift
 
     rng = np.random.default_rng(1)
     steady = 64.0 + rng.normal(scale=0.2, size=400)
     waters = 6.0 + rng.normal(scale=0.5, size=400)
-    out = membrane_settled(steady, waters, 0.01, 1.5)
-    assert out["settled"] is True and abs(out["area_change"]) < 0.002 and abs(out["pocket_water_change"]) < 0.3
+    out = membrane_drift(steady, waters)
+    assert set(out) == {"area_change", "pocket_water_change"}
+    assert abs(out["area_change"]) < 0.002 and abs(out["pocket_water_change"]) < 0.3
     shrinking = steady * np.linspace(1.10, 1.0, 400)               # the area still falls by 2.5 % per quarter
-    out = membrane_settled(shrinking, waters, 0.01, 1.5)
-    assert out["settled"] is False and out["area_change"] == pytest.approx(-0.024, abs=0.004)
+    assert membrane_drift(shrinking, waters)["area_change"] == pytest.approx(-0.024, abs=0.004)
     filling = waters + np.linspace(0.0, 12.0, 400)                 # three more waters near the ligand per quarter
-    out = membrane_settled(steady, filling, 0.01, 1.5)
-    assert out["settled"] is False and out["pocket_water_change"] == pytest.approx(3.0, abs=0.3)
-    assert membrane_settled(steady, [], 0.01, 1.5)["pocket_water_change"] is None
-    assert membrane_settled(steady[:12], waters[:12], 0.01, 1.5)["settled"] is None     # too short to say
+    assert membrane_drift(steady, filling)["pocket_water_change"] == pytest.approx(3.0, abs=0.3)
+    assert membrane_drift(steady, [])["pocket_water_change"] is None
+    assert membrane_drift(steady[:12], waters[:12]) == {"area_change": None, "pocket_water_change": None}
+    # no levels and no extension
+    assert not set(EquilibrationSettings.__dataclass_fields__) & {"max_production_ns", "area_tolerance", "water_tolerance"}
+    assert "settled" not in EquilibrationResult.__dataclass_fields__
 
 
-def test_stored_verdicts_are_made_again_with_the_levels_of_this_run(tmp_path):
-    """Review of PR 1: a leg that ran again returned the notes of its first run: a bilayer whose area
-    changed by 1.5 % stayed "settled" or "not settled" whatever membrane.area_tolerance said now, and
-    the note about the pose kept the level of the first run."""
+#: the notes with levels of cuFEP's own that version 9 wrote on a bilayer, a pose and a structure
+BILAYER_VERDICT = ("the bilayer had not settled after 10 ns of equilibration: between the last two quarters the area in "
+                   "the membrane plane changed by -1.5 % (tolerance 1 %). A longer membrane.equilibration_ns, in a new "
+                   "output.dir, gives it more time")
+POSE_VERDICT = ("the ligand moved away from its input pose in the pre-equilibration MD (heavy-atom RMSD 2.5 A over the "
+                "second half, above restraints.pose_rmsd_warning_nm = 2 A); the result is for the pose it moved to")
+UNCOMPARED_POSE = ("the distance of the ligand from its input pose was measured by an earlier version of cuFEP in another "
+                   "way (or not stored) and could not be compared with restraints.pose_rmsd_warning_nm of this run")
+STRUCTURE_VERDICT = ("the ligand's centre of mass drifted 6.0 A in the coupled state; it may have left the pocket")
+
+
+def test_the_verdicts_that_earlier_versions_stored_are_removed_and_the_numbers_kept(tmp_path):
+    """The notes of a stored pre-equilibration and of a stored restraint lose the verdicts with levels of
+    cuFEP's own that earlier versions wrote into them; the other notes stay, and the numbers behind the
+    verdicts are given as they are (the area fell by 1.5 %, the ligand was 2.5 A from its input pose)."""
     from cufep.config.schema import Config
-    from cufep.workflow import equil_notes, restraint_made_with, restraint_notes
+    from cufep.workflow import bilayer_numbers, equil_notes, restraint_made_with, restraint_notes
 
-    def config(**sections):
-        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, **sections})
-
-    # the area falls by 1.5 % from the third to the fourth quarter; the file holds the note of a run
-    # that had a tolerance of 1 %, and a note that has nothing to do with the bilayer
     area = np.concatenate([np.full(200, 66.0), np.full(100, 65.0), np.full(100, 65.0 * 0.985)])
-    old_note = ("the bilayer had not settled after 10 ns of equilibration: between the last two quarters the area "
-                "in the membrane plane changed by -1.5 % (tolerance 1 %). A longer membrane.equilibration_ns, in a "
-                "new output.dir, gives it more time")
-    np.savez(tmp_path / "equil.npz", notes=json.dumps(["the time step was reduced to 2 fs", old_note]), area_nm2=area,
-             pocket_waters=np.full(400, 6.0), simulated_ns=10.0)
+    np.savez(tmp_path / "equil.npz", notes=json.dumps(["the time step was reduced to 2 fs", BILAYER_VERDICT]),
+             area_nm2=area, pocket_waters=np.full(400, 6.0), simulated_ns=10.0)
     eq = np.load(tmp_path / "equil.npz")
-    strict = equil_notes(eq, config(membrane={"enabled": True, "area_tolerance": 0.01}), True)
-    assert strict == ["the time step was reduced to 2 fs", old_note.replace("(tolerance 1 %)", "(tolerance 1 %) and the "
-                      "number of water molecules near the ligand by +0.0 (tolerance 1.5)")]
-    assert equil_notes(eq, config(membrane={"enabled": True, "area_tolerance": 0.02}), True) \
-        == ["the time step was reduced to 2 fs"]                                 # 1.5 % is within 2 %
-    waters = equil_notes(eq, config(membrane={"enabled": True, "area_tolerance": 0.02, "pocket_water_tolerance": 0.5}), True)
-    assert waters == ["the time step was reduced to 2 fs"]                       # the waters did not change
-    assert equil_notes(eq, config(), False) == ["the time step was reduced to 2 fs", old_note]   # not a bilayer leg
+    assert equil_notes(eq) == ["the time step was reduced to 2 fs"]
+    assert bilayer_numbers(eq) == {"area_change": pytest.approx(-0.015), "pocket_water_change": 0.0}
+    np.savez(tmp_path / "solvent.npz", notes="[]", area_nm2=area, pocket_waters=np.zeros(0), simulated_ns=1.0)
+    assert bilayer_numbers(np.load(tmp_path / "solvent.npz")) is None                 # not a bilayer
 
-    # the pose: 2.5 A from the input pose, stored with the note of a run whose level was 2 A
     stored = {"info": {"selection": "auto", "ligand_rmsd_A": 2.5, "ligand_rmsd_reference": "input pose",
-                       "notes": ["a note of the search",
-                                 "the ligand moved away from its input pose in the pre-equilibration MD (heavy-atom "
-                                 "RMSD 2.5 A over the second half, above restraints.pose_rmsd_warning_nm = 2 A); the "
-                                 "result is for the pose it moved to"]}}
-    assert restraint_notes(stored, config(restraints={"pose_rmsd_warning_nm": 0.3})) == ["a note of the search"]
-    again = restraint_notes(stored, config(restraints={"pose_rmsd_warning_nm": 0.2}))
-    assert again == stored["info"]["notes"]
-    # the level is not part of what a restraint is made with: changing it does not refuse the file
-    assert restraint_made_with(config(restraints={"pose_rmsd_warning_nm": 0.2})) == restraint_made_with(config())
-    # a file whose distance was measured otherwise, or that holds none: kept, and said so
-    older = {"info": {"selection": "auto", "ligand_rmsd_A": 0.8, "notes": ["a note of the search"]}}
-    notes = restraint_notes(older, config(restraints={"pose_rmsd_warning_nm": 0.05}))
-    assert notes[0] == "a note of the search" and "could not be compared with restraints.pose_rmsd_warning_nm" in notes[1]
-    # manual anchors are measured like the search's since the review of 037bdf1; a file of manual anchors of an
-    # earlier version holds no distance, and says so instead of saying nothing
-    manual = restraint_notes({"info": {"selection": "manual"}}, config())
-    assert len(manual) == 1 and "could not be compared with restraints.pose_rmsd_warning_nm" in manual[0]
+                       "notes": ["a note of the search", POSE_VERDICT, UNCOMPARED_POSE]}}
+    assert restraint_notes(stored) == ["a note of the search"]
+    assert restraint_notes({"info": {"selection": "manual"}}) == []
+    # the settings of the restraints hold no level any more, and a file that names one is read with a notice
+    assert not any("pose" in key or "warning" in key for key in restraint_made_with(Config.model_validate(
+        {"system": {"protein": "p.pdb", "ligand": "l.sdf"}})))
 
 
-def test_the_notes_on_bilayer_and_pose_of_a_leg_that_is_not_run_follow_the_levels_of_the_run(tmp_path):
-    """Review of PR 1: a complex leg finished with membrane.area_tolerance 0.02 (the area changed by 1.5 %:
-    no note). A run of the solvent leg alone with 0.01 found the result of the complex leg "current" and
-    combined it without a note; made again for another reason, it kept the notes of the old run."""
-    import h5py
-
+def test_a_leg_result_gives_the_bilayer_and_the_pose_as_numbers_without_verdicts(tmp_path):
+    """The result of a leg gives how the bilayer changed at the end of its equilibration and how far the
+    ligand was from its input pose as numbers, from the files of the leg. The verdicts with levels of
+    cuFEP's own that version 9 wrote (in those files, in the notes of the run, in a stored result) are
+    gone from the result that is made again, which every result of version 9 is."""
+    from conftest import edit_attributes
     from test_sampling import synthetic_leg
 
     from cufep.alchemy.restraints import BoreschRestraint
     from cufep.config.schema import Config
-    from cufep.workflow import (analysis_record, combine_ligand, leg_result_from_samples, notes_of_leg_files,
-                                refresh_leg_result, write_leg_result)
+    from cufep.workflow import (analysis_record, archive_leg, combine_ligand, leg_files, leg_result_from_samples,
+                                notes_of_leg_files, refresh_leg_result, write_leg_result)
 
-    def config(area=0.02, pose=0.3, **analysis):
-        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
-                                      "membrane": {"enabled": True, "area_tolerance": area},
-                                      "restraints": {"pose_rmsd_warning_nm": pose}, "analysis": {"lrc": "none", **analysis}})
-
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "membrane": {"enabled": True},
+                                 "analysis": {"lrc": "none"}})
+    assert not any("tolerance" in key or "pose" in key for key in analysis_record(cfg))
     lig = tmp_path / "lig"
     legs = {name: lig / "repeat_0" / name for name in ("complex", "solvent")}
     for name, leg in legs.items():
         synthetic_leg(leg)
-        from conftest import edit_attributes
-
         edit_attributes(leg / "hrex", {"conditions": {"barostat": "membrane" if name == "complex" else "isotropic",
                                                       "pressure_bar": 1.0}})   # the conditions say what kind of leg
-    # the files of the complex leg: the area falls by 1.5 % between the last two quarters, the ligand is
-    # 2.5 A from its input pose; both files hold a note that depends on no level
     area = np.concatenate([np.full(200, 66.0), np.full(100, 65.0), np.full(100, 65.0 * 0.985)])
-    np.savez(legs["complex"] / "equil.npz", notes=json.dumps(["the time step was reduced to 2 fs"]), area_nm2=area,
-             pocket_waters=np.full(400, 6.0), simulated_ns=10.0)
+    np.savez(legs["complex"] / "equil.npz", notes=json.dumps(["the time step was reduced to 2 fs", BILAYER_VERDICT]),
+             area_nm2=area, pocket_waters=np.full(400, 6.0), simulated_ns=10.0)
     np.savez(legs["solvent"] / "equil.npz", notes="[]", area_nm2=area, pocket_waters=np.zeros(0), simulated_ns=1.0)
     restraint = BoreschRestraint((0, 1, 2), (3, 4, 5), 0.8, 1.6, 1.6, 0.0, 2.0, 1.0)
     (legs["complex"] / "restraint.json").write_text(json.dumps({"restraint": restraint.to_dict(), "info": {
-        "selection": "auto", "ligand_rmsd_A": 2.5, "ligand_rmsd_reference": "input pose", "notes": ["a note of the search"]}}))
+        "selection": "auto", "ligand_rmsd_A": 2.5, "ligand_rmsd_reference": "input pose",
+        "notes": ["a note of the search", POSE_VERDICT]}}))
 
     def run(name):
+        # the run of version 9 kept the verdicts among its notes too
         return {"ligand": "lig", "leg": name, "repeat": 0, "backend": "openmm", "timestep_fs": 4.0,
-                "notes": ["a note of the run"], "prepared_systems_sha256": "abc"}
+                "notes": ["a note of the run", BILAYER_VERDICT, STRUCTURE_VERDICT], "prepared_systems_sha256": "abc"}
 
-    first = config(area=0.02, pose=0.3)
-    for name, leg in legs.items():
-        write_leg_result(leg, leg_result_from_samples(leg, first, run(name)))
     kept = ["the time step was reduced to 2 fs", "a note of the search", "a note of the run"]
+    for name, leg in legs.items():
+        write_leg_result(leg, leg_result_from_samples(leg, cfg, run(name)))
     finished = json.loads((legs["complex"] / "result.json").read_text())
-    assert finished["notes"] == kept and finished["run"]["notes"] == ["a note of the run"]
-    assert finished["analysis_record"] == analysis_record(first) and finished["analysis_record"]["membrane_area_tolerance"] == 0.02
-    assert json.loads((legs["solvent"] / "result.json").read_text())["notes"] == ["a note of the run"]
-    # the same levels again, although they are not the defaults: nothing is made again
+    assert finished["notes"] == kept
+    assert finished["bilayer"] == {"area_change": pytest.approx(-0.015), "pocket_water_change": 0.0}
+    assert finished["ligand_rmsd_from_input_A"] == 2.5
+    solvent = json.loads((legs["solvent"] / "result.json").read_text())
+    assert solvent["notes"] == ["a note of the run"]
+    assert solvent["bilayer"] is None and solvent["ligand_rmsd_from_input_A"] is None
     said = []
-    assert refresh_leg_result(legs["complex"], first, said.append) == "current" and said == []
+    assert refresh_leg_result(legs["complex"], cfg, said.append) == "current" and said == []
 
-    # the next run asks for 1 % and 2 A and samples the solvent leg alone: the complex leg is made again
-    strict = config(area=0.01, pose=0.2)
-    assert refresh_leg_result(legs["complex"], strict, said.append) == "reanalysed"
-    assert "membrane_area_tolerance: 0.02 -> 0.01; pose_rmsd_warning_nm: 0.3 -> 0.2" in said[0]
-    again = json.loads((legs["complex"] / "result.json").read_text())
-    assert again["notes"][0] == "the time step was reduced to 2 fs" and again["notes"][-1] == "a note of the run"
-    assert again["notes"][1].startswith("the bilayer had not settled after 10 ns of equilibration: between the last two "
-                                        "quarters the area in the membrane plane changed by -1.5 % (tolerance 1 %)")
-    assert again["notes"][2] == "a note of the search"
-    assert again["notes"][3].startswith("the ligand moved away from its input pose in the pre-equilibration MD "
-                                        "(heavy-atom RMSD 2.5 A over the second half, above "
-                                        "restraints.pose_rmsd_warning_nm = 2 A)")
-    assert len(again["notes"]) == 5 and again["delta_g_decouple"] == finished["delta_g_decouple"]
-    assert refresh_leg_result(legs["solvent"], strict, said.append) == "reanalysed"       # its record names the levels too
-    combined = combine_ligand(lig, "lig", 1, strict)
-    assert any(w.startswith("repeat 0 complex: the bilayer had not settled") for w in combined["warnings"])
-    assert any(w.startswith("repeat 0 complex: the ligand moved away from its input pose") for w in combined["warnings"])
-    assert combined["old_analysis"] == [] and "dg_bind" in combined
-    assert refresh_leg_result(legs["complex"], strict, said.append) == "current"
-
-    # back to the first levels: the notes of the stricter run do not stay
-    assert refresh_leg_result(legs["complex"], first, said.append) == "reanalysed"
-    assert json.loads((legs["complex"] / "result.json").read_text())["notes"] == kept
-    # a result of a version whose run kept these notes itself: they are judged anew, not doubled
-    old = dict(again, run=dict(again["run"], notes=again["notes"][:4] + ["a note of the run"]))
+    # a result of version 9 that holds the verdicts: made again, without them
+    old = dict(finished, notes=kept[:2] + [BILAYER_VERDICT, POSE_VERDICT, "a note of the run"],
+               analysis_record=dict(finished["analysis_record"], version=9, membrane_area_tolerance=0.01,
+                                    membrane_pocket_water_tolerance=1.5, pose_rmsd_warning_nm=0.3))
+    old.pop("bilayer")
+    old.pop("ligand_rmsd_from_input_A")
     (legs["complex"] / "result.json").write_text(json.dumps(old))
-    assert leg_result_from_samples(legs["complex"], first, old["run"])["notes"] == kept
-    assert leg_result_from_samples(legs["complex"], strict, old["run"])["notes"] == again["notes"]
-    # review of PR 1: a leg run again with --reschedule keeps its earlier samples in previous_<n>/, and their
-    # analysis gave none of these notes (the files are in the leg directory above). Now the archive holds
-    # copies, and an archive of an earlier version is read with the files above it: both agree with the leg
-    from cufep.workflow import archive_leg, leg_files
-    strict_notes = leg_result_from_samples(legs["complex"], strict, old["run"])["notes"]
+    assert refresh_leg_result(legs["complex"], cfg, said.append) == "reanalysed"
+    assert "version 9 of the analysis" in said[0]
+    again = json.loads((legs["complex"] / "result.json").read_text())
+    assert again["notes"] == kept and again["bilayer"] == finished["bilayer"]
+    assert again["ligand_rmsd_from_input_A"] == 2.5 and again["delta_g_decouple"] == finished["delta_g_decouple"]
+    combined = combine_ligand(lig, "lig", 1, cfg)
+    assert not any("settled" in w or "moved away" in w or "drifted" in w for w in combined["warnings"])
+    assert "dg_bind" in combined
+
+    # review of PR 1: a leg run again with --reschedule keeps its earlier samples in previous_<n>/; the archive
+    # holds copies of the files of the leg, and an archive of an earlier version is read with the files above it
     archived = archive_leg(legs["complex"])
     assert (archived / "equil.npz").exists() and (archived / "restraint.json").exists()
-    assert (legs["complex"] / "equil.npz").exists() and (legs["complex"] / "restraint.json").exists()
-    assert leg_result_from_samples(archived, strict, old["run"])["notes"] == strict_notes
+    from_archive = leg_result_from_samples(archived, cfg, run("complex"))
+    assert from_archive["notes"] == kept and from_archive["bilayer"] == finished["bilayer"]
     (archived / "equil.npz").unlink()
     (archived / "restraint.json").unlink()
     assert leg_files(archived) == {"equil.npz": legs["complex"] / "equil.npz",
                                    "restraint.json": legs["complex"] / "restraint.json"}
-    assert leg_result_from_samples(archived, strict, old["run"])["notes"] == strict_notes
+    assert leg_result_from_samples(archived, cfg, run("complex"))["ligand_rmsd_from_input_A"] == 2.5
     for name in ("hrex", "result.json"):
         (archived / name).rename(legs["complex"] / name)
 
-    # without the files nothing can be judged again: what the run noted stays as it is
-    notes, judged = notes_of_leg_files(legs["solvent"].parent / "nothing", strict, {})
-    assert notes == [] and judged == ()
-    (legs["complex"] / "equil.npz").unlink()
-    without = leg_result_from_samples(legs["complex"], first, old["run"])["notes"]
-    assert without[0] == "a note of the search" and any(n.startswith("the bilayer had not settled") for n in without)
-    assert not any(n.startswith("the ligand moved away") for n in without)
+    # without the files there are neither notes nor numbers of them
+    assert notes_of_leg_files(legs["solvent"].parent / "nothing") == (
+        [], {"bilayer": None, "ligand_rmsd_from_input_A": None})
 
 
 
@@ -296,28 +266,3 @@ def test_waters_that_overlap_across_the_boundary_of_a_trimmed_bilayer_are_remove
     taken = {atoms[i].residue.index for i in boundary_water_overlaps(close, protein_kinds, heavy, molecules, set(),
                                                                      (edge, edge, height))}
     assert 6 in taken and 7 not in taken
-
-
-@pytest.mark.parametrize("shift", [[0, 0, 0], [1, 0, 0], [1, -1, 0], [0, 0, 1]])
-def test_the_preparation_refuses_a_water_that_overlaps_another_molecule(shift):
-    """The check of every prepared system (one water 0.092 A from another, also in a triclinic box and through its
-    boundary) finds the pair; a water 3 A away, or a contact of two molecules that are not solvent, is not reported."""
-    from cufep.workflow import overlapping_molecules
-
-    d = 3.0
-    box = np.array([[d, 0, 0], [0, d, 0], [d / 2, d / 2, d * np.sqrt(2) / 2]])     # rhombic dodecahedron
-    a = np.array([0.0046, 1.0, 1.0])
-    b = a - [0.0092, 0.0, 0.0] + np.asarray(shift) @ box                         # the same place, maybe an image away
-    top, pos = _waters([a, b, a + [0.3, 0.0, 0.0] + [0.0, 0.5, 0.0]])
-    pairs = overlapping_molecules(top, pos, box)
-    assert len(pairs) == 1 and pairs[0][:2] == (0, 3) and pairs[0][2] == pytest.approx(0.0092, abs=1e-6)
-    lig = app.Topology()
-    chain = lig.addChain()
-    for name in ("LIG", "ALA"):
-        lig.addAtom("C1", app.element.carbon, lig.addResidue(name, chain))
-        lig.addAtom("C2", app.element.carbon, list(lig.residues())[-1])
-    lig_bonds = list(lig.atoms())
-    lig.addBond(lig_bonds[0], lig_bonds[1])
-    lig.addBond(lig_bonds[2], lig_bonds[3])
-    contact = np.array([[1.0, 1.0, 1.0], [1.15, 1.0, 1.0], [1.01, 1.0, 1.0], [1.0, 1.15, 1.0]])
-    assert overlapping_molecules(lig, contact, box) == []

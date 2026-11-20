@@ -120,11 +120,13 @@ def _samples(shift):
             "attrs": {"frame_ca": list(range(30)), "frame_ligand": list(range(30, 38))}}
 
 
-def test_structural_analysis_ignores_tumbling_and_flags_a_leaving_ligand():
+def test_structural_analysis_ignores_tumbling_and_measures_a_leaving_ligand():
+    """The RMSD and the drift of the centre of the ligand are numbers without a verdict (the owner, 2026-11-20:
+    the warnings above 3 A and 5 A, levels of cuFEP's own, are gone)."""
     still = structural_analysis(_samples(np.zeros(3)))
-    assert still["ligand_rmsd_max_A"] < 0.5 and still["warnings"] == []
+    assert still["ligand_rmsd_max_A"] < 0.5 and "warnings" not in still
     gone = structural_analysis(_samples(np.array([1.2, 0.0, 0.0])))
-    assert gone["ligand_com_drift_last_half_A"] > 5.0 and len(gone["warnings"]) == 2
+    assert gone["ligand_com_drift_last_half_A"] > 5.0 and "warnings" not in gone
     assert structural_analysis({"attrs": {}}) is None
 
 

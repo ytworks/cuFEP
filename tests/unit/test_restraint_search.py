@@ -4,7 +4,7 @@ import openmm.app as app
 import openmm.unit as u
 import pytest
 
-from cufep.alchemy.restraints import RestraintSearchSettings, find_boresch_restraint, heavy_atom_symmetries
+from cufep.alchemy.restraints import find_boresch_restraint, heavy_atom_symmetries
 from cufep.prep.ligand import load_ligands
 from cufep.prep.protein import prepare_protein
 from cufep.prep.solvate import combine, ligand_atom_indices
@@ -63,8 +63,9 @@ def test_search_picks_rigid_ring_atoms_and_nearby_backbone(tyk2_complex):
     assert all(rdmol.GetAtomWithIdx(lig.index(i)).GetIsAromatic() for i in again.restraint.guest_atoms)
 
 
-def test_a_ligand_that_moves_is_reported_and_the_search_goes_on(tyk2_complex):
-    """OpenFE has no stop for a pose that changes; cuFEP reports it with the result."""
+def test_a_ligand_that_moves_is_measured_and_the_search_goes_on(tyk2_complex):
+    """OpenFE has no stop for a pose that changes and reports the ligand RMSD without a limit; so does cuFEP (the
+    owner, 2026-11-20: the warning above restraints.pose_rmsd_warning_nm, a level of cuFEP's own, is gone)."""
     top, pos, lig, rdmol = tyk2_complex
 
     def shift(fr):
@@ -79,10 +80,7 @@ def test_a_ligand_that_moves_is_reported_and_the_search_goes_on(tyk2_complex):
     v = found.restraint.values(frames)
     assert found.restraint.r0 == pytest.approx(v[-1, 0], abs=1e-9)
     assert abs(found.restraint.r0 - v[:, 0].mean()) > 0.01
-    assert any("moved away from its starting pose" in n and "pose_rmsd_warning_nm" in n for n in found.notes)
-    quiet = find_boresch_restraint(top, _trajectory(pos, lig, np.random.default_rng(3), ligand_motion=shift),
-                                   lig, rdmol, 298.15, RestraintSearchSettings(pose_rmsd_warning_nm=0.5))
-    assert not any("moved away" in n for n in quiet.notes)
+    assert not any("moved away" in n for n in found.notes)
 
 
 def test_the_pose_is_compared_with_the_input_pose(tyk2_complex):
@@ -96,10 +94,10 @@ def test_the_pose_is_compared_with_the_input_pose(tyk2_complex):
 
     frames = _trajectory(pos, lig, np.random.default_rng(11), ligand_motion=moved_before_the_trajectory)
     unaware = find_boresch_restraint(top, frames, lig, rdmol, 298.15)
-    assert unaware.ligand_rmsd_nm < 0.05 and not any("moved away" in n for n in unaware.notes)
+    assert unaware.ligand_rmsd_nm < 0.05
     aware = find_boresch_restraint(top, frames, lig, rdmol, 298.15, input_pose_nm=pos)
-    assert aware.ligand_rmsd_nm == pytest.approx(0.5, abs=0.05)
-    assert any("moved away from its input pose" in n and "5.0 A" in n for n in aware.notes)
+    assert aware.ligand_rmsd_nm == pytest.approx(0.5, abs=0.05)                # a number, without a note
+    assert not any("moved away" in n for n in aware.notes)
     assert aware.restraint.host_atoms == unaware.restraint.host_atoms       # the restraint itself is as before
     assert aware.restraint.r0 == pytest.approx(unaware.restraint.r0)
 

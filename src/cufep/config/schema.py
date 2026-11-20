@@ -71,12 +71,6 @@ class MembraneConfig(_Section):
     padding_nm: float = 1.5
     #: unrestrained MD of the bilayer before the alchemical run (replaces pre_equilibration md_ns)
     equilibration_ns: float = 10.0
-    #: the result carries a warning if the bilayer has not settled by the end of that MD: if,
-    #: between its last two quarters, the area in the membrane plane changes by more than this
-    #: fraction, or the number of water molecules within 0.6 nm of the ligand by more than the
-    #: number below. The run is not made longer
-    area_tolerance: float = Field(default=0.01, gt=0.0)
-    pocket_water_tolerance: float = Field(default=1.5, gt=0.0)
 
 
 class ForceFieldConfig(_Section):
@@ -138,9 +132,6 @@ class RestraintConfig(_Section):
     host_min_distance_nm: float = 0.5
     host_max_distance_nm: float = 1.5
     dssp_filter: bool = True
-    #: the result carries a warning when the ligand's heavy atoms are on average further than
-    #: this from the input pose over the second half of the pre-equilibration MD
-    pose_rmsd_warning_nm: float = Field(0.3, gt=0)
 
     @model_validator(mode="after")
     def _manual_anchors(self):
@@ -228,8 +219,10 @@ class PrecalculationLengths(_Section):
 class AdaptiveConfig(_Section):
     """Adaptive lambda scheduling (Midgley et al., J. Chem. Inf. Model. 2025, 65, 512)."""
 
-    #: a pair of neighbouring windows is deficient if its overlap is at or below this value
-    overlap_threshold: float = Field(default=0.04, gt=0.0, lt=0.5)
+    #: a pair of neighbouring windows is deficient if its overlap is at or below this value. 0.18 is
+    #: the owner's choice of 2026-11-20 from the examples at 5 ns (the paper: 0.04; at 0.20 the
+    #: precalculation of the TYK2 solvent leg did not converge before max_windows)
+    overlap_threshold: float = Field(default=0.18, gt=0.0, lt=0.5)
     #: number of equally spaced candidate lambda values per stage
     candidates: int = Field(default=101, ge=3)
     #: windows per leg and stage in the first iteration (the schedule never gets smaller than this)
@@ -516,6 +509,21 @@ REMOVED_SETTINGS = {
         "literature's: analysis.min_overlap (0.03) and analysis.min_effective_samples (50 uncorrelated samples "
         "in the lambda window with the fewest)",
         "A multiple of the standard error is no level of the literature: remove the line"),
+    ("membrane", "area_tolerance"): (
+        0.01,
+        "Whether the bilayer has settled is no longer judged (a level of cuFEP's own): how its area and the "
+        "water near the ligand changed at the end of its equilibration are numbers of the result (bilayer)",
+        "Remove the line"),
+    ("membrane", "pocket_water_tolerance"): (
+        1.5,
+        "Whether the bilayer has settled is no longer judged (a level of cuFEP's own): how its area and the "
+        "water near the ligand changed at the end of its equilibration are numbers of the result (bilayer)",
+        "Remove the line"),
+    ("restraints", "pose_rmsd_warning_nm"): (
+        0.3,
+        "The distance of the ligand from its input pose is no longer judged (a level of cuFEP's own): it is a "
+        "number of the result (ligand_rmsd_from_input_A), as OpenFE reports it without a limit",
+        "Remove the line"),
     ("analysis", "halves_tolerance_kT"): (
         1.0,
         "The two halves of the production are no longer a check: their difference is shown with the analysis, "

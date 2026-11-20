@@ -40,7 +40,10 @@ KCAL = 4.184
 #:      samples); the comparison of the two halves and of BAR with MBAR, and the reduction of the
 #:      samples by the ratio of two standard errors, are no longer checks (owner, 2026-11-20). The
 #:      free energies and errors are those of version 8
-ANALYSIS_VERSION = 9
+#:  10  no other verdict either: the notes on the bilayer and on the pose of the ligand, with levels of
+#:      cuFEP's own, are gone; how the bilayer changed and how far the ligand was from its input pose
+#:      are numbers of the result. The record of the analysis holds the analysis section only
+ANALYSIS_VERSION = 10
 #: numbers of time blocks the standard error of a leg is computed with; the largest of the errors
 #: they give is the one reported (:meth:`TimeRangeEstimator.part`). The numbers are cuFEP's choice:
 #: the literature asks for blocks longer than the correlation time and for a standard error that

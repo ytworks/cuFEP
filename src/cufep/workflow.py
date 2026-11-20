@@ -148,12 +148,11 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
     check_manual_anchors(cfg, lig_dir)
     stored = all((Path(lig_dir) / f"repeat_{r}" / "complex" / "restraint.json").exists() for r in complex_repeats)
     if cfg.restraints.selection == "manual" and not stored:
-        # anchors that cannot define the restraint already in the prepared pose, from which the
-        # pre-equilibration starts, are refused before it. Only the rule of every frame (an angle near a
-        # straight line) applies here; the margin of the reference values belongs to the last frame of
-        # the pre-equilibration, which is checked when the restraint is made (review of PR 1: the
-        # prepared pose was held to both, and anchors the run accepts were refused; so was a run whose
-        # legs all have their restraint already)
+        # anchors that OpenFE's rules refuse already in the prepared pose, from which the pre-equilibration
+        # starts, are refused before it (anchor_geometry_problem: theta_A and theta_B within 10 kT of a
+        # straight line, the six anchors on one line); the frames of the pre-equilibration are checked
+        # when the restraint is made. A run whose legs all have their restraint is not checked here
+        # (review of PR 1)
         from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, anchor_geometry_problem,
                                               anchor_margins, nearest_image_of_ligand)
 
@@ -164,8 +163,8 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
                                        np.asarray(prep["positions"], dtype=float)[list(host)].mean(axis=0),
                                        np.asarray(prep["box"], dtype=float))
         settings = RestraintSearchSettings(k_r=rc.k_r_kcal_per_A2 * KCAL * 100.0, k_angle=rc.k_angle_kcal_per_rad2 * KCAL)
-        flat_margin, _reference_margin = anchor_margins(settings, cfg.thermodynamics.temperature_K)
-        problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None], flat_margin, 0.0)
+        problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None],
+                                          anchor_margins(settings, cfg.thermodynamics.temperature_K))
         if problem:
             raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)} in the prepared pose: "
                                 f"{problem}. Choose other anchors; nothing was changed")
@@ -214,51 +213,24 @@ def check_manual_anchors(cfg: Config, lig_dir: Path) -> None:
 
 
 # =============================================================================== preparation
-POSE_CONTACT_NM = 0.45
-POSE_MIN_CONTACT_FRACTION = 0.5
-POSE_CLASH_NM = 0.20
+#: crystal waters that overlap the ligand are removed (a rule of building the system, not a verdict)
 WATER_CLASH_NM = 0.22
-METALS = {"Zn", "Mg", "Mn", "Fe", "Cu", "Co", "Ni", "Ca", "Cd", "Hg"}
 
 
-def check_ligand(ligand, protein_topology, protein_positions_nm: np.ndarray) -> list[str]:
-    """Stop on inputs that would silently give a wrong answer; return warnings otherwise."""
+def check_ligand(ligand) -> None:
+    """Stop on a ligand that cuFEP cannot treat (a net charge).
+
+    Earlier versions also stopped on a ligand with less than half of its heavy atoms near the protein,
+    one closer than 0.2 nm to a protein atom or 0.3 nm to a metal ion, and warned of a metal ion within
+    0.6 nm: levels of cuFEP's own, removed by the owner's order of 2026-11-20 (no criterion of its own).
+    """
     from cufep.prep.ligand import LigandError
-    from cufep.prep.protein import WATER
 
     if ligand.formal_charge != 0:
         raise LigandError(
             f"ligand '{ligand.name}' has formal charge {ligand.formal_charge:+d}. Charged ligands need a "
             "finite-size/co-alchemical ion treatment that cuFEP 0.1 does not have. Provide a neutral "
             "protonation state, or wait for charged-ligand support.")
-    heavy = np.array([a.index for a in protein_topology.atoms()
-                      if a.element is not None and a.element.symbol != "H" and a.residue.name not in WATER])
-    lig = ligand.positions_nm()[ligand.heavy_atom_indices()]
-    d = np.linalg.norm(lig[:, None, :] - protein_positions_nm[heavy][None, :, :], axis=2)
-    nearest = d.min(axis=1)
-    contact = float((nearest < POSE_CONTACT_NM).mean())
-    if contact < POSE_MIN_CONTACT_FRACTION:
-        raise LigandError(
-            f"ligand '{ligand.name}' does not sit in a pocket of the protein: only {100 * contact:.0f}% of its "
-            f"heavy atoms are within {10 * POSE_CONTACT_NM:.1f} A of the protein. The SDF must contain the bound "
-            "pose in the coordinate frame of the PDB.")
-    if nearest.min() < POSE_CLASH_NM:
-        i, j = np.unravel_index(np.argmin(d), d.shape)
-        atom = list(protein_topology.atoms())[int(heavy[j])]
-        raise LigandError(
-            f"ligand '{ligand.name}' is {10 * nearest.min():.2f} A from {atom.residue.name}{atom.residue.id}:"
-            f"{atom.name}. That is a severe clash or a covalent bond; neither is supported.")
-    warnings = []
-    for a in protein_topology.atoms():
-        if a.element is not None and a.element.symbol in METALS:
-            dm = float(np.linalg.norm(lig - protein_positions_nm[a.index], axis=1).min())
-            if dm < 0.30:
-                raise LigandError(
-                    f"ligand '{ligand.name}' is {10 * dm:.1f} A from the metal ion {a.residue.name}{a.residue.id}. "
-                    "Metal coordination is not described by the default force fields; cuFEP stops here.")
-            if dm < 0.6:
-                warnings.append(f"metal ion {a.residue.name}{a.residue.id} is {10 * dm:.1f} A from the ligand")
-    return warnings
 
 
 def _remove_clashing_waters(modeller, ligand_xyz_nm: np.ndarray) -> int:
@@ -799,48 +771,32 @@ def check_prepared(cfg: Config, ligand, lig_dir: Path, membrane: bool, box_shape
     return info
 
 
-def equil_notes(eq, cfg: Config, in_membrane: bool) -> list[str]:
-    """The notes of a stored pre-equilibration, with the verdict on the bilayer made anew.
-
-    Whether the bilayer has settled is judged with the tolerances of this run from the series the
-    file holds (area in the membrane plane, water molecules near the ligand), not taken from the
-    sentence the run wrote that made the file: a tolerance is a level for a note and can be changed
-    without making the pre-equilibration another one.
-    """
-    from cufep.sampling.equilibrate import BILAYER_NOTE, bilayer_note, membrane_settled
-
+def equil_notes(eq) -> list[str]:
+    """The notes of a stored pre-equilibration, without the verdicts that earlier versions wrote into
+    them with levels of cuFEP's own (whether the bilayer had settled: :data:`_ANALYSIS_NOTES`). How
+    the bilayer changed is a number of the result (:func:`bilayer_numbers`)."""
     notes = json.loads(str(eq["notes"])) if "notes" in eq.files else []
-    if not in_membrane or "area_nm2" not in eq.files:
-        return notes
-    notes = [n for n in notes if not n.startswith(BILAYER_NOTE)]
+    return [n for n in notes if not str(n).startswith(_ANALYSIS_NOTES)]
+
+
+def bilayer_numbers(eq) -> dict | None:
+    """How the bilayer of a stored pre-equilibration changed between the last two quarters of its
+    equilibration (:func:`cufep.sampling.equilibrate.membrane_drift`), as numbers without a verdict;
+    None for a system without a bilayer."""
+    from cufep.sampling.equilibrate import membrane_drift
+
+    if not equil_in_membrane(eq) or "area_nm2" not in eq.files:
+        return None
     waters = np.asarray(eq["pocket_waters"]) if "pocket_waters" in eq.files else np.zeros(0)
-    verdict = membrane_settled(np.asarray(eq["area_nm2"]), waters, cfg.membrane.area_tolerance,
-                               cfg.membrane.pocket_water_tolerance)
-    note = bilayer_note(verdict, float(eq["simulated_ns"]) if "simulated_ns" in eq.files else float("nan"))
-    return notes + ([note] if note else [])
+    return membrane_drift(np.asarray(eq["area_nm2"]), waters)
 
 
-def restraint_notes(stored: dict, cfg: Config) -> list[str]:
-    """The notes of a stored restraint, with the note about the pose made anew.
-
-    The file holds how far the ligand was from the pose it was given; that is compared with
-    ``restraints.pose_rmsd_warning_nm`` of this run. A file of a version that measured the
-    distance from the first frame of the MD, or that holds none, cannot be judged again: its
-    note is kept and the leg says so.
-    """
-    from cufep.alchemy.restraints import POSE_NOTE, pose_note
-
+def restraint_notes(stored: dict) -> list[str]:
+    """The notes of a stored restraint, without the verdicts that earlier versions wrote into them
+    with levels of cuFEP's own (whether the ligand had left its pose: :data:`_ANALYSIS_NOTES`). The
+    distance of the ligand from its input pose is a number of the result (``ligand_rmsd_from_input_A``)."""
     info = stored.get("info") or {}
-    notes = list(info.get("notes", []))
-    # manual anchors too (review of PR 1: their pose was not measured); a file of manual anchors of an
-    # earlier version holds no distance and says so
-    if info.get("ligand_rmsd_reference") == "input pose" and info.get("ligand_rmsd_A") is not None:
-        notes = [n for n in notes if not n.startswith(POSE_NOTE)]
-        note = pose_note(float(info["ligand_rmsd_A"]) / 10.0, cfg.restraints.pose_rmsd_warning_nm)
-        return notes + ([note] if note else [])
-    return notes + ["the distance of the ligand from its input pose was measured by an earlier version of cuFEP "
-                    "in another way (or not stored) and could not be compared with restraints.pose_rmsd_warning_nm "
-                    "of this run"]
+    return [n for n in info.get("notes", []) if not str(n).startswith(_ANALYSIS_NOTES)]
 
 
 def prep_made_from(cfg: Config, ligand, membrane: bool, box_shape: str) -> dict:
@@ -919,7 +875,7 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
                                    np.asarray(eq["frame_boxes"], dtype=float))
     probe = BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0)
     settings = RestraintSearchSettings(k_r=k_r, k_angle=k_angle)
-    problem = anchor_geometry_problem(probe, full, *anchor_margins(settings, temperature_K))
+    problem = anchor_geometry_problem(probe, full, anchor_margins(settings, temperature_K))
     if problem:
         raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}: {problem}. Choose other "
                             "anchors; nothing was sampled")
@@ -935,74 +891,7 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
 def restraint_made_with(cfg: Config) -> dict:
     """The settings that the choice of the Boresch restraint depends on."""
     data = cfg.restraints.model_dump(mode="json")
-    data.pop("pose_rmsd_warning_nm", None)          # a level for a warning; it does not change the restraint
     return data
-
-
-#: a water or an ion whose heavy atom is closer than this (nm) to a heavy atom of another molecule
-#: overlaps it: no structure has that, and the minimisation of the pre-equilibration cannot always
-#: separate them
-OVERLAP_NM = 0.15
-
-
-def overlapping_molecules(topology, positions_nm, box_nm, limit_nm: float = OVERLAP_NM) -> list[tuple[int, int, float]]:
-    """Pairs of heavy atoms (indices, distance in nm) of different molecules (connected parts of the
-    bond graph), one of them a water or a single-atom ion (the solvent the preparation builds),
-    closer than ``limit_nm`` in the periodic box ``box_nm`` (rows are the box vectors; any triclinic
-    box), the closest first. Contacts between protein, ligand and lipids are the input's and are not
-    looked at here (:func:`check_ligand`)."""
-    from scipy.spatial import cKDTree
-
-    from cufep.prep.protein import WATER
-
-    atoms = list(topology.atoms())
-    heavy = np.array([a.index for a in atoms if a.element is not None and a.element.symbol != "H"], dtype=int)
-    solvent = np.array([a.residue.name in WATER or len(list(a.residue.atoms())) == 1 for a in atoms])
-    parent = list(range(len(atoms)))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for a, b in topology.bonds():
-        ra, rb = find(a.index), find(b.index)
-        if ra != rb:
-            parent[ra] = rb
-    molecule = np.array([find(i) for i in range(len(atoms))])
-    box = np.asarray(box_nm, dtype=float)
-    frac = np.asarray(positions_nm, dtype=float)[heavy] @ np.linalg.inv(box)
-    wrapped = (frac - np.floor(frac)) @ box
-    tree = cKDTree(wrapped)
-    found: dict[tuple[int, int], float] = {}
-    for shift in np.array(np.meshgrid([-1, 0, 1], [-1, 0, 1], [-1, 0, 1])).T.reshape(-1, 3):
-        other = cKDTree(wrapped + shift @ box)
-        for (i, j), d in tree.sparse_distance_matrix(other, limit_nm).items():
-            a, b = int(heavy[i]), int(heavy[j])
-            if molecule[a] != molecule[b] and (solvent[a] or solvent[b]):
-                key = (min(a, b), max(a, b))
-                found[key] = min(float(d), found.get(key, np.inf))
-    return sorted(((a, b, d) for (a, b), d in found.items()), key=lambda item: item[2])
-
-
-def _check_overlaps(modeller, what: str) -> None:
-    """WorkflowError if a water or an ion of the system that ``modeller`` holds overlaps another molecule
-    (:func:`overlapping_molecules`), before it is written (review of PR 1: two waters 0.09 A apart
-    across the boundary of a trimmed bilayer made the pre-equilibration end in NaN)."""
-    import openmm.unit as unit
-
-    box = [[float(v) for v in vec.value_in_unit(unit.nanometer)] for vec in modeller.topology.getPeriodicBoxVectors()]
-    pairs = overlapping_molecules(modeller.topology, np.asarray(modeller.positions.value_in_unit(unit.nanometer)), box)
-    if pairs:
-        atoms = list(modeller.topology.atoms())
-
-        def label(i: int) -> str:
-            return f"{atoms[i].residue.name}{atoms[i].residue.id}:{atoms[i].name}"
-
-        shown = "; ".join(f"{label(a)} and {label(b)} {10 * d:.2f} A" for a, b, d in pairs[:5])
-        raise WorkflowError(f"{what}: {len(pairs)} pair(s) of a water or an ion and another molecule are closer than "
-                            f"{10 * OVERLAP_NM:g} A ({shown}); nothing was written")
 
 
 def _check_box(modeller, cutoff_nm: float, what: str) -> None:
@@ -1031,7 +920,8 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     if info is not None:
         return info
     prep_dir.mkdir(parents=True, exist_ok=True)
-    warnings = check_ligand(ligand, protein.topology, protein.positions_nm())
+    check_ligand(ligand)
+    warnings: list[str] = []
     t0 = time.perf_counter()
     assign_partial_charges(ligand, cfg.forcefield.ligand_charges, cache_dir=cfg.output.dir / "cache")
     log(f"{ligand.name}: partial charges ({cfg.forcefield.ligand_charges}) in {time.perf_counter() - t0:.0f} s")
@@ -1066,7 +956,6 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
                                                     ionic_strength_M=ionic, min_edge_nm=min_edge))
         barostat = "isotropic"
     _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated complex")
-    _check_overlaps(modeller, f"{ligand.name}: the solvated complex")
     system = create_system(forcefield, modeller.topology, sysspec)
     lig_idx = ligand_atom_indices(modeller.topology)
     _write_system(prep_dir, "complex", modeller, system, lig_idx)
@@ -1078,7 +967,6 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
                                                 water=cfg.forcefield.water,
                                                 ionic_strength_M=ionic, min_edge_nm=min_edge))
     _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated ligand")
-    _check_overlaps(modeller, f"{ligand.name}: the solvated ligand")
     system = create_system(forcefield, modeller.topology, sysspec)
     _write_system(prep_dir, "solvent", modeller, system, ligand_atom_indices(modeller.topology))
     publish_text(prep_dir / "ligand.json", ligand.offmol.to_json())
@@ -1503,7 +1391,6 @@ def run_leg(job: LegJob) -> dict:
             platform=cfg.backend.platform,
             precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
             md_backend=cfg.backend.name,
-            area_tolerance=cfg.membrane.area_tolerance, water_tolerance=cfg.membrane.pocket_water_tolerance,
             restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half, wall_centre_nm=0.0,
             ligand_atoms=prep["ligand"] if in_membrane else [],
             water_oxygens=[a.index for a in prep["topology"].atoms()
@@ -1522,7 +1409,7 @@ def run_leg(job: LegJob) -> dict:
                     frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
                     simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
                     pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
-                    made_with=json.dumps(equil_from), membrane_settled=json.dumps(eq.settled))
+                    made_with=json.dumps(equil_from), membrane_drift=json.dumps(eq.drift))
         timed("pre_equilibration", t0)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)
@@ -1563,17 +1450,15 @@ def run_leg(job: LegJob) -> dict:
                     force_constants=rc.force_constants, temperature_K=T)
                 # how far the ligand moved from the pose it was given, measured as for anchors the search
                 # chooses (review of PR 1: with manual anchors a ligand that left the site gave no warning)
-                from cufep.alchemy.restraints import ligand_pose_rmsd, pose_note
+                from cufep.alchemy.restraints import ligand_pose_rmsd
 
                 full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))
                 full[:, eq["frame_atoms"], :] = eq["frames"]
                 rmsd = ligand_pose_rmsd(prep["topology"], full, prep["ligand"], rdmol, prep["positions"],
                                         frame_boxes_nm=eq["frame_boxes"], input_box_nm=prep["box"],
                                         host_max_distance_nm=rc.host_max_distance_nm)
-                note = pose_note(rmsd, rc.pose_rmsd_warning_nm)
                 info = {"selection": "manual", "force_constants": rc.force_constants, "fluctuations": fluctuations,
-                        "ligand_rmsd_A": 10 * rmsd, "ligand_rmsd_reference": "input pose",
-                        "notes": [note] if note else []}
+                        "ligand_rmsd_A": 10 * rmsd, "ligand_rmsd_reference": "input pose", "notes": []}
                 log(f"restraint (manual anchors): r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * rmsd:.2f} A")
             else:
                 full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))
@@ -1581,8 +1466,7 @@ def run_leg(job: LegJob) -> dict:
                 settings = RestraintSearchSettings(k_r=k_r, k_angle=k_a, rmsf_cutoff_nm=rc.rmsf_cutoff_nm,
                                                    host_min_distance_nm=rc.host_min_distance_nm,
                                                    host_max_distance_nm=rc.host_max_distance_nm,
-                                                   dssp_filter=rc.dssp_filter,
-                                                   pose_rmsd_warning_nm=rc.pose_rmsd_warning_nm)
+                                                   dssp_filter=rc.dssp_filter)
                 # the pose is compared with the prepared input: the frames kept for the search begin
                 # only after the first part of the pre-equilibration
                 found = find_boresch_restraint(prep["topology"], full, prep["ligand"], rdmol, T, settings,
@@ -1970,17 +1854,15 @@ def leg_quality(analysis: dict, cfg) -> dict:
 def analysis_settings(source):
     """The settings with which the result of a leg is made from its samples and files.
 
-    They are the ``analysis`` section and three levels for notes that are made from the files of
-    the leg: ``membrane.area_tolerance`` and ``membrane.pocket_water_tolerance`` (whether the
-    bilayer had settled) and ``restraints.pose_rmsd_warning_nm`` (whether the ligand left its
-    pose). The run of a leg, a result that is made again and ``cufep analyze`` use the same
-    ones. ``source`` is a whole configuration (returned as it is), an object with these three
-    sections, or an ``analysis`` section alone, which gets the default levels.
+    They are the ``analysis`` section: the run of a leg, a result that is made again and ``cufep
+    analyze`` use the same ones. ``source`` is a whole configuration (returned as it is), an object
+    with an ``analysis`` section, or an ``analysis`` section alone. (Earlier versions added levels of
+    cuFEP's own for notes on the bilayer and the pose; they are gone, the owner 2026-11-20.)
     """
-    if all(hasattr(source, section) for section in ("analysis", "membrane", "restraints")):
+    if hasattr(source, "analysis"):
         return source
     settings = analysis_settings_of(None)
-    settings.analysis = getattr(source, "analysis", source)
+    settings.analysis = source
     return settings
 
 
@@ -1995,10 +1877,7 @@ def analysis_record(cfg) -> dict:
             "min_overlap": float(a.min_overlap),
             "min_effective_samples": float(a.min_effective_samples),
             "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
-            "error_blocks": [int(count) for count in a.error_blocks], "part_error_blocks": int(a.part_error_blocks),
-            "membrane_area_tolerance": float(settings.membrane.area_tolerance),
-            "membrane_pocket_water_tolerance": float(settings.membrane.pocket_water_tolerance),
-            "pose_rmsd_warning_nm": float(settings.restraints.pose_rmsd_warning_nm)}
+            "error_blocks": [int(count) for count in a.error_blocks], "part_error_blocks": int(a.part_error_blocks)}
 
 
 def analyse_leg_directory(directory, config=None, equilibration_ns: float | None = None,
@@ -2129,48 +2008,37 @@ def analysis_settings_of(record: dict | None, attrs: dict | None = None):
     an earlier version lacks and the samples ``attrs`` hold)."""
     from types import SimpleNamespace
 
-    from cufep.config.schema import AnalysisConfig, MembraneConfig, RestraintConfig, renamed_settings
+    from cufep.config.schema import AnalysisConfig, renamed_settings
 
     record, _renamed = renamed_settings("analysis", dict(record or {}))
     if "lrc_cutoff_nm" not in record and attrs is not None and recorded_tail_radius(attrs) is not None:
         record["lrc_cutoff_nm"] = recorded_tail_radius(attrs)
-    membrane, restraints = MembraneConfig(), RestraintConfig()
     return SimpleNamespace(
-        analysis=AnalysisConfig(**{key: value for key, value in record.items() if key in AnalysisConfig.model_fields}),
-        membrane=SimpleNamespace(
-            area_tolerance=float(record.get("membrane_area_tolerance", membrane.area_tolerance)),
-            pocket_water_tolerance=float(record.get("membrane_pocket_water_tolerance", membrane.pocket_water_tolerance))),
-        restraints=SimpleNamespace(
-            pose_rmsd_warning_nm=float(record.get("pose_rmsd_warning_nm", restraints.pose_rmsd_warning_nm))))
+        analysis=AnalysisConfig(**{key: value for key, value in record.items() if key in AnalysisConfig.model_fields}))
 
 
-def notes_of_leg_files(leg_dir: Path, settings, conditions: dict) -> tuple[list[str], tuple[str, ...]]:
+def notes_of_leg_files(leg_dir: Path) -> tuple[list[str], dict]:
     """The notes that the pre-equilibration and the restraint of a leg carry, from the files of the
-    leg, with the verdicts on the bilayer and on the pose made with the levels of ``settings``.
-
-    Returns the notes and how those begin whose verdict was made here: such notes of an earlier
-    run are replaced by them. A file that is not there gives no notes and replaces none.
-    ``conditions`` are those of the samples (the barostat says whether the leg is in a bilayer;
-    samples that do not record it leave that to the pre-equilibration file).
+    leg, without verdicts of cuFEP's own (:func:`equil_notes`, :func:`restraint_notes`), and what
+    those files say as numbers: how the bilayer changed at the end of its equilibration (``bilayer``)
+    and how far the ligand was from its input pose (``ligand_rmsd_from_input_A``). A file that is
+    not there gives no notes and no number.
     """
-    from cufep.alchemy.restraints import POSE_NOTE
-    from cufep.sampling.equilibrate import BILAYER_NOTE
-
     notes: list[str] = []
-    judged: list[str] = []
+    numbers: dict = {"bilayer": None, "ligand_rmsd_from_input_A": None}
     files = leg_files(leg_dir)
     equil_file, restraint_file = files["equil.npz"], files["restraint.json"]
     if equil_file is not None:
         eq = np.load(equil_file)
-        barostat = conditions.get("barostat")
-        in_membrane = barostat == "membrane" if barostat is not None else bool(equil_in_membrane(eq))
-        notes += equil_notes(eq, settings, in_membrane)
-        judged.append(BILAYER_NOTE)
+        notes += equil_notes(eq)
+        numbers["bilayer"] = bilayer_numbers(eq)
     stored = _read_json(restraint_file) if restraint_file is not None else None
     if stored:
-        notes += [n for n in restraint_notes(stored, settings) if n not in notes]
-        judged.append(POSE_NOTE)
-    return notes, tuple(judged)
+        notes += [n for n in restraint_notes(stored) if n not in notes]
+        info = stored.get("info") or {}
+        if info.get("ligand_rmsd_reference") == "input pose" and info.get("ligand_rmsd_A") is not None:
+            numbers["ligand_rmsd_from_input_A"] = float(info["ligand_rmsd_A"])
+    return notes, numbers
 
 
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
@@ -2180,7 +2048,12 @@ _ANALYSIS_NOTES = ("NOT RELIABLE", "NO FREE ENERGY", "NOT CONVERGED", "convergen
                    "analytical one", "parts of the production without an estimate",
                    "parts of the production whose lambda windows overlap below", "the comparison of the two halves",
                    "the two halves of the production", "half of the production does not",
-                   "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record")
+                   "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record",
+                   # verdicts of earlier versions with levels of cuFEP's own, no longer made (the owner, 2026-11-20)
+                   "the bilayer had not settled after", "the ligand moved away from its",
+                   "the distance of the ligand from its input pose was measured by an earlier version",
+                   "the ligand moved ", "the ligand's centre of mass drifted",
+                   "bilayer area or pocket hydration still drifting")
 #: what the run of a leg knows and its samples do not hold
 _RUN_KEYS = ("ligand", "leg", "repeat", "backend", "timestep_fs", "ligand_symmetry_number", "rest2",
              "origin_not_recorded", "prepared_systems_sha256")
@@ -2333,11 +2206,10 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     correction = res.correction
     structure = structural_analysis(samples, n_equilibration)
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
-    # the notes of the pre-equilibration and the restraint, with the verdicts on the bilayer and the
-    # pose by the levels of these settings; then what the run noted besides
-    notes, judged = notes_of_leg_files(leg_dir, settings, conditions)
-    notes += [n for n in (run.get("notes") or []) if n not in notes and not (judged and n.startswith(judged))]
-    notes += [n for n in (structure or {}).get("warnings", []) if n not in notes]
+    # the notes of the pre-equilibration and the restraint, and what their files say as numbers
+    notes, file_numbers = notes_of_leg_files(leg_dir)
+    # what the run noted besides, without the verdicts of earlier versions
+    notes += [n for n in (run.get("notes") or []) if n not in notes and not str(n).startswith(_ANALYSIS_NOTES)]
     origin_not_recorded = list(run.get("origin_not_recorded") or [])
     # the pressure is the one the samples were made under; samples that do not record it have none
     pressure = conditions.get("pressure_bar")
@@ -2359,6 +2231,8 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "lrc": correction, "lrc_method": a.lrc, "lrc_long_cutoff_nm": tail.get("long_cutoff_nm"),
         "lrc_reweight": res.lrc_reweight,
         "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.correction_error, "structure": structure,
+        # numbers of the files of the leg, without a verdict
+        "bilayer": file_numbers["bilayer"], "ligand_rmsd_from_input_A": file_numbers["ligand_rmsd_from_input_A"],
         "restraint_release": release, "restraint_release_analytical": release_analytical,
         "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
         "analysis_record": analysis_record(settings), "run": run,

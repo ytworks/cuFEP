@@ -277,16 +277,13 @@ def test_the_validation_compares_the_system_a_run_samples(dipeptides_in_water):
     assert verdict({}) is False and verdict({"complex": False, "solvent": True}) is False
 
 
-@pytest.mark.parametrize("compared_kT,worst,ok,n_compared", [(-5.0, 85.0, False, 2), (-80.0, 160.0, False, 2),
-                                                             (80.0, 0.0, True, 1), (180.0, 0.0, True, 1)])
-def test_validate_compares_a_state_that_either_backend_finds_favourable(compared_kT, worst, ok, n_compared):
-    """Review of 037bdf1 (P2): the pairs that validate compares were chosen by the reference alone (|difference| < 60
-    kT), so a state 80 kT above the sampled one in the reference and 5 kT below it in the backend compared was left out
-    and the result was OK. Review of c691e37 (P2): chosen by |difference| < 60 kT on either side, a state 80 kT below in
-    the backend compared was left out too (160 kT, OK). A state is compared when its signed difference is below 60 kT on
-    either side. Rows of a two-state system evaluated on OpenMM's Reference and CPU platforms: 85 and 160 kT are seen
-    (MISMATCH); with the same Hamiltonian on both the largest difference is 0 (OK), and a state unfavourable on both
-    sides (+80 and +180 kT) is left out (OK)."""
+@pytest.mark.parametrize("compared_kT,worst", [(-5.0, 85.0), (-80.0, 160.0), (80.0, 0.0), (180.0, 100.0)])
+def test_validate_gives_the_differences_of_every_pair_without_a_verdict(compared_kT, worst):
+    """Review of 037bdf1 (P2) and of c691e37 (P2): the pairs that validate compared were chosen by a level of 60 kT, and
+    a state 80 kT above the sampled one in the reference and 5 kT (or 80 kT) below it in the backend compared was left
+    out. The owner, 2026-11-20: no level of cuFEP's own (60 kT, 0.15 kT, 1e-4). Every pair that is finite on both
+    backends is compared, and the numbers are given without OK or MISMATCH. Rows of a two-state system evaluated on
+    OpenMM's Reference and CPU platforms: 85, 160, 0 and 100 kT over the two pairs."""
     import openmm as mm
     import openmm.unit as unit
 
@@ -313,10 +310,8 @@ def test_validate_compares_a_state_that_either_backend_finds_favourable(compared
     reference, other = rows("Reference", 80.0), rows("CPU", compared_kT)
     found = between_state_differences(reference, other, [0])
     assert found["worst"] == pytest.approx(worst, abs=1e-4)
-    assert (found["worst"] < 0.15) is ok and found["compared"] == n_compared
-    # the rule before the fix, which looked at the reference only, saw nothing
-    ref = np.asarray(reference)
-    mask = np.abs(ref - ref[:, [0]]) < 60.0
-    assert float(np.abs((np.asarray(other) - np.asarray(other)[:, [0]]) - (ref - ref[:, [0]]))[mask].max()) == 0.0
-    # a state that is not finite in one backend only is compared and fails
-    assert between_state_differences([[0.0, 1.0]], [[0.0, float("nan")]], [0])["worst"] == float("inf")
+    assert found["compared"] == 2 and found["one_sided"] == 0 and set(found) == {"worst", "relative", "compared",
+                                                                                "one_sided"}
+    # a state that is not finite on one backend only is counted and named, not compared
+    one = between_state_differences([[0.0, 1.0]], [[0.0, float("nan")]], [0])
+    assert one == {"worst": 0.0, "relative": None, "compared": 1, "one_sided": 1}     # no energy to relate to

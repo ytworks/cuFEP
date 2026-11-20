@@ -487,14 +487,9 @@ def add_membrane(modeller, forcefield, cfg, log=print) -> dict:
     up, low = quality["lipids_upper"], quality["lipids_lower"]
     log(f"membrane: {cfg.membrane.lipid} bilayer with {up} + {low} lipids, box "
         + " x ".join(f"{x:.2f}" for x in quality["box_nm"]) + f" nm, {quality['n_atoms'] - n_before} atoms added")
-    warnings = []
-    if up + low < 40:
-        raise MembraneError(f"only {up + low} lipids were placed; the bilayer is too small to be meaningful")
-    if abs(up - low) > max(2, 0.1 * (up + low)):
-        warnings.append(f"the two leaflets differ by {abs(up - low)} lipids ({up} vs {low})")
-    if quality["waters_in_hydrophobic_core_away_from_protein"]:
-        warnings.append(f"{quality['waters_in_hydrophobic_core_away_from_protein']} water(s) in the hydrophobic "
-                        "core away from the protein")
-    info["warnings"] = warnings
+    # the numbers of the bilayer (lipids per leaflet, waters in the hydrophobic core away from the protein) are
+    # in info, without a verdict: earlier versions stopped below 40 lipids and warned of leaflets that differ by
+    # more than 10 % and of such waters, levels of cuFEP's own (removed by the owner's order of 2026-11-20)
+    info["warnings"] = []
     _ = mm
     return info

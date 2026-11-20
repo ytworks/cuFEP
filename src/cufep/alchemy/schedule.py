@@ -271,7 +271,7 @@ def als_step(windows: list[int], superdiagonal, threshold: float, room: int = 1)
 # ============================================================================ ALS: the precalculation
 @dataclass
 class AlsSettings:
-    overlap_threshold: float = 0.04
+    overlap_threshold: float = 0.18             # the owner's choice of 2026-11-20 (the paper: 0.04)
     candidates: int = 101
     initial_windows: dict = field(default_factory=lambda: {"restrain": 3, "discharge": 5, "vanish": 9})
     window_ps: float = 50.0

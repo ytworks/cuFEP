@@ -30,8 +30,6 @@ membrane:
   lipid: POPC
   padding_nm: 1.5
   equilibration_ns: 10.0
-  area_tolerance: 0.01            # warning if the area still changes by more than this fraction at the end of the equilibration
-  pocket_water_tolerance: 1.5     # ... or the number of waters near the ligand by more than this
 forcefield:
   protein: amber14/protein.ff14SB.xml
   water: amber14/tip3p.xml        # tip3p, tip3pfb, opc3, spce, tip4pew, tip4pfb or opc of amber14/; a bilayer needs a 3-site one
@@ -71,7 +69,6 @@ restraints:
   host_min_distance_nm: 0.5
   host_max_distance_nm: 1.5
   dssp_filter: true
-  pose_rmsd_warning_nm: 0.3       # warn when the ligand ends up further than this from the pose that was given (auto and manual anchors)
 alchemy:
   softcore_alpha: 0.5
 lambda_schedule:
@@ -85,7 +82,7 @@ lambda_schedule:
       discharge: 5
       vanish: [0.0, 0.12, 0.24, 0.36, 0.48, 0.6, 0.7, 0.77, 0.85, 1.0]
   adaptive:
-    overlap_threshold: 0.04
+    overlap_threshold: 0.18
     candidates: 101
     initial_windows:
       complex:
@@ -184,12 +181,13 @@ the schedule in fixed mode.
 | `sampling.production_ns` | 10 ns per lambda window | default of OpenFE's ABFE protocol. Schrödinger's absolute binding FEP+, A3FE and Boltz-ABFE use 5 ns. With 5 ns the lambda window with the fewest independent samples of a TYK2 complex leg held about 29 (11 of 55 legs reached the 50 that Mey et al. 2020 recommend for MBAR); see protocol.md, "Checks of the analysis" |
 | `sampling.repeats` | 1 | FEP+ and Flare run a calculation once. OpenFE's default is 3; more than one repeat makes the reported uncertainty the standard deviation over repeats |
 | `restraints` search settings and force constants, `alchemy.softcore_alpha` | as listed | defaults of OpenFE's ABFE protocol. `force_constants: auto` takes kT / sigma^2 of each restrained coordinate in the pre-equilibration instead, as A3FE and SOMD2 do. On TYK2 ejm_31 (three repeats each) the two gave the same binding free energy within the spread of the repeats (-10.6 ± 1.9 and -10.8 ± 1.2 kcal/mol), so the fixed values of OpenFE stay the default |
-| `restraints.pose_rmsd_warning_nm` | 0.3 nm | cuFEP's own choice: 2 A is the usual limit for calling two poses the same, and thermal motion adds to it. OpenFE reports the ligand RMSD without a limit; like OpenFE, cuFEP does not stop |
+| anchors of the Boresch restraint | OpenFE's rules | Two of the conditions of OpenFE's `EvaluateBoreschAtoms`: theta_A and theta_B stay, in every frame, where their restraint energy is at least 10 kT from that at 0 and at 180 degrees (`check_angle_not_flat`, 22 degrees with the default force constant), and anchors whose H2-H1-H0-G0-G1-G2 have three in a row on a straight line (|cos| of their bond vectors above 0.9, `is_collinear` from Yank) in every frame are refused. Rules of cuFEP's own of earlier versions (the same margin for the two other angles; 30 degrees in the last frame) are gone (owner, 2026-11-20). OpenFE's limits on the dihedrals and on the variances were never part of cuFEP |
+| distance of the ligand from its input pose | a number, no level | reported with the result of the complex leg (`ligand_rmsd_from_input_A`), as OpenFE reports the ligand RMSD without a limit. `restraints.pose_rmsd_warning_nm` of earlier versions (a warning above 0.3 nm, a level of cuFEP's own) is read with a notice if it holds 0.3 and refused otherwise |
 | `sampling.rest2.scale` | 1.5 (447 K at 298 K) | A torsion barrier E is crossed at a rate proportional to exp(-E / (kT x scale)). With 1.5 a barrier of 6 kcal/mol, which takes nanoseconds to cross at 298 K, is crossed about 30 times as often, while an amide bond (16 kcal/mol or more) stays 18 kT high. The scale must stay below the point where amide bonds isomerise: with 2.5 (745 K, inside the 670-1000 K that FEP+ uses for its hot region) the solvent legs of five TYK2 ligands ended with a cis amide in 6 to 15 of their 21 windows, none without REST2, and three of the five binding free energies moved 4-5 kcal/mol away from experiment (`spikes/m10_amide_isomers.py`). SOMD2's own default is 1.0 (off) |
 | `sampling.rest2.residues` | none | named as in the input PDB: residue number, with the chain of the input and the insertion code where needed (`"B:898A"`). The preparation gives every peptide segment a chain of its own (A, B, ... in order) and records which chain of the input it came from (`input_chains` in `prep/prep.json`); a number that two chains of the input have must be given with its chain. Prepared systems of an earlier version have no such record and are refused when residues are named |
 | `sampling.rest2.region` | ligand | default hot region of FEP+ and of SOMD2. `pocket` adds the protein residues within `pocket_cutoff_nm` (0.4 nm, cuFEP's own choice) of the ligand, as FEP+ does on request |
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
-| `lambda_schedule.adaptive.overlap_threshold`, `candidates` | 0.04, 101 | Midgley et al., J. Chem. Inf. Model. 2025, 65, 512. The threshold has to stay low: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. On the TYK2 complex leg a threshold of 0.20 added windows until `max_windows` (see protocol.md) |
+| `lambda_schedule.adaptive.overlap_threshold`, `candidates` | 0.18, 101 | The method and `candidates`: Midgley et al., J. Chem. Inf. Model. 2025, 65, 512, whose threshold is 0.04. 0.18 is the owner's choice (2026-11-20): with 0.04 the production of the TYK2 and A2A complex legs had neighbouring windows below the overlap of 0.03 of Klimovich et al. (0.024 at vanish 0.75-0.88, which the precalculation had read as 0.096 and 0.073); with 0.10 to 0.18 the lowest overlap in their production was 0.065 to 0.147. The threshold cannot go much higher: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. With 0.20 TYK2 legs added windows until `max_windows` (see protocol.md) |
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent leg: 50 ps, no equilibration; complex leg: 500 ps after 500 ps of equilibration | Solvent leg: the paper's value, set there for a ligand in solution. Complex leg: cuFEP's own values. The pocket adapts to a partly decoupled ligand over hundreds of picoseconds, and a 50 ps precalculation read the overlap of the affected windows several times too high (protocol.md, "What was measured on TYK2") |
 | `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 in both legs | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer (cuFEP's own choice for these two) |
 | `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
@@ -205,4 +203,4 @@ the schedule in fixed mode.
 | `forcefield.water` | amber14/tip3p.xml | default of OpenFE's ABFE protocol. The water box is built with the model whose number of sites matches the file (measured with OpenMM 8.4: tip3p, tip3pfb, opc3 and spce with 3 sites, tip4pew, tip4pfb and opc with 4); other files are refused before anything is prepared. The bilayer is built with 3-site waters, so `membrane.enabled` needs a 3-site model |
 | `resources.oversubscription_factor` | from the size of the system: 16 up to 10,000 atoms, 8 up to 60,000, 4 up to 200,000, else 2 | measured total throughput per GPU under NVIDIA MPS |
 | `membrane.equilibration_ns` | 10 ns | cuFEP's own choice for a freshly built bilayer |
-| `membrane.area_tolerance`, `pocket_water_tolerance` | 0.01; 1.5 | cuFEP's own choice: the mean area in the membrane plane and the mean number of water molecules within 0.6 nm of the ligand are compared between the last two quarters of the equilibration. A larger change is reported with the result; the run is not made longer |
+| the bilayer at the end of its equilibration | numbers, no level | the relative change of the mean area in the membrane plane and the change of the mean number of water molecules within 0.6 nm of the ligand between the last two quarters of `membrane.equilibration_ns`, reported with the result of the complex leg (`bilayer`); the run is never made longer. `membrane.area_tolerance` and `pocket_water_tolerance` of earlier versions (a warning above 1 % and 1.5 waters, levels of cuFEP's own) are read with a notice if they hold those values and refused otherwise |

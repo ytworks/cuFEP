@@ -196,11 +196,11 @@ class RestraintSearchSettings:
     host_min_distance_nm: float = 0.5
     host_max_distance_nm: float = 1.5
     dssp_filter: bool = True
-    flat_angle_energy_kt: float = 10.0     # a restrained angle must be this far from 0 / pi
-    min_equilibrium_angle_deg: float = 30.0
+    #: theta_A and theta_B must stay this far (in kT of their force constant) from 0 and pi in every
+    #: frame: OpenFE's check_angle_not_flat (contributed by V. Gapsys)
+    flat_angle_energy_kt: float = 10.0
     max_guest_anchors: int = 8
     max_host_candidates: int = 60
-    pose_rmsd_warning_nm: float = 0.3
 
 
 #: the six restrained coordinates of a Boresch restraint
@@ -226,35 +226,63 @@ def anchor_angles(restraint: "BoreschRestraint", positions: np.ndarray) -> np.nd
     return np.stack([_angle(h2, h1, h0), _angle(h1, h0, g0), _angle(h0, g0, g1), _angle(g0, g1, g2)], axis=-1)
 
 
-def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin: float,
-                            equilibrium_margin: float) -> str | None:
-    """Why the anchors of ``restraint`` cannot define its six coordinates over ``frames`` (positions
-    with the ligand in the periodic image nearest the host), or None.
+#: OpenFE's is_collinear (from Yank): three atoms in a row are taken as on a straight line when the
+#: inner product of their two normalised bond vectors exceeds this in magnitude
+COLLINEAR_THRESHOLD = 0.9
 
-    Every one of the four angles of the anchors must stay ``flat_margin`` away from 0 and from pi in
-    every frame: the dihedral angles phi_A and phi_C need the planes H2-H1-H0 and G0-G1-G2, and an
-    acetonitrile whose N-C-C was chosen as guest anchors gave forces of NaN although theta_A and
-    theta_B (53.7 and 81.3 degrees) were in order (review of PR 1). In the last frame, from which the
-    reference values come, every angle must also be ``equilibrium_margin`` away from 0 and pi."""
-    angles = np.atleast_2d(anchor_angles(restraint, np.asarray(frames, dtype=float)))
-    for k, name in enumerate(ANCHOR_ANGLES):
+
+def collinear_frames(restraint: "BoreschRestraint", frames: np.ndarray) -> np.ndarray:
+    """For every frame, whether the six anchors H2-H1-H0-G0-G1-G2 are on a straight line by OpenFE's
+    rule (:data:`COLLINEAR_THRESHOLD`, any three in a row)."""
+    chain = [*reversed(restraint.host_atoms), *restraint.guest_atoms]
+    p = np.asarray(frames, dtype=float)
+    if p.ndim == 2:
+        p = p[None]
+    out = np.zeros(p.shape[0], dtype=bool)
+    for i in range(4):
+        v1 = p[:, chain[i + 1], :] - p[:, chain[i], :]
+        v2 = p[:, chain[i + 2], :] - p[:, chain[i + 1], :]
+        cos = np.einsum("fi,fi->f", v1, v2) / np.sqrt(np.einsum("fi,fi->f", v1, v1) * np.einsum("fi,fi->f", v2, v2))
+        out |= np.abs(cos) > COLLINEAR_THRESHOLD
+    return out
+
+
+def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin: float) -> str | None:
+    """Why the anchors of ``restraint`` are refused over ``frames`` (positions with the ligand in the
+    periodic image nearest the host), or None. The rules are two of OpenFE's (EvaluateBoreschAtoms in
+    openfe.protocols.restraint_utils.geometry.boresch.host) and nothing of cuFEP's own (the owner,
+    2026-11-20; earlier versions also held all four angles to the flat margin and the last frame to
+    30 degrees):
+
+    * theta_A and theta_B stay ``flat_margin`` away from 0 and pi in every frame: the angle at which
+      the restraint energy reaches 10 kT (OpenFE's check_angle_not_flat, contributed by V. Gapsys);
+    * the six anchors H2-H1-H0-G0-G1-G2 are not on a straight line in every frame (OpenFE's
+      ``not all(collinear)`` with is_collinear, from Yank: :func:`collinear_frames`): an acetonitrile
+      whose N-C-C was chosen as guest anchors gave forces of NaN (review of PR 1).
+
+    OpenFE's other conditions there (each dihedral within +-150 degrees, limits on the circular
+    variance of the angles and dihedrals) were never part of cuFEP and are not applied."""
+    frames = np.asarray(frames, dtype=float)
+    angles = np.atleast_2d(anchor_angles(restraint, frames))
+    for k in (1, 2):
+        name = ANCHOR_ANGLES[k]
         low, high = float(angles[:, k].min()), float(angles[:, k].max())
         if low < flat_margin or high > np.pi - flat_margin:
             return (f"the anchor angle {name} comes within {np.degrees(flat_margin):.0f} degrees of a straight line "
-                    f"({np.degrees(low):.1f} to {np.degrees(high):.1f} degrees over the frames): the dihedral angles "
-                    "of the restraint are not defined there")
-        last = float(angles[-1, k])
-        if not equilibrium_margin <= last <= np.pi - equilibrium_margin:
-            return (f"the anchor angle {name} is {np.degrees(last):.1f} degrees in the frame the reference values "
-                    f"come from, closer than {np.degrees(equilibrium_margin):.0f} degrees to a straight line")
+                    f"({np.degrees(low):.1f} to {np.degrees(high):.1f} degrees over the frames), where the restraint "
+                    "energy is below 10 kT (OpenFE's check_angle_not_flat)")
+    if bool(np.all(collinear_frames(restraint, frames))):
+        return ("the six anchors H2-H1-H0-G0-G1-G2 are on a straight line in every frame (three in a row with "
+                f"|cos| above {COLLINEAR_THRESHOLD:g}, OpenFE's is_collinear): the dihedral angles of the restraint "
+                "are not defined there")
     return None
 
 
-def anchor_margins(settings: "RestraintSearchSettings", temperature_K: float) -> tuple[float, float]:
-    """(flat margin, equilibrium margin) in radians of :func:`anchor_geometry_problem`."""
+def anchor_margins(settings: "RestraintSearchSettings", temperature_K: float) -> float:
+    """The angle (radians) from 0 and pi of :func:`anchor_geometry_problem`: where the energy of a
+    restrained angle reaches ``flat_angle_energy_kt`` kT."""
     kt = R_GAS * temperature_K
-    return (math.sqrt(2.0 * settings.flat_angle_energy_kt * kt / settings.k_angle),
-            math.radians(settings.min_equilibrium_angle_deg))
+    return math.sqrt(2.0 * settings.flat_angle_energy_kt * kt / settings.k_angle)
 
 
 @dataclass
@@ -339,18 +367,9 @@ def _guest_anchor_candidates(rdmol, ligand_atoms: list[int], rmsf: np.ndarray, r
     return [t[2] for t in triples[:limit]]
 
 
-#: how the note about a ligand that left its pose begins
+#: how the note of earlier versions about a ligand that moved from its pose began (a verdict with a level of
+#: cuFEP's own, restraints.pose_rmsd_warning_nm: no longer made, and removed from stored notes)
 POSE_NOTE = "the ligand moved away from its"
-
-
-def pose_note(rmsd_nm: float, warning_nm: float, reference: str = "input") -> str | None:
-    """The note for a ligand whose heavy atoms are further than ``warning_nm`` from the pose it is
-    compared with (``reference``: "input" or "starting"), or None."""
-    if rmsd_nm <= warning_nm:
-        return None
-    return (f"{POSE_NOTE} {reference} pose in the pre-equilibration MD (heavy-atom RMSD {10 * rmsd_nm:.1f} A over the "
-            f"second half, above restraints.pose_rmsd_warning_nm = {10 * warning_nm:g} A); the result is for the pose "
-            "it moved to")
 
 
 def nearest_image_of_ligand(positions_nm: np.ndarray, ligand: np.ndarray, anchor: np.ndarray,
@@ -486,12 +505,9 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     lig_self = kabsch_align(lig_self, lig_self.mean(axis=0), np.array(heavy_local))
     lig_rmsf = np.sqrt(((lig_self - lig_self.mean(axis=0)) ** 2).sum(axis=2).mean(axis=0))
 
-    # How far the ligand moved from the input pose, in the frame of the binding site. The run goes
-    # on in any case, as in OpenFE; a large value is reported with the result.
+    # How far the ligand moved from the input pose, in the frame of the binding site: a number of the
+    # result, without a verdict (OpenFE reports the ligand RMSD without a limit)
     tail = pose_rmsd_in_site(topology, aligned, site, lig, lig_heavy, rdmol, input_pose_nm, input_box_nm)
-    note = pose_note(tail, s.pose_rmsd_warning_nm, "input" if input_pose_nm is not None else "starting")
-    if note:
-        notes.append(note)
 
     guests = _guest_anchor_candidates(rdmol, list(lig), lig_rmsf, s.rmsf_cutoff_nm, s.max_guest_anchors)
     if not guests:
@@ -519,7 +535,7 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
 
     sig_r = math.sqrt(kt / s.k_r)
     sig_a = math.sqrt(kt / s.k_angle)
-    flat_margin, eq_margin = anchor_margins(s, temperature_K)
+    flat_margin = anchor_margins(s, temperature_K)
     best = None
     n_tested = 0
     for g_local in guests:
@@ -535,8 +551,8 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
                         continue
                     n_tested += 1
                     r = BoreschRestraint((h0, h1, h2), (g0, g1, g2), 0, 0, 0, 0, 0, 0)
-                    # all four anchor angles away from a straight line in every frame
-                    if anchor_geometry_problem(r, aligned, flat_margin, eq_margin) is not None:
+                    # OpenFE's rules: theta_A and theta_B away from 0 and pi, the anchors not on a line
+                    if anchor_geometry_problem(r, aligned, flat_margin) is not None:
                         continue
                     v = r.values(aligned)                                           # (frames, 6)
                     # Reference values: those of the final frame, from which the alchemical run

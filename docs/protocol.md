@@ -44,9 +44,11 @@ What happens to the protein (all of it is reported in `auto_report.md`):
   caps and hydrogens run on OpenMM's Reference platform with a fixed seed (before revision
   15 the caps of one input landed up to 1.9 A apart from one preparation to the next).
 
-cuFEP stops, with the reason, on: unknown or modified residues, a ligand without explicit
-hydrogens, a ligand with a net charge, a ligand outside the protein, a severe clash or a
-covalent contact, and a metal ion within 3 A of the ligand.
+cuFEP stops, with the reason, on what it cannot treat: unknown or modified residues, a
+ligand without explicit hydrogens, and a ligand with a net charge. Where the ligand sits is
+not judged: earlier versions also stopped on a ligand outside the protein, a clash, a
+covalent contact or a metal ion within 3 A of the ligand, and warned of a metal ion within
+6 A, levels of cuFEP's own that are gone (owner, 2026-11-20).
 
 ## Systems
 
@@ -77,8 +79,11 @@ inside the protein at the depth of the bilayer are filled with water, because th
 adds bulk water only above and below the lipids. After the cut, every water that comes
 within 0.24 nm of another molecule through the new periodic boundary is removed (before
 revision 15 only waters next to a lipid were, and two waters 0.09 A apart made the
-pre-equilibration of the A2A example end in NaN). A prepared system in which a water or
-an ion is closer than 0.15 nm to another molecule is refused before it is written.
+pre-equilibration of the A2A example end in NaN). The numbers of the bilayer (lipids in
+each leaflet, waters in the hydrophobic core away from the protein) are recorded in
+`prep/prep.json` without a verdict; earlier versions stopped below 40 lipids, warned of
+leaflets that differ by more than 10 % and of such waters, and refused a prepared system with
+a water or an ion closer than 0.15 nm to another molecule, levels of cuFEP's own that are gone.
 `Modeller.addMembrane` relaxes the lipids with a short MD whose random seed OpenMM does not
 let the caller set, so two preparations of one membrane system are not identical.
 
@@ -128,24 +133,32 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    revision 15 integrated whole intervals only (40 ps of 50 ps), and such a file holding less
    than it was made for is not used again. A bilayer system is held
    by position restraints during NVT and NPT and then runs unrestrained for
-   `membrane.equilibration_ns`. At the end of that run cuFEP checks whether the bilayer has
-   settled: between the last two quarters the mean area in the membrane plane must not change
-   by more than `membrane.area_tolerance` (1 %) and the mean number of water molecules within
-   0.6 nm of the ligand by more than `membrane.pocket_water_tolerance` (1.5). If it has not,
-   the result carries a warning with the two changes; the run is not made longer. In the A2A
-   example the area was still shrinking after 10 ns, by 1.5 % between the last two quarters.
+   `membrane.equilibration_ns`. How the bilayer changed at the end of that run is reported with
+   the result of the complex leg, as numbers without a verdict (`bilayer`): the relative change
+   of the mean area in the membrane plane and the change of the mean number of water molecules
+   within 0.6 nm of the ligand between the last two quarters. The run is never made longer for
+   it. In the A2A example the area was still shrinking after 10 ns, by 1.5 % between the last
+   two quarters.
 2. Complex leg only: choose the Boresch restraint from that trajectory. Ligand anchor:
    three bonded atoms of an aromatic ring near the centre of the molecule. Protein anchor:
    three bonded backbone atoms in stable secondary structure, RMSF below 0.1 nm, 0.5-1.5 nm
-   from the ligand anchor. Candidates with a restrained angle near 0 or 180 degrees are
-   rejected and the one with the smallest fluctuations is taken. The reference distance and
-   angles are those of the final frame, from which the alchemical run starts, as in OpenFE.
-   Force constants: 10 kcal/mol/A^2 and 80 kcal/mol/rad^2. If the ligand has moved away from
-   the pose that was given (symmetry-corrected heavy-atom RMSD against the prepared input
-   coordinates, in the frame of the binding site, above `restraints.pose_rmsd_warning_nm` over
-   the second half of the trajectory), the run goes on, as in OpenFE, and the result carries
-   a warning: it is then the free energy of the pose the ligand moved to. The same measure is
-   made for anchors given with `restraints.selection: manual`.
+   from the ligand anchor. Candidates are held to two rules of OpenFE's `EvaluateBoreschAtoms`
+   and to nothing of cuFEP's own: theta_A and theta_B must stay, in every frame, where their
+   restraint energy is at least 10 kT from that at 0 and at 180 degrees
+   (`check_angle_not_flat`, 22 degrees with the default force constant), and anchors whose
+   H2-H1-H0-G0-G1-G2 have three in a row on a straight line (|cos| of the bond vectors above
+   0.9, `is_collinear`) in every frame are refused. Of the candidates left, the one with the
+   smallest fluctuations is taken. The reference distance and angles are those of the final
+   frame, from which the alchemical run starts, as in OpenFE. Anchors given with
+   `restraints.selection: manual` are held to the same two rules, also in the prepared pose
+   before any job. Force constants: 10 kcal/mol/A^2 and 80 kcal/mol/rad^2. How far the ligand
+   moved from the pose that was given (symmetry-corrected heavy-atom RMSD against the prepared
+   input coordinates, in the frame of the binding site, over the second half of the
+   trajectory) is reported with the result as a number without a level
+   (`ligand_rmsd_from_input_A`), as OpenFE reports the ligand RMSD; the run goes on in any
+   case, and the result is the free energy of the pose the ligand is in. The same is measured
+   for manual anchors. The RMSD and the drift of the centre of the ligand in the coupled state
+   during the production are numbers of the result too (`structure`).
 3. Lambda windows: adaptive lambda scheduling, or the windows given in the configuration.
 4. Hamiltonian replica exchange, one replica per lambda window, 2.5 ps per iteration: 1 ns
    equilibration and 10 ns production per window.
@@ -181,7 +194,8 @@ energy.
 
 Definitions. Lambda can take `candidates` (101) equally spaced values. The windows of a
 stage are ordered by lambda. A pair of neighbouring windows is *deficient* if its element
-of the overlap matrix (the superdiagonal) is at or below `overlap_threshold` (0.04). A *bad
+of the overlap matrix (the superdiagonal) is at or below `overlap_threshold` (0.18 by default,
+the owner's choice; the paper uses 0.04: configuration.md). A *bad
 section* is a run of consecutive deficient pairs that cannot be extended; its length is its
 number of pairs.
 
@@ -838,14 +852,14 @@ belong together:
 - A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg: its
   stages and its two end states are checked. Give a directory as written by `cufep benchmark
   freeze`, or the file of one leg together with `--leg`.
-- Notes that depend on a level (whether the bilayer had settled, whether the ligand had left
-  its pose) are made from what the files of the leg hold whenever its result is made, with
-  the levels of the run: `membrane.area_tolerance`, `membrane.pocket_water_tolerance`,
-  `restraints.pose_rmsd_warning_nm`. The three levels are recorded with the settings of the
-  analysis, so the result of a leg that a run does not sample is made again if they differ.
-  The lambda windows and samples that `--reschedule` sets aside in `previous_<n>/` take copies
-  of the pre-equilibration and the restraint with them; an archive of an earlier version is
-  read with those of the leg directory above it, which the leg used again.
+- How the bilayer changed and how far the ligand was from its input pose are taken from the
+  files of the leg whenever its result is made, as numbers. The notes with a verdict on them
+  that earlier versions wrote into those files and into their results (whether the bilayer had
+  settled, whether the ligand had left its pose or the pocket) are removed; a result of
+  analysis version 9 or earlier is made again from its samples for that. The lambda windows
+  and samples that `--reschedule` sets aside in `previous_<n>/` take copies of the
+  pre-equilibration and the restraint with them; an archive of an earlier version is read with
+  those of the leg directory above it, which the leg used again.
 
 *The legs of a ligand.*
 

@@ -71,13 +71,13 @@ def main() -> None:
         equil = run / ligand / "repeat_0" / "complex" / "equil.npz"
         if equil.exists():
             with np.load(equil) as e:
-                if "membrane_settled" in e.files:
-                    settled = json.loads(str(e["membrane_settled"]))
-                    if settled:
-                        print(f"\nbilayer between the last two quarters of its equilibration: area "
-                              f"{100 * settled['area_change']:+.2f} % (level {100 * settled['area_tolerance']:g} %), "
-                              f"pocket waters {settled['pocket_water_change']:+.2f} (level {settled['pocket_water_tolerance']:g}); "
-                              f"settled: {settled['settled']}")
+                if "membrane_drift" in e.files:
+                    drift = json.loads(str(e["membrane_drift"]))
+                    if drift:
+                        water = drift.get("pocket_water_change")
+                        print(f"\nbilayer between the last two quarters of its equilibration (no verdict): area "
+                              f"{100 * drift['area_change']:+.2f} %, water molecules near the ligand "
+                              f"{'none' if water is None else f'{water:+.2f}'}")
         notes = [w for w in lig.get("warnings", [])]
         if notes:
             print("\nwarnings: " + "; ".join(notes))

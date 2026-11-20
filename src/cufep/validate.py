@@ -34,43 +34,34 @@ def validation_system(cfg, system, prep: dict, box_nm, leg: str):
     return built, fixed_schedule(list(STAGES_SOLVENT), {"discharge": 4, "vanish": 6}, scale)
 
 
-#: a pair of state and configuration is not compared when the state lies this much (kT) or more above
-#: the sampled one on both backends: such states have no weight in the free energy
-COMPARED_BELOW_KT = 60.0
-
-
-def between_state_differences(reference_rows, rows, own_states, level_kT: float = COMPARED_BELOW_KT) -> dict:
+def between_state_differences(reference_rows, rows, own_states) -> dict:
     """How far the reduced potentials ``rows`` (configuration x state) of a backend are from
     ``reference_rows`` in what matters for the free energy: the differences between the states, each
-    taken from the state the configuration was sampled in (``own_states``).
+    taken from the state the configuration was sampled in (``own_states``). Numbers without a verdict
+    and without a selection of the pairs (earlier versions compared the pairs below 60 kT and judged
+    0.15 kT and 1e-4, levels of cuFEP's own: removed by the owner's order of 2026-11-20).
 
-    A pair of configuration and state is compared when the signed difference between the states is
-    below ``level_kT`` on either side, or finite on one side only. Only a state that is unfavourable
-    by ``level_kT`` or more on both sides has no weight in the free energy; a state that one backend
-    finds favourable, however much, is not left out because the other one does not (review of PR 1:
-    +80 kT in the reference and -5 kT in cuPotential were left out, and the validation said OK; then,
-    with the absolute value of the difference, +80 kT against -80 kT). Returns ``worst`` (kT), the
-    largest relative difference of the energies themselves (``relative``) and the number of pairs
-    compared; a pair with a non-finite difference makes ``worst`` infinite."""
+    Returns ``worst`` (kT; over the pairs that are finite on both backends), the largest relative
+    difference of the energies themselves (``relative``), the number of pairs compared and the
+    number that are finite on one backend only (``one_sided``)."""
     ref, x = np.asarray(reference_rows, dtype=float), np.asarray(rows, dtype=float)
     n = np.arange(ref.shape[0])
     own = np.asarray(own_states, dtype=int)
     ref_d, d = ref - ref[n, own][:, None], x - x[n, own][:, None]
-    with np.errstate(invalid="ignore"):
-        compared = (ref_d < level_kT) | (d < level_kT) | (np.isfinite(ref_d) != np.isfinite(d))
-    if not compared.any():
-        return {"worst": 0.0, "relative": 0.0, "compared": 0}
-    gap = np.abs(d - ref_d)[compared]
-    worst = float(gap.max()) if np.all(np.isfinite(gap)) else float("inf")
-    scale = np.abs(ref[compared])
-    rel_gap = np.abs(x - ref)[compared]
-    relative = float(rel_gap.max() / scale.max()) if np.all(np.isfinite(rel_gap)) and scale.max() > 0 else float("inf")
-    return {"worst": worst, "relative": relative, "compared": int(compared.sum())}
+    both = np.isfinite(ref_d) & np.isfinite(d)
+    one_sided = int((np.isfinite(ref_d) != np.isfinite(d)).sum())
+    if not both.any():
+        return {"worst": None, "relative": None, "compared": 0, "one_sided": one_sided}
+    worst = float(np.abs(d - ref_d)[both].max())
+    scale = np.abs(ref[both])
+    relative = float(np.abs(x - ref)[both].max() / scale.max()) if scale.max() > 0 else None
+    return {"worst": worst, "relative": relative, "compared": int(both.sum()), "one_sided": one_sided}
 
 
 def verdict(results: dict[str, bool | None]) -> bool:
-    """Whether a validation passed: every leg it was asked for was compared (None: not compared) and
-    agreed. A validation that compared nothing has not passed."""
+    """Whether the comparison was made for every leg it was asked for (None: not compared, for example
+    because cuPotential cannot run the system). It is no verdict on the numbers, which have none; a
+    validation that compared nothing has not been made."""
     return bool(results) and all(value is True for value in results.values())
 
 
@@ -168,19 +159,24 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
         own = [schedule.states.index(f[0]) for f in frames]
         compared = {name: between_state_differences(rows["stock double"], rows[name], own)
                     for name in ("stock mixed", "cuPotential")}
-        worst = {name: c["worst"] for name, c in compared.items()}
-        rel = compared["cuPotential"]["relative"]
-        good = compared["cuPotential"]["compared"] > 0 and worst["cuPotential"] < 0.15 and rel < 1e-4
-        results[leg] = bool(good)
+        results[leg] = True                     # compared; the numbers below are no verdict
         region = (f"REST2 scale {schedule.rest2_scale:g}, {len(built.hot_atoms)} protein atoms hot"
                   if built.rest2_on else "no REST2")
+
+        def shown(c: dict) -> str:
+            worst = "none" if c["worst"] is None else f"{c['worst']:.3f} kT"
+            one = f", {c['one_sided']} pair(s) finite on one backend only" if c["one_sided"] else ""
+            return f"max {worst} over {c['compared']} pairs{one}"
+
+        rel = compared["cuPotential"]["relative"]
         echo(f"{leg} ({alch.system.getNumParticles()} atoms, barostat {barostat}, {region}): between-state energy differences vs "
-             f"stock double precision: cuPotential max {worst['cuPotential']:.3f} kT, stock mixed max "
-             f"{worst['stock mixed']:.3f} kT; relative total-energy difference {rel:.1e} -> {'OK' if good else 'MISMATCH'}")
+             f"stock double precision: cuPotential {shown(compared['cuPotential'])}; stock mixed "
+             f"{shown(compared['stock mixed'])}; relative total-energy difference of cuPotential "
+             f"{'none' if rel is None else f'{rel:.1e}'}")
         for c, _i, _e in contexts.values():
             del c
-    echo("The two backends approximate Ewald sums differently, so differences of a few hundredths of kT are "
-         "expected; cuFEP never mixes samples from both backends in one estimate.")
+    echo("The two backends approximate Ewald sums differently; cuFEP never mixes samples from both backends in one "
+         "estimate. The numbers are given without a verdict.")
     if not_compared:
         echo("FAILED: the comparison asked for was not made for " + "; ".join(f"the {leg} leg ({why})"
                                                                               for leg, why in not_compared.items()))

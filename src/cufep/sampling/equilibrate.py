@@ -46,11 +46,6 @@ class EquilibrationSettings:
     #: heavy atoms held by harmonic position restraints during NVT/NPT (released for production)
     restrained_atoms: list[int] = field(default_factory=list)
     restraint_k: float = 1000.0            # kJ/mol/nm^2
-    #: if set, the production run is extended in 5 ns blocks up to this length while the box area
-    #: or the number of waters around the ligand still drifts (off by default)
-    max_production_ns: float | None = None
-    area_tolerance: float = 0.01           # relative change of the XY area between the last two quarters
-    water_tolerance: float = 1.5           # change of the mean pocket water count between them
     ligand_atoms: list[int] = field(default_factory=list)
     water_oxygens: list[int] = field(default_factory=list)
     #: bilayers, restrained phases only: keep these water oxygens out of the hydrophobic core
@@ -76,8 +71,8 @@ class EquilibrationResult:
     simulated_ns: float = 0.0
     area_nm2: np.ndarray | None = None     # XY area per frame
     pocket_waters: np.ndarray | None = None  # waters within 0.6 nm of the ligand per frame
-    #: membrane systems: had the bilayer area and the pocket hydration settled? (membrane_settled)
-    settled: dict | None = None
+    #: membrane systems: how the bilayer area and the pocket hydration changed at the end (membrane_drift)
+    drift: dict | None = None
 
 
 def _context(system: mm.System, backend, settings: EquilibrationSettings, dt_fs: float, device, barostat: bool,
@@ -181,43 +176,25 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
         return _production(system, backend, start, frame_atoms, settings, dt_fs, device, log, notes)
 
 
-#: how the note about a bilayer that has not settled begins
+#: how the note of earlier versions about a bilayer that had not settled began (a verdict with levels of
+#: cuFEP's own: no longer made, and removed from stored notes)
 BILAYER_NOTE = "the bilayer had not settled after"
 
 
-def bilayer_note(verdict: dict, simulated_ns: float) -> str | None:
-    """The note for a bilayer that had not settled (:func:`membrane_settled`), or None."""
-    if verdict.get("settled") is not False:
-        return None
-    water = "" if verdict["pocket_water_change"] is None else (
-        f" and the number of water molecules near the ligand by {verdict['pocket_water_change']:+.1f} "
-        f"(tolerance {verdict['pocket_water_tolerance']:g})")
-    return (f"{BILAYER_NOTE} {simulated_ns:g} ns of equilibration: between the last two quarters "
-            f"the area in the membrane plane changed by {100 * verdict['area_change']:+.1f} % (tolerance "
-            f"{100 * verdict['area_tolerance']:g} %){water}. A longer membrane.equilibration_ns, in a new "
-            "output.dir, gives it more time")
-
-
-def membrane_settled(areas, waters, area_tolerance: float, water_tolerance: float) -> dict:
-    """Whether a bilayer has settled by the end of its equilibration.
-
-    Compares the third and the fourth quarter of the run: the mean area of the box in the
-    membrane plane (relative change at most ``area_tolerance``) and, if counted, the mean
-    number of water molecules near the ligand (change at most ``water_tolerance``).
-    ``settled`` is None if the run has fewer than five frames per quarter.
-    """
+def membrane_drift(areas, waters) -> dict:
+    """How the bilayer changed at the end of its equilibration, as numbers without a verdict (cuFEP
+    judges nothing by levels of its own, the owner 2026-11-20): the relative change of the mean area
+    of the box in the membrane plane and, if counted, the change of the mean number of water
+    molecules near the ligand, from the third to the fourth quarter of the run. None where the run
+    has fewer than five frames per quarter."""
     q = len(areas) // 4
-    out = {"settled": None, "area_change": None, "pocket_water_change": None,
-           "area_tolerance": float(area_tolerance), "pocket_water_tolerance": float(water_tolerance)}
+    out = {"area_change": None, "pocket_water_change": None}
     if q < 5:
         return out
     a3, a4 = float(np.mean(areas[2 * q:3 * q])), float(np.mean(areas[3 * q:]))
     out["area_change"] = (a4 - a3) / a3
-    ok = abs(out["area_change"]) <= area_tolerance
     if len(waters):
         out["pocket_water_change"] = float(np.mean(waters[3 * q:]) - np.mean(waters[2 * q:3 * q]))
-        ok = ok and abs(out["pocket_water_change"]) <= water_tolerance
-    out["settled"] = bool(ok)
     return out
 
 
@@ -261,26 +238,16 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
                 d -= np.round(d / np.diag(bx_f)) * np.diag(bx_f)       # rectangular membrane box
                 waters.append(float(np.sum(np.min(np.einsum("ijk,ijk->ij", d, d), axis=1) < 0.36)))
 
-    def settled() -> bool:
-        return membrane_settled(areas, waters, settings.area_tolerance, settings.water_tolerance)["settled"] is not False
-
     advance(settings.production_ns)
-    total = settings.production_ns
-    if settings.max_production_ns is not None:
-        while not settled() and total + 5.0 <= settings.max_production_ns + 1e-9:
-            log(f"bilayer area or pocket hydration still drifting after {total:g} ns; extending by 5 ns")
-            advance(5.0)
-            total += 5.0
-        if settled() and total > settings.production_ns:
-            notes.append(f"membrane equilibration extended to {total:g} ns")
-    # a membrane system: say whether the bilayer has settled; the run is not made longer for it
-    verdict = None
+    # a membrane system: how the bilayer changed at the end, as numbers (no verdict, and the run is never
+    # made longer for it)
+    drift = None
     if settings.barostat == "membrane":
-        verdict = membrane_settled(areas, waters, settings.area_tolerance, settings.water_tolerance)
-        note = bilayer_note(verdict, total)
-        if note:
-            notes.append(note)
-            log(f"WARNING: {note}")
+        drift = membrane_drift(areas, waters)
+        if drift["area_change"] is not None:
+            water = "" if drift["pocket_water_change"] is None else \
+                f", water molecules near the ligand {drift['pocket_water_change']:+.1f}"
+            log(f"bilayer between the last two quarters of its equilibration: area {100 * drift['area_change']:+.2f} %{water}")
     pos, vel, bx = _state_arrays(ctx)
     # the time that was integrated, not the one asked for
     simulated_ns = steps_done * float(dt_fs) * 1.0e-6
@@ -291,7 +258,7 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
                                frame_atoms=list(frame_atoms), timestep_fs=dt_fs, notes=notes,
                                mean_volume_nm3=float(np.mean(volumes[half:])),
                                mean_box=boxes_arr[half:].mean(axis=0).astype(float), simulated_ns=simulated_ns,
-                               area_nm2=np.asarray(areas), pocket_waters=np.asarray(waters), settled=verdict)
+                               area_nm2=np.asarray(areas), pocket_waters=np.asarray(waters), drift=drift)
 
 
 def pre_equilibrate(system: mm.System, positions, box, frame_atoms: list[int],

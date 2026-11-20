@@ -70,6 +70,21 @@ def test_files_of_earlier_versions_are_read(tmp_path, capsys):
         with pytest.raises(ValueError, match="Remove the line"):
             load_config(write(tmp_path, removed))
 
+    # the owner, 2026-11-20: no verdict with a level of cuFEP's own on the bilayer or on the pose of the ligand; the
+    # three levels are read with a notice at their old default and refused with any other value
+    for path, default, other in ((("membrane", "area_tolerance"), 0.01, 0.02),
+                                 (("membrane", "pocket_water_tolerance"), 1.5, 3.0),
+                                 (("restraints", "pose_rmsd_warning_nm"), 0.3, 0.5)):
+        assert path[1] not in full[path[0]]
+        removed = copy.deepcopy(full)
+        removed[path[0]][path[1]] = default
+        cfg, notices = load_config_with_notices(write(tmp_path, removed))
+        assert len(notices) == 1 and notices[0].startswith(f"{'.'.join(path)}: {default} is a setting of an earlier "
+                                                           "version") and "no longer judged" in notices[0]
+        removed[path[0]][path[1]] = other
+        with pytest.raises(ValueError, match="Remove the line"):
+            load_config(write(tmp_path, removed))
+
     # the other setting that an earlier version wrote and this one does not have
     older = copy.deepcopy(full)
     older["lambda_schedule"]["adaptive"]["equilibration_check_ps"] = 250.0
@@ -134,7 +149,8 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert len(ls.windows.complex.vanish) == 15 and ls.windows.solvent.discharge == 5
     assert len(ls.windows.solvent.vanish) == 10
     a = ls.adaptive
-    assert (a.overlap_threshold, a.candidates) == (0.04, 101)
+    # the owner, 2026-11-20: 0.18 (Midgley et al. 2025 use 0.04)
+    assert (a.overlap_threshold, a.candidates) == (0.18, 101)
     # the precalculation: the paper's 50 ps in the solvent leg, 500 ps after 500 ps in the complex leg
     assert (a.window("solvent"), a.equilibration("solvent")) == (50.0, 0.0)
     assert (a.window("complex"), a.equilibration("complex")) == (500.0, 500.0)

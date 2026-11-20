@@ -30,22 +30,23 @@ def test_ligands_load_with_names_and_experimental_values(ligands):
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
-def test_bound_pose_passes_and_displaced_pose_stops(tyk2, ligands):
+def test_the_place_of_the_ligand_is_not_judged(ligands):
+    """The owner, 2026-11-20: no verdict with a level of cuFEP's own. Earlier versions stopped on a ligand with less
+    than half of its heavy atoms near the protein (a pose 40 A away); the place of the ligand is now the user's."""
     lig = ligands[0]
-    assert check_ligand(lig, tyk2.topology, tyk2.positions_nm()) == []
+    check_ligand(lig)
     from openff.units import unit
     moved = load_ligands(lig.source)[0]
     moved.offmol._conformers = [moved.offmol.conformers[0] + np.array([40.0, 0.0, 0.0]) * unit.angstrom]
-    with pytest.raises(LigandError, match="pocket"):
-        check_ligand(moved, tyk2.topology, tyk2.positions_nm())
+    check_ligand(moved)                                       # 40 A away: not stopped
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
-def test_charged_ligand_stops(repo, tyk2):
+def test_charged_ligand_stops(repo):
     ligs = load_ligands(repo / "benchmarks/a2a/inputs/a2a_hip278_ligands.sdf")
     charged = next(l for l in ligs if l.formal_charge != 0)
     with pytest.raises(LigandError, match="formal charge"):
-        check_ligand(charged, tyk2.topology, tyk2.positions_nm())
+        check_ligand(charged)
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
@@ -761,7 +762,7 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         == ["membrane_equilibration_ns: 10.0 -> 20.0"]
     with pytest.raises(WorkflowError, match="the pre-equilibration of this leg in .*equil.npz cannot be used again"):
         check_made_from("the pre-equilibration of this leg", tmp_path / "equil.npz", eq, in_membrane)
-    stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0, "pose_rmsd_warning_nm": 0.5}))
+    stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0}))
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 
 

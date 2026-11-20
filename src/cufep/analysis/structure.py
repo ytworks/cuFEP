@@ -1,8 +1,8 @@
-"""Structural checks on the coupled-state configurations saved during replica exchange.
+"""Structural numbers of the coupled-state configurations saved during replica exchange.
 
 Ligand RMSD and centre-of-mass drift relative to the first saved frame, after superposing
-on the protein's C-alpha atoms. A ligand that leaves the pocket or changes its pose makes
-an absolute binding free energy meaningless without anyone noticing from the energies.
+on the protein's C-alpha atoms, as numbers without a verdict: earlier versions warned above
+3 A and 5 A, levels of cuFEP's own (removed by the owner's order of 2026-11-20).
 """
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ import numpy as np
 
 from cufep.alchemy.restraints import kabsch_align, nearest_image_of_ligand
 
-LIGAND_RMSD_WARN_A = 3.0
-COM_DRIFT_WARN_A = 5.0
 
 
 def structural_analysis(samples: dict, n_equilibration: int = 0) -> dict | None:
@@ -43,11 +41,5 @@ def structural_analysis(samples: dict, n_equilibration: int = 0) -> dict | None:
            "ligand_rmsd_last_half_A": float(lig_rmsd[half:].mean()), "ligand_rmsd_max_A": float(lig_rmsd.max()),
            "ligand_com_drift_last_half_A": float(com[half:].mean()), "ligand_com_drift_max_A": float(com.max()),
            "protein_ca_rmsd_last_half_A": float(ca_rmsd[half:].mean()),
-           "periodic_images_checked": bool(images_checked), "warnings": []}
-    if out["ligand_rmsd_last_half_A"] > LIGAND_RMSD_WARN_A:
-        out["warnings"].append(f"the ligand moved {out['ligand_rmsd_last_half_A']:.1f} A (heavy-atom RMSD) from its "
-                               "starting pose in the coupled state; the pose may have changed")
-    if out["ligand_com_drift_last_half_A"] > COM_DRIFT_WARN_A:
-        out["warnings"].append(f"the ligand's centre of mass drifted {out['ligand_com_drift_last_half_A']:.1f} A in "
-                               "the coupled state; it may have left the pocket")
+           "periodic_images_checked": bool(images_checked)}
     return out

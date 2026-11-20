@@ -230,7 +230,10 @@ def analyze(directory: str, config, equilibration_ns, equilibration_iterations) 
 @click.option("--device", type=int, default=0, show_default=True)
 @click.option("-o", "--output", help="Override output.dir.")
 def validate(config: str, ligand, device: int, output) -> None:
-    """Compare the two backends' alchemical energies for the system in CONFIG."""
+    """Compare the two backends' alchemical energies for the system in CONFIG.
+
+    Prints the differences between the states as numbers, without a verdict; ends with an error
+    if a leg could not be compared."""
     from cufep.validate import validate as run_validation
 
     cfg = _apply_overrides(_load(config), None, None, None, output, None)

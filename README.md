@@ -88,6 +88,11 @@ you run the leg concerned again, and the rest of the calculation keeps its resul
 | checks of this version not made | `cufep benchmark report` read a summary that an earlier version of cuFEP wrote | analyse the legs again |
 | origin of files not recorded | the leg used files of an earlier version of cuFEP that do not say what they were made from | a new output directory, if that matters |
 
+These are the only verdicts. What else the result holds is given as numbers without a level
+(owner, 2026-11-20): how the bilayer changed at the end of its equilibration (`bilayer`), how
+far the ligand was from its input pose (`ligand_rmsd_from_input_A`) and how far it moved in the
+coupled state (`structure`), the forward and reverse series, the halves, the blocks and BAR.
+
 No check can show that one run is converged: a slow change that does not occur during the run
 is invisible in it. Independent runs (`sampling.repeats`) show the spread.
 

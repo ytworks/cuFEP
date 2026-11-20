@@ -2657,16 +2657,15 @@ def test_a_leg_whose_first_run_was_interrupted_is_judged_by_the_levels_of_that_r
 
     cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
                                  "analysis": {"lrc": "none", "min_overlap": 0.45, "convergence_points": 4,
-                                              "convergence_blocks": 2},
-                                 "membrane": {"area_tolerance": 0.02}, "restraints": {"pose_rmsd_warning_nm": 0.2}})
+                                              "convergence_blocks": 2}})
     record = analysis_record(cfg)
-    assert record["min_overlap"] == 0.45 and record["membrane_area_tolerance"] == 0.02
-    assert record["error_blocks"] == [40, 20, 10, 5] and record["part_error_blocks"] == 5
-    assert record["membrane_pocket_water_tolerance"] == 1.5 and record["pose_rmsd_warning_nm"] == 0.2
+    assert record["min_overlap"] == 0.45 and record["error_blocks"] == [40, 20, 10, 5] and record["part_error_blocks"] == 5
+    # the levels of cuFEP's own for notes on the bilayer and the pose are gone with the notes (the owner, 2026-11-20)
+    assert not any("tolerance" in key or "pose" in key for key in record)
     # the settings a record describes give the same record, and an analysis section alone the default levels
     assert analysis_record(analysis_settings_of(record)) == record and analysis_settings(cfg) is cfg
     alone = analysis_record(cfg.analysis)
-    assert alone == dict(record, membrane_area_tolerance=0.01, pose_rmsd_warning_nm=0.3)
+    assert alone == record
 
     # the run stores them with the samples before its first iteration; it is interrupted after 100
     leg = tmp_path / "lig" / "repeat_0" / "solvent"
