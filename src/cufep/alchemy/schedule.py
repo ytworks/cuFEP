@@ -472,6 +472,10 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                                      "candidates": s.candidates, "window_ps": s.window_ps,
                                      "equilibration_ps": s.equilibration_ps,
                                      "sample_interval_ps": s.sample_interval_ps,
+                                     # the MD each window ran: whole sample intervals, as many as are
+                                     # nearest to window_ps (precalculation_steps), and its equilibration
+                                     "window_ps_integrated": n_samples * steps_per_sample * float(timestep_fs) / 1000.0,
+                                     "equilibration_ps_integrated": equilibration_steps * float(timestep_fs) / 1000.0,
                                      "windows_run_concurrently": pool is not None,
                                      "initial_windows": {n: int(s.initial_windows.get(n, 3)) for n in stages},
                                      "windows_simulated": len(runs), "iterations": records})

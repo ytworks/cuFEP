@@ -130,8 +130,10 @@ def _load(context, positions, box, velocities=None) -> None:
 
 def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettings, dt_fs: float, device, log):
     backend = get_backend("openmm", precision=settings.precision, platform=settings.platform)
+    from cufep.steps import md_steps
+
     temperature = settings.temperature_K * u.kelvin
-    steps = lambda ns: int(round(ns * 1.0e6 / dt_fs))                       # noqa: E731
+    steps = lambda ns: md_steps(ns * 1000.0, dt_fs, least=0)                  # noqa: E731
 
     # ---- minimise + NVT -----------------------------------------------------------------
     ctx, integ = _context(system, backend, settings, dt_fs, device, False, np.asarray(positions), settings.seed)
@@ -231,10 +233,20 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
     lig = np.asarray(settings.ligand_atoms, dtype=int)
     wat = np.asarray(settings.water_oxygens, dtype=int)
     frames, boxes, volumes, areas, waters = [], [], [], [], []
+    steps_done = 0                     # MD steps integrated in this Context (counted: a plugin's
+                                       # integrator need not advance the time of the Context)
 
     def advance(ns: float) -> None:
-        for _ in range(max(1, int(round(ns * 1000.0 / settings.frame_interval_ps)))):
-            integ.step(per_frame)
+        # all the MD that is asked for, in pieces of one frame interval and a last piece of what is
+        # left, with a frame after each (review of PR 1: round(50 / 20) frames integrated 40 ps of
+        # the 50 ps asked, and 50 ps were recorded)
+        nonlocal steps_done
+        remaining = md_steps(ns * 1000.0, dt_fs)
+        while remaining > 0:
+            piece = min(per_frame, remaining)
+            integ.step(piece)
+            steps_done += piece
+            remaining -= piece
             st = ctx.getState(getPositions=True, getEnergy=True)
             p = np.asarray(st.getPositions(asNumpy=True).value_in_unit(u.nanometer))
             if not np.isfinite(st.getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)):
@@ -270,13 +282,15 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
             notes.append(note)
             log(f"WARNING: {note}")
     pos, vel, bx = _state_arrays(ctx)
+    # the time that was integrated, not the one asked for
+    simulated_ns = steps_done * float(dt_fs) * 1.0e-6
     del ctx, integ
     half = len(frames) // 2
     boxes_arr = np.asarray(boxes)
     return EquilibrationResult(positions=pos, velocities=vel, box=bx, frames=np.asarray(frames), frame_boxes=boxes_arr,
                                frame_atoms=list(frame_atoms), timestep_fs=dt_fs, notes=notes,
                                mean_volume_nm3=float(np.mean(volumes[half:])),
-                               mean_box=boxes_arr[half:].mean(axis=0).astype(float), simulated_ns=float(total),
+                               mean_box=boxes_arr[half:].mean(axis=0).astype(float), simulated_ns=simulated_ns,
                                area_nm2=np.asarray(areas), pocket_waters=np.asarray(waters), settled=verdict)
 
 

@@ -26,6 +26,22 @@ def md_steps(ps: float, timestep_fs: float, least: int = 1) -> int:
     return max(int(least), int(round(float(ps) * 1000.0 / float(timestep_fs))))
 
 
+def frames_of(ps: float, frame_interval_ps: float, timestep_fs: float) -> int:
+    """The frames an MD of ``ps`` picoseconds keeps when it takes one after every
+    ``frame_interval_ps`` and one at its end (the pre-equilibration,
+    :mod:`cufep.sampling.equilibrate`): its :func:`md_steps` in pieces of one interval."""
+    steps, per_frame = md_steps(ps, timestep_fs), md_steps(frame_interval_ps, timestep_fs)
+    return -(-steps // per_frame)
+
+
+def integrated_before_revision_15_ps(ps: float, frame_interval_ps: float, timestep_fs: float) -> float:
+    """The MD that versions before revision 15 integrated in the pre-equilibration when ``ps``
+    picoseconds were asked (and recorded): whole frame intervals only, round(ps / interval) of them
+    and at least one (review of PR 1: 40 ps of the 50 ps asked)."""
+    return max(1, int(round(float(ps) / float(frame_interval_ps)))) * md_steps(frame_interval_ps, timestep_fs) \
+        * float(timestep_fs) / 1000.0
+
+
 def precalculation_steps(window_ps: float, equilibration_ps: float, sample_interval_ps: float,
                          timestep_fs: float) -> tuple[int, int, int]:
     """Steps of one window of the precalculation of adaptive lambda scheduling:

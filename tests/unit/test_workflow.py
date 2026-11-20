@@ -704,6 +704,26 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     np.savez(tmp_path / "older.npz", timestep_fs=4.0, simulated_ns=5.0)          # a file that does not tell
     assert equil_in_membrane(np.load(tmp_path / "older.npz")) is None
     assert equil_contradictions(np.load(tmp_path / "older.npz"), cfg, "complex", False) == []
+    # review of 037bdf1 (P2): versions before revision 15 integrated whole frame intervals of 20 ps and recorded the
+    # length asked for. A file of 50 ps holds 40 ps and is refused whatever its record says; one of today holds 50 ps
+    from cufep.workflow import check_equil_file, leg_seed
+
+    short = config(sampling={"pre_equilibration": {"solvent": {"md_ns": 0.05}}})
+    seed = leg_seed(short, 0, "solvent")
+    record = json.dumps(equil_made_with(short, "solvent", False, seed))
+    np.savez(tmp_path / "rounded.npz", timestep_fs=4.0, simulated_ns=0.05, made_with=record)
+    with pytest.raises(WorkflowError, match="holds 40 ps of unrestrained MD where 50 ps were asked for"):
+        check_equil_file(np.load(tmp_path / "rounded.npz"), tmp_path / "rounded.npz", short, "solvent", False, seed)
+    assert equil_contradictions(np.load(tmp_path / "rounded.npz"), short, "solvent", False) == [
+        "length of the MD: 0.04 ns -> 0.05 ns"]
+    np.savez(tmp_path / "integrated.npz", timestep_fs=4.0, simulated_ns=0.05, simulated_ns_is_integrated=True,
+             made_with=record)
+    assert check_equil_file(np.load(tmp_path / "integrated.npz"), tmp_path / "integrated.npz", short, "solvent", False,
+                            seed) is True
+    whole = config(sampling={"pre_equilibration": {"solvent": {"md_ns": 0.04}}})
+    np.savez(tmp_path / "whole.npz", timestep_fs=4.0, simulated_ns=0.04,
+             made_with=json.dumps(equil_made_with(whole, "solvent", False, seed)))
+    assert check_equil_file(np.load(tmp_path / "whole.npz"), tmp_path / "whole.npz", whole, "solvent", False, seed)
     # the restraint of such a version: all six force constants it holds (kJ/mol/nm^2 and kJ/mol/rad^2)
     angles = {key: 80.0 * 4.184 for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")}
     old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0,
@@ -900,7 +920,8 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
     leg_dir = lig_dir / "repeat_0" / "solvent"
     leg_dir.mkdir(parents=True)
     box = np.diag([1.9, 1.9, 1.9])
-    np.savez(leg_dir / "equil.npz", box=box, timestep_fs=2.0, simulated_ns=0.2,
+    # the length its record was made for (sampling.pre_equilibration.solvent.md_ns: 0.5 ns), all of it integrated
+    np.savez(leg_dir / "equil.npz", box=box, timestep_fs=2.0, simulated_ns=0.5,
              made_with=json.dumps(equil_made_with(first, "solvent", False, leg_seed(first, 0, "solvent"))))
     schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 2}, rest2_scale=first.sampling.rest2.scale)
     schedule.save(leg_dir / "schedule.yaml", leg="solvent")

@@ -2968,3 +2968,89 @@ def test_replica_exchange_stores_the_swaps_of_every_iteration(tmp_path, tiny_leg
     assert data["swaps"].shape == (4, spec.n_states - 1, 2)
     proposed, accepted = data["swaps"][..., 0], data["swaps"][..., 1]
     assert proposed.sum() > 0 and np.all(accepted <= proposed)
+
+
+def test_the_exchange_a_sampler_runs_is_the_one_its_samples_record(tmp_path):
+    """Review of 037bdf1 (P2): ReplicaExchangeSampler(..., exchange=False) ran independent windows, but the conditions of
+    its samples came from the spec, whose default is replica exchange. On the Reference platform the samples are stored
+    as 'none', continued under the same method from 2 to 3 rows with no exchange proposed, and a run with exchange is
+    refused."""
+    from cufep.sampling.states import AlchemicalState
+    from cufep.sampling.storage import ConditionsError, stored_attributes
+
+    system = mm.System()
+    for _ in range(4):
+        system.addParticle(12.0)
+    spec = LegSpec(name="free", system_xml=mm.XmlSerializer.serialize(system),
+                   states=[AlchemicalState().to_dict(), AlchemicalState(lambda_sterics=0.5).to_dict()], n_atoms=4,
+                   backend="openmm", platform="Reference", precision="double", temperature_K=298.15, pressure_bar=None,
+                   barostat="none", friction_per_ps=1.0, timestep_fs=2.0, steps_per_iteration=1, seed=11)
+    assert spec.exchange == "hrex"                                   # the default of a spec
+
+    def sampler(**kwargs):
+        return ReplicaExchangeSampler(spec, tmp_path, devices=[None], inline=True, log=lambda m: None, **kwargs)
+
+    with sampler(exchange=False) as s:
+        assert s.spec.exchange == "none" and s.exchange is False
+        s.initialize(np.zeros((4, 3)), 3.0 * np.eye(3), velocities=np.zeros((4, 3)))
+        s.run(2, record_stride=0, checkpoint_stride=1)
+        assert s.attempted == 0
+    rows, attrs = stored_attributes(tmp_path)
+    assert rows == 2 and attrs["conditions"]["exchange"] == "none"
+    with sampler(exchange=False) as s:
+        assert s.restore()
+        s.run(1, record_stride=0, checkpoint_stride=1)
+        assert s.attempted == 0
+    assert stored_attributes(tmp_path)[0] == 3
+    assert read_samples(tmp_path)["swaps"][..., 0].sum() == 0       # no exchange was proposed
+    with pytest.raises(ConditionsError, match="exchange"):
+        sampler()                                                   # the spec's replica exchange
+    with pytest.raises(ConditionsError, match="exchange"):
+        sampler(exchange=True)
+    assert stored_attributes(tmp_path)[0] == 3                      # nothing changed
+    with pytest.raises(ValueError, match="'hrex' or 'none'"):
+        ReplicaExchangeSampler(LegSpec(**{**spec.__dict__, "exchange": "gibbs"}), tmp_path / "x", devices=[None],
+                               inline=True, log=lambda m: None)
+
+
+@pytest.mark.parametrize("asked_ps,frames", [(5.0, 1), (40.0, 2), (50.0, 3)])
+def test_the_pre_equilibration_integrates_the_time_it_records(monkeypatch, asked_ps, frames):
+    """Review of 037bdf1 (P2): with frames every 20 ps, 50 ps asked integrated round(50 / 20) = 2 frames, 40 ps, and
+    recorded 50 ps. On the Reference platform 5, 40 and 50 ps asked are 5, 40 and 50 ps of the Context's time, with 1, 2
+    and 3 frames, and the recorded time is the one integrated."""
+    import openmm.unit as unit
+
+    from cufep.backends import get_backend
+    from cufep.sampling import equilibrate
+    from cufep.steps import integrated_before_revision_15_ps
+
+    n, edge = 8, 3.0
+    system = mm.System()
+    system.setDefaultPeriodicBoxVectors(mm.Vec3(edge, 0, 0), mm.Vec3(0, edge, 0), mm.Vec3(0, 0, edge))
+    nonbonded = mm.NonbondedForce()
+    nonbonded.setNonbondedMethod(mm.NonbondedForce.CutoffPeriodic)
+    nonbonded.setCutoffDistance(1.0)
+    for _ in range(n):
+        system.addParticle(40.0)
+        nonbonded.addParticle(0.0, 0.3, 0.5)
+    system.addForce(nonbonded)
+    positions = np.array([[0.7 * (i % 2), 0.7 * ((i // 2) % 2), 0.7 * (i // 4)] for i in range(n)]) + 0.5
+    contexts = []
+    made = equilibrate._context
+
+    def keep(*args, **kwargs):
+        context, integrator = made(*args, **kwargs)
+        contexts.append(context)
+        return context, integrator
+
+    monkeypatch.setattr(equilibrate, "_context", keep)
+    settings = equilibrate.EquilibrationSettings(production_ns=asked_ps / 1000.0, platform="Reference",
+                                                 precision="double", timestep_fs=2.0, seed=3)
+    backend = get_backend("openmm", precision="double", platform="Reference")
+    result = equilibrate._production(system, backend, (positions, np.zeros((n, 3)), edge * np.eye(3)), list(range(n)),
+                                     settings, 2.0, None, lambda m: None, [])
+    assert contexts[-1].getState().getTime().value_in_unit(unit.picosecond) == pytest.approx(asked_ps)
+    assert result.simulated_ns * 1000.0 == pytest.approx(asked_ps)
+    assert result.frames.shape[0] == frames and result.frame_boxes.shape[0] == frames
+    # what versions before the fix integrated: 20, 40 and 40 ps
+    assert integrated_before_revision_15_ps(asked_ps, 20.0, 2.0) == {5.0: 20.0, 40.0: 40.0, 50.0: 40.0}[asked_ps]

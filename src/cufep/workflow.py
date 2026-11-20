@@ -363,6 +363,42 @@ def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape:
     return [f"{key}: {info[key]} -> {value}" for key, value in expected.items() if key in info and info[key] != value]
 
 
+def equil_lengths(eq, cfg: Config, leg: str, in_membrane: bool) -> tuple[float, float, float]:
+    """(asked, integrated, tolerance) in ns of the unrestrained MD of a stored pre-equilibration:
+    the length this run asks for, the MD the file holds, and half an MD step. A file of a version
+    before revision 15 records the length that was asked for, of which only whole frame intervals
+    were integrated (review of PR 1: 40 ps of 50 ps)."""
+    from cufep.sampling.equilibrate import EquilibrationSettings
+    from cufep.steps import integrated_before_revision_15_ps
+
+    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
+    asked = max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns
+    files = set(eq.files)
+    done = float(eq["simulated_ns"])
+    dt = float(eq["timestep_fs"]) if "timestep_fs" in files else float(cfg.dynamics.timestep_fs)
+    if "simulated_ns_is_integrated" not in files:
+        done = integrated_before_revision_15_ps(done * 1000.0, EquilibrationSettings.frame_interval_ps, dt) / 1000.0
+    return float(asked), done, 0.5 * dt * 1.0e-6
+
+
+def check_equil_file(eq, equil_file: Path, cfg: Config, leg: str, in_membrane: bool, seed: int, log=print) -> bool:
+    """Refuse a stored pre-equilibration this run cannot use (:func:`check_made_from` with its record
+    or, for a file without one, :func:`equil_contradictions`), and one that holds less MD than it was
+    made for, whatever its record says (:func:`equil_lengths`). Returns whether its origin is recorded."""
+    recorded = check_made_from("the pre-equilibration of this leg", equil_file,
+                               json.loads(str(eq["made_with"])) if "made_with" in eq.files else None,
+                               equil_made_with(cfg, leg, in_membrane, seed), log,
+                               contradictions=equil_contradictions(eq, cfg, leg, in_membrane))
+    if "simulated_ns" in eq.files:
+        asked, done, tolerance = equil_lengths(eq, cfg, leg, in_membrane)
+        if done < asked - tolerance:
+            raise WorkflowError(
+                f"the pre-equilibration of this leg in {equil_file} cannot be used again: it holds {done * 1000:g} ps "
+                f"of unrestrained MD where {asked * 1000:g} ps were asked for (versions before revision 15 integrated "
+                "whole frame intervals of 20 ps only). Nothing was changed; run the calculation in a new output.dir")
+    return recorded
+
+
 def equil_in_membrane(eq) -> bool | None:
     """Whether a stored pre-equilibration was one of a system in a bilayer; None if the file does not tell.
 
@@ -387,9 +423,8 @@ def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[s
     if "timestep_fs" in files and float(eq["timestep_fs"]) > float(cfg.dynamics.timestep_fs) + 1e-9:
         out.append(f"time step: {float(eq['timestep_fs']):g} fs -> {float(cfg.dynamics.timestep_fs):g} fs")
     if "simulated_ns" in files:
-        asked = max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns
-        done = float(eq["simulated_ns"])
-        if done < asked - 1e-6 or (not in_membrane and done > asked + 1e-6):
+        asked, done, tolerance = equil_lengths(eq, cfg, leg, in_membrane)
+        if done < asked - tolerance or (not in_membrane and done > asked + tolerance):
             out.append(f"length of the MD: {done:g} ns -> {asked:g} ns")
     has_bilayer = equil_in_membrane(eq)
     if has_bilayer is not None and has_bilayer != bool(in_membrane):
@@ -654,10 +689,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     equil_file = leg_dir / "equil.npz"
     if equil_file.exists():
         eq = np.load(equil_file)
-        check_made_from("the pre-equilibration of this leg", equil_file,
-                        json.loads(str(eq["made_with"])) if "made_with" in eq.files else None,
-                        equil_made_with(cfg, leg, in_membrane, leg_seed(cfg, repeat, leg)), quiet,
-                        contradictions=equil_contradictions(eq, cfg, leg, in_membrane))
+        check_equil_file(eq, equil_file, cfg, leg, in_membrane, leg_seed(cfg, repeat, leg), quiet)
     rfile = leg_dir / "restraint.json"
     if is_complex and rfile.exists():
         stored = _read_json(rfile) or {}
@@ -1381,20 +1413,23 @@ def run_leg(job: LegJob) -> dict:
         t0 = time.perf_counter()
         eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device0, log)
         # the restraint search uses the last pre_equilibration md_ns of the trajectory
-        n_keep = max(2, int(round(pre.md_ns * 1000.0 / settings.frame_interval_ps)))
+        from cufep.steps import frames_of
+
+        n_keep = max(2, frames_of(pre.md_ns * 1000.0, settings.frame_interval_ps, eq.timestep_fs))
+        # simulated_ns is the MD integrated (simulated_ns_is_integrated): earlier versions recorded the
+        # length asked for and integrated whole frame intervals of it (equil_contradictions)
         publish_npz(equil_file, positions=eq.positions, velocities=eq.velocities, box=eq.box,
                     frames=eq.frames[-n_keep:], frame_boxes=eq.frame_boxes[-n_keep:],
                     frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
-                    simulated_ns=eq.simulated_ns, pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
+                    simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
+                    pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
                     made_with=json.dumps(equil_from), membrane_settled=json.dumps(eq.settled))
         timed("pre_equilibration", t0)
         log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)
     # files of this leg that an earlier version wrote without a record of what they were made from
     origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
-    if not check_made_from("the pre-equilibration of this leg", equil_file,
-                           json.loads(str(eq["made_with"])) if "made_with" in eq.files else None, equil_from, log,
-                           contradictions=equil_contradictions(eq, cfg, job.leg, in_membrane)):
+    if not check_equil_file(eq, equil_file, cfg, job.leg, in_membrane, seed, log):
         origin_not_recorded.append("the pre-equilibration")
     timestep_fs = float(eq["timestep_fs"])
     # the notes of the pre-equilibration and of the restraint are made from their files when the
@@ -1596,8 +1631,8 @@ def run_leg(job: LegJob) -> dict:
             return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)
 
         t_sampling = time.perf_counter()
-        with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline,
-                                    exchange=cfg.sampling.exchange == "hrex", log=log) as sampler:
+        # the method of exchange is the one of the spec (leg_spec: sampling.exchange)
+        with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline, log=log) as sampler:
             if sampler.unrecorded:
                 # samples of an earlier version, whose conditions are not recorded: a leg that has
                 # all its iterations is analysed as it is; nothing is added to such samples

@@ -257,10 +257,20 @@ class ReplicaExchangeSampler:
     """Replica exchange over the states of ``spec`` (one replica per state)."""
 
     def __init__(self, spec: LegSpec, storage_dir, devices: list[int | None] | None = None,
-                 inline: bool = False, exchange: bool = True, log=print) -> None:
+                 inline: bool = False, exchange: bool | None = None, log=print) -> None:
+        # the method of exchange is decided here, once: ``exchange`` (if given) replaces the one of
+        # ``spec``, and the same value runs the leg, is stored with its samples and is compared when
+        # the leg is continued (review of PR 1: exchange=False ran independent windows whose samples
+        # were recorded as replica exchange, from the default of the spec)
+        if exchange is not None:
+            from dataclasses import replace
+
+            spec = replace(spec, exchange="hrex" if exchange else "none")
+        if spec.exchange not in ("hrex", "none"):
+            raise ValueError(f"exchange {spec.exchange!r} of the leg: 'hrex' or 'none'")
         self.spec = spec
         self.k = spec.n_states
-        self.exchange = exchange
+        self.exchange = spec.exchange == "hrex"
         self.log = log
         self.devices = list(devices) if devices else [None]
         self.inline = inline
