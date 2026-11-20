@@ -66,7 +66,7 @@ def test_benchmark_tiers(tmp_path):
     assert smoke.lambda_schedule.adaptive.equilibration("complex") == 0.0
     subset = benchmark_config("a2a", "subset", tmp_path / "x")
     assert subset.system.ligand_names == load_registry()["a2a"]["subset"]
-    assert subset.sampling.repeats == 1 and subset.membrane.enabled is True     # one run per ligand, as FEP+
+    assert subset.sampling.repeats == 1 and subset.membrane.enabled is True     # one run per ligand
     full = benchmark_config("tyk2", "full")
     assert full.system.ligand_names is None and full.sampling.production_ns == 10.0
     assert full.membrane.enabled is False and smoke.membrane.enabled is False

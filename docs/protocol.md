@@ -1,10 +1,10 @@
 # The cuFEP protocol
 
 cuFEP computes absolute binding free energies by double decoupling with Boresch restraints,
-Hamiltonian replica exchange and MBAR. Its features, defaults and vocabulary follow
-established FEP software; the table in "How cuFEP compares" says which one each choice
-follows. Every number below is a default that can be changed in the configuration
-([configuration.md](configuration.md)).
+Hamiltonian replica exchange and MBAR. Its defaults and vocabulary follow the literature and
+published open methods; [configuration.md](configuration.md) gives the source of each default,
+and "How cuFEP compares" sets the protocol beside OpenFE's. Every number below is a default
+that can be changed in the configuration.
 
 ## Terms
 
@@ -12,18 +12,18 @@ follows. Every number below is a default that can be changed in the configuratio
 |---|---|---|
 | lambda window | one alchemical intermediate state | lambda state |
 | replica | one simulation in replica exchange; it moves between lambda windows | |
-| leg | one side of the cycle: the complex leg (protein and ligand) and the solvent leg (ligand in water) | bound / free (Flare), phase (YANK) |
-| stage | part of a leg in which one kind of interaction changes: restrain, discharge, vanish | names of Flare and A3FE |
+| leg | one side of the cycle: the complex leg (protein and ligand) and the solvent leg (ligand in water) | bound / free, phase (YANK) |
+| stage | part of a leg in which one kind of interaction changes: restrain, discharge, vanish | names of A3FE |
 | decoupling | switching off the ligand's interactions with its environment while keeping those within the ligand | |
-| Boresch restraints | one distance, two angles and three dihedrals between three ligand atoms and three protein atoms | Flare also writes "constraint strengths" for their force constants |
+| Boresch restraints | one distance, two angles and three dihedrals between three ligand atoms and three protein atoms | |
 | constraints | fixed bond lengths to hydrogen, which with hydrogen mass repartitioning allow a 4 fs time step | |
 | iteration | one cycle of replica exchange: every replica runs for `time_per_iteration_ps`, energies are evaluated, lambda windows are exchanged | exchange attempt interval |
 | repeat | a completely independent run of the whole calculation with another seed | replicate, trial; `protocol_repeats` in OpenFE |
 | pre-equilibration | minimisation and plain MD of the fully interacting system before the alchemical run | |
 | equilibration, production | per lambda window: the part that is discarded, and the part used for the estimate | |
 | overlap matrix | probability of a sample of one lambda window being found in another; its superdiagonal (first off-diagonal) holds neighbouring windows | |
-| adaptive lambda scheduling | a precalculation that chooses the lambda windows | ALS, adaptive lambda windows (Flare) |
-| oversubscription factor | number of workers that share one GPU at the same time under NVIDIA MPS | SOMD2; `mps_factor` in Desmond |
+| adaptive lambda scheduling | a precalculation that chooses the lambda windows | ALS |
+| oversubscription factor | number of workers that share one GPU at the same time under NVIDIA MPS | SOMD2 |
 | backend | the code that computes the forces: the cuPotential plugin or stock OpenMM. Not a force field | |
 
 ## Inputs
@@ -165,7 +165,7 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
 5. MBAR on samples that are decorrelated lambda window by lambda window ("Checks of the
    analysis").
 
-One calculation is run by default (`sampling.repeats: 1`), as in FEP+ and Flare, and the
+One calculation is run by default (`sampling.repeats: 1`), and the
 reported uncertainty is then the standard error of that calculation, from blocks of its
 production ("Checks of the analysis"). With more repeats, every repeat is a
 completely independent run of steps 1-5 with a different seed, and the reported uncertainty
@@ -187,8 +187,7 @@ those of OpenFE's ABFE protocol: 30 windows for the complex leg and 14 for the s
 
 `lambda_schedule.mode: adaptive` is the default. It is the method of Midgley, Bariami,
 Habgood and Mackey, "Adaptive Lambda Scheduling: A Method for Computational Efficiency in
-Free Energy Perturbation Simulations", J. Chem. Inf. Model. 2025, 65, 512-516 (the adaptive
-lambda windows of Cresset Flare). The aim is the smallest set of windows that still overlap
+Free Energy Perturbation Simulations", J. Chem. Inf. Model. 2025, 65, 512-516. The aim is the smallest set of windows that still overlap
 enough. A short precalculation decides the windows; its data are not used for the free
 energy.
 
@@ -231,9 +230,7 @@ A longer example with threshold 0.04 (the overlaps are made up for illustration)
 How cuFEP applies it to absolute binding. The paper treats relative binding with a single
 lambda coordinate and runs the precalculation for the ligand in solution only. In cuFEP
 every stage of every leg is treated as one such coordinate, with its own candidates, overlap
-matrix and bad sections; at most one window is added per stage and iteration. Flare's
-absolute FEP likewise holds separate numbers of windows for restrain (bound), discharge
-(bound and free) and vanish (bound and free). The start (`initial_windows`) is 3 windows
+matrix and bad sections; at most one window is added per stage and iteration. The start (`initial_windows`) is 3 windows
 for restrain, 5 for discharge and 9 for vanish; since windows are never removed, this is also
 the smallest schedule.
 
@@ -254,18 +251,18 @@ section, the new lambda values) are written to `schedule.yaml` in the leg direct
 last configuration of each window is the start of its replica; replica exchange then runs
 its own equilibration before the production.
 
-### Where cuFEP follows Cresset and where it differs
+### Where cuFEP follows the paper and where it differs
 
-| point | Cresset (the paper, and Flare) | cuFEP |
+| point | the paper | cuFEP |
 |---|---|---|
 | when the windows are chosen | in a precalculation before the production: "Once converged, all results from the ALS are discarded, and the converged bespoke λ schedule is used in a production run" | the same. No window is added during the equilibration or the production of the replica-exchange run |
 | rule and values | threshold 0.04, 101 candidates, one window per iteration into the longest bad section | the same rule and 101 candidates; threshold 0.18 by default (the owner's choice of 2026-11-20, configuration.md) |
 | MD per new window of the precalculation | 50 ps | solvent leg: 50 ps. Complex leg: 500 ps recorded after 500 ps of equilibration, because the pocket adapts to a partly decoupled ligand over hundreds of picoseconds ("What was measured on TYK2") |
 | initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
-| where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state. For absolute FEP, Flare states only that the schedule is adaptive "for each stage of the calculation" | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
+| where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
-| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the analysis checks the overlap and the number of independent samples, the levels of the literature, and shows the forward and reverse series and the halves without a verdict ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
-| Fast / Normal / Accurate | an option of Flare; its values are not published | `overlap_threshold` is set as a number (the paper tested 0.03, 0.04 and 0.05) |
+| after the production | not part of the method | the analysis checks the overlap and the number of independent samples, the levels of the literature, and shows the forward and reverse series and the halves without a verdict ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
+| threshold values | 0.03, 0.04 and 0.05 tested | `overlap_threshold` is a number |
 
 ### What was measured on TYK2
 
@@ -310,7 +307,7 @@ production had 0.024 there, so that result was `NOT RELIABLE`. The longer precal
 finds the region in most legs, not in all.
 
 If a pair of windows still ends below the warning level in the production, the result says
-`NOT RELIABLE` and names the pair, and the remedy is the one of Flare: more windows in that
+`NOT RELIABLE` and names the pair, and the remedy is more windows in that
 stage (`lambda_schedule.adaptive.initial_windows`, or `lambda_schedule.windows` with
 `mode: fixed`) and a new run of that leg ("When a leg carries a message"). For orientation (threshold
 0.04, 50 ps per window in the precalculation unless stated):
@@ -345,8 +342,7 @@ lambda windows; see "Limits of version 0.1".
 ## REST2
 
 REST2 is replica exchange with solute scaling (Wang, Friesner and Berne, J. Phys. Chem. B
-2011, 115, 9431). FEP+ runs it between its lambda windows (FEP/REST) and SOMD2, the engine
-of Flare, offers it as `rest2_scale`. It is for degrees of freedom that change too slowly to
+2011, 115, 9431). SOMD2 offers it as `rest2_scale`. It is for degrees of freedom that change too slowly to
 be sampled within one window, such as a ligand torsion or a side-chain rotamer in the
 pocket: in the windows in the middle of a leg a *hot region* is given a higher effective
 temperature, and replica exchange carries what is sampled there to the physical windows at
@@ -370,8 +366,8 @@ cuFEP applies it as Sire / SOMD2 do:
 The hot region is the ligand and, in the complex leg, the protein residues chosen with
 `sampling.rest2.region` and `sampling.rest2.residues` (whole residues). By default
 (`region: pocket`, the owner's choice of 2026-11-20) these are the residues with a heavy atom
-within 0.4 nm of a heavy atom of the ligand in the prepared structure, as FEP+ does on
-request; FEP+ and SOMD2 heat the ligand alone by default (`region: ligand`).
+within 0.4 nm of a heavy atom of the ligand in the prepared structure;
+SOMD2 heats the ligand alone by default (`region: ligand`).
 
 The scale along a leg. `sampling.rest2.scale` is T_hot / T in the middle of the leg, as
 SOMD2's `rest2_scale`; the default is 1.5 (447 K at 298 K; its basis is in
@@ -403,8 +399,7 @@ Both ends of a leg are physical states, so the free energy of a converged leg ca
 on the scale. If the shift is real, it says that the windows in between are not in
 equilibrium with each other. The replicas of the complex leg make no round trip between the
 ends, with or without REST2: with the few windows that adaptive lambda scheduling chooses,
-neighbours exchange too rarely for what is sampled in the hot windows to reach the ends. FEP+
-runs REST2 with 80 windows in the complex leg. REST2 has not been shown to improve cuFEP's
+neighbours exchange too rarely for what is sampled in the hot windows to reach the ends. REST2 has not been shown to improve cuFEP's
 results on TYK2.
 
 With the pocket in the hot region (the residues within 0.4 nm of the ligand), an ALS threshold
@@ -422,13 +417,9 @@ stage ends and the next begins, so the free energies of the single stages in the
 restrain stage of a TYK2 complex leg reads about 59 kcal/mol with the default scale, the three
 stages together the 38 kcal/mol of the leg.
 
-How FEP+ differs: Desmond takes the temperatures of the windows from a ladder predicted for
-an exchange probability of 0.3 between neighbours (the predictor of Patriksson and van der
-Spoel on the atoms of the hot region), rising over the first half of the windows and falling
-over the second; its authors give about 1000 K at the top for a hot region of about 20 heavy
-atoms. Desmond scales a torsion by sqrt(s) for each of its two end atoms in the hot region.
-cuFEP follows SOMD2 in both points, because a ladder that depends on the number of windows
-does not go together with windows chosen adaptively.
+The temperatures of the windows follow from one scale per leg, as in SOMD2, and not from a
+ladder of temperatures that depends on the number of windows: such a ladder does not go
+together with windows chosen adaptively.
 
 In the System the scaling is carried by two global parameters, sqrt(s) - 1 and s - 1 (both
 zero in the physical state): parameter offsets on the charges and epsilons of hot protein
@@ -614,9 +605,7 @@ is run. What they find is written to the result line, to `result.json` (`quality
 `summary.csv` and to the benchmark report. Every level is one that the literature gives:
 Klimovich, Shirts and Mobley, "Guidelines for the analysis of free energy calculations", J.
 Comput. Aided Mol. Des. 2015, 29, 397, and Mey et al., "Best Practices for Alchemical Free
-Energy Calculations", LiveCoMS 2020. Flare shows the same quantities after a run:
-the overlap matrix with a warning below 0.03, a convergence analysis, and a comparison of TI
-and MBAR.
+Energy Calculations", LiveCoMS 2020.
 
 | check | level | message | source |
 |---|---|---|---|
@@ -635,7 +624,7 @@ level; it does not say that a result is wrong.
 These two are the only checks. cuFEP has no criteria of its own (the owner, 2026-11-20). The
 forward and reverse series, the two halves of the production, the consecutive blocks and BAR
 between neighbouring windows are computed and shown (`analysis.png`, `result.json`) as numbers
-without a verdict, as FEP+ and OpenFE show their convergence plots. Earlier versions also
+without a verdict, as OpenFE shows its convergence plots. Earlier versions also
 judged the two halves of a leg against 1 kT, BAR against MBAR against 1 kcal/mol, and the
 samples after a reduction by the ratio of two standard errors: the 1 kT of Mey et al. is the
 caption of a figure about one step of a relative perturbation, and for a whole leg the
@@ -736,8 +725,7 @@ window near the end of the vanish stage is correlated over 126 to 214 iterations
 ns), so 5 ns give 9 independent samples and 10 ns give 32; the bilayer of that system had
 also not settled when the alchemical run began.
 
-Why the default production is 10 ns per window. It is the default of OpenFE's ABFE protocol;
-FEP+ uses 5 ns. Of 55 TYK2 complex legs with 5 ns, 11 had 50 independent samples in their
+Why the default production is 10 ns per window. It is the default of OpenFE's ABFE protocol. Of 55 TYK2 complex legs with 5 ns, 11 had 50 independent samples in their
 slowest window; the statistical inefficiencies of that window (quartiles 52, 68 and 116
 iterations) put 33 of them there with 10 ns, if they stay as they are, and 46 with 20 ns. Of
 54 solvent legs, 33 had 50 with 5 ns. A longer run can also show a slower change, as the
@@ -762,9 +750,7 @@ reported as the acceptance; it misses moves that are undone within one iteration
 
 ### When a leg carries a message
 
-cuFEP does not run anything again by itself. The user runs the leg concerned again, as a
-Flare user adds a further instance of a link "with longer simulation time/more Lambda
-windows"; the other legs and ligands keep their results and the binding free energy is put
+cuFEP does not run anything again by itself. The user runs the leg concerned again; the other legs and ligands keep their results and the binding free energy is put
 together again.
 
 - `NOT RELIABLE`: more lambda windows in the stage that the message names
@@ -990,26 +976,26 @@ utilization during the run.
 
 ## How cuFEP compares
 
-Absolute binding protocols of three established programs, from their documentation,
-source code and papers (see "Sources").
+The absolute binding protocol of OpenFE, from its documentation and source code (see
+"Sources"), beside cuFEP's:
 
-| | Schrödinger FEP+ (absolute binding) | Cresset Flare (absolute FEP) | OpenFE | cuFEP |
-|---|---|---|---|---|
-| lambda windows are given as | a number | a number per stage and side | lambda values | a number or lambda values, per leg and stage |
-| default windows | complex 80, solvent 68 | presets Quick / Normal / Accurate; adaptive optional | complex 30, solvent 14 | adaptive; fixed mode: complex 30, solvent 14 |
-| time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 10 ns |
-| runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
-| reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | standard error from blocks of time common to all lambda windows (delete-one-block jackknife of MBAR minus the tail correction, on samples decorrelated window by window), not below the analytical one; standard deviation over repeats if more than one |
-| checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03 and fewer than 50 independent samples per window, the levels of the literature; the series, halves and BAR shown without a verdict; messages in the result |
-| a calculation that is not good enough | the user: "Try increasing the length of the simulations (i.e., 10 ns)", "try increasing the number of lambda windows and/or increasing the sampling" | the user runs a further instance of the link "with longer simulation time/more Lambda windows" | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
-| replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
-| MD before the alchemical run | 1 ns and a short equilibration | minimisation, equilibration, MD for the restraint search | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
-| restraint | Boresch-type, atoms chosen from hydrogen bonds and salt bridges | Boresch, atoms and strengths chosen automatically | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |
-| water sampling | grand canonical Monte Carlo by default | grand canonical option | none | none |
-| GPUs | replicas spread over GPUs, several per GPU under MPS | lambda windows on separate GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
-| membrane | chosen by the user | chosen by the user | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |
+| | OpenFE | cuFEP |
+|---|---|---|
+| lambda windows are given as | lambda values | a number or lambda values, per leg and stage |
+| default windows | complex 30, solvent 14 | adaptive; fixed mode: complex 30, solvent 14 |
+| time per lambda window | 1 ns equilibration + 10 ns | 1 ns equilibration + 10 ns |
+| runs per calculation | 3 repeats | 1; `sampling.repeats` for more |
+| reported uncertainty | standard deviation over repeats | standard error from blocks of time common to all lambda windows (delete-one-block jackknife of MBAR minus the tail correction, on samples decorrelated window by window), not below the analytical one; standard deviation over repeats if more than one |
+| checks after the run | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03 and fewer than 50 independent samples per window, the levels of the literature; the series, halves and BAR shown without a verdict; messages in the result |
+| a calculation that is not good enough | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
+| replica exchange | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
+| MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
+| restraint | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |
+| water sampling | none | none |
+| GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
+| membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |
 
-Further differences from OpenFE, whose protocol cuFEP follows most closely:
+Further differences:
 
 | | OpenFE | cuFEP |
 |---|---|---|
@@ -1019,16 +1005,14 @@ Further differences from OpenFE, whose protocol cuFEP follows most closely:
 | Lennard-Jones between atoms of the ligand | cut off as in the original System | no cutoff (hundredths of a kcal/mol; "Interactions inside the ligand") |
 | decorrelation of the samples | one statistical inefficiency for all windows, from the reduced potential summed over the replicas (openmmtools) | one per lambda window, the larger of those of its energy differences to the two neighbouring windows (alchemlyb's default takes the next window only) |
 
-Sources: Schrödinger `fep_plus` and `fep_absolute_binding` command help and Python API
-documentation, the "FEP+ troubleshooting" checklist of the FEP+ user manual, Ross et al., Commun. Chem. 2023, 6, 222; Cresset Flare release notes for
-versions 10 to 12 and the pyflare scripts `feprun.py` and `abferun.py`, Midgley et al. 2025;
+Sources: Midgley et al. 2025;
 OpenFE 1.13 source and documentation (the plots are those of `multistate_analysis.py`); SOMD2 documentation (oversubscription factor); Mey et
 al., "Best Practices for Alchemical Free Energy Calculations", LiveCoMS 2020; Grossfield et
 al., "Best Practices for Quantification of Uncertainty and Sampling Quality in Molecular
 Simulations", LiveCoMS 2018; Rizzi et al., "The SAMPL6 SAMPLing challenge: assessing the
 reliability and efficiency of binding free energy calculations", J. Comput. Aided Mol. Des.
 2020, 34, 601; openmmtools 0.26 source (`multistateanalyzer.py`); alchemlyb documentation
-(`decorrelate_u_nk`). Flare's preset values are not public.
+(`decorrelate_u_nk`).
 
 ## Limits of version 0.1
 

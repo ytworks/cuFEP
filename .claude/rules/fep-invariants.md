@@ -100,3 +100,5 @@ Never relax a criterion to make a run pass. A criterion changes only with its so
   vendor. Such a name appears only where accuracy is compared (the benchmark report against the
   published predictions) and where a source is cited correctly (the benchmark set, licence
   notices). Names of the software cuFEP depends on and of development tools are fine.
+  `scripts/check_names.py` (CI job `harness`) holds the names to the files that compare accuracy
+  or cite a source.

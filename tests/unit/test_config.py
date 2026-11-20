@@ -17,7 +17,7 @@ def test_minimal_config_only_needs_protein_and_ligand(tmp_path):
     assert cfg.lambda_schedule.mode == "adaptive"
     assert cfg.membrane.enabled is False and cfg.membrane.orientation == "auto"
     assert cfg.resources.gpus == "auto"
-    assert cfg.sampling.repeats == 1                       # one run, as FEP+ and Flare
+    assert cfg.sampling.repeats == 1                       # one run per compound
     # 1 ns of equilibration and 10 ns of production per lambda window, as OpenFE's ABFE protocol
     assert cfg.sampling.equilibration("complex") == 1.0 and cfg.sampling.production("solvent") == 10.0
     assert cfg.sampling.production("complex") == 10.0
@@ -192,7 +192,7 @@ def test_rest2_is_on_by_default_and_can_be_set(tmp_path):
 
     cfg = load_config(write(tmp_path, BASE))
     r2 = cfg.sampling.rest2
-    # the pocket is the default, the owner's choice of 2026-11-20 (FEP+ and SOMD2 heat the ligand alone)
+    # the pocket is the default, the owner's choice of 2026-11-20 (SOMD2 heats the ligand alone)
     assert (r2.scale, r2.region, r2.pocket_cutoff_nm, r2.residues) == (1.5, "pocket", 0.4, [])
     assert "hot region: the ligand and protein residues within 0.4 nm of it; 1.5 times the temperature" \
         in lambda_window_table(cfg)

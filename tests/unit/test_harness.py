@@ -167,3 +167,18 @@ def test_the_wrapper_never_builds_an_image_it_was_not_asked_to_build(tmp_path):
     args = subprocess.run(["bash", wrapper, "--gpus", "6,7", "python"], capture_output=True, text=True,
                           env=env).stdout.splitlines()
     assert args[args.index("--gpus") + 1] == '"device=6,7"'
+
+
+def test_names_of_commercial_fep_products_are_kept_to_accuracy_and_sources():
+    """The owner's rule (2026-11-20): no text presents a decision of cuFEP as following a commercial FEP
+    product; such names appear only where accuracy is compared and where a source is cited."""
+    import check_names
+
+    assert check_names.problems_in("docs/protocol.md", "as in FEP+ and Flare") == [
+        "docs/protocol.md:1: Flare",
+        "docs/protocol.md:1: FEP+ (only for comparing accuracy or citing a source, in the files listed in "
+        "scripts/check_names.py)"]
+    assert check_names.problems_in("src/cufep/mps.py", "\n# Desmond mps_factor") == ["src/cufep/mps.py:2: Desmond"]
+    assert check_names.problems_in("src/cufep/benchmarks/runner.py", "| cuFEP | FEP+ |") == []
+    assert check_names.problems_in("README.md", "the Schrödinger public binding free energy benchmark") == []
+    assert check_names.problems_in("README.md", "the method of Cresset Flare") != []

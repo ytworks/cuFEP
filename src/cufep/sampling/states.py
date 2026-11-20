@@ -75,8 +75,8 @@ class AlchemicalState:
         return asdict(self)
 
 
-#: Stages of a leg, in the order in which they are passed. The names are those of Cresset Flare
-#: and A3FE: restrain (restraint off -> on), discharge (charges on -> off), vanish (LJ on -> off).
+#: Stages of a leg, in the order in which they are passed. The names are those of
+#: A3FE: restrain (restraint off -> on), discharge (charges on -> off), vanish (LJ on -> off).
 STAGES_COMPLEX = ("restrain", "discharge", "vanish")
 STAGES_SOLVENT = ("discharge", "vanish")
 #: names used by earlier versions (still accepted when reading files)

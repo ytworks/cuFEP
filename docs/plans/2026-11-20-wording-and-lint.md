@@ -14,7 +14,7 @@ PR #2 (README 英日、開発ハーネス) は 99b59fe でマージ済み。そ�
      - `spikes/run.sh` が完全な互換になっていない。
      - 2つの検査スクリプトに誤判定がある。
    - P1 は、`fep-invariants.md` の「protocol.md が比較するプログラムに従う」が、商用製品に従うと言っているのと同じになっていること。
-2. **既存の文書とコードのコメント**に、cuFEP の判断を商用 FEP 製品 (Schrödinger の FEP+・Desmond、Cresset の Flare) に従った・まねたとする記述が残っている。オーナーの規則では次のとおり。
+2. **既存の文書とコードのコメント**に、cuFEP の判断を商用 FEP 製品やその会社に従った・まねたとする記述が残っている。オーナーの規則では次のとおり。
    - 名前を書いてよいのは、精度の比較 (ベンチマークでの FEP+ の予測値との比較) と、出典の正しい記載だけ。
    - OpenFE、SOMD2、A3FE などのオープンソースの出典と、ruff などのツール名は問題にしない。
 3. **lint の導入**: PR #2 で、別 PR に回すと決めたもの。
@@ -87,10 +87,10 @@ PR #2 (README 英日、開発ハーネス) は 99b59fe でマージ済み。そ�
 
 | 対象 | 主な箇所 |
 |---|---|
-| `docs/protocol.md` | Terms の表、"as in FEP+ and Flare"、"the method of … Cresset Flare"、"Where cuFEP follows Cresset" の節 (論文 Midgley et al. 2025 との比較に改める)、REST2 の節の FEP+・Desmond の記述、"the remedy is the one of Flare"、"How cuFEP compares" の表 (FEP+ と Flare の列を除き、OpenFE との比較として残す) と、その Sources の商用製品の文書 |
-| `docs/configuration.md` | production の行の "Schrödinger's absolute binding FEP+"、repeats の行の "FEP+ and Flare run a calculation once" (根拠を「1 化合物 1 回の計算で精度を出すことが要件」にする)、REST2 の行の FEP+ の温度、region の行、min_overlap の行の "warning level of Flare"、"(no other level)" の行 |
+| `docs/protocol.md` | Terms の表の別名、1 回の計算の根拠、ALS の出典、ALS の節の比較表 (論文 Midgley et al. 2025 との比較に改める)、REST2 の節、leg を走らせ直す理由、"How cuFEP compares" の表 (OpenFE との比較として残す) と Sources |
+| `docs/configuration.md` | pre-equilibration、production、repeats (根拠を「1 化合物 1 回の計算で精度を出すことが要件」にする)、REST2 の scale と region、min_overlap、"(no other level)" の各行 |
 | `docs/plans/2026-11-18-abfe-engine.md` | 同じ趣旨の記述。ベンチマークの FEP+ との精度比較の数値は残す |
-| コードのコメント・docstring | `mps.py` (Desmond)、`alchemy/restraints.py`、`config/schema.py`、`analysis/mbar.py`、`analysis/plots.py`、`sampling/states.py`、テストのコメント (`test_config.py`、`test_benchmarks.py`) |
+| コードのコメント・docstring | `mps.py`、`alchemy/restraints.py`、`config/schema.py`、`analysis/mbar.py`、`analysis/plots.py`、`sampling/states.py`、テストのコメント (`test_config.py`、`test_benchmarks.py`) |
 
 残すもの:
 - ベンチマークのコードと文書の FEP+ (精度の比較)
@@ -100,8 +100,8 @@ PR #2 (README 英日、開発ハーネス) は 99b59fe でマージ済み。そ�
 
 再発防止として `scripts/check_names.py` を作り、CI の `harness` ジョブに入れる (テスト付き)。
 
-- `Flare|Cresset|Desmond` は、ライセンス表示 (`benchmarks/THIRD_PARTY/`、`docs/LICENSING.md`) と検査自身を除き、追跡ファイルのどこにも書かせない。
-- `FEP\+|Schrödinger` は、精度比較と出典のファイル (ベンチマークのコード・データ・テスト・文書、README の該当節、`PROGRESS.md`、計画書、`examples/*/config.yaml`) にだけ許す。
+- 精度比較にも出典にも使わない商用製品と会社の名前は、検査自身とそのテストを除き、追跡ファイルのどこにも書かせない。
+- 精度比較と出典に使う名前 (FEP+ と、ベンチマークセットの出典) は、そのためのファイル (ベンチマークのコード・データ・テスト・文書、README、`CLAUDE.md`、`PROGRESS.md`、計画書、`examples/`、`docs/LICENSING.md`) にだけ許す。名前の一覧は `scripts/check_names.py` にある。
 
 ### 3. lint の導入 (ruff 0.17.5、fmeta と同じ規則)
 

@@ -639,7 +639,7 @@ def with_force_constants_from_fluctuations(restraint: BoreschRestraint, fluctuat
 
     A harmonic restraint with this force constant has the width the coordinate shows in the
     plain MD of the bound state, so it holds the ligand where it is without squeezing it. A3FE
-    and SOMD2 derive Boresch force constants this way (Flare: "constraint strengths"). Each
+    and SOMD2 derive Boresch force constants this way. Each
     value is kept within ``limits`` times the fixed default (10 kcal/mol/A^2, 80 kcal/mol/rad^2).
     """
     kt = R_GAS * temperature_K
