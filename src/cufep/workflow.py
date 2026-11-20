@@ -146,6 +146,24 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
     if not complex_repeats:
         return
     check_manual_anchors(cfg, lig_dir)
+    if cfg.restraints.selection == "manual":
+        # anchors that cannot define the restraint already in the prepared pose are refused before the
+        # pre-equilibration (the frames of the pre-equilibration are checked again when it is made)
+        from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, anchor_geometry_problem,
+                                              anchor_margins, nearest_image_of_ligand)
+
+        prep = load_prepared(Path(lig_dir) / "prep", "complex")
+        rc = cfg.restraints
+        host, guest = tuple(int(i) for i in rc.host_atoms), tuple(int(i) for i in rc.guest_atoms)
+        pose = nearest_image_of_ligand(np.asarray(prep["positions"], dtype=float), np.asarray(prep["ligand"], dtype=int),
+                                       np.asarray(prep["positions"], dtype=float)[list(host)].mean(axis=0),
+                                       np.asarray(prep["box"], dtype=float))
+        settings = RestraintSearchSettings(k_r=rc.k_r_kcal_per_A2 * KCAL * 100.0, k_angle=rc.k_angle_kcal_per_rad2 * KCAL)
+        problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None],
+                                          *anchor_margins(settings, cfg.thermodynamics.temperature_K))
+        if problem:
+            raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)} in the prepared pose: "
+                                f"{problem}. Choose other anchors; nothing was changed")
     rest2 = cfg.sampling.rest2
     if rest2.scale > 1.0 and rest2.residues:
         prep = load_prepared(Path(lig_dir) / "prep", "complex")
@@ -391,9 +409,9 @@ def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
         for key, asked in (("host_atoms", rc.host_atoms), ("guest_atoms", rc.guest_atoms)):
             if asked and key in restraint and list(restraint[key]) != list(asked):
                 out.append(f"restraints.{key}: {list(restraint[key])} -> {list(asked)}")
-    # the six force constants, where the run sets them (not taken from the fluctuations): the file
-    # holds them in kJ/mol/nm^2 and kJ/mol/rad^2
-    if rc.force_constants != "auto" or rc.selection == "manual":
+    # the six force constants, where the run sets them (not taken from the fluctuations, for chosen
+    # and for manual anchors alike): the file holds them in kJ/mol/nm^2 and kJ/mol/rad^2
+    if rc.force_constants != "auto":
         from cufep.sampling.storage import _same
         if "k_r" in restraint and not _same(float(restraint["k_r"]), rc.k_r_kcal_per_A2 * KCAL * 100.0):
             out.append(f"restraints.k_r_kcal_per_A2: {float(restraint['k_r']) / (KCAL * 100.0):g} -> {rc.k_r_kcal_per_A2:g}")
@@ -787,17 +805,25 @@ BAROSTAT_FREQUENCY_BEFORE_THE_SETTING = 25
 
 
 def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms: int, k_r: float, k_angle: float,
-                             where: Path | str = "equil.npz"):
-    """The Boresch restraint of ``restraints.selection: manual``: the given anchors, with the
-    reference values of the last frame of the pre-equilibration.
+                             where: Path | str = "equil.npz", force_constants: str = "openfe",
+                             temperature_K: float = 298.15):
+    """The Boresch restraint of ``restraints.selection: manual`` and the fluctuations of its six
+    coordinates: the given anchors, with the reference values of the last frame of the
+    pre-equilibration.
 
-    The force of the restraint measures across the periodic boundary, so the reference values
-    are taken with the ligand in the periodic image nearest to the host anchors (the same rule
-    as the restraint search, :func:`cufep.alchemy.restraints.nearest_image_of_ligand`). From the
-    raw coordinates a ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, and the restraint
-    held the reference configuration with 52,300 kJ/mol (review of PR 1).
+    The force of the restraint measures across the periodic boundary, so every frame is taken with
+    the ligand in the periodic image nearest to the host anchors (the same rule as the restraint
+    search, :func:`cufep.alchemy.restraints.nearest_image_of_ligand`). From the raw coordinates a
+    ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, and the restraint held the reference
+    configuration with 52,300 kJ/mol (review of PR 1). The anchors must define the six coordinates
+    in every frame (:func:`cufep.alchemy.restraints.anchor_geometry_problem`, the rule of the
+    search); with ``force_constants: auto`` the constants come from the fluctuations of the six
+    coordinates over the frames, as for anchors the search chose (review of PR 1: they were ignored
+    for manual anchors). Returns (restraint, fluctuations).
     """
-    from cufep.alchemy.restraints import BoreschRestraint, nearest_image_of_ligand
+    from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, anchor_geometry_problem,
+                                          anchor_margins, coordinate_fluctuations, nearest_image_of_ligand,
+                                          with_force_constants_from_fluctuations)
 
     if "frame_boxes" not in eq:
         raise WorkflowError(f"{where} holds no boxes of its frames (an earlier version wrote it): the reference "
@@ -808,13 +834,25 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
     if missing:
         raise WorkflowError(f"restraints.host_atoms / guest_atoms {missing} are not among the atoms whose positions the "
                             f"pre-equilibration kept ({where}); the anchors must be atoms of the protein and the ligand")
-    last = np.zeros((int(n_atoms), 3))
-    last[frame_atoms] = eq["frames"][-1]
+    frames = np.asarray(eq["frames"], dtype=float)
+    full = np.zeros((frames.shape[0], int(n_atoms), 3))
+    full[:, frame_atoms, :] = frames
     host, guest = tuple(int(i) for i in host_atoms), tuple(int(i) for i in guest_atoms)
-    last = nearest_image_of_ligand(last, np.asarray(ligand_atoms, dtype=int), last[list(host)].mean(axis=0),
-                                   np.asarray(eq["frame_boxes"][-1], dtype=float))
-    values = BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0).values(last)
-    return BoreschRestraint(host, guest, *[float(x) for x in values], k_r, k_angle, k_angle, k_angle, k_angle, k_angle)
+    full = nearest_image_of_ligand(full, np.asarray(ligand_atoms, dtype=int), full[:, list(host), :].mean(axis=1),
+                                   np.asarray(eq["frame_boxes"], dtype=float))
+    probe = BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0)
+    settings = RestraintSearchSettings(k_r=k_r, k_angle=k_angle)
+    problem = anchor_geometry_problem(probe, full, *anchor_margins(settings, temperature_K))
+    if problem:
+        raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}: {problem}. Choose other "
+                            "anchors; nothing was sampled")
+    values = probe.values(full)
+    fluctuations = coordinate_fluctuations(values)
+    restraint = BoreschRestraint(host, guest, *[float(x) for x in values[-1]], k_r, k_angle, k_angle, k_angle,
+                                 k_angle, k_angle)
+    if force_constants == "auto":
+        restraint = with_force_constants_from_fluctuations(restraint, fluctuations, temperature_K)
+    return restraint, fluctuations
 
 
 def restraint_made_with(cfg: Config) -> dict:
@@ -1356,9 +1394,10 @@ def run_leg(job: LegJob) -> dict:
             if rc.selection == "manual":
                 if not (rc.host_atoms and rc.guest_atoms):
                     raise WorkflowError("restraints.selection is 'manual' but host_atoms/guest_atoms are not given")
-                restraint = manual_boresch_restraint(rc.host_atoms, rc.guest_atoms, prep["ligand"], eq,
-                                                     system.getNumParticles(), k_r, k_a, equil_file)
-                info = {"selection": "manual"}
+                restraint, fluctuations = manual_boresch_restraint(
+                    rc.host_atoms, rc.guest_atoms, prep["ligand"], eq, system.getNumParticles(), k_r, k_a, equil_file,
+                    force_constants=rc.force_constants, temperature_K=T)
+                info = {"selection": "manual", "force_constants": rc.force_constants, "fluctuations": fluctuations}
             else:
                 full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))
                 full[:, eq["frame_atoms"], :] = eq["frames"]

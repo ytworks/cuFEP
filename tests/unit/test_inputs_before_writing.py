@@ -173,7 +173,8 @@ def test_what_a_complex_job_would_refuse_is_refused_before_any_job(tmp_path, mon
     from cufep.workflow import WorkflowError, check_before_jobs
 
     system, top, pos, box, ligand, other = dipeptides_in_water
-    old_prep = {"topology": top, "positions": pos, "ligand": ligand, "protein": other, "input_chains": None}
+    old_prep = {"topology": top, "positions": pos, "ligand": ligand, "protein": other, "input_chains": None,
+                "box": np.asarray(box)}
     monkeypatch.setattr(workflow, "load_prepared", lambda prep_dir, name: old_prep)
     lig_dir = tmp_path / "lig"
     residues = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
@@ -181,6 +182,11 @@ def test_what_a_complex_job_would_refuse_is_refused_before_any_job(tmp_path, mon
     with pytest.raises(WorkflowError, match="did not record the chains of the input"):
         check_before_jobs(residues, lig_dir, {(0, "complex")})
     check_before_jobs(residues, lig_dir, {(0, "solvent")})          # a run of the solvent leg alone needs no region
+    # the anchors below are atoms of two peptides chosen for the files, not for their angles (theta_B 158 degrees,
+    # refused by the check of the geometry, tests/unit/test_periodic_images.py); that check is set aside here
+    from cufep.alchemy import restraints
+
+    monkeypatch.setattr(restraints, "anchor_geometry_problem", lambda *args, **kwargs: None)
     manual = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
                                     "restraints": {"selection": "manual", "host_atoms": other[:3],
                                                    "guest_atoms": ligand[:3]}})

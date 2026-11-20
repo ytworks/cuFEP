@@ -203,6 +203,60 @@ class RestraintSearchSettings:
     pose_rmsd_warning_nm: float = 0.3
 
 
+#: the six restrained coordinates of a Boresch restraint
+COORDINATES = ("r", "theta_A", "theta_B", "phi_A", "phi_B", "phi_C")
+#: the four angles of the anchors: the two restrained ones and the angles of the host and of the
+#: guest triple, which the first and the last dihedral angle need away from a straight line
+ANCHOR_ANGLES = ("H2-H1-H0", "H1-H0-G0 (theta_A)", "H0-G0-G1 (theta_B)", "G0-G1-G2")
+
+
+def coordinate_fluctuations(values: np.ndarray) -> dict[str, float]:
+    """Standard deviation of each restrained coordinate over frames (``values``: frames x 6), the
+    dihedral angles on the circle."""
+    v = np.asarray(values, dtype=float)
+    stds = [float(v[:, 0].std()), float(v[:, 1].std()), float(v[:, 2].std()),
+            circular_std(v[:, 3]), circular_std(v[:, 4]), circular_std(v[:, 5])]
+    return dict(zip(COORDINATES, stds))
+
+
+def anchor_angles(restraint: "BoreschRestraint", positions: np.ndarray) -> np.ndarray:
+    """The four angles of the anchors (ANCHOR_ANGLES) for positions of shape (..., n_atoms, 3)."""
+    h0, h1, h2 = (positions[..., i, :] for i in restraint.host_atoms)
+    g0, g1, g2 = (positions[..., i, :] for i in restraint.guest_atoms)
+    return np.stack([_angle(h2, h1, h0), _angle(h1, h0, g0), _angle(h0, g0, g1), _angle(g0, g1, g2)], axis=-1)
+
+
+def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin: float,
+                            equilibrium_margin: float) -> str | None:
+    """Why the anchors of ``restraint`` cannot define its six coordinates over ``frames`` (positions
+    with the ligand in the periodic image nearest the host), or None.
+
+    Every one of the four angles of the anchors must stay ``flat_margin`` away from 0 and from pi in
+    every frame: the dihedral angles phi_A and phi_C need the planes H2-H1-H0 and G0-G1-G2, and an
+    acetonitrile whose N-C-C was chosen as guest anchors gave forces of NaN although theta_A and
+    theta_B (53.7 and 81.3 degrees) were in order (review of PR 1). In the last frame, from which the
+    reference values come, every angle must also be ``equilibrium_margin`` away from 0 and pi."""
+    angles = np.atleast_2d(anchor_angles(restraint, np.asarray(frames, dtype=float)))
+    for k, name in enumerate(ANCHOR_ANGLES):
+        low, high = float(angles[:, k].min()), float(angles[:, k].max())
+        if low < flat_margin or high > np.pi - flat_margin:
+            return (f"the anchor angle {name} comes within {np.degrees(flat_margin):.0f} degrees of a straight line "
+                    f"({np.degrees(low):.1f} to {np.degrees(high):.1f} degrees over the frames): the dihedral angles "
+                    "of the restraint are not defined there")
+        last = float(angles[-1, k])
+        if not equilibrium_margin <= last <= np.pi - equilibrium_margin:
+            return (f"the anchor angle {name} is {np.degrees(last):.1f} degrees in the frame the reference values "
+                    f"come from, closer than {np.degrees(equilibrium_margin):.0f} degrees to a straight line")
+    return None
+
+
+def anchor_margins(settings: "RestraintSearchSettings", temperature_K: float) -> tuple[float, float]:
+    """(flat margin, equilibrium margin) in radians of :func:`anchor_geometry_problem`."""
+    kt = R_GAS * temperature_K
+    return (math.sqrt(2.0 * settings.flat_angle_energy_kt * kt / settings.k_angle),
+            math.radians(settings.min_equilibrium_angle_deg))
+
+
 @dataclass
 class RestraintSearchResult:
     restraint: BoreschRestraint
@@ -424,8 +478,7 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
 
     sig_r = math.sqrt(kt / s.k_r)
     sig_a = math.sqrt(kt / s.k_angle)
-    flat_margin = math.sqrt(2.0 * s.flat_angle_energy_kt * kt / s.k_angle)
-    eq_margin = math.radians(s.min_equilibrium_angle_deg)
+    flat_margin, eq_margin = anchor_margins(s, temperature_K)
     best = None
     n_tested = 0
     for g_local in guests:
@@ -441,18 +494,15 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
                         continue
                     n_tested += 1
                     r = BoreschRestraint((h0, h1, h2), (g0, g1, g2), 0, 0, 0, 0, 0, 0)
-                    v = r.values(aligned)                                           # (frames, 6)
-                    ang = v[:, 1:3]
-                    if ang.min() < flat_margin or ang.max() > math.pi - flat_margin:
+                    # all four anchor angles away from a straight line in every frame
+                    if anchor_geometry_problem(r, aligned, flat_margin, eq_margin) is not None:
                         continue
+                    v = r.values(aligned)                                           # (frames, 6)
                     # Reference values: those of the final frame, from which the alchemical run
                     # starts (as OpenFE). A mean over the trajectory is a geometry that a ligand
                     # which moved between two positions never has.
                     reference = [float(x) for x in v[-1]]
-                    if not all(eq_margin <= m <= math.pi - eq_margin for m in reference[1:3]):
-                        continue
-                    stds = [float(v[:, 0].std()), float(ang[:, 0].std()), float(ang[:, 1].std()),
-                            circular_std(v[:, 3]), circular_std(v[:, 4]), circular_std(v[:, 5])]
+                    stds = list(coordinate_fluctuations(v).values())
                     score = (stds[0] / sig_r) ** 2 + sum((x / sig_a) ** 2 for x in stds[1:])
                     if best is None or score < best[0]:
                         best = (score, (h0, h1, h2), (g0, g1, g2), reference, stds)
@@ -463,9 +513,8 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     score, host, guest, ref, stds = best
     restraint = BoreschRestraint(host, guest, ref[0], ref[1], ref[2], ref[3], ref[4], ref[5],
                                  s.k_r, s.k_angle, s.k_angle, s.k_angle, s.k_angle, s.k_angle)
-    labels = ["r", "theta_A", "theta_B", "phi_A", "phi_B", "phi_C"]
     return RestraintSearchResult(restraint=restraint, score=float(score),
-                                 fluctuations=dict(zip(labels, stds)), ligand_rmsd_nm=tail,
+                                 fluctuations=dict(zip(COORDINATES, stds)), ligand_rmsd_nm=tail,
                                  n_candidates=n_tested, notes=notes)
 
 

@@ -58,18 +58,18 @@ def test_the_reviewers_manual_restraint_one_cell_away():
     raw_values = BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0).values(moved)
     old = BoreschRestraint(HOST, GUEST, *[float(x) for x in raw_values], K_R, K_A, K_A, K_A, K_A, K_A)
     assert old.r0 == pytest.approx(5.4) and restraint_energy(old, moved, CUBE) == pytest.approx(52300.0, rel=1e-6)
-    new = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(moved, CUBE), len(POSITIONS), K_R, K_A)
+    new, _ = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(moved, CUBE), len(POSITIONS), K_R, K_A)
     assert new.r0 == pytest.approx(0.4) and restraint_energy(new, moved, CUBE) == pytest.approx(0.0, abs=1e-6)
 
 
 @pytest.mark.parametrize("box", [CUBE, DODECAHEDRON], ids=["cube", "dodecahedron"])
 def test_the_manual_restraint_is_the_same_in_every_image(box):
-    reference = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(POSITIONS, box), len(POSITIONS),
-                                         K_R, K_A)
+    reference, _ = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(POSITIONS, box), len(POSITIONS),
+                                            K_R, K_A)
     for name, shift in lattice_shifts(box).items():
         moved = POSITIONS.copy()
         moved[LIGAND] += shift
-        r = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(moved, box), len(POSITIONS), K_R, K_A)
+        r, _ = manual_boresch_restraint(HOST, GUEST, LIGAND, equilibration_with(moved, box), len(POSITIONS), K_R, K_A)
         fields = ("r0", "theta_a0", "theta_b0", "phi_a0", "phi_b0", "phi_c0")
         assert [getattr(r, f) for f in fields] == pytest.approx([getattr(reference, f) for f in fields]), name
         assert restraint_energy(r, moved, box) == pytest.approx(0.0, abs=1e-6), name
@@ -126,3 +126,59 @@ def test_the_nearest_image_is_found_however_many_cells_away(box):
         moved[LIGAND] += shift + 3 * box[0] - 2 * box[2]
         back = nearest_image_of_ligand(moved, LIGAND, POSITIONS[list(HOST)].mean(axis=0), box)
         assert np.allclose(back, POSITIONS, atol=1e-9), name
+
+
+# ---- review of PR 1 on 64751ca: anchors that cannot define the restraint ----------------------------------
+
+def _nitrile_frames(n=20, seed=0):
+    """Host atoms as above and a guest N-C-C on a straight line (acetonitrile), with small thermal noise."""
+    rng = np.random.default_rng(seed)
+    base = POSITIONS.copy()
+    base[4] = base[3] + [0.0, -0.116, 0.0]
+    base[5] = base[4] + [0.0, -0.146, 0.0]
+    return base[None] + rng.normal(scale=0.002, size=(n, 6, 3))
+
+
+def test_a_guest_on_a_straight_line_is_refused_and_would_give_nan():
+    """P1: an acetonitrile N-C-C was chosen as guest anchors; theta_A and theta_B were in order and the force of the
+    restraint at its own reference was NaN. Every angle of the anchors is checked in every frame."""
+    from cufep.alchemy.restraints import RestraintSearchSettings, anchor_geometry_problem, anchor_margins
+
+    frames = _nitrile_frames()
+    probe = BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0)
+    exact = frames[-1].copy()
+    exact[4] = exact[3] + [0.0, -0.116, 0.0]
+    exact[5] = exact[4] + [0.0, -0.146, 0.0]
+    values = probe.values(exact)
+    straight = BoreschRestraint(HOST, GUEST, *[float(x) for x in values], K_R, K_A, K_A, K_A, K_A, K_A)
+    system = mm.System()
+    for _ in range(6):
+        system.addParticle(12.0)
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in CUBE])
+    system.addForce(straight.create_force())
+    context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    context.setPositions(exact * unit.nanometer)
+    forces = context.getState(getForces=True).getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
+    assert not np.all(np.isfinite(forces))                                      # what the reviewer saw
+    problem = anchor_geometry_problem(probe, frames, *anchor_margins(RestraintSearchSettings(), 298.15))
+    assert problem is not None and problem.startswith("the anchor angle G0-G1-G2")
+    assert anchor_geometry_problem(probe, POSITIONS[None], *anchor_margins(RestraintSearchSettings(), 298.15)) is None
+    eq = {"frame_atoms": np.arange(6), "frames": frames, "frame_boxes": np.repeat(CUBE[None], len(frames), axis=0)}
+    with pytest.raises(WorkflowError, match="G0-G1-G2 comes within"):
+        manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A)
+
+
+def test_manual_anchors_take_their_force_constants_from_their_fluctuations():
+    """P2: with selection: manual, force_constants: auto was ignored and the configured constants used."""
+    from cufep.alchemy.restraints import coordinate_fluctuations, with_force_constants_from_fluctuations
+
+    rng = np.random.default_rng(4)
+    frames = POSITIONS[None] + rng.normal(scale=0.01, size=(200, 6, 3))
+    eq = {"frame_atoms": np.arange(6), "frames": frames, "frame_boxes": np.repeat(CUBE[None], len(frames), axis=0)}
+    fixed, fluct = manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A)
+    auto, fluct_auto = manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A, force_constants="auto")
+    assert fixed.k_r == K_R and fluct == fluct_auto
+    expected = with_force_constants_from_fluctuations(fixed, fluct, 298.15)
+    assert auto.k_r == pytest.approx(expected.k_r) and auto.k_phi_c == pytest.approx(expected.k_phi_c)
+    assert auto.k_r != K_R
+    assert fluct == pytest.approx(coordinate_fluctuations(BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0).values(frames)))
