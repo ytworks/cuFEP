@@ -939,6 +939,72 @@ def restraint_made_with(cfg: Config) -> dict:
     return data
 
 
+#: a water or an ion whose heavy atom is closer than this (nm) to a heavy atom of another molecule
+#: overlaps it: no structure has that, and the minimisation of the pre-equilibration cannot always
+#: separate them
+OVERLAP_NM = 0.15
+
+
+def overlapping_molecules(topology, positions_nm, box_nm, limit_nm: float = OVERLAP_NM) -> list[tuple[int, int, float]]:
+    """Pairs of heavy atoms (indices, distance in nm) of different molecules (connected parts of the
+    bond graph), one of them a water or a single-atom ion (the solvent the preparation builds),
+    closer than ``limit_nm`` in the periodic box ``box_nm`` (rows are the box vectors; any triclinic
+    box), the closest first. Contacts between protein, ligand and lipids are the input's and are not
+    looked at here (:func:`check_ligand`)."""
+    from scipy.spatial import cKDTree
+
+    from cufep.prep.protein import WATER
+
+    atoms = list(topology.atoms())
+    heavy = np.array([a.index for a in atoms if a.element is not None and a.element.symbol != "H"], dtype=int)
+    solvent = np.array([a.residue.name in WATER or len(list(a.residue.atoms())) == 1 for a in atoms])
+    parent = list(range(len(atoms)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a, b in topology.bonds():
+        ra, rb = find(a.index), find(b.index)
+        if ra != rb:
+            parent[ra] = rb
+    molecule = np.array([find(i) for i in range(len(atoms))])
+    box = np.asarray(box_nm, dtype=float)
+    frac = np.asarray(positions_nm, dtype=float)[heavy] @ np.linalg.inv(box)
+    wrapped = (frac - np.floor(frac)) @ box
+    tree = cKDTree(wrapped)
+    found: dict[tuple[int, int], float] = {}
+    for shift in np.array(np.meshgrid([-1, 0, 1], [-1, 0, 1], [-1, 0, 1])).T.reshape(-1, 3):
+        other = cKDTree(wrapped + shift @ box)
+        for (i, j), d in tree.sparse_distance_matrix(other, limit_nm).items():
+            a, b = int(heavy[i]), int(heavy[j])
+            if molecule[a] != molecule[b] and (solvent[a] or solvent[b]):
+                key = (min(a, b), max(a, b))
+                found[key] = min(float(d), found.get(key, np.inf))
+    return sorted(((a, b, d) for (a, b), d in found.items()), key=lambda item: item[2])
+
+
+def _check_overlaps(modeller, what: str) -> None:
+    """WorkflowError if a water or an ion of the system that ``modeller`` holds overlaps another molecule
+    (:func:`overlapping_molecules`), before it is written (review of PR 1: two waters 0.09 A apart
+    across the boundary of a trimmed bilayer made the pre-equilibration end in NaN)."""
+    import openmm.unit as unit
+
+    box = [[float(v) for v in vec.value_in_unit(unit.nanometer)] for vec in modeller.topology.getPeriodicBoxVectors()]
+    pairs = overlapping_molecules(modeller.topology, np.asarray(modeller.positions.value_in_unit(unit.nanometer)), box)
+    if pairs:
+        atoms = list(modeller.topology.atoms())
+
+        def label(i: int) -> str:
+            return f"{atoms[i].residue.name}{atoms[i].residue.id}:{atoms[i].name}"
+
+        shown = "; ".join(f"{label(a)} and {label(b)} {10 * d:.2f} A" for a, b, d in pairs[:5])
+        raise WorkflowError(f"{what}: {len(pairs)} pair(s) of a water or an ion and another molecule are closer than "
+                            f"{10 * OVERLAP_NM:g} A ({shown}); nothing was written")
+
+
 def _check_box(modeller, cutoff_nm: float, what: str) -> None:
     """WorkflowError if no backend could run the system that ``modeller`` holds with this cutoff
     (:func:`cufep.prep.solvate.box_height_problem`), before it is written."""
@@ -1000,6 +1066,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
                                                     ionic_strength_M=ionic, min_edge_nm=min_edge))
         barostat = "isotropic"
     _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated complex")
+    _check_overlaps(modeller, f"{ligand.name}: the solvated complex")
     system = create_system(forcefield, modeller.topology, sysspec)
     lig_idx = ligand_atom_indices(modeller.topology)
     _write_system(prep_dir, "complex", modeller, system, lig_idx)
@@ -1011,6 +1078,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
                                                 water=cfg.forcefield.water,
                                                 ionic_strength_M=ionic, min_edge_nm=min_edge))
     _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated ligand")
+    _check_overlaps(modeller, f"{ligand.name}: the solvated ligand")
     system = create_system(forcefield, modeller.topology, sysspec)
     _write_system(prep_dir, "solvent", modeller, system, ligand_atom_indices(modeller.topology))
     publish_text(prep_dir / "ligand.json", ligand.offmol.to_json())

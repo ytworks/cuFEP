@@ -254,17 +254,66 @@ def trim_membrane(modeller, padding_nm: float, log=print) -> dict:
                 doomed.update(mol)
                 removed_z += 1
         new_z += 0.15                           # a thin gap instead of overlaps at the z boundary
+    # waters that overlap another molecule across the new periodic boundary, in the final box (review of
+    # PR 1: waters were removed only where they overlapped a lipid; two waters on the two sides of the new
+    # boundary ended 0.09 A apart, and the minimisation could not separate them)
+    across = boundary_water_overlaps(pos, kinds, heavy, molecules, doomed, (edge, edge, new_z))
+    doomed.update(across)
+    removed_across = len({atoms[i].residue.index for i in across})
     modeller.delete([atoms[i] for i in sorted(doomed)])
     modeller.topology.setPeriodicBoxVectors(
         [mm.Vec3(edge, 0, 0), mm.Vec3(0, edge, 0), mm.Vec3(0, 0, new_z)] * unit.nanometer)
     old_z, old = old[2], (old[0], old[1], new_z)
     log(f"membrane: trimmed from {old[0]:.2f} x {old[1]:.2f} nm to {edge:.2f} x {edge:.2f} nm; "
         f"{len(upper)} + {len(lower)} lipids kept, {plan['removed_lipids']} lipid(s) and "
-        f"{plan['removed_waters']} water(s) removed for overlapping across the new boundary; "
+        f"{plan['removed_waters'] + removed_across} water(s) removed for overlapping across the new boundary; "
         f"box height {old_z:.2f} -> {new_z:.2f} nm; expected box after relaxation about "
         f"{relaxed:.2f} x {relaxed:.2f} x {new_z * (edge / relaxed) ** 2:.2f} nm")
     return {"trimmed": True, "box_nm": [edge, edge, new_z], "built_box_nm": [old[0], old[1], old_z],
-            "lipids_removed_for_overlap": plan["removed_lipids"], "expected_relaxed_edge_nm": relaxed}
+            "lipids_removed_for_overlap": plan["removed_lipids"], "expected_relaxed_edge_nm": relaxed,
+            "waters_removed_for_overlap": plan["removed_waters"] + removed_across}
+
+
+def boundary_water_overlaps(pos, kinds, heavy, molecules, doomed, box_nm) -> set[int]:
+    """Atoms of the water molecules to remove so that no kept water has a heavy atom within
+    :data:`CLASH_NM` of a heavy atom of another kept molecule in the periodic box ``box_nm``
+    (lengths of a rectangular box). Of two overlapping waters the one with more overlaps goes, then
+    the later one; a water overlapping a lipid, the protein or the ligand goes."""
+    from scipy.spatial import cKDTree
+
+    box = np.asarray(box_nm, dtype=float)
+    mol_of = np.full(len(kinds), -1, dtype=int)
+    for m, mol in enumerate(molecules):
+        mol_of[mol] = m
+    kept = np.array([i for i in range(len(kinds)) if heavy[i] and i not in doomed], dtype=int)
+    if len(kept) < 2:
+        return set()
+    tree = cKDTree(np.mod(np.asarray(pos, dtype=float)[kept], box), boxsize=box)
+    overlaps: dict[int, set[int]] = {}
+    forced: set[int] = set()
+    for a, b in tree.query_pairs(CLASH_NM):
+        i, j = kept[a], kept[b]
+        mi, mj = mol_of[i], mol_of[j]
+        if mi == mj:
+            continue
+        wi, wj = kinds[i] == "water", kinds[j] == "water"
+        if wi and wj:
+            overlaps.setdefault(mi, set()).add(mj)
+            overlaps.setdefault(mj, set()).add(mi)
+        elif wi:
+            forced.add(mi)
+        elif wj:
+            forced.add(mj)
+    removed = set(forced)
+    for m in forced:
+        for other in overlaps.pop(m, set()):
+            overlaps.get(other, set()).discard(m)
+    while any(overlaps.values()):
+        worst = max((m for m in overlaps if overlaps[m]), key=lambda m: (len(overlaps[m]), m))
+        removed.add(worst)
+        for other in overlaps.pop(worst):
+            overlaps[other].discard(worst)
+    return {i for m in removed for i in molecules[m]}
 
 
 def _select_for_box(edge, old, rel, pos, atoms, kinds, heavy, molecules) -> dict:

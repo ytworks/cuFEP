@@ -239,3 +239,85 @@ def test_the_notes_on_bilayer_and_pose_of_a_leg_that_is_not_run_follow_the_level
     assert without[0] == "a note of the search" and any(n.startswith("the bilayer had not settled") for n in without)
     assert not any(n.startswith("the ligand moved away") for n in without)
 
+
+
+def _waters(oxygens_nm):
+    """A topology of water molecules with their oxygens at ``oxygens_nm`` and their positions (nm)."""
+    top = app.Topology()
+    chain = top.addChain()
+    positions = []
+    for k, o in enumerate(np.asarray(oxygens_nm, dtype=float)):
+        res = top.addResidue("HOH", chain, id=str(k + 1))
+        ao = top.addAtom("O", app.element.oxygen, res)
+        h1 = top.addAtom("H1", app.element.hydrogen, res)
+        h2 = top.addAtom("H2", app.element.hydrogen, res)
+        top.addBond(ao, h1)
+        top.addBond(ao, h2)
+        positions += [o, o + [0.0957, 0.0, 0.0], o + [-0.024, 0.0927, 0.0]]
+    return top, np.asarray(positions)
+
+
+def test_waters_that_overlap_across_the_boundary_of_a_trimmed_bilayer_are_removed():
+    """Review of 771a7ab (B5, the A2A example): trim_membrane removed waters that overlapped a lipid across the new
+    periodic boundary, but not waters that overlapped each other there; two waters on the two sides of the new boundary
+    ended with their oxygens 0.092 A apart, and the pre-equilibration ended in NaN at 4 and at 2 fs. Of every pair of
+    overlapping waters in the final box one goes; a water that overlaps another molecule goes."""
+    from cufep.prep.membrane import CLASH_NM, _kind, _molecules, boundary_water_overlaps
+
+    edge, height = 3.0, 4.0
+    oxygens = [[0.0046, 1.0, 1.0], [3.0 - 0.0046, 1.0, 1.0],            # 0.092 A apart through x
+               [1.5, 0.1, 2.0], [1.5, 2.95, 2.0],                         # 0.15 nm apart through y
+               [1.0, 1.0, 0.05], [1.0, 1.0, 3.93],                        # 0.12 nm apart through z
+               [1.5, 1.5, 1.0], [2.0, 2.0, 3.0]]                          # far from everything
+    top, pos = _waters(oxygens)
+    atoms = list(top.atoms())
+    kinds = np.array([_kind(a.residue) for a in atoms])
+    heavy = np.array([a.element != app.element.hydrogen for a in atoms])
+    molecules = _molecules(top)
+    removed = boundary_water_overlaps(pos, kinds, heavy, molecules, set(), (edge, edge, height))
+    gone = sorted({atoms[i].residue.index for i in removed})
+    assert len(gone) == 3 and {0, 1} & set(gone) and {2, 3} & set(gone) and {4, 5} & set(gone)
+    assert 6 not in gone and 7 not in gone and all(len([i for i in removed if atoms[i].residue.index == r]) == 3
+                                                    for r in gone)
+    # what is left overlaps nothing in the final box
+    left = [i for i in range(len(atoms)) if heavy[i] and i not in removed]
+    box = np.array([edge, edge, height])
+    d = np.linalg.norm((pos[left][:, None] - pos[left][None] + box / 2) % box - box / 2, axis=2)
+    assert d[np.triu_indices(len(left), 1)].min() >= CLASH_NM
+    # atoms that are already removed do not count: with the first water gone, its partner stays
+    without_first = {atoms[i].residue.index for i in boundary_water_overlaps(
+        pos, kinds, heavy, molecules, {a.index for a in atoms if a.residue.index == 0}, (edge, edge, height))}
+    assert 1 not in without_first and len(without_first) == 2
+    # a water overlapping the protein goes whatever else
+    protein_kinds = kinds.copy()
+    protein_kinds[[a.index for a in list(top.residues())[7].atoms()]] = "protein"
+    close = pos.copy()
+    close[[a.index for a in list(top.residues())[6].atoms()]] += pos[21] - pos[18] + [0.1, 0.0, 0.0]   # 0.1 nm from it
+    taken = {atoms[i].residue.index for i in boundary_water_overlaps(close, protein_kinds, heavy, molecules, set(),
+                                                                     (edge, edge, height))}
+    assert 6 in taken and 7 not in taken
+
+
+@pytest.mark.parametrize("shift", [[0, 0, 0], [1, 0, 0], [1, -1, 0], [0, 0, 1]])
+def test_the_preparation_refuses_a_water_that_overlaps_another_molecule(shift):
+    """The check of every prepared system (one water 0.092 A from another, also in a triclinic box and through its
+    boundary) finds the pair; a water 3 A away, or a contact of two molecules that are not solvent, is not reported."""
+    from cufep.workflow import overlapping_molecules
+
+    d = 3.0
+    box = np.array([[d, 0, 0], [0, d, 0], [d / 2, d / 2, d * np.sqrt(2) / 2]])     # rhombic dodecahedron
+    a = np.array([0.0046, 1.0, 1.0])
+    b = a - [0.0092, 0.0, 0.0] + np.asarray(shift) @ box                         # the same place, maybe an image away
+    top, pos = _waters([a, b, a + [0.3, 0.0, 0.0] + [0.0, 0.5, 0.0]])
+    pairs = overlapping_molecules(top, pos, box)
+    assert len(pairs) == 1 and pairs[0][:2] == (0, 3) and pairs[0][2] == pytest.approx(0.0092, abs=1e-6)
+    lig = app.Topology()
+    chain = lig.addChain()
+    for name in ("LIG", "ALA"):
+        lig.addAtom("C1", app.element.carbon, lig.addResidue(name, chain))
+        lig.addAtom("C2", app.element.carbon, list(lig.residues())[-1])
+    lig_bonds = list(lig.atoms())
+    lig.addBond(lig_bonds[0], lig_bonds[1])
+    lig.addBond(lig_bonds[2], lig_bonds[3])
+    contact = np.array([[1.0, 1.0, 1.0], [1.15, 1.0, 1.0], [1.01, 1.0, 1.0], [1.0, 1.15, 1.0]])
+    assert overlapping_molecules(lig, contact, box) == []
