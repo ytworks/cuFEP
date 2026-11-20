@@ -269,7 +269,9 @@ def test_a_report_is_that_of_the_run_as_it_is_now(tmp_path):
     (tmp_path / "summary.json").write_text(json.dumps([good]))
     assert "-12.34" in report("tyk2", tmp_path)
     assert "-12.34" in (tmp_path / "benchmark_report.csv").read_text()
+    assert (tmp_path / "benchmark_report_ligands.png").exists()            # the figure ligand by ligand
     (tmp_path / "benchmark_report.png").write_text("the figure of that state")      # also where no figure can be made
+    (tmp_path / "benchmark_report_ligands.png").write_text("the figure of that state")
 
     failed = {"ligand": "jmc_23", "n_repeats": 0, "failed_legs": ["complex leg"],
               "warnings": ["repeat 0 complex: FAILED: the GPU was lost.", "repeat 0 is incomplete"]}
@@ -281,7 +283,7 @@ def test_a_report_is_that_of_the_run_as_it_is_now(tmp_path):
     with open(tmp_path / "benchmark_report.csv") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == 1 and rows[0]["cufep"] == "" and rows[0]["flags"] == "FAILED: complex leg"
-    assert not (tmp_path / "benchmark_report.png").exists()
+    assert not (tmp_path / "benchmark_report.png").exists() and not (tmp_path / "benchmark_report_ligands.png").exists()
 
     # some ligands with a result and some without: both are in the report and in the table
     (tmp_path / "summary.json").write_text(json.dumps([

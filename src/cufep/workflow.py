@@ -62,7 +62,8 @@ def safe_name(name: str) -> str:
 OUTPUT_ROOT_NAMES = frozenset({
     "cache", "cufep.log", "resolved_config.yaml", "resolved_config.refused.yaml", "auto_report.md",
     "protein_prepared.pdb", "summary.json", "summary.csv", "timing.json", "timing_rerun.json",
-    "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "frozen_schedules", ".cufep.lock"})
+    "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "benchmark_report_ligands.png",
+    "frozen_schedules", ".cufep.lock"})
 
 
 def ligand_dir_name(name: str) -> str:

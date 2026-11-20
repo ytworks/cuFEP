@@ -290,10 +290,11 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             w.writerows(rows + without)
 
         publish_with(run_dir / "benchmark_report.csv", table, newline="")
-        figure = run_dir / "benchmark_report.png"
-        figure.unlink(missing_ok=True)                 # never the figure of an earlier state of the run
-        if rows:
-            _plot(rows, figure, name, unreliable, level)
+        for figure, plot in ((run_dir / "benchmark_report.png", _plot),
+                             (run_dir / "benchmark_report_ligands.png", _plot_ligands)):
+            figure.unlink(missing_ok=True)             # never the figure of an earlier state of the run
+            if rows:
+                plot(rows, figure, name, unreliable, level)
 
     if not rows:
         lines.append("No ligand has a binding free energy.")
@@ -408,37 +409,101 @@ def figure_range(rows: list[dict], margin: float = 1.0) -> tuple[float, float]:
     return min(values) - margin, max(values) + margin
 
 
-def _plot(rows: list[dict], path: Path, name: str, unreliable: set[str], level: str) -> None:
-    """The figure of the report: every ligand with a result, the NOT RELIABLE ones as open circles;
-    each series names its error bars."""
+#: the colours of the figures (categorical slots 1 and 2 of a palette checked for colour-vision
+#: deficiencies; experiment is drawn in neutral ink) and the marker of each series
+CUFEP_COLOUR, FEPPLUS_COLOUR, EXPERIMENT_COLOUR, GUIDE_COLOUR = "#2a78d6", "#eb6834", "#0b0b0b", "0.55"
+
+
+def _pyplot():
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except Exception:  # noqa: BLE001
-        return
-    exp = [r["exp"] for r in rows]
-    lo, hi = figure_range(rows)
-    fig, ax = plt.subplots(figsize=(5.2, 5.0), dpi=150)
-    ax.plot([lo, hi], [lo, hi], color="0.4", lw=1)
-    ax.fill_between([lo, hi], [lo - 1, hi - 1], [lo + 1, hi + 1], color="0.9", zorder=0)
+        return None
+    return plt
+
+
+def _save_figure(fig, path: Path) -> None:
+    from cufep.files import publish_with
+
+    fig.tight_layout()
+    publish_with(path, lambda fh: fig.savefig(fh, format=Path(path).suffix.lstrip(".") or "png", bbox_inches="tight"),
+                 mode="wb")
+
+
+def _cufep_series(ax, xs: dict, ys: dict, rows: list[dict], unreliable: set[str], level: str,
+                  bars: bool = True) -> None:
+    """cuFEP's points: filled circles, the NOT RELIABLE ones open; each series names its error bars."""
     for part, what, kind in (([r for r in rows if r["ligand"] not in unreliable], "cuFEP (absolute", {}),
                              ([r for r in rows if r["ligand"] in unreliable],
                               f"cuFEP, NOT RELIABLE (overlap below {level}", {"mfc": "white"})):
         if part:
-            ax.errorbar([r["exp"] for r in part], [r["cufep"] for r in part], yerr=[error_bar(r) for r in part],
-                        fmt="o", color="#1f6f8b", capsize=2, label=f"{what}; {error_bar_label(part)})", **kind)
-    ax.plot(exp, [r["fepplus"] for r in rows], "s", mfc="none", color="#c0392b", label="FEP+ (relative, shifted)")
+            ax.errorbar([xs[r["ligand"]] for r in part], [ys[r["ligand"]] for r in part],
+                        yerr=[error_bar(r) for r in part] if bars else None, fmt="o", ms=6, color=CUFEP_COLOUR,
+                        capsize=2, elinewidth=1, label=f"{what}; {error_bar_label(part)})", zorder=3, **kind)
+
+
+def _plot(rows: list[dict], path: Path, name: str, unreliable: set[str], level: str) -> None:
+    """The figure of the report: every ligand with a result against experiment, the NOT RELIABLE
+    ones as open circles, FEP+ as open squares; the diagonal and a band of 1 kcal/mol."""
+    plt = _pyplot()
+    if plt is None:
+        return
+    lo, hi = figure_range(rows)
+    fig, ax = plt.subplots(figsize=(5.2, 5.0), dpi=150)
+    ax.plot([lo, hi], [lo, hi], color=GUIDE_COLOUR, lw=1)
+    ax.fill_between([lo, hi], [lo - 1, hi - 1], [lo + 1, hi + 1], color="0.92", zorder=0)
+    exp = {r["ligand"]: r["exp"] for r in rows}
+    _cufep_series(ax, exp, {r["ligand"]: r["cufep"] for r in rows}, rows, unreliable, level)
+    ax.plot(list(exp.values()), [r["fepplus"] for r in rows], "s", ms=6, mfc="none", color=FEPPLUS_COLOUR,
+            label="FEP+ (relative, shifted)", zorder=2)
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_xlabel("experiment (kcal/mol)")
     ax.set_ylabel("calculated (kcal/mol)")
     ax.set_title(f"{name}: binding free energies")
-    ax.legend(frameon=False, fontsize=8)
-    from cufep.files import publish_with
+    ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(0.0, -0.12))
+    _save_figure(fig, path)
+    plt.close(fig)
 
-    fig.tight_layout()
-    publish_with(path, lambda fh: fig.savefig(fh, format=Path(path).suffix.lstrip(".") or "png"), mode="wb")
+
+def _plot_ligands(rows: list[dict], path: Path, name: str, unreliable: set[str], level: str) -> None:
+    """The figure of the report ligand by ligand, in the order of experiment: above, the binding
+    free energy of experiment, cuFEP (with its error bar) and FEP+; below, the signed errors of
+    cuFEP and FEP+ against experiment, with zero and a band of 1 kcal/mol."""
+    plt = _pyplot()
+    if plt is None:
+        return
+    ordered = sorted(rows, key=lambda r: r["exp"])
+    x = {r["ligand"]: i for i, r in enumerate(ordered)}
+    shift = 0.18                                       # experiment in the middle, the two methods beside it
+    fig, (top, bottom) = plt.subplots(2, 1, sharex=True, figsize=(max(6.0, 0.48 * len(ordered) + 2.0), 6.4),
+                                      dpi=150, gridspec_kw={"height_ratios": [3, 2]})
+    left = {k: v - shift for k, v in x.items()}
+    right = [v + shift for v in x.values()]
+    top.plot(list(x.values()), [r["exp"] for r in ordered], "D", ms=6, color=EXPERIMENT_COLOUR, label="experiment",
+             zorder=4)
+    _cufep_series(top, left, {r["ligand"]: r["cufep"] for r in rows}, rows, unreliable, level)
+    top.plot(right, [r["fepplus"] for r in ordered], "s", ms=6, mfc="none", color=FEPPLUS_COLOUR,
+             label="FEP+ (relative, shifted)", zorder=2)
+    top.set_ylabel("binding free energy (kcal/mol)")
+    top.set_title(f"{name}: binding free energy of each ligand", pad=34)
+    top.legend(frameon=False, fontsize=8, ncol=2, loc="lower left", bbox_to_anchor=(0.0, 1.0))
+    width = len(ordered) - 0.5
+    bottom.fill_between([-0.5, width], [-1, -1], [1, 1], color="0.92", zorder=0)
+    bottom.axhline(0.0, color=GUIDE_COLOUR, lw=1)
+    _cufep_series(bottom, left, {r["ligand"]: r["cufep"] - r["exp"] for r in rows}, rows, unreliable, level)
+    bottom.plot(right, [r["fepplus"] - r["exp"] for r in ordered], "s", ms=6, mfc="none", color=FEPPLUS_COLOUR,
+                zorder=2)
+    bottom.set_ylabel("minus experiment (kcal/mol)")
+    bottom.set_xticks(list(x.values()))
+    bottom.set_xticklabels([r["ligand"] for r in ordered], rotation=60, ha="right", fontsize=8)
+    bottom.set_xlim(-0.5, width)
+    for ax in (top, bottom):
+        ax.grid(axis="y", color="0.9", lw=0.6)
+        ax.set_axisbelow(True)
+    _save_figure(fig, path)
     plt.close(fig)
 
 
