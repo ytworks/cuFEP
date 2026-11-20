@@ -1,12 +1,14 @@
 # Docker execution rule
 
-Everything except CI is executed and tested in the official image, as in fmeta.
+Everything except CI is executed and tested in the official image, as in
+[fmeta](https://github.com/ytworks/fmeta).
 
 ## The rule
 
 - `cufep` commands, simulations, `pytest`, the scripts in `scripts/` and `spikes/`, the GPU tests
   and the benchmarks run in a container of the official image, through `scripts/in_docker.sh`
-  (`spikes/run.sh` and `spikes/run_frozen.sh` call the image the same way).
+  (`spikes/run.sh` calls it; `spikes/run_frozen.sh` runs the code built into an image of a
+  commit, through the entrypoint of the image, for runs whose result matters).
 - On the host: `git`, `gh`, `docker`, file editing and read-only state checks (`nvidia-smi`,
   `docker logs`, `docker ps`). No Python environment on the host (no conda, venv or
   `pip install`), and the project's Python is never run there.

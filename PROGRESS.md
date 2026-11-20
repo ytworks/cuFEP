@@ -19,7 +19,7 @@ OpenMM, on all GPUs of a machine, from two files.
 - Protocol: double decoupling with Boresch restraints chosen as OpenFE chooses them,
   Hamiltonian replica exchange with REST2 on the ligand and its pocket, adaptive lambda
   scheduling (Midgley et al. 2025), MBAR with the checks of the literature. Defaults and terms
-  follow established programs and the literature (`docs/protocol.md`); one calculation per
+  follow the literature and published open methods (`docs/configuration.md`); one calculation per
   ligand.
 - Speed is a requirement: replicas spread over all GPUs in proportion to the work, several
   workers per GPU through NVIDIA MPS.
@@ -49,8 +49,11 @@ Snapshot date: 2026-11-20. `main` is 31a720e (PR #1 merged): the engine of plan
 Open items:
 - The examples with the default settings (10 ns of production per window) in an image of the
   current code; the full benchmarks. Both wait for the owner's decision.
-- Lint: ruff is not used yet. With fmeta's rules it reports about 1800 findings in the current
-  tree, most of them line length; it is left to a pull request of its own.
+- Lint: ruff is not used yet; PR #3 introduces it with the rules of
+  [fmeta](https://github.com/ytworks/fmeta).
+- `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
+  5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
+  decision (`.claude/rules/fep-invariants.md`).
 - The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4 and CUDA 13.4
   only); a rebuild of the image can change other packages.
 
