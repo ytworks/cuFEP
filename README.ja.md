@@ -283,7 +283,9 @@ lambda window あたり 5 ns の production、それ以外は既定値) で動�
 (Ross ら 2023、MIT ライセンス。[benchmarks/README.md](benchmarks/README.md)) のものです。レポートは
 cuFEP を、実験値と、セットとともに公開されている FEP+ の予測値と比較します。FEP+ の値は相対計算を
 実験値の平均にそろえたものなので、レポートは生の誤差 (cuFEP のみ) と、同じ条件での統計を分けて
-示します。全セットの結果はまだ公開していません。
+示します。結果のあるリガンドはすべて、NOT RELIABLE のものも含めて比較します。さらに NOT RELIABLE の
+リガンドとそれ以外を分けて比較し、NOT RELIABLE の leg がどこで overlap の基準を下回ったかを示します。
+全セットの結果はまだ公開していません。
 
 ## 制限
 

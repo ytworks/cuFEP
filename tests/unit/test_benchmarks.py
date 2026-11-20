@@ -7,7 +7,14 @@ import pytest
 
 from cufep.analysis.structure import structural_analysis
 from cufep.benchmarks.curate import compound_id, evenly_spaced_subset
-from cufep.benchmarks.runner import benchmark_config, data_root, load_registry, read_reference, report
+from cufep.benchmarks.runner import (
+    benchmark_config,
+    data_root,
+    load_registry,
+    overlap_places,
+    read_reference,
+    report,
+)
 from cufep.benchmarks.stats import bootstrap, metrics
 from cufep.config.schema import load_config
 from cufep.prep.ligand import load_ligands
@@ -132,6 +139,61 @@ def test_report_from_a_synthetic_run(tmp_path):
     assert (tmp_path / "benchmark_report.md").exists() and (tmp_path / "benchmark_report.csv").exists()
     with open(tmp_path / "benchmark_report.csv") as fh:
         assert len(list(csv.DictReader(fh))) == 16
+
+
+def test_not_reliable_ligands_are_compared_with_experiment_and_fepplus_like_the_others(tmp_path):
+    """The owner, 2026-11-20: NOT RELIABLE results are compared properly, not left out. They count in the
+    statistics of all ligands, have their signed errors and the place below the level of overlap, and the
+    breakdown compares them and the others with experiment, FEP+ on the same ligands."""
+    ref = read_reference("tyk2")
+    dg = {"jmc_23": -12.5, "ejm_47": -9.2, "ejm_49": -10.75, "ejm_31": -13.04}
+    place = {"leg": "complex leg", "windows": [13, 14], "stage": "vanish", "lambda": [0.75, 0.88]}
+    unreliable = {
+        "ejm_31": [dict(place, of="all iterations", overlap=0.024), dict(place, of="the samples of the estimate",
+                                                                           overlap=0.021)],
+        "ejm_49": [{"leg": "solvent leg", "of": "all iterations", "overlap": 0.011, "windows": [0, 1],
+                    "stage": "discharge", "lambda": [0.0, 0.25]}],
+    }
+    summary = [{"ligand": name, "dg_bind": value, "dg_bind_error": 0.5, "dg_bind_std": None, "n_repeats": 1,
+                "warnings": [], "min_overlap": 0.08, "not_reliable": [p["leg"] for p in unreliable.get(name, [])][:1],
+                "overlap_below_level": unreliable.get(name, [])} for name, value in dg.items()]
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    text = report("tyk2", tmp_path)
+
+    def err(names, method):
+        values = [(dg[n] if method == "cufep" else ref[n]["fepplus"]) - ref[n]["exp"] for n in names]
+        return np.mean(values), np.sqrt(np.mean(np.square(values)))
+
+    # every ligand is in the statistics of all ligands
+    mse_all = err(dg, "cufep")[0]
+    assert [line.split("|")[2].split("[")[0].strip() for line in text.splitlines()
+            if line.startswith("| mean signed")][0] == f"{mse_all:.2f}"
+    # ... with its signed errors, marked, and the place below the level
+    assert (f"| ejm_31 (NOT RELIABLE) | -9.54 | -13.04 | 0.50 |  | 1 | {ref['ejm_31']['fepplus']:.2f} | -3.50 | "
+            f"{ref['ejm_31']['fepplus'] + 9.54:+.2f} |") in text
+    assert ("| complex leg, lambda windows 13 and 14 (vanish stage, lambda 0.75 and 0.88): 0.024 among all "
+            "iterations, 0.021 among the samples of the estimate |") in text
+    # the breakdown: both groups, cuFEP and FEP+ on the same ligands
+    assert ("| statistic | cuFEP, NOT RELIABLE (2) | FEP+, the same ligands | cuFEP, the others (2) | FEP+, the same "
+            "ligands |") in text
+    row = [line for line in text.splitlines() if line.startswith("| RMSE, raw")][-1]
+    expected = [err(["ejm_31", "ejm_49"], "cufep")[1], err(["ejm_31", "ejm_49"], "fepplus")[1],
+                err(["jmc_23", "ejm_47"], "cufep")[1], err(["jmc_23", "ejm_47"], "fepplus")[1]]
+    assert [float(x) for x in row.split("|")[2:6]] == pytest.approx(expected, abs=0.005)
+    assert "NOT RELIABLE (overlap below 0.03 in a leg, Klimovich et al. 2015): ejm_31, ejm_49." in text
+    with open(tmp_path / "benchmark_report.csv") as fh:
+        rows = {r["ligand"]: r for r in csv.DictReader(fh)}
+    assert float(rows["ejm_31"]["cufep_minus_exp"]) == pytest.approx(-3.5)
+    assert rows["ejm_49"]["overlap_below_level"].startswith("solvent leg, lambda windows 0 and 1 (discharge stage")
+    assert rows["jmc_23"]["overlap_below_level"] == "" and (tmp_path / "benchmark_report.png").exists()
+    # a group of one ligand has no error around its mean; no NOT RELIABLE ligand: said so
+    (tmp_path / "summary.json").write_text(json.dumps([s for s in summary if s["ligand"] != "ejm_49"]))
+    row = [line for line in report("tyk2", tmp_path).splitlines() if line.startswith("| RMSE after")][-1]
+    assert row.split("|")[2:4] == [" N/A ", " N/A "]
+    (tmp_path / "summary.json").write_text(json.dumps([s for s in summary if s["ligand"] not in unreliable]))
+    assert "No ligand is NOT RELIABLE: the statistics above are those of the 2 ligands" in report("tyk2", tmp_path)
+    # a summary of an earlier version names the legs only
+    assert overlap_places({"not_reliable": ["complex leg"]}) == "complex leg (windows not recorded)"
 
 
 def _samples(shift):

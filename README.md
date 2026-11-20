@@ -290,8 +290,10 @@ one of the set's. One calculation per ligand is run; `--repeats` runs more. The 
 (Ross et al. 2023, MIT licence; [benchmarks/README.md](benchmarks/README.md)). The report
 compares cuFEP with experiment and with the FEP+ predictions published with the set. The FEP+
 values come from relative calculations shifted to the experimental mean, so the report separates
-the raw errors (cuFEP only) from the like-for-like statistics. Results of the full sets are not
-published yet.
+the raw errors (cuFEP only) from the like-for-like statistics. Every ligand with a result is
+compared, NOT RELIABLE ones included; the report also compares the NOT RELIABLE ligands and the
+others apart and says where each NOT RELIABLE leg is below the level of overlap. Results of the
+full sets are not published yet.
 
 ## Limitations
 

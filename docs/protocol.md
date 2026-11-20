@@ -601,7 +601,10 @@ same number of samples:
 
 After the production the analysis of each leg makes four checks. They change nothing in what
 is run. What they find is written to the result line, to `result.json` (`quality`), to
-`summary.csv` and to the benchmark report. Every level is one that the literature gives:
+`summary.csv` and to the benchmark report. The report compares every ligand with a result
+with experiment and with the predictions published with the set, NOT RELIABLE ones included,
+also in two groups apart, and names the pair of windows below the level
+(`overlap_below_level` in `summary.json`). Every level is one that the literature gives:
 Klimovich, Shirts and Mobley, "Guidelines for the analysis of free energy calculations", J.
 Comput. Aided Mol. Des. 2015, 29, 397, and Mey et al., "Best Practices for Alchemical Free
 Energy Calculations", LiveCoMS 2020.

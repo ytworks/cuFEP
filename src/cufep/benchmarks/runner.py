@@ -127,12 +127,72 @@ def flags_of(ligand_summary: dict) -> list[str]:
     return out
 
 
+def overlap_places(ligand_summary: dict) -> str:
+    """Where the legs of a NOT RELIABLE result have neighbouring lambda windows below the level of
+    overlap: leg, pair of windows, stage, lambda values and the overlap, among all iterations and
+    among the samples of the estimate (``overlap_below_level`` of the summary). A summary of an
+    earlier version names the legs only; empty if no leg is NOT RELIABLE."""
+    places = ligand_summary.get("overlap_below_level")
+    if places is None:
+        legs = ligand_summary.get("not_reliable") or []
+        return "; ".join(f"{leg} (windows not recorded)" for leg in legs)
+    grouped: dict[tuple, list[str]] = {}
+    for p in places:
+        pair, lam = p.get("windows"), p.get("lambda")
+        where = p["leg"] if not pair else f"{p['leg']}, lambda windows {pair[0]} and {pair[1]}"
+        if p.get("stage") is not None and lam:
+            where += f" ({p['stage']} stage, lambda {lam[0]:g} and {lam[1]:g})"
+        value = "not defined" if p.get("overlap") is None else f"{p['overlap']:.3f}"
+        grouped.setdefault(where, []).append(f"{value} among {p['of']}")
+    return "; ".join(f"{where}: {', '.join(values)}" for where, values in grouped.items())
+
+
+#: the statistics of the agreement with experiment, in the order of the report
+STATISTICS = (("mean_signed_error", "mean signed error (kcal/mol)"), ("rmse", "RMSE, raw (kcal/mol)"),
+              ("mue", "MUE, raw (kcal/mol)"), ("centred_rmse", "RMSE after removing the mean error (kcal/mol)"),
+              ("pairwise_rmse", "pairwise ddG RMSE (kcal/mol)"), ("kendall_tau", "Kendall tau"),
+              ("spearman", "Spearman rho"), ("pearson_r2", "Pearson R^2"))
+#: those of them shown for each group of the breakdown by the check of overlap
+BREAKDOWN_STATISTICS = ("mean_signed_error", "rmse", "mue", "centred_rmse")
+
+
+def breakdown_by_overlap(rows: list[dict], unreliable: set[str]) -> list[str]:
+    """Markdown lines: the agreement with experiment of the NOT RELIABLE ligands and of the others,
+    each for cuFEP and for FEP+ on the same ligands. Both groups are also in the statistics of all
+    ligands; this shows how the results below the level of overlap compare."""
+    groups = [("NOT RELIABLE", [r for r in rows if r["ligand"] in unreliable]),
+              ("the others", [r for r in rows if r["ligand"] not in unreliable])]
+    out = ["## Agreement with experiment by the check of overlap", ""]
+    if not groups[0][1]:
+        return out + [f"No ligand is NOT RELIABLE: the statistics above are those of the {len(rows)} ligands that "
+                      "meet the level of overlap."]
+    names = ", ".join(r["ligand"] for r in sorted(groups[0][1], key=lambda r: r["exp"]))
+    out += [f"NOT RELIABLE (overlap below 0.03 in a leg, Klimovich et al. 2015): {names}. They are counted in the "
+            "statistics above; here they and the other ligands are compared with experiment apart, cuFEP and FEP+ "
+            "on the same ligands (N/A: not defined for so few ligands).", ""]
+    header, rule = "| statistic |", "|---|"
+    cells: dict[str, str] = {key: "" for key in BREAKDOWN_STATISTICS}
+    for group, members in groups:
+        header += f" cuFEP, {group} ({len(members)}) | FEP+, the same ligands |"
+        rule += "---|---|"
+        exp = [r["exp"] for r in members]
+        for method in ("cufep", "fepplus"):
+            m = metrics([r[method] for r in members], exp) if members else None
+            for key in BREAKDOWN_STATISTICS:
+                value = None if m is None else m[key]
+                cells[key] += " N/A |" if value is None else f" {value:.2f} |"
+    labels = dict(STATISTICS)
+    return out + [header, rule] + [f"| {labels[key]} |{cells[key]}" for key in BREAKDOWN_STATISTICS]
+
+
 #: the columns of benchmark_report.csv: cufep_error is the standard error of one calculation
-#: (dg_bind_error; empty for a result of before it), cufep_std the standard deviation over repeats
-REPORT_COLUMNS = ("ligand", "exp", "fepplus", "cufep", "cufep_error", "cufep_std", "n_repeats", "windows_complex",
-                  "windows_solvent",
-                  "windows_added_complex", "windows_added_solvent", "lowest_overlap", "lowest_overlap_used", "flags",
-                  "warnings")
+#: (dg_bind_error; empty for a result of before it), cufep_std the standard deviation over repeats;
+#: cufep_minus_exp and fepplus_minus_exp the signed errors; overlap_below_level where a NOT RELIABLE
+#: result is below the level (:func:`overlap_places`)
+REPORT_COLUMNS = ("ligand", "exp", "fepplus", "cufep", "cufep_error", "cufep_std", "n_repeats", "cufep_minus_exp",
+                  "fepplus_minus_exp", "windows_complex", "windows_solvent",
+                  "windows_added_complex", "windows_added_solvent", "lowest_overlap", "lowest_overlap_used",
+                  "overlap_below_level", "flags", "warnings")
 
 
 def report(name: str, run_dir: str | Path, write: bool = True) -> str:
@@ -147,6 +207,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     reference = read_reference(name)
     summary = json.loads((run_dir / "summary.json").read_text())
     rows, without = [], []
+    unreliable: set[str] = set()                       # ligands whose result is NOT RELIABLE (overlap)
     for s in summary:
         ref = reference.get(s["ligand"])
         if ref is None:
@@ -154,9 +215,13 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         if "dg_bind" not in s:
             without.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": None,
                             "cufep_error": None, "cufep_std": None, "n_repeats": s.get("n_repeats", 0),
+                            "cufep_minus_exp": None, "fepplus_minus_exp": ref["fepplus"] - ref["exp"],
+                            "overlap_below_level": overlap_places(s),
                             "flags": "; ".join(flags_of(s) or ["no complete repeat"]),
                             "warnings": len(s.get("warnings", []))})
             continue
+        if s.get("not_reliable"):
+            unreliable.add(s["ligand"])
         first = (s.get("repeats") or [{}])[0]
         added = first.get("lambda_windows_added") or {}
         flags = flags_of(s)
@@ -169,12 +234,15 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                 "cufep_error": s.get("dg_bind_error"),
                 "cufep_std": s.get("dg_bind_std"),
                 "n_repeats": s["n_repeats"],
+                "cufep_minus_exp": s["dg_bind"] - ref["exp"],
+                "fepplus_minus_exp": ref["fepplus"] - ref["exp"],
                 "windows_complex": (first.get("lambda_windows") or {}).get("complex"),
                 "windows_solvent": (first.get("lambda_windows") or {}).get("solvent"),
                 "windows_added_complex": None if added.get("complex") is None else sum(added["complex"].values()),
                 "windows_added_solvent": None if added.get("solvent") is None else sum(added["solvent"].values()),
                 "lowest_overlap": s.get("min_overlap"),
                 "lowest_overlap_used": s.get("min_overlap_used"),
+                "overlap_below_level": overlap_places(s),
                 "flags": "; ".join(flags),
                 "warnings": len(s.get("warnings", [])),
             }
@@ -201,7 +269,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         figure = run_dir / "benchmark_report.png"
         figure.unlink(missing_ok=True)                 # never the figure of an earlier state of the run
         if rows:
-            _plot(rows, figure, name)
+            _plot(rows, figure, name, unreliable)
 
     if not rows:
         lines.append("No ligand has a binding free energy.")
@@ -210,15 +278,19 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             save(text)
         return text
     lines += ["## Per ligand (kcal/mol)", "",
-              "Standard error: of one calculation, from its own trajectories (- for a result of an earlier version "
-              "that did not record it). SD over repeats: only where several independent calculations were run.", "",
-              "| ligand | experiment | cuFEP | standard error | SD over repeats | repeats | FEP+ |",
-              "|---|---|---|---|---|---|---|"]
+              "Every ligand with a binding free energy, NOT RELIABLE ones included (marked). Standard error: of one "
+              "calculation, from its own trajectories (- for a result of an earlier version that did not record it). "
+              "SD over repeats: only where several independent calculations were run. The last two columns are the "
+              "signed errors against experiment.", "",
+              "| ligand | experiment | cuFEP | standard error | SD over repeats | repeats | FEP+ | cuFEP - experiment "
+              "| FEP+ - experiment |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: r["exp"]):
         sd = "" if r["cufep_std"] is None else f"{r['cufep_std']:.2f}"
         se = "-" if r["cufep_error"] is None else f"{r['cufep_error']:.2f}"
-        lines.append(f"| {r['ligand']} | {r['exp']:.2f} | {r['cufep']:.2f} | {se} | {sd} | {r['n_repeats']} | "
-                     f"{r['fepplus']:.2f} |")
+        mark = " (NOT RELIABLE)" if r["ligand"] in unreliable else ""
+        lines.append(f"| {r['ligand']}{mark} | {r['exp']:.2f} | {r['cufep']:.2f} | {se} | {sd} | {r['n_repeats']} | "
+                     f"{r['fepplus']:.2f} | {r['cufep_minus_exp']:+.2f} | {r['fepplus_minus_exp']:+.2f} |")
 
     def count(value) -> str:
         return "" if value is None else str(value)
@@ -231,13 +303,16 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         "of neighbouring windows in the production (from all iterations with equal numbers of samples per "
         "window, and among the samples the free energy is estimated from), and the legs that do not meet a "
         "level of the checks (first repeat). The checks are the two of the literature: NOT RELIABLE (overlap "
-        "below 0.03, Klimovich et al. 2015) makes a result unusable; few independent samples (fewer than 50 "
+        "below 0.03, Klimovich et al. 2015) says that the free energy of a leg rests on too little overlap of "
+        "neighbouring windows; few independent samples (fewer than 50 "
         "in a window, Mey et al. 2020) says that more sampling is advisable. A result that an earlier version "
         "of cuFEP analysed carries the flag that the checks of this version were not made; they are made when "
-        "its legs are analysed again.",
+        "its legs are analysed again. The last column says where a NOT RELIABLE result is below the level: "
+        "leg, pair of lambda windows, stage, lambda values and overlap.",
         "",
-        "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags |",
-        "|---|---|---|---|---|---|",
+        "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags "
+        "| overlap below the level |",
+        "|---|---|---|---|---|---|---|",
     ]
     for r in sorted(rows, key=lambda r: r["exp"]):
         def cell_windows(leg: str, r=r) -> str:
@@ -246,7 +321,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         low = "" if r["lowest_overlap"] is None else f"{r['lowest_overlap']:.3f}"
         used = "" if r["lowest_overlap_used"] is None else f"{r['lowest_overlap_used']:.3f}"
         lines.append(f"| {r['ligand']} | {cell_windows('complex')} | {cell_windows('solvent')} | {low} | {used} | "
-                     f"{r['flags']} |")
+                     f"{r['flags']} | {r['overlap_below_level']} |")
     scheduled = [r[f"windows_added_{leg}"] for r in rows for leg in ("complex", "solvent")
                  if r[f"windows_added_{leg}"] is not None]
     if scheduled:
@@ -270,18 +345,16 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
 
     lines += ["", "## Agreement with experiment", "",
               "Values in brackets are 95 % bootstrap intervals over ligands. All numbers are for the ligands "
-              "of this report. FEP+ values come from relative calculations that were shifted as a whole to the "
-              "experimental mean of the published set; over a part of that set their mean signed error is not "
-              "zero. Only the rows below the first three compare the two methods like for like.", "",
+              "of this report: every ligand with a binding free energy, NOT RELIABLE ones included. FEP+ values "
+              "come from relative calculations that were shifted as a whole to the experimental mean of the "
+              "published set; over a part of that set their mean signed error is not zero. Only the rows below "
+              "the first three compare the two methods like for like.", "",
               "| statistic | cuFEP | FEP+ |", "|---|---|---|"]
-    labels = [("mean_signed_error", "mean signed error (kcal/mol)"), ("rmse", "RMSE, raw (kcal/mol)"),
-              ("mue", "MUE, raw (kcal/mol)"), ("centred_rmse", "RMSE after removing the mean error (kcal/mol)"),
-              ("pairwise_rmse", "pairwise ddG RMSE (kcal/mol)"), ("kendall_tau", "Kendall tau"),
-              ("spearman", "Spearman rho"), ("pearson_r2", "Pearson R^2")]
-    for key, label in labels:
+    for key, label in STATISTICS:
         lines.append(f"| {label} | {cell('cuFEP', key)} | {cell('FEP+', key)} |")
     if len(rows) < 8:
         lines += ["", f"Only {len(rows)} ligands: the intervals are wide and rank statistics are indicative at best."]
+    lines += ["", *breakdown_by_overlap(rows, unreliable)]
     text = "\n".join(lines) + "\n"
     if write:
         save(text)
@@ -311,7 +384,8 @@ def figure_range(rows: list[dict], margin: float = 1.0) -> tuple[float, float]:
     return min(values) - margin, max(values) + margin
 
 
-def _plot(rows: list[dict], path: Path, name: str) -> None:
+def _plot(rows: list[dict], path: Path, name: str, unreliable: frozenset[str] | set[str] = frozenset()) -> None:
+    """The figure of the report: every ligand with a result, the NOT RELIABLE ones as open circles."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -323,8 +397,13 @@ def _plot(rows: list[dict], path: Path, name: str) -> None:
     fig, ax = plt.subplots(figsize=(5.2, 5.0), dpi=150)
     ax.plot([lo, hi], [lo, hi], color="0.4", lw=1)
     ax.fill_between([lo, hi], [lo - 1, hi - 1], [lo + 1, hi + 1], color="0.9", zorder=0)
-    ax.errorbar(exp, [r["cufep"] for r in rows], yerr=[error_bar(r) for r in rows], fmt="o",
-                color="#1f6f8b", label="cuFEP (absolute; " + error_bar_label(rows) + ")", capsize=2)
+    label = "cuFEP (absolute; " + error_bar_label(rows) + ")"
+    for part, kind in (([r for r in rows if r["ligand"] not in unreliable], {}),
+                       ([r for r in rows if r["ligand"] in unreliable], {"mfc": "white"})):
+        if part:
+            ax.errorbar([r["exp"] for r in part], [r["cufep"] for r in part], yerr=[error_bar(r) for r in part],
+                        fmt="o", color="#1f6f8b", capsize=2, label=label if not kind else
+                        "cuFEP, NOT RELIABLE (overlap below 0.03)", **kind)
     ax.plot(exp, [r["fepplus"] for r in rows], "s", mfc="none", color="#c0392b", label="FEP+ (relative, shifted)")
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
