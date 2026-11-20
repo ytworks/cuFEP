@@ -12,12 +12,14 @@ Everything except CI is executed and tested in the official image, as in
 - On the host: `git`, `gh`, `docker`, file editing and read-only state checks (`nvidia-smi`,
   `docker logs`, `docker ps`). No Python environment on the host (no conda, venv or
   `pip install`), and the project's Python is never run there.
-- Exactly two exceptions:
+- Exactly three exceptions:
   1. CI (`.github/workflows/`). The `unit` job builds the conda environment of
      `docker/environment.yml` on the runner (stock OpenMM, no GPU, no plugin); the `harness` job
      runs the standard-library checks of `scripts/` with the runner's Python.
   2. The SessionStart hook (`scripts/check_progress_size.py`, standard library only), which must
      also work in a session that has no Docker.
+  3. ruff runs in its own official image, pinned in `scripts/lint.sh`, locally and in CI; it reads
+     the code and needs nothing of the cuFEP image.
 - A session without Docker does not fall back to the host: leave the verification to CI and
   report "not verified here".
 

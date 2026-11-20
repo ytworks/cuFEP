@@ -82,6 +82,8 @@ Apply these rules whenever a change adds, removes, moves or reclassifies behavio
 
 Every command runs in the official image (rule above); write `scripts/in_docker.sh` in front.
 
+- Lint: `scripts/lint.sh` (ruff, pinned there, in its official image; the rules are in
+  `pyproject.toml`). `scripts/lint.sh --fix` applies the safe fixes.
 - CPU: `scripts/in_docker.sh python -m pytest -q` (the unit tests, as CI runs them),
   `scripts/in_docker.sh python scripts/check_progress_size.py`,
   `scripts/in_docker.sh python scripts/check_readme_pair.py`,

@@ -29,3 +29,16 @@ markers = [
   "cupotential: needs the cuPotential OpenMM plugin",
   "physical: long physical validation run",
 ]
+
+[tool.ruff]
+# The rules of fmeta. Run with scripts/lint.sh (the pinned ruff in its official image).
+line-length = 120
+target-version = "py312"
+extend-exclude = ["runs", "spikes/out"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+  "E741",  # physics notation (l, I, O) is intentional
+  "B905",  # zip() over sequences of equal length by construction
+]
