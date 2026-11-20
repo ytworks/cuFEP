@@ -277,8 +277,8 @@ cufep benchmark report tyk2 runs/benchmark_tyk2_subset
 | `a2a` | アデノシン A2A 受容体 (PDB 5OLZ)、二重膜中 | 17 化合物 (29 状態) |
 
 セットは、その example の設定 (`examples/kinase_tyk2/config.yaml`、`examples/membrane_a2a/config.yaml`:
-lambda window あたり 5 ns の production、それ以外は既定値) で動きます。違うのは入力ファイルと出力先
-だけで、example のリガンドはセットのリガンドの 1 つです。リガンドごとに 1 回計算します。`--repeats` で回数を増やせます。入力は
+lambda window あたり 5 ns の production、それ以外は既定値) で動きます。違うのは入力ファイル、計算するリガンドの
+選び方と出力先だけで (smoke はさらにサンプリングを短くする)、example のリガンドはセットのリガンドの 1 つです。リガンドごとに 1 回計算します。`--repeats` で回数を増やせます。入力は
 [Schrödinger の公開結合自由エネルギーベンチマーク](https://github.com/schrodinger/public_binding_free_energy_benchmark)
 (Ross ら 2023、MIT ライセンス。[benchmarks/README.md](benchmarks/README.md)) のものです。レポートは
 cuFEP を、実験値と、セットとともに公開されている FEP+ の予測値と比較します。FEP+ の値は相対計算を

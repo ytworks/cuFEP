@@ -1,7 +1,8 @@
 # Benchmark sets. Paths are relative to the cuFEP data root (the repository, or
 # /opt/cufep inside the official image; override with the CUFEP_DATA variable).
 # `example` is the configuration whose settings the set runs with: everything in it but the
-# input files and the output directory (its ligand is one of the set's).
+# input files, the choice of ligands and the output directory (the smoke tier also shortens the
+# sampling); its ligand is one of the set's.
 # `subset` lists five ligands evenly spaced by experimental rank; it was fixed before any
 # benchmark calculation was run.
 tyk2:

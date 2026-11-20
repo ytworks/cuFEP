@@ -7,7 +7,8 @@
 
 A set runs with the settings of its example (`examples/kinase_tyk2/config.yaml`,
 `examples/membrane_a2a/config.yaml`; `src/cufep/benchmarks/registry.yaml`): everything in that
-configuration but the input files and the output directory. The example's protein is the set's
+configuration but the input files, the choice of ligands and the output directory (the smoke tier
+also shortens the sampling, never lengthening a setting of the example). The example's protein is the set's
 protein file and its ligand is one of the set's records.
 
 `*/inputs/` holds unmodified files from the Schrödinger

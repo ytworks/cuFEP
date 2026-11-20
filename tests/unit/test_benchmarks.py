@@ -70,7 +70,8 @@ def test_compound_names():
 def test_benchmark_tiers(tmp_path):
     smoke = benchmark_config("tyk2", "smoke", tmp_path / "s")
     assert smoke.system.ligand_names == ["jmc_23"] and smoke.sampling.repeats == 1
-    assert smoke.sampling.production_ns == 0.1 and smoke.lambda_schedule.adaptive.window_ps == 10
+    assert smoke.sampling.production_ns == 0.1
+    assert smoke.lambda_schedule.adaptive.window("complex") == smoke.lambda_schedule.adaptive.window("solvent") == 10
     assert smoke.lambda_schedule.adaptive.equilibration("complex") == 0.0
     a2a_smoke = benchmark_config("a2a", "smoke", tmp_path / "m")
     assert a2a_smoke.membrane.enabled is True and a2a_smoke.membrane.equilibration_ns == 0.5
@@ -108,6 +109,25 @@ def test_a_benchmark_set_runs_with_the_settings_of_its_example(name, tmp_path):
     assert example.system.protein.read_bytes() == (root / entry["protein"]).read_bytes()
     (ligand, record), = _sdf_records(example.system.ligand).items()
     assert _sdf_records(root / entry["ligands"])[ligand] == record
+
+
+def test_the_tiers_choose_the_ligands_and_smoke_never_lengthens_a_setting_of_the_example(tmp_path, monkeypatch):
+    """Independent review of PR 4: an example that selects ligands made the full tier run only those, and the
+    smoke tier set 0.5 ns of membrane equilibration where the example had 0.2."""
+    (tmp_path / "benchmarks").mkdir()
+    (tmp_path / "examples" / "membrane_a2a").mkdir(parents=True)
+    (tmp_path / "examples" / "membrane_a2a" / "config.yaml").write_text(
+        "system: {protein: protein.pdb, ligand: ligand.sdf, ligand_names: [4e]}\n"
+        "membrane: {enabled: true, equilibration_ns: 0.2}\n"
+        "sampling: {production_ns: {complex: 0.05, solvent: 5.0}, rest2: {region: ligand}}\n")
+    monkeypatch.setenv("CUFEP_DATA", str(tmp_path))
+    example = load_config(tmp_path / "examples" / "membrane_a2a" / "config.yaml")
+    assert benchmark_config("a2a", "full").system.ligand_names is None
+    smoke = benchmark_config("a2a", "smoke", tmp_path / "s")
+    assert smoke.system.ligand_names == ["4e"] and smoke.membrane.equilibration_ns == 0.2
+    assert smoke.sampling.production_ns.complex == 0.05 and smoke.sampling.production_ns.solvent == 0.1
+    assert smoke.sampling.rest2 == example.sampling.rest2 and smoke.membrane.enabled is True
+    assert smoke.restraints == example.restraints and smoke.analysis == example.analysis
 
 
 def test_report_from_a_synthetic_run(tmp_path):
@@ -191,9 +211,28 @@ def test_not_reliable_ligands_are_compared_with_experiment_and_fepplus_like_the_
     row = [line for line in report("tyk2", tmp_path).splitlines() if line.startswith("| RMSE after")][-1]
     assert row.split("|")[2:4] == [" N/A ", " N/A "]
     (tmp_path / "summary.json").write_text(json.dumps([s for s in summary if s["ligand"] not in unreliable]))
-    assert "No ligand is NOT RELIABLE: the statistics above are those of the 2 ligands" in report("tyk2", tmp_path)
+    text = report("tyk2", tmp_path)
+    assert "No ligand with a binding free energy is NOT RELIABLE." in text and "meet the level" not in text
+    # the level is the one the analysis of the run recorded
+    level = [dict(s, analysis_record={"min_overlap": 0.05}) for s in summary]
+    (tmp_path / "summary.json").write_text(json.dumps(level))
+    text = report("tyk2", tmp_path)
+    assert "NOT RELIABLE (overlap below 0.05, Klimovich" in text and "below 0.03" not in text
     # a summary of an earlier version names the legs only
-    assert overlap_places({"not_reliable": ["complex leg"]}) == "complex leg (windows not recorded)"
+    assert overlap_places({"not_reliable": ["complex leg"]}) == "complex leg (the windows are not in this summary.json)"
+
+
+def test_ligands_an_earlier_version_analysed_are_not_said_to_meet_the_level(tmp_path):
+    """Independent review of PR 4: for a summary of an earlier version (no checks of this version) the breakdown
+    said that the ligands "meet the level of overlap"; a binding free energy written as null stopped the report."""
+    old = [{"ligand": name, "dg_bind": value, "dg_bind_mbar_error": 0.3, "dg_bind_std": None, "n_repeats": 1}
+           for name, value in (("jmc_23", -12.0), ("jmc_30", -11.0))]
+    old.append({"ligand": "ejm_31", "dg_bind": None, "n_repeats": 1, "not_reliable": ["solvent leg"], "warnings": []})
+    (tmp_path / "summary.json").write_text(json.dumps(old))
+    text = report("tyk2", tmp_path)
+    assert ("No ligand with a binding free energy is NOT RELIABLE. The checks of this version were not made for "
+            "jmc_23, jmc_30 (analysed by an earlier version).") in text
+    assert "| ejm_31 | -9.54 | NOT RELIABLE (overlap): solvent leg" in text and "Ligands with a result: 2 of 3" in text
 
 
 def _samples(shift):

@@ -284,8 +284,8 @@ cufep benchmark report tyk2 runs/benchmark_tyk2_subset
 
 A set runs with the settings of its example (`examples/kinase_tyk2/config.yaml`,
 `examples/membrane_a2a/config.yaml`: 5 ns of production per lambda window, every other setting
-the default); only the input files and the output directory differ, and the example's ligand is
-one of the set's. One calculation per ligand is run; `--repeats` runs more. The inputs come from the
+the default); only the input files, the choice of ligands and the output directory differ (the
+smoke tier also shortens the sampling), and the example's ligand is one of the set's. One calculation per ligand is run; `--repeats` runs more. The inputs come from the
 [Schrödinger public binding free energy benchmark](https://github.com/schrodinger/public_binding_free_energy_benchmark)
 (Ross et al. 2023, MIT licence; [benchmarks/README.md](benchmarks/README.md)). The report
 compares cuFEP with experiment and with the FEP+ predictions published with the set. The FEP+
