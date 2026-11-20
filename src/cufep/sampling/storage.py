@@ -119,6 +119,11 @@ def committed_counts(h5) -> tuple[int, int, int]:
     return rows, records(TAIL_DATASETS), records(FRAME_DATASETS)
 
 
+#: conditions that versions before they were recorded always had: their value for samples that do
+#: not record them
+CONDITIONS_OF_EARLIER_VERSIONS = {"exchange": "hrex"}
+
+
 def conditions_differences(stored: dict, current: dict) -> list[str]:
     """What differs between the conditions stored with samples and those of a run, in words.
 
@@ -126,6 +131,12 @@ def conditions_differences(stored: dict, current: dict) -> list[str]:
     version) is not.
     """
     differing = []
+    stored = dict(stored)
+    for key, earlier in CONDITIONS_OF_EARLIER_VERSIONS.items():
+        # what every version before the key was recorded did: samples of hrex were stored without it,
+        # and a run with exchange: none must not take them as its own (review of PR 1)
+        if key in current and key not in stored:
+            stored[key] = earlier
     for key, old in stored.items():
         new = current.get(key)
         if key == "lrc" and isinstance(old, dict) and "env" in old:

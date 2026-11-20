@@ -38,6 +38,8 @@ class LegSpec:
     pressure_bar: float | None = 1.0     # None -> constant volume
     barostat: str = "isotropic"          # isotropic | membrane | none
     barostat_frequency: int = 25
+    #: hrex = Hamiltonian replica exchange between the windows, none = independent windows
+    exchange: str = "hrex"
     friction_per_ps: float = 1.0
     timestep_fs: float = 4.0
     steps_per_iteration: int = 625
@@ -97,6 +99,7 @@ class LegSpec:
         return {"states": [dict(s) for s in self.states], "temperature_K": float(self.temperature_K),
                 "pressure_bar": None if self.pressure_bar is None else float(self.pressure_bar),
                 "barostat": self.barostat, "barostat_frequency": int(self.barostat_frequency),
+                "exchange": str(self.exchange),
                 "friction_per_ps": float(self.friction_per_ps), "timestep_fs": float(self.timestep_fs),
                 "steps_per_iteration": int(self.steps_per_iteration), "backend": self.backend,
                 "precision": self.precision, "integrator": self.integrator, "n_atoms": int(self.n_atoms),

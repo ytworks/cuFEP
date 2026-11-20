@@ -521,7 +521,7 @@ def leg_spec(cfg: Config, built, states: list[dict], barostat: str, timestep_fs:
         name=more.pop("name", "leg"), system_xml=built.xml, states=states, n_atoms=built.alch.system.getNumParticles(), backend=backend_name,
         precision=_precision(cfg, backend_name), platform=cfg.backend.platform,
         temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
-        barostat=barostat, barostat_frequency=cfg.dynamics.barostat_frequency,
+        barostat=barostat, barostat_frequency=cfg.dynamics.barostat_frequency, exchange=cfg.sampling.exchange,
         friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
         steps_per_iteration=planned_iterations(iteration_ps, timestep_fs, 0.0, 0.0).steps_per_iteration, seed=seed,
         cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=built.tail, settings=samples_settings(cfg),
@@ -1646,8 +1646,9 @@ def run_leg(job: LegJob) -> dict:
                 raise WorkflowError(
                     f"the cuPotential run of this leg failed ({str(exc)[:300]}). The leg had samples from an earlier "
                     "run, so it is not repeated on stock OpenMM from its start: its samples and checkpoint are left "
-                    "in hrex/. Run the leg again to continue it on cuPotential, or start it anew on stock OpenMM "
-                    "with backend.name: openmm and --reschedule (its samples are then kept in previous_<n>/)") from exc
+                    "in hrex/. Run the leg again to continue it on cuPotential, or run the calculation on stock "
+                    "OpenMM (backend.name: openmm) in a new output.dir: the pre-equilibration of this directory was "
+                    "made on cuPotential, and a leg keeps the backend of its files") from exc
             raise
         kept = set_aside_failed_backend(leg_dir)
         log(f"cuPotential run failed ({str(exc)[:300]}); repeating this leg on stock OpenMM; what the failed run "

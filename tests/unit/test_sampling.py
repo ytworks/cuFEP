@@ -2939,3 +2939,20 @@ if __name__ == "__main__":
         GOLDEN.parent.mkdir(exist_ok=True)
         GOLDEN.write_text(json.dumps({"version": ANALYSIS_VERSION, "numbers": golden_analysis()}, indent=1, default=float))
         print(f"recorded {GOLDEN} for version {ANALYSIS_VERSION}")
+
+
+def test_the_exchange_of_replicas_is_a_condition_of_the_samples(tiny_leg):
+    """Review of PR 1 on 64751ca (P2): samples of replica exchange and of independent windows had the same
+    conditions, and a finished leg run again with exchange: none took the samples of the exchange as its own.
+    Samples of every version before record no exchange: they are samples of hrex."""
+    import dataclasses as _dc
+
+    from cufep.sampling.storage import conditions_differences
+
+    spec, _pos, _box = tiny_leg
+    hrex, independent = spec.conditions(), _dc.replace(spec, exchange="none").conditions()
+    assert hrex["exchange"] == "hrex" and independent["exchange"] == "none"
+    assert conditions_differences(hrex, independent) == ["exchange: hrex -> none"]
+    earlier = {k: v for k, v in hrex.items() if k != "exchange"}          # samples of an earlier version
+    assert conditions_differences(earlier, independent) == ["exchange: hrex -> none"]
+    assert conditions_differences(earlier, hrex) == []
