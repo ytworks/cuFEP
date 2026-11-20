@@ -39,7 +39,10 @@ What happens to the protein (all of it is reported in `auto_report.md`):
 - missing heavy atoms are rebuilt; chain breaks split the chain and get ACE/NME caps;
   missing loops are never modelled;
 - explicitly charged chain ends stay charged; hydrogen-capped ends get ACE/NME caps;
-- water and monatomic ions are kept; waters overlapping the ligand are removed.
+- water and monatomic ions are kept; waters overlapping the ligand are removed;
+- one input gives one prepared protein: the small minimisations that place missing atoms,
+  caps and hydrogens run on OpenMM's Reference platform with a fixed seed (before revision
+  15 the caps of one input landed up to 1.9 A apart from one preparation to the next).
 
 cuFEP stops, with the reason, on: unknown or modified residues, a ligand without explicit
 hydrogens, a ligand with a net charge, a ligand outside the protein, a severe clash or a
@@ -71,7 +74,13 @@ two of three methods agree on it (a transfer-energy model, a hydrophobic-slab se
 (`membrane.orientation: input`). The complex is embedded in a POPC bilayer with
 `Modeller.addMembrane`, the bilayer is cut to the smallest sufficient box, and cavities
 inside the protein at the depth of the bilayer are filled with water, because the builder
-adds bulk water only above and below the lipids.
+adds bulk water only above and below the lipids. After the cut, every water that comes
+within 0.24 nm of another molecule through the new periodic boundary is removed (before
+revision 15 only waters next to a lipid were, and two waters 0.09 A apart made the
+pre-equilibration of the A2A example end in NaN). A prepared system in which a water or
+an ion is closer than 0.15 nm to another molecule is refused before it is written.
+`Modeller.addMembrane` relaxes the lipids with a short MD whose random seed OpenMM does not
+let the caller set, so two preparations of one membrane system are not identical.
 
 ## Thermodynamic cycle
 
