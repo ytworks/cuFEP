@@ -219,7 +219,8 @@ def link_problems(name: str, text: str, root: Path) -> list[str]:
 def table_numbers(text: str) -> list[str]:
     """The numbers in the cells of the tables outside code blocks that hold numbers only, in order
     (cells of prose are translated and may count in words; a minus sign written as U+2212 counts as
-    a hyphen-minus)."""
+    a hyphen-minus). Numbers in prose, in cells with words, units, code spans or emphasis are not
+    compared: keep the numbers of a result in cells of their own."""
     _, lines = blocks_and_text(text)
     cells = [cell.strip() for line in lines if line.lstrip().startswith("|")
              for cell in line.strip().strip("|").split("|")]

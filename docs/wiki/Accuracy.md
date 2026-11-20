@@ -25,7 +25,9 @@ analysis are compared like all others, and marked. The page gives numbers, not v
 One calculation per ligand, 5 ns of production per lambda window, on the full TYK2 (16 ligands)
 and A2A (17 compounds) sets. The statistics below are those of the Felis paper's definitions (see
 [Comparison with Felis](#comparison-with-felis-another-abfe-method)), so that all three methods
-stand on one basis (kcal/mol; offset b = <experiment - prediction>):
+are computed the same way (kcal/mol; offset b = <experiment - prediction>). The FEP+ values were
+shifted as a whole to the experimental mean of the published set, so their offset is near zero by
+construction and is not comparable with the offsets of the two absolute methods:
 
 | set | method | R^2 | Spearman rho | Kendall tau | offset b | RMSE after offset |
 |---|---|---|---|---|---|---|
@@ -66,7 +68,7 @@ method is in [docs/protocol.md](https://github.com/ytworks/cuFEP/blob/main/docs/
 | lambda windows | adaptive lambda scheduling (Midgley et al. 2025), threshold 0.18 |
 | sampling | Hamiltonian replica exchange, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it, scale 1.5 |
 | per lambda window | 1 ns of equilibration and 5 ns of production (the default of cuFEP is 10 ns; the examples and the benchmarks set 5 ns) |
-| analysis | MBAR minus the long-range dispersion correction; standard error from blocks of time; version 10 of the analysis |
+| analysis | MBAR minus the long-range dispersion correction; standard error from blocks of time, not below the analytical one (the analytical one where too few samples allow no blocks); version 10 of the analysis |
 
 ## The reference data
 
@@ -99,11 +101,12 @@ licence); cuFEP uses its input files unmodified
   the whole published set their mean signed error is zero; over the ligands here it need not be).
   These three rows are not like for like. The rows that compare the two methods like for like are
   the RMSE after removing each method's mean error, the pairwise ddG RMSE, Kendall tau, Spearman
-  rho and Pearson R^2.
+  rho, Pearson r and Pearson R^2.
 - The values in brackets are 95 % bootstrap intervals over ligands (2000 resamples). With 16 and
   17 ligands they are wide.
 - The error bar of a cuFEP value is the standard error of the one calculation, from blocks of
-  time common to all lambda windows. Repeated calculations of the same complex leg have differed
+  time common to all lambda windows and not below the analytical one; where a leg has too few
+  samples for blocks, the analytical one (5 of the 16 TYK2 ligands, 5 of the 17 A2A compounds). Repeated calculations of the same complex leg have differed
   among themselves by more than this standard error
   ([protocol: REST2](https://github.com/ytworks/cuFEP/blob/main/docs/protocol.md#rest2)), so the
   error bars understate how much a second run could differ.
@@ -178,7 +181,7 @@ What the numbers show, without a verdict:
 17 of 17 compounds have a binding free energy. No compound is NOT RELIABLE: the lowest overlap of
 neighbouring lambda windows is 0.035 to 0.182, 4e's 0.035 being the closest to the level of 0.03.
 In 16 of the 17 the complex leg has a lambda window with fewer than 50 independent samples, as
-few as 4 to 13 in 4i, 4h, 4f, 4q and 4j. Adaptive lambda scheduling ran with the threshold 0.18 in
+few as 4 to 13 in eight compounds (4i 4, 4h 6, 4f 9, 4e 10, 4g 10, 4o 11, 4q 11, 4j 13). Adaptive lambda scheduling ran with the threshold 0.18 in
 all 34 legs and added 2 to 6 windows to each complex leg and 3 to 7 to each solvent leg.
 
 ![A2A: calculated against experiment](images/a2a_scatter.png)
@@ -226,13 +229,13 @@ scheduling; the flags of the checks):
 
 What the numbers show, without a verdict:
 
-- 16 of 17 compounds come out more strongly bound than experiment, by 4.12 kcal/mol on average.
-  The Felis paper reports an offset in the same direction for this target, of 2.74.
+- 16 of 17 compounds come out more strongly bound than experiment; the mean signed error over all
+  17 is -4.12 kcal/mol. The Felis paper reports an offset in the same direction for this target,
+  of 2.74.
 - The example ligand 4e came out at -18.91 ± 0.52 kcal/mol here. One calculation with the same
   settings on an earlier commit gave -11.95 ± 0.73. The difference is in the complex leg (44.68
   here, 37.61 then); the solvent leg is the same (16.67, 16.52).
-- The bilayer was still changing at the end of its 10 ns of equilibration. Between the last two
-  quarters, its area changed by -2.3 to +0.1 % and the number of water molecules near the ligand
+- Between the last two quarters of the 10 ns of equilibration of the bilayer, its area changed by -2.3 to +0.1 % and the number of water molecules near the ligand
   by -1.7 to +1.6, over the 17 complex legs.
 
 ## Comparison with Felis, another ABFE method
@@ -249,11 +252,14 @@ rows of the paper exactly, for both targets. The Felis rows are copied from the 
 | | cuFEP (this page) | Felis (the paper) |
 |---|---|---|
 | calculations per ligand | 1 calculation | 3 calculations, averaged |
-| lambda states, complex / solvent | adaptive, about 20 / 18 | 80 / 24 |
+| lambda states, complex / solvent | adaptive: TYK2 20-30 / 17-21, A2A 17-21 / 16-20 | 80 / 24 for neutral ligands (96 / 32 for charged ones) |
 | sampling per state | 5 ns after 1 ns of equilibration | 5 ns (or its first 3 ns), nothing discarded |
 | enhanced sampling | Hamiltonian replica exchange, REST2 on the pocket | Hamiltonian replica exchange, RelocationMC for water near the ligand |
 | ligand force field | OpenFF 2.2.1, AM1-BCC | ByteFF25, AM1-BCC (or ABCG2) |
 | estimator | MBAR | BAR between neighbouring states |
+| states of a ligand | one record per compound: for A2A the neutral record that the FEP+ results file reports (17 of the 29 records) | every record of the benchmark (alternative poses and protonation states, 998 configurations for 857 entries), combined per compound with symmetry and pKa/tautomer corrections |
+| crystallographic waters | those in the input; the TYK2 and A2A protein files used here hold none | kept as provided in the benchmark repository |
+| A2A environment | the receptor in a POPC bilayer built by cuFEP | not described in the paper |
 
 TYK2:
 
