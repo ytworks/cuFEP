@@ -87,7 +87,10 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
         barostat = info["complex_barostat"] if leg == "complex" else "isotropic"
         # brief relaxation on stock OpenMM, then a few frames at three states
         prepared = stock.prepare_system(system)
-        integ = stock.make_integrator(T * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=1)
+        # the time step of the run is the upper limit of every MD of the validation (review of PR 1:
+        # with constraints none and 1 fs the fixed 4 fs gave NaN)
+        dt_run = float(resolved.dynamics.timestep_fs)
+        integ = stock.make_integrator(T * u.kelvin, 1 / u.picosecond, min(2.0, dt_run) * u.femtoseconds, seed=1)
         ctx = stock.make_context(prepared, integ, device)
         ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in prep["box"]])
         ctx.setPositions(prep["positions"])
@@ -109,7 +112,7 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
         contexts = {}
         for name, backend in (("stock mixed", stock), ("stock double", get_backend("openmm", precision="double")),
                               ("cuPotential", get_backend("cupotential"))):
-            integ = backend.make_integrator(T * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds, seed=2)
+            integ = backend.make_integrator(T * u.kelvin, 1 / u.picosecond, min(4.0, dt_run) * u.femtoseconds, seed=2)
             c = backend.make_context(backend.prepare_system(alch.system), integ, device)
             contexts[name] = (c, integ, StateEnergyEvaluator(c, schedule.states, T, None))
         frames = []

@@ -166,11 +166,18 @@ class WindowPool:
         self.workers, _described = start_workers(
             [lambda d=d, w=w: _Process(ctx, spec, d, None, w) for w, d in enumerate(devices)])
 
-    def run(self, tasks: list[dict], timeout: float = 3600.0) -> list[dict]:
+    def run(self, tasks: list[dict], window_timeout: float = 3600.0) -> list[dict]:
+        """Run every task (one window each) on the workers as they become free.
+
+        A window that runs longer than ``window_timeout`` seconds from its own start, or a worker
+        process that has ended, is a WorkerError. The limit is one of a window, not of the batch:
+        few workers that run many windows one after another, each in good time, are not stopped
+        after an hour in total (review of PR 1).
+        """
         results: list = [None] * len(tasks)
         pending = list(range(len(tasks)))
         busy: dict[int, int] = {}                          # worker position -> task index
-        deadline = time.time() + timeout
+        started: dict[int, float] = {}                     # worker position -> start of its window
         while pending or busy:
             for pos, worker in enumerate(self.workers):
                 if pos not in busy and pending:
@@ -180,11 +187,16 @@ class WindowPool:
                     except (EOFError, OSError) as exc:     # the process has ended
                         raise WorkerError(f"a worker of the lambda precalculation ended (device {worker.device})") \
                             from exc
-                    busy[pos] = i
+                    busy[pos], started[pos] = i, time.time()
             for pos in list(busy):
                 worker = self.workers[pos]
                 try:
                     if not worker.parent.poll(0.02):
+                        if not worker.proc.is_alive():
+                            raise WorkerError(f"a worker of the lambda precalculation died (device {worker.device})")
+                        if time.time() - started[pos] > window_timeout:
+                            raise WorkerError(f"a window of the lambda precalculation on device {worker.device} did not "
+                                              f"finish within {window_timeout:.0f} s of its start")
                         continue
                     msg = worker.parent.recv()
                 except (EOFError, OSError) as exc:
@@ -192,8 +204,7 @@ class WindowPool:
                 if msg[0] != "done":
                     raise WorkerError(f"lambda precalculation on device {worker.device}: {msg[1]}")
                 results[busy.pop(pos)] = msg[1]
-            if time.time() > deadline:
-                raise WorkerError("the lambda precalculation did not finish in time")
+                started.pop(pos, None)
         return results
 
     def close(self) -> None:

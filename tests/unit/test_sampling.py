@@ -1912,7 +1912,7 @@ def test_a_worker_that_ends_before_or_after_it_is_ready_is_a_failure_of_a_worker
     pool = WindowPool.__new__(WindowPool)
     pool.workers, pool.log = [late], (lambda message: None)
     with pytest.raises(WorkerError, match="lambda precalculation"):
-        pool.run([{"window": 0}], timeout=30.0)
+        pool.run([{"window": 0}], window_timeout=30.0)
     with pytest.raises(WorkerError, match="worker 8 .device 0. died"):
         late.result(5.0)
 

@@ -67,3 +67,16 @@ def scheduler_main(out_dir: str, names: list[str]) -> None:
 
 if __name__ == "__main__":
     scheduler_main(sys.argv[1], sys.argv[2:])
+
+
+def window_worker(conn, seconds: float) -> None:
+    """Stands in for a worker of the lambda precalculation: every window takes ``seconds``."""
+    while True:
+        try:
+            message = conn.recv()
+        except EOFError:
+            return
+        if message[0] == "stop":
+            return
+        time.sleep(seconds)
+        conn.send(("done", {"window": message[1].get("window")}))

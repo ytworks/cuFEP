@@ -33,14 +33,14 @@ class CuPotentialBackend(Backend):
     name = "cupotential"
 
     def __init__(self, precision: str = "mixed", platform: str = "CUDA",
-                 integrator: str = "nv", box_safety: float | None = None) -> None:
+                 integrator: str = "nv", box_safety: float | None = None, cpu_threads: int | None = None) -> None:
         if platform != "CUDA":
             raise BackendError("the cuPotential backend only runs on the CUDA platform")
         if precision not in ("mixed", "single"):
             raise BackendError("the cuPotential backend supports only 'mixed' or 'single' precision")
         if integrator not in ("nv", "stock"):
             raise BackendError("integrator must be 'nv' or 'stock'")
-        super().__init__(precision=precision, platform=platform)
+        super().__init__(precision=precision, platform=platform, cpu_threads=cpu_threads)
         self.integrator_kind = integrator
         self.box_safety = box_safety
 

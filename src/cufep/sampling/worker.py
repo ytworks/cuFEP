@@ -127,6 +127,43 @@ def _shared_directory(required_bytes: int, fallback: str | None = None) -> str:
     return fallback or tempfile.gettempdir()
 
 
+#: the directories of the shared replica arrays, and the lock their owner holds while it lives
+ARRAYS_PREFIX = "cufep-replicas-"
+OWNER_LOCK = "owner.lock"
+
+
+def remove_orphaned_arrays(base: str) -> list[str]:
+    """Remove the replica arrays under ``base`` whose owner has ended without removing them (killed,
+    crashed); returns them. An owner holds the lock ``owner.lock`` of its directory while it lives;
+    the lock works across processes and containers on one machine, which a process number would not.
+    Directories without the lock (of earlier versions) are left alone. Review of PR 1: every killed
+    run left its arrays, 288 MB for 30 replicas of 100,000 atoms, in /dev/shm or its fallback."""
+    import fcntl
+
+    removed = []
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return removed
+    for name in names:
+        if not name.startswith(ARRAYS_PREFIX):
+            continue
+        directory = os.path.join(base, name)
+        try:
+            fd = os.open(os.path.join(directory, OWNER_LOCK), os.O_RDWR)
+        except OSError:
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            continue                                     # its owner lives
+        finally:
+            os.close(fd)
+        shutil.rmtree(directory, ignore_errors=True)
+        removed.append(directory)
+    return removed
+
+
 class SharedArrays:
     """Replica state and energies in memory-mapped files shared with the workers."""
 
@@ -137,11 +174,19 @@ class SharedArrays:
         self.shapes = {"pos": (2, n_replicas, n_atoms, 3), "vel": (2, n_replicas, n_atoms, 3),
                        "box": (2, n_replicas, 3, 3), "u": (n_replicas, n_states), "vol": (n_replicas,)}
         self.owner = names is None
+        self._owner_lock = None
         if self.owner:
             total = sum(int(np.prod(s)) * 8 for s in self.shapes.values())
             base = _shared_directory(total, fallback_dir)
             os.makedirs(base, exist_ok=True)
-            self.directory = tempfile.mkdtemp(prefix="cufep-replicas-", dir=base)
+            remove_orphaned_arrays(base)
+            self.directory = tempfile.mkdtemp(prefix=ARRAYS_PREFIX, dir=base)
+            # held for as long as the owner lives: the arrays of an owner that ended without close()
+            # are recognised by this lock being free (remove_orphaned_arrays)
+            import fcntl
+
+            self._owner_lock = os.open(os.path.join(self.directory, OWNER_LOCK), os.O_RDWR | os.O_CREAT, 0o644)
+            fcntl.flock(self._owner_lock, fcntl.LOCK_EX)
             self._paths = {k: os.path.join(self.directory, f"{k}.f8") for k in self.FIELDS}
             mode = "w+"
         else:
@@ -168,6 +213,9 @@ class SharedArrays:
         if self.owner and self.directory:
             shutil.rmtree(self.directory, ignore_errors=True)
             self.directory = None
+        if self._owner_lock is not None:
+            os.close(self._owner_lock)
+            self._owner_lock = None
 
 
 def tail_summary(lrc: dict) -> dict:
@@ -214,7 +262,7 @@ class ReplicaWorker:
         self.arrays = arrays
         self.worker_id = worker_id
         self._mm, self._u = mm, u
-        kwargs = dict(precision=spec.precision, platform=spec.platform)
+        kwargs = dict(precision=spec.precision, platform=spec.platform, cpu_threads=spec.cpu_threads)
         if spec.backend in ("cupotential", "cupo"):
             kwargs.update(integrator=spec.integrator, box_safety=spec.box_safety)
         self.backend = get_backend(spec.backend, **kwargs)

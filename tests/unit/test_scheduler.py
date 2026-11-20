@@ -296,3 +296,95 @@ def test_the_clients_of_cufeps_mps_daemon_do_not_carry_the_device_mask(monkeypat
     finally:
         daemon.stop()
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "2"
+
+
+# ---- review of PR 1 on 64751ca: the GPUs and processes of the precalculation, and of the CPU ---------------
+
+def test_the_precalculation_keeps_the_gpus_it_runs_on():
+    """P2: the precalculation keeps its workers where they started, but the scheduler moved them on paper when a
+    short job on GPU 1 ended, and started a new job on GPU 0, where the precalculation still ran."""
+    precalculation = Demand(job=0, phase="pinned", factor=1, max_workers=1, devices=[0])
+    plan = allocate([0, 1], [precalculation])
+    assert plan[0] == [0]
+    plan = allocate([0, 1], [precalculation, Demand(job=1, factor=1)], strict=True)
+    assert plan == {0: [0], 1: [1]}
+    assert allocate([0, 1], [precalculation, Demand(job=1, factor=1, devices=[1]),
+                             Demand(job=2, factor=1)], strict=True) is None      # no room: the third waits
+
+
+def _pool_of(seconds, n_workers=1):
+    import multiprocessing as mp
+
+    from cufep.sampling.hrex import WindowPool, _Process
+
+    ctx = mp.get_context("spawn")
+    workers = []
+    for k in range(n_workers):
+        parent, child = ctx.Pipe()
+        proc = ctx.Process(target=job_doubles.window_worker, args=(child, seconds))
+        proc.start()
+        child.close()
+        made = _Process.__new__(_Process)
+        made.parent, made.proc, made.device, made.worker_id, made.start = parent, proc, 0, k, 0
+        workers.append(made)
+    pool = WindowPool.__new__(WindowPool)
+    pool.workers, pool.log = workers, (lambda message: None)
+    return pool
+
+
+def test_the_precalculation_limit_is_one_of_a_window_not_of_the_batch():
+    """P2: one deadline for the whole batch stopped few workers that ran many windows, each in good time."""
+    from cufep.sampling.hrex import WorkerError
+
+    pool = _pool_of(0.3)
+    try:
+        results = pool.run([{"window": k} for k in range(5)], window_timeout=1.0)     # 1.5 s in all, 0.3 s each
+        assert [r["window"] for r in results] == list(range(5))
+    finally:
+        for w in pool.workers:
+            w.stop()
+    slow = _pool_of(3.0)
+    try:
+        with pytest.raises(WorkerError, match="did not finish within 1 s of its start"):
+            slow.run([{"window": 0}], window_timeout=1.0)
+    finally:
+        for w in slow.workers:
+            w.proc.kill()
+
+
+def test_arrays_whose_owner_ended_are_removed(tmp_path, monkeypatch):
+    """P2: a killed run left its replica arrays (288 MB for 30 replicas of 100,000 atoms) in /dev/shm."""
+    from cufep.sampling.worker import ARRAYS_PREFIX, OWNER_LOCK, SharedArrays, remove_orphaned_arrays
+
+    monkeypatch.setenv("CUFEP_SHM_DIR", str(tmp_path))
+    living = SharedArrays(3, 10, 3)
+    orphan = tmp_path / f"{ARRAYS_PREFIX}dead"
+    orphan.mkdir()
+    (orphan / OWNER_LOCK).write_text("")               # nobody holds it: its owner has ended
+    (orphan / "pos.f8").write_bytes(b"\0" * 1000)
+    earlier = tmp_path / f"{ARRAYS_PREFIX}of_an_earlier_version"
+    earlier.mkdir()
+    assert remove_orphaned_arrays(str(tmp_path)) == [str(orphan)]
+    assert Path(living.directory).exists() and earlier.exists() and not orphan.exists()
+    second = SharedArrays(3, 10, 3)                     # a new owner sweeps too, and leaves the living one
+    assert Path(living.directory).exists()
+    living.close()
+    second.close()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [earlier.name]
+
+
+def test_a_cpu_context_has_the_threads_of_the_configuration(monkeypatch):
+    """P2: the inline workers of CPU runs took OPENMM_CPU_THREADS (3) instead of resources.cpu_threads_per_worker
+    (1). OpenCL got no precision at all."""
+    import openmm as mm
+
+    from cufep.backends import get_backend
+
+    monkeypatch.setenv("OPENMM_CPU_THREADS", "3")
+    backend = get_backend("openmm", platform="CPU", cpu_threads=1)
+    system = mm.System()
+    system.addParticle(1.0)
+    context = backend.make_context(system, mm.VerletIntegrator(0.001))
+    assert context.getPlatform().getPropertyValue(context, "Threads") == "1"
+    assert get_backend("openmm", platform="OpenCL", precision="double").platform_properties(0) == {
+        "Precision": "double", "DeviceIndex": "0"}

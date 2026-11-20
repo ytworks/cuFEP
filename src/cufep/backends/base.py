@@ -42,9 +42,11 @@ class Backend(abc.ABC):
 
     name: str = "abstract"
 
-    def __init__(self, precision: str = "mixed", platform: str = "CUDA") -> None:
+    def __init__(self, precision: str = "mixed", platform: str = "CUDA", cpu_threads: int | None = None) -> None:
         self.precision = precision
         self.platform_name = platform
+        #: threads of a Context of the CPU platform (resources.cpu_threads_per_worker)
+        self.cpu_threads = cpu_threads
 
     # -- availability -------------------------------------------------------
     @classmethod
@@ -79,17 +81,32 @@ class Backend(abc.ABC):
         return mm.Platform.getPlatformByName(self.platform_name)
 
     def platform_properties(self, device_index: int | None = None) -> dict[str, str]:
+        """The properties of a Context: precision and device on CUDA and OpenCL (review of PR 1: OpenCL
+        got none and ran in its default single precision while the result recorded the one asked
+        for), threads on the CPU platform (the inline workers of CPU runs got the threads of the
+        environment instead of resources.cpu_threads_per_worker)."""
         props: dict[str, str] = {}
-        if self.platform_name == "CUDA":
+        if self.platform_name in ("CUDA", "OpenCL"):
             props["Precision"] = self.precision
             if device_index is not None:
                 props["DeviceIndex"] = str(device_index)
+        elif self.platform_name == "CPU" and self.cpu_threads:
+            props["Threads"] = str(int(self.cpu_threads))
         return props
 
     def make_context(self, system: mm.System, integrator: mm.Integrator,
                      device_index: int | None = None) -> mm.Context:
-        """Create a Context for an already prepared System."""
-        return mm.Context(system, integrator, self.platform(), self.platform_properties(device_index))
+        """Create a Context for an already prepared System; the properties asked for are read back
+        from it, so that what a result records is what the Context does."""
+        props = self.platform_properties(device_index)
+        context = mm.Context(system, integrator, self.platform(), props)
+        platform = context.getPlatform()
+        for name, wanted in props.items():
+            if name in platform.getPropertyNames():
+                got = platform.getPropertyValue(context, name)
+                if str(got) != str(wanted):
+                    raise BackendError(f"the {platform.getName()} Context has {name} = {got}, not {wanted} as asked")
+        return context
 
 
 def get_backend(name: str, **kwargs) -> Backend:

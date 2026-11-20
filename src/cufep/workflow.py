@@ -953,9 +953,12 @@ class JobControl:
         except (BrokenPipeError, OSError):
             pass
 
-    def request_devices(self, replicas: int, work: float, timeout: float = 300.0) -> list | None:
-        """Tell the scheduler that sampling starts; returns the GPU of every worker to use."""
-        self._send({"event": "sampling", "replicas": int(replicas), "work": float(work)})
+    def request_devices(self, replicas: int, work: float, timeout: float = 300.0, pinned: bool = False) -> list | None:
+        """Tell the scheduler that sampling starts; returns the GPU of every worker to use. With
+        ``pinned`` the job keeps these GPUs until it asks again or goes back to serial work: it cannot
+        move its workers (the precalculation of adaptive lambda scheduling), so the scheduler must not
+        count them as moved (review of PR 1)."""
+        self._send({"event": "sampling", "replicas": int(replicas), "work": float(work), "pinned": bool(pinned)})
         try:
             if self.conn.poll(timeout):
                 return list(self.conn.recv()["devices"])
@@ -1523,7 +1526,8 @@ def run_leg(job: LegJob) -> dict:
                 devices = list(job.devices)
                 if job.control is not None:
                     granted = job.control.request_devices(
-                        n_first, n_first * (als.window_ps + als.equilibration_ps) / max(1, job.oversubscription))
+                        n_first, n_first * (als.window_ps + als.equilibration_ps) / max(1, job.oversubscription),
+                        pinned=True)
                     devices = granted or devices
                 if job.inline or len(devices) < 2:
                     schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log)

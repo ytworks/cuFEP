@@ -162,7 +162,9 @@ class Demand:
     """What one running job needs at the moment."""
 
     job: int
-    phase: str = "serial"                # serial | sampling
+    #: serial: one worker, where it runs; sampling: workers that can be moved between iterations;
+    #: pinned: workers that cannot be moved (the precalculation of adaptive lambda scheduling)
+    phase: str = "serial"                # serial | sampling | pinned
     factor: int = 1
     max_workers: int = 1                 # sampling: the number of replicas
     work: float = 1.0                    # remaining work in arbitrary units; only ratios matter
@@ -200,7 +202,16 @@ def allocate(gpus: list[int], demands: list[Demand], strict: bool = False) -> di
         return d.phase != "sampling" and bool(d.devices) and d.devices[0] in free
 
     first = sorted(demands, key=lambda d: (not pinned(d), d.phase == "sampling", -1.0 / d.factor, d.job))
-    for d in first:
+    for d in [x for x in demands if x.phase == "pinned"]:
+        # every worker of a job that cannot move its workers stays where it is
+        cost = 1.0 / d.factor
+        for g in d.devices:
+            if g in free:
+                if strict and not fits(g, cost):
+                    return None
+                free[g] -= cost
+        out[d.job] = list(d.devices)
+    for d in [x for x in first if x.phase != "pinned"]:
         cost = 1.0 / d.factor
         if pinned(d):
             g = d.devices[0]                                   # it is running there
@@ -493,6 +504,9 @@ def _run_started_jobs(jobs: list[LegJob], gpus: list, log, oversubscription, mps
                             r.update(phase="sampling", max_workers=int(msg["replicas"]), work=float(msg["work"]),
                                      waiting_for_devices=True)
                             rebalance(f"{jobs[i].tag} starts sampling {msg['replicas']} lambda windows")
+                            if msg.get("pinned"):
+                                # it cannot move them: they stay its own until it asks again (review of PR 1)
+                                r["phase"] = "pinned"
                         elif msg.get("event") == "progress":
                             r["work"] = float(msg["work"])
                         elif msg.get("event") == "serial":
