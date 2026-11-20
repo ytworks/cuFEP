@@ -181,7 +181,7 @@ def test_rest2_residues_are_named_as_in_the_input_pdb(repo, tmp_path):
     chains = prepared.input_chains
 
     def region(*residues, input_chains=chains):
-        return rest2_region(Rest2Config(scale=1.5, residues=list(residues)), top, pos, [], protein, input_chains)[1]
+        return rest2_region(Rest2Config(scale=1.5, region="ligand", residues=list(residues)), top, pos, [], protein, input_chains)[1]
 
     assert region("B:960") == ["ILE960"] and region("960") == ["ILE960"]
     assert region("B:898A") == ["LYS898A"] and region("B:898") == ["LYS898"]

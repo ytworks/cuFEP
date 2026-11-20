@@ -192,7 +192,11 @@ def test_rest2_is_on_by_default_and_can_be_set(tmp_path):
 
     cfg = load_config(write(tmp_path, BASE))
     r2 = cfg.sampling.rest2
-    assert (r2.scale, r2.region, r2.pocket_cutoff_nm, r2.residues) == (1.5, "ligand", 0.4, [])
+    # the pocket is the default, the owner's choice of 2026-11-20 (FEP+ and SOMD2 heat the ligand alone)
+    assert (r2.scale, r2.region, r2.pocket_cutoff_nm, r2.residues) == (1.5, "pocket", 0.4, [])
+    assert "hot region: the ligand and protein residues within 0.4 nm of it; 1.5 times the temperature" \
+        in lambda_window_table(cfg)
+    cfg = load_config(write(tmp_path, {**BASE, "sampling": {"rest2": {"region": "ligand"}}}))
     assert "hot region: the ligand; 1.5 times the temperature" in lambda_window_table(cfg)
     cfg = load_config(write(tmp_path, {**BASE, "sampling": {"rest2": {"scale": 1.0}}}))
     assert "off (sampling.rest2.scale is 1)" in lambda_window_table(cfg)

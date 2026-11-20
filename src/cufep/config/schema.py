@@ -321,8 +321,9 @@ class Rest2Config(_Section):
     #: do not isomerise (docs/configuration.md)
     scale: float = Field(default=1.5, ge=1.0)
     #: complex leg: ligand = the ligand only; pocket = also the protein residues that have a
-    #: heavy atom within pocket_cutoff_nm of a heavy atom of the ligand in the prepared structure
-    region: Literal["ligand", "pocket"] = "ligand"
+    #: heavy atom within pocket_cutoff_nm of a heavy atom of the ligand in the prepared structure.
+    #: pocket is the owner's choice of 2026-11-20 (the default of FEP+ and SOMD2 is the ligand)
+    region: Literal["ligand", "pocket"] = "pocket"
     pocket_cutoff_nm: float = Field(default=0.4, gt=0.0)
     #: protein residues added to the hot region, named as in the input PDB: "960", with the chain
     #: of the input "B:960", with an insertion code "B:898A"

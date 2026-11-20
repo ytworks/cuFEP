@@ -364,7 +364,10 @@ cuFEP applies it as Sire / SOMD2 do:
 | bonds, angles, improper torsions, the Boresch restraint | not scaled |
 
 The hot region is the ligand and, in the complex leg, the protein residues chosen with
-`sampling.rest2.region` and `sampling.rest2.residues` (whole residues).
+`sampling.rest2.region` and `sampling.rest2.residues` (whole residues). By default
+(`region: pocket`, the owner's choice of 2026-11-20) these are the residues with a heavy atom
+within 0.4 nm of a heavy atom of the ligand in the prepared structure, as FEP+ does on
+request; FEP+ and SOMD2 heat the ligand alone by default (`region: ligand`).
 
 The scale along a leg. `sampling.rest2.scale` is T_hot / T in the middle of the leg, as
 SOMD2's `rest2_scale`; the default is 1.5 (447 K at 298 K; its basis is in
@@ -399,6 +402,15 @@ ends, with or without REST2: with the few windows that adaptive lambda schedulin
 neighbours exchange too rarely for what is sampled in the hot windows to reach the ends. FEP+
 runs REST2 with 80 windows in the complex leg. REST2 has not been shown to improve cuFEP's
 results on TYK2.
+
+With the pocket in the hot region (the residues within 0.4 nm of the ligand), an ALS threshold
+of 0.18 and 5 ns of production per window, one calculation of each example gave -8.94 ± 0.77
+kcal/mol for TYK2 ejm_31 (experiment -9.54; with the ligand alone as the hot region and
+otherwise the same settings -10.56) and -11.95 ± 0.73 for A2A 4e (experiment -12.07; -17.02
+with the ligand alone). These are single runs: the complex legs of these examples differ from
+run to run by more than their standard errors (the discharge stage of TYK2 from 15.3 to 18.4
+kcal/mol over runs with thresholds of 0.10 to 0.18). The owner made the pocket the default on
+2026-11-20.
 
 Only the free energy of a whole leg is a physical quantity then. The scale is not 1 where one
 stage ends and the next begins, so the free energies of the single stages in the results
@@ -986,7 +998,7 @@ source code and papers (see "Sources").
 | reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | standard error from blocks of time common to all lambda windows (delete-one-block jackknife of MBAR minus the tail correction, on samples decorrelated window by window), not below the analytical one; standard deviation over repeats if more than one |
 | checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03 and fewer than 50 independent samples per window, the levels of the literature; the series, halves and BAR shown without a verdict; messages in the result |
 | a calculation that is not good enough | the user: "Try increasing the length of the simulations (i.e., 10 ns)", "try increasing the number of lambda windows and/or increasing the sampling" | the user runs a further instance of the link "with longer simulation time/more Lambda windows" | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
-| replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 with `sampling.rest2` |
+| replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
 | MD before the alchemical run | 1 ns and a short equilibration | minimisation, equilibration, MD for the restraint search | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
 | restraint | Boresch-type, atoms chosen from hydrogen bonds and salt bridges | Boresch, atoms and strengths chosen automatically | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |
 | water sampling | grand canonical Monte Carlo by default | grand canonical option | none | none |
@@ -1019,7 +1031,7 @@ reliability and efficiency of binding free energy calculations", J. Comput. Aide
 Neutral ligands only. No cofactors yet. No symmetry correction (the ligand's graph
 symmetry number is reported); a small symmetric ligand that turns over in its pocket leaves
 the unrestrained window without overlap, which the result line reports. Symmetric POPC-type
-bilayers only. No grand canonical water sampling. REST2 covers the ligand by default; slow
-rearrangements of the pocket, such as a side-chain rotamer that differs with and without the
-ligand, are sampled faster only if their residues are put into the hot region
-(`sampling.rest2.region: pocket` or `sampling.rest2.residues`).
+bilayers only. No grand canonical water sampling. REST2 covers the ligand and the residues
+within 0.4 nm of it by default; a slow rearrangement further away, such as a side chain
+behind the first shell, is sampled faster only if its residues are named
+(`sampling.rest2.residues`).

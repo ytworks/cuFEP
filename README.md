@@ -11,7 +11,7 @@ Every other setting has a recommended default and can be changed in YAML
 - Soluble and membrane proteins. With `membrane: {enabled: true}` the complex is oriented
   and embedded in a lipid bilayer.
 - Double decoupling with automatically chosen Boresch restraints, Hamiltonian replica
-  exchange with REST2 solute scaling of the ligand, and MBAR. Defaults and terms follow
+  exchange with REST2 solute scaling of the ligand and its pocket, and MBAR. Defaults and terms follow
   established FEP software;
   [docs/protocol.md](docs/protocol.md) compares cuFEP with FEP+, Flare and OpenFE.
 - Lambda windows: adaptive lambda scheduling by default (the method of Cresset Flare), or a
