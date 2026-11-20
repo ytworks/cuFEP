@@ -6,8 +6,8 @@ trusted, and if what it says about them rests on published knowledge. Every chan
 
 ## The only verdicts: published criteria
 
-A verdict on a result (a flag, a warning, a note that judges it) needs a published basis. These
-are the published criteria:
+A verdict (stop, refuse, warning, note, a flag in a result) needs a published basis. These are the
+published criteria:
 
 | criterion | source | checked by |
 |---|---|---|
@@ -18,18 +18,19 @@ are the published criteria:
 | adaptive lambda scheduling inserts a window where neighbouring windows overlap by 0.18 or less (`lambda_schedule.adaptive.overlap_threshold`) | the method of Midgley et al. 2025; the value 0.18 is the project's choice, recorded in `docs/configuration.md` | `test_a_pair_is_deficient_at_or_below_the_threshold`, `test_the_rule_ends_with_every_pair_above_the_threshold` (`test_schedule.py`) |
 | Boresch anchors: theta_A and theta_B 10 kT from 0 and 180 degrees in every frame; refused if H2-H1-H0-G0-G1-G2 has three atoms in a row on a line (abs(cos) > 0.9) in every frame | OpenFE `EvaluateBoreschAtoms` (`check_angle_not_flat`, `is_collinear`), quoted in `docs/configuration.md` | `test_anchors_on_a_straight_line_are_refused_only_if_they_are_in_every_frame`, `test_a_guest_on_a_straight_line_is_refused_and_would_give_nan` (`test_periodic_images.py`) |
 
-Besides them the code has, and they are not verdicts on a result:
+Not verdicts, and kept:
 
 - rules of computation: a part of the production gets an estimate of its own only with at least
   4 independent samples per lambda window (`MIN_INDEPENDENT_SAMPLES` in
   `src/cufep/analysis/mbar.py`); the tolerances to which the MBAR equations are solved and a
   part counts as determined (`SOLVER_TOLERANCE`, `NEGLIGIBLE_FRACTION`, `RESOLUTION_KT`);
-- limits of the input that version 0.1 cannot treat, where it stops with the reason: a ligand
-  with a net charge, unknown or modified residues, a ligand without explicit hydrogens
-  (`docs/protocol.md`, "Inputs" and "Limits of version 0.1");
-- one stop of cuFEP's own that has no published basis and waits for the owner's decision:
-  `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees
-  and 5 A (`consensus_orientation` in `src/cufep/prep/orient.py`).
+- what version 0.1 cannot treat, where it stops with the reason: a ligand with a net charge,
+  unknown or modified residues, a ligand without explicit hydrogens (`docs/protocol.md`,
+  "Inputs" and "Limits of version 0.1").
+
+One exception to the rule remains, a stop of cuFEP's own without a published basis, kept as it
+is until the owner decides: `membrane.orientation: auto` stops unless two of its three methods
+agree within 15 degrees and 5 A (`consensus_orientation` in `src/cufep/prep/orient.py`).
 
 Everything else is reported as a number without a verdict and without words such as
 "converged", "settled" or "OK": the forward and reverse series, the halves, the blocks, BAR,

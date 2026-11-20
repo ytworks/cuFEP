@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import unicodedata
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -19,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 #: names used neither to compare accuracy nor to cite a source here: nowhere but in this check
 #: and its test
-NOWHERE = re.compile(r"Flare|Cresset|Desmond")
+NOWHERE = re.compile(r"Flare|Cresset|Desmond", re.IGNORECASE)
 #: names used to compare accuracy and to cite the benchmark set, allowed in these files only
 FOR_ACCURACY_AND_SOURCES = re.compile(r"FEP\+|Schr(?:ö|oe?)dinger", re.IGNORECASE)
 ACCURACY_AND_SOURCE_FILES = (
@@ -36,7 +37,7 @@ def problems_in(path: str, text: str) -> list[str]:
         return []
     allowed = any(fnmatch(path, pattern) for pattern in ACCURACY_AND_SOURCE_FILES)
     problems = []
-    for n, line in enumerate(text.splitlines(), start=1):
+    for n, line in enumerate(unicodedata.normalize("NFC", text).splitlines(), start=1):
         for m in NOWHERE.finditer(line):
             problems.append(f"{path}:{n}: {m.group(0)}")
         if not allowed:
@@ -62,7 +63,7 @@ def tracked_files(root: Path = ROOT) -> list[str]:
         for file in root.rglob("*"):
             rel = file.relative_to(root).as_posix()
             if file.is_file() and not set(file.relative_to(root).parts) & IGNORED_DIRS \
-                    and not rel.startswith(IGNORED_PATHS) and not file.name.startswith("core") \
+                    and not rel.startswith(IGNORED_PATHS) and not re.fullmatch(r"core(\..*)?", file.name) \
                     and ".egg-info/" not in rel:
                 files.append(rel)
         return files

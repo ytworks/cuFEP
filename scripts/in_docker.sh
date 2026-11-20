@@ -40,7 +40,7 @@ WORKDIR=""
 MOUNTS=()
 
 value() {   # the value of option $1, which must be given
-    if [[ $# -lt 2 || -z "$2" ]]; then
+    if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
         echo "in_docker.sh: $1 needs a value" >&2
         exit 2
     fi

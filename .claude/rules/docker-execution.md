@@ -54,7 +54,8 @@ scripts/in_docker.sh --build cufep --help                    # rebuild the image
   they are numbered from 0 again: `--gpus 6,7` outside is `0,1` inside, and that is what
   `resources.gpus` and `--gpus` of `cufep run` see. `--docker-gpus` passes a value to
   `docker run --gpus` as it is (a count, `all`, `"device=..."`); `spikes/run.sh` uses it for
-  `$GPUS`, with `--workdir /work`, so it behaves as it did before the wrapper existed.
+  `$GPUS`, with `--workdir /work`, so its GPUs and its working directory are those it had before
+  the wrapper existed.
 - An image is built only with `--build`; a missing image stops the wrapper, so a tag such as
   `cufep:<commit>` never names a tree it was not built from.
 - `--shm-size=16g` is set: replica coordinates are shared between worker processes in memory, and

@@ -44,8 +44,8 @@ compute backend; stock OpenMM is the second backend and is always available.
   embedded in a POPC bilayer. cuFEP never decides this by itself.
 - **An established protocol.** Double decoupling with Boresch restraints chosen automatically,
   Hamiltonian replica exchange with REST2 on the ligand and its pocket, and MBAR. Defaults and
-  terms follow established practice and the literature, and the documentation gives the basis of
-  each default.
+  terms follow the literature and published open methods, and the documentation gives the source
+  of each default.
 - **Lambda windows.** Adaptive lambda scheduling by default (Midgley et al. 2025), or a fixed
   number or list of lambda values per leg and stage.
 - **Checks from the literature only.** The overlap of neighbouring lambda windows (at least 0.03)
@@ -164,7 +164,7 @@ calculation keeps its results.
 
 | message | meaning | what to do |
 |---|---|---|
-| `NOT RELIABLE` | two neighbouring lambda windows overlap by less than 0.03 in the production, among all iterations or among the samples the free energy is estimated from. Without overlap the free energy cannot be used | give that stage more lambda windows and start the leg anew; if only the samples of the estimate are below the level, a longer production also helps |
+| `NOT RELIABLE (overlap)` | two neighbouring lambda windows overlap by less than 0.03 in the production, among all iterations or among the samples the free energy is estimated from. Without overlap the free energy cannot be used | give that stage more lambda windows and start the leg anew; if only the samples of the estimate are below the level, a longer production also helps |
 | `few independent samples` | a lambda window gives MBAR fewer than 50 uncorrelated samples (Mey et al. 2020); the free energy and its uncertainty rest on few samples | run the leg longer; it continues from where it stopped |
 | `FAILED` | a leg did not finish, was interrupted, or its samples determine no free energy; the ligand has no binding free energy from that leg | read the message, then run the leg again |
 | `LEGS MADE UNDER DIFFERENT CONDITIONS` | the complex and the solvent leg (or two repeats) differ in temperature, pressure, prepared systems or tail correction; the ligand gets no binding free energy | run the legs that differ again under the conditions of the others |
@@ -175,10 +175,12 @@ calculation keeps its results.
 | `checks of this version not made` | `cufep benchmark report` read a summary written by an earlier version of cuFEP | analyse the legs again |
 | `origin of files not recorded` | the leg used files of an earlier version of cuFEP that do not say what they were made from | a new output directory, if that matters |
 
-These are the messages a result can carry. Only `NOT RELIABLE` and `few independent samples` judge
-the analysis, by the two checks of the literature; the others say that something is missing,
-cannot be compared or rests on less than the whole production. Other quantities are reported as
-numbers: how the bilayer changed at
+These are the flags and the notes of the analysis. Only `NOT RELIABLE` and `few independent
+samples` judge the analysis, by the two checks of the literature; the others say that something is
+missing, cannot be compared or rests on less than the whole production. Other warnings of a run
+(for example a fall-back to stock OpenMM, an incomplete repeat, the graph symmetry of the ligand,
+what the preparation changed) are printed under the result line and kept in `summary.json`.
+Other quantities are reported as numbers: how the bilayer changed at
 the end of its equilibration (`bilayer`), how far the ligand was from its input pose
 (`ligand_rmsd_from_input_A`) and how far it moved in the coupled state (`structure`), the
 forward and reverse series, the halves, the blocks and BAR. No check can show that one run is
@@ -305,7 +307,7 @@ See [protocol: Limits of version 0.1](docs/protocol.md#limits-of-version-01).
 
 | document | content |
 |---|---|
-| [docs/protocol.md](docs/protocol.md) | the method: systems, thermodynamic cycle, lambda windows, REST2, analysis and its checks, GPUs, comparison with other software |
+| [docs/protocol.md](docs/protocol.md) | the method: systems, thermodynamic cycle, lambda windows, REST2, analysis and its checks, GPUs, comparison with OpenFE's protocol |
 | [docs/configuration.md](docs/configuration.md) | every setting, its default and the basis of the default |
 | [docs/LICENSING.md](docs/LICENSING.md) | licences of cuFEP, of the cuPotential runtime and of the benchmark inputs |
 | [docs/M0_REPORT.md](docs/M0_REPORT.md) | the first risk checks of the plugin and the platform |

@@ -187,9 +187,9 @@ those of OpenFE's ABFE protocol: 30 windows for the complex leg and 14 for the s
 
 `lambda_schedule.mode: adaptive` is the default. It is the method of Midgley, Bariami,
 Habgood and Mackey, "Adaptive Lambda Scheduling: A Method for Computational Efficiency in
-Free Energy Perturbation Simulations", J. Chem. Inf. Model. 2025, 65, 512-516. The aim is the smallest set of windows that still overlap
-enough. A short precalculation decides the windows; its data are not used for the free
-energy.
+Free Energy Perturbation Simulations", J. Chem. Inf. Model. 2025, 65, 512-516. The aim is the
+smallest set of windows that still overlap enough. A short precalculation decides the windows;
+its data are not used for the free energy.
 
 Definitions. Lambda can take `candidates` (101) equally spaced values. The windows of a
 stage are ordered by lambda. A pair of neighbouring windows is *deficient* if its element
@@ -230,9 +230,9 @@ A longer example with threshold 0.04 (the overlaps are made up for illustration)
 How cuFEP applies it to absolute binding. The paper treats relative binding with a single
 lambda coordinate and runs the precalculation for the ligand in solution only. In cuFEP
 every stage of every leg is treated as one such coordinate, with its own candidates, overlap
-matrix and bad sections; at most one window is added per stage and iteration. The start (`initial_windows`) is 3 windows
-for restrain, 5 for discharge and 9 for vanish; since windows are never removed, this is also
-the smallest schedule.
+matrix and bad sections; at most one window is added per stage and iteration. The start
+(`initial_windows`) is 3 windows for restrain, 5 for discharge and 9 for vanish; since windows
+are never removed, this is also the smallest schedule.
 
 Points the paper does not specify, and cuFEP's rule for each:
 
@@ -256,13 +256,12 @@ its own equilibration before the production.
 | point | the paper | cuFEP |
 |---|---|---|
 | when the windows are chosen | in a precalculation before the production: "Once converged, all results from the ALS are discarded, and the converged bespoke λ schedule is used in a production run" | the same. No window is added during the equilibration or the production of the replica-exchange run |
-| rule and values | threshold 0.04, 101 candidates, one window per iteration into the longest bad section | the same rule and 101 candidates; threshold 0.18 by default (the owner's choice of 2026-11-20, configuration.md) |
+| rule and values | threshold 0.04 (0.03 and 0.05 also tested), 101 candidates, one window per iteration into the longest bad section | the same rule and 101 candidates; threshold 0.18 by default (the owner's choice of 2026-11-20, configuration.md) |
 | MD per new window of the precalculation | 50 ps | solvent leg: 50 ps. Complex leg: 500 ps recorded after 500 ps of equilibration, because the pocket adapts to a partly decoupled ligand over hundreds of picoseconds ("What was measured on TYK2") |
 | initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
 | after the production | not part of the method | the analysis checks the overlap and the number of independent samples, the levels of the literature, and shows the forward and reverse series and the halves without a verdict ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
-| threshold values | 0.03, 0.04 and 0.05 tested | `overlap_threshold` is a number |
 
 ### What was measured on TYK2
 
@@ -624,7 +623,7 @@ level; it does not say that a result is wrong.
 These two are the only checks. cuFEP has no criteria of its own (the owner, 2026-11-20). The
 forward and reverse series, the two halves of the production, the consecutive blocks and BAR
 between neighbouring windows are computed and shown (`analysis.png`, `result.json`) as numbers
-without a verdict, as OpenFE shows its convergence plots. Earlier versions also
+without a verdict, as OpenFE shows its forward and reverse convergence. Earlier versions also
 judged the two halves of a leg against 1 kT, BAR against MBAR against 1 kcal/mol, and the
 samples after a reduction by the ratio of two standard errors: the 1 kT of Mey et al. is the
 caption of a figure about one step of a relative perturbation, and for a whole leg the

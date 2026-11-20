@@ -999,9 +999,9 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
                  "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy
                  estimate"; below it "the free energy estimate itself will likely be substantially
                  incorrect" (Klimovich, Shirts and Mobley 2015, section 3.5). Two matrices are
-                 examined, both in the normalisation of equal numbers of
-                 samples per window: that of all iterations, and that of the samples the free
-                 energy is estimated from (``used``, :func:`overlap_with_equal_weights`).
+                 examined, both in the normalisation of equal numbers of samples per window: that of
+                 all iterations, and that of the samples the free energy is estimated from
+                 (``used``, :func:`overlap_with_equal_weights`).
                  ``below`` names the one that is under the level.
     samples      the window with the fewest uncorrelated samples has at least
                  ``min_effective_samples``: "it is recommended that the effective number of
@@ -1011,8 +1011,8 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
                  (``fewest``), and not more than the samples MBAR really gets from it (``kept``).
 
     ``ok`` is None where the analysis does not hold the numbers for a check. The forward and
-    reverse estimates, the two halves and BAR stay in the analysis as numbers (as OpenFE
-    shows them), without a verdict.
+    reverse estimates, the two halves and BAR stay in the analysis as numbers without a verdict
+    (OpenFE shows its forward and reverse series without one).
     """
     error = _number(analysis.get("delta_g_error"))
     kept = analysis.get("window_kept_samples") or []

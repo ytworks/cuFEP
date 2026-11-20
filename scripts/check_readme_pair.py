@@ -9,6 +9,7 @@ GitHub resolves them. Run by the `harness` job of CI. Standard library only.
 """
 from __future__ import annotations
 
+import html
 import re
 import sys
 import unicodedata
@@ -18,38 +19,61 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent.parent
 PAIR = ("README.md", "README.ja.md")
 
-FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+FENCE_OPEN = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 ATX = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
 SETEXT = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
 CODE_SPAN = re.compile(r"(`+)(.+?)\1")
 INLINE_LINK = re.compile(r"\]\(\s*(<[^>\n]*>|(?:[^\s()]|\([^\s()]*\))+)(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)")
 REFERENCE_USE = re.compile(r"\[([^\]]+)\]\[([^\]]*)\]")
 DEFINITION = re.compile(r"^ {0,3}\[([^\]]+)\]:\s*(<[^>\n]*>|\S+)")
-HREF = re.compile(r"<a\s[^>]*\bhref\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
-HTML_ANCHOR = re.compile(r"<a\s[^>]*\b(?:id|name)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+HREF = re.compile(r"<(?:a|img)\s[^>]*(?<![-\w])(?:href|src)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+HTML_ANCHOR = re.compile(r"<\w+\s[^>]*(?<![-\w])(?:id|name)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+SHORTCUT_REFERENCE = re.compile(r"(?<![\]!])\[([^\]]+)\](?![\[(:])")
 EXTERNAL = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
 
 
-def blocks_and_text(text: str) -> tuple[list[list[str]], list[str]]:
-    """The fenced code blocks (their lines) and the lines outside them, as CommonMark reads fences:
-    three or more backticks or tildes, indented by at most three spaces; a backtick fence has no
-    backtick in its info string; it is closed by a line of the same character, at least as long."""
-    blocks, outside, current, fence = [], [], None, ""
-    for line in text.splitlines():
-        if current is None:
+OUTSIDE, OPENING, INSIDE, CLOSING = 0, 1, 2, 3
+
+
+def fence_states(lines: list[str]) -> list[int]:
+    """For every line its place in fenced code blocks (OUTSIDE, OPENING, INSIDE, CLOSING), as
+    CommonMark reads fences: three or more backticks or tildes (indented, also inside list items);
+    a backtick fence has no backtick in its info string; it is closed by a line of the same
+    character, at least as long; an unclosed fence runs to the end of the document. Shared with
+    scripts/check_progress_size.py."""
+    states, fence = [], ""
+    for line in lines:
+        if not fence:
             m = FENCE_OPEN.match(line)
             if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
-                current, fence = [], m.group(1)
+                fence = m.group(1)
+                states.append(OPENING)
             else:
-                outside.append(line)
-        elif re.match(r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$", line):
-            blocks.append(current)
-            current = None
+                states.append(OUTSIDE)
+        elif re.match(r"^\s*" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$", line):
+            fence = ""
+            states.append(CLOSING)
         else:
-            current.append(line)
-    if current is not None:              # an unclosed fence runs to the end of the document
-        blocks.append(current)
-    return blocks, outside
+            states.append(INSIDE)
+    return states
+
+
+def blocks_and_text(text: str) -> tuple[list[list[str]], list[str]]:
+    """The fenced code blocks (their lines, without the fences) and the lines outside them, with
+    HTML comments removed from the latter."""
+    lines = text.splitlines()
+    blocks, outside = [], []
+    for line, state in zip(lines, fence_states(lines)):
+        if state == OPENING:
+            blocks.append([])
+        elif state == INSIDE:
+            blocks[-1].append(line)
+        elif state == OUTSIDE:
+            outside.append(line)
+    if not outside:
+        return blocks, []
+    joined = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), "\n".join(outside), flags=re.DOTALL)
+    return blocks, joined.split("\n")
 
 
 def headings(text: str) -> list[tuple[int, str]]:
@@ -65,7 +89,10 @@ def headings(text: str) -> list[tuple[int, str]]:
         prev = lines[i - 1] if i else ""
         if s and prev.strip() and not ATX.match(prev) and not re.match(r"^ {0,3}([-*+]|\d+[.)])\s", prev) \
                 and not SETEXT.match(prev):
-            found.append((1 if s.group(1)[0] == "=" else 2, prev.strip()))   # the paragraph line above
+            j = i - 1                            # the paragraph above, which may span lines
+            while j > 0 and lines[j - 1].strip() and not ATX.match(lines[j - 1]) and not SETEXT.match(lines[j - 1]):
+                j -= 1
+            found.append((1 if s.group(1)[0] == "=" else 2, " ".join(ln.strip() for ln in lines[j:i])))
     return found
 
 
@@ -84,7 +111,7 @@ def uncommented(block: list[str]) -> list[str]:
             if quote:
                 if c == quote:
                     quote = ""
-            elif c in "\"'":
+            elif c == '"' or (c == "'" and (i == 0 or line[i - 1] in " \t=([{,")):
                 quote = c
             elif c == "#" and (i == 0 or line[i - 1].isspace()):
                 cut = i
@@ -113,6 +140,9 @@ def links(text: str) -> list[str]:
         for m in REFERENCE_USE.finditer(ln):
             key = (m.group(2) or m.group(1)).strip().lower()
             found.append(definitions.get(key, f"[undefined reference {key}]"))
+        rest = REFERENCE_USE.sub("", INLINE_LINK.sub("", ln))
+        found += [definitions[m.group(1).strip().lower()] for m in SHORTCUT_REFERENCE.finditer(rest)
+                  if m.group(1).strip().lower() in definitions]
         found += [m.group(1) for m in HREF.finditer(ln)]
     return [t[1:-1] if t.startswith("<") and t.endswith(">") else t for t in found]
 
@@ -127,7 +157,7 @@ def slugify(heading: str) -> str:
     everything else dropped; spaces to hyphens."""
     text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", heading)
     text = CODE_SPAN.sub(r"\2", text)
-    text = re.sub(r"<[^>]+>", "", text).strip().lower()
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).strip().lower()
     text = "".join(c for c in text if c in " -_" or unicodedata.category(c)[0] in "LNM")
     return text.replace(" ", "-")
 
@@ -163,12 +193,12 @@ def link_problems(name: str, text: str, root: Path) -> list[str]:
         if is_external(target):
             continue
         path, _, anchor = target.partition("#")
-        anchor = unquote(anchor)
+        path, anchor = path.partition("?")[0], unquote(anchor)
         if not path:                                   # an anchor of this file
             if anchor not in anchors(text):
                 problems.append(f"{name}: link to {target}: no such heading")
             continue
-        file = (root / name).parent / unquote(path)
+        file = root / unquote(path).lstrip("/") if path.startswith("/") else (root / name).parent / unquote(path)
         if not file.exists():
             problems.append(f"{name}: link to {target}: no such file")
         elif anchor and file.suffix == ".md" and anchor not in anchors(file.read_text(encoding="utf-8")):

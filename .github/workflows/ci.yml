@@ -11,8 +11,9 @@ concurrency:
 
 jobs:
   harness:
-    # The checks of the development harness (.claude/rules/progress-log.md): standard library only,
-    # so they need neither the conda environment nor the image.
+    # The checks of the development harness (.claude/rules/progress-log.md; standard library only)
+    # and ruff (in its own image, scripts/lint.sh): they need neither the conda environment nor the
+    # image of cuFEP.
     name: harness (checks of the development harness, ruff)
     runs-on: ubuntu-latest
     timeout-minutes: 5

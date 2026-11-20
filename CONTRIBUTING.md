@@ -55,8 +55,9 @@ contribution meets most often:
 
 - **Only published criteria decide.** A threshold that stops, refuses or warns needs a
   published source, quoted in [docs/configuration.md](docs/configuration.md). Everything else
-  is reported as a number.
-- **Defaults and terms follow established practice and the literature**; give the source of a
+  is reported as a number. One stop of the code has no such source yet and waits for a decision
+  (the agreement of the membrane orientation methods, see the rules file).
+- **Defaults and terms follow the literature and published open methods**; give the source of a
   new default in [docs/configuration.md](docs/configuration.md). One calculation per ligand is
   the default.
 - **Every setting has a recommended default** with its basis in

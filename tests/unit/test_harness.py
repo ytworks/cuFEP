@@ -182,3 +182,30 @@ def test_names_of_commercial_fep_products_are_kept_to_accuracy_and_sources():
     assert check_names.problems_in("src/cufep/benchmarks/runner.py", "| cuFEP | FEP+ |") == []
     assert check_names.problems_in("README.md", "the Schrödinger public binding free energy benchmark") == []
     assert check_names.problems_in("README.md", "the method of Cresset Flare") != []
+
+
+def test_the_checks_hold_on_the_inputs_of_the_review_of_pr_3(tmp_path):
+    """Independent review of PR 3: inputs on which the checks were still wrong."""
+    import unicodedata
+
+    import check_names
+
+    c = check_readme_pair
+    # PROGRESS.md: a line that opens with a code span is no fence (one reader of fences for both checks)
+    progress = "# P\n\n## Product\n```x``` is a tool\n\n## Current Status\n\n## Change Log\n"
+    assert check_progress_size.problems_in(progress) == []
+    # names in any case and in decomposed Unicode
+    assert len(check_names.problems_in("docs/protocol.md", "as desmond and flare and CRESSET do")) == 3
+    assert check_names.problems_in("docs/protocol.md", unicodedata.normalize("NFD", "Schrödinger")) != []
+    # README: fences inside list items, shortcut references, ids of any element, HTML comments,
+    # links from the root and with a query, an apostrophe in a command, multi-line setext, entities
+    assert c.blocks_and_text("1. run\n\n    ```bash\n    cufep run a.yaml\n    ```\n")[0] == [["    cufep run a.yaml"]]
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "p.md").write_text("# P\n")
+    text = "[guide]\n\n[guide]: docs/missing.md\n\n[root](/docs/p.md) [raw](docs/p.md?plain=1)\n"
+    assert [p.split(": ")[1] for p in c.link_problems("README.md", text, tmp_path)] == ["link to docs/missing.md"]
+    assert c.anchors('<div id="x"></div>\n<h2 id="y">Y</h2>\n<a data-id="z"></a>\n') >= {"x", "y"}
+    assert "z" not in c.anchors('<a data-id="z"></a>\n')
+    assert c.outline("<!--\n## Hidden\n-->\n## Shown\n") == [2]
+    assert c.uncommented(["echo it's fine # comment"]) == ["echo it's fine"]
+    assert c.anchors("Line one\nline two\n========\n\n## A &amp; B\n") == {"line-one-line-two", "a--b"}

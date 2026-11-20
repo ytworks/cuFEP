@@ -8,39 +8,35 @@ or the required section layout is broken.
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # check_readme_pair, beside this file
 
 MAX_TOTAL_LINES = 200
 MAX_CHANGELOG_ENTRIES = 10
 SECTIONS = ["## Product", "## Current Status", "## Change Log"]
 #: lines of a section after its heading
 MAX_SECTION_LINES = {"## Product": 25, "## Current Status": 80}
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 def problems_in(text: str) -> list[str]:
-    """Rule violations of a PROGRESS.md given as text (empty list: none). Lines inside fenced code
-    blocks are neither headings nor entries."""
+    """Rule violations of a PROGRESS.md given as text (empty list: none). Lines of fenced code
+    blocks are neither headings nor entries (fences read as scripts/check_readme_pair.py reads
+    them)."""
+    from check_readme_pair import OUTSIDE, fence_states
+
     lines = text.splitlines()
     sections, section_lines = [], {}
-    current, fence = None, ""
+    current = None
     entries = 0
-    for line in lines:
-        m = FENCE.match(line)
-        if fence:
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
-                    and not line.strip().strip(fence[0]):
-                fence = ""
-        elif m:
-            fence = m.group(1)
-        elif line.startswith("## "):
+    for line, state in zip(lines, fence_states(lines)):
+        if state == OUTSIDE and line.startswith("## "):
             current = line.rstrip()
             sections.append(current)
             section_lines[current] = 0
             continue
-        elif current == "## Change Log" and line.startswith("### "):
+        if state == OUTSIDE and current == "## Change Log" and line.startswith("### "):
             entries += 1
         if current is not None:
             section_lines[current] += 1

@@ -83,7 +83,7 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         margin = max(0.5, 0.15 * (high - low))
         ax.set_ylim(low - margin, high + margin)
         # the forward and reverse estimates, the halves and the blocks are shown as numbers, without a verdict
-        # (as OpenFE shows them); the verdicts are the two checks of quality_checks
+        # (OpenFE shows its forward and reverse series without one); the verdicts are the two checks of quality_checks
         verdict = ""
         samples = quality.get("samples") or {}
         if samples.get("fewest") is not None:

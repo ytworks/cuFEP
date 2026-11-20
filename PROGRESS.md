@@ -37,7 +37,7 @@ Snapshot date: 2026-11-20. `main` is 99b59fe (PR #1, the engine of plan
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 558 passed on PR #3 (2026-11-20, image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| Unit tests (CPU) | 559 passed on PR #3 (2026-11-20, image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
 | GPU tests | 17 passed on PR #3 (2026-11-20, one GPU, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | one calculation with ALS threshold 0.18, REST2 on the pocket and 5 ns of production per window: -8.94 ± 0.77 kcal/mol (`docs/configuration.md`, `sampling.rest2.region`). Not run with the default of 10 ns |

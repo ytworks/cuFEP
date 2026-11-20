@@ -43,8 +43,8 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
 - **水溶性タンパク質と膜タンパク質。** `membrane: {enabled: true}` で、複合体の向きを決めて POPC の
   脂質二重膜に埋め込みます。膜を付けるかどうかを cuFEP が自分で判断することはありません。
 - **確立したプロトコル。** 自動で選ぶ Boresch restraints による double decoupling、リガンドと
-  ポケットに REST2 をかけた Hamiltonian replica exchange、MBAR。既定値と用語は確立した方法と
-  文献に合わせ、各既定値の根拠を文書に書いています。
+  ポケットに REST2 をかけた Hamiltonian replica exchange、MBAR。既定値と用語は文献と公開された
+  方法に合わせ、各既定値の出典を文書に書いています。
 - **lambda window。** 既定は adaptive lambda scheduling (Midgley ら 2025)。leg と stage ごとに
   window の数や lambda の値の列で固定することもできます。
 - **判定は文献の基準だけ。** 隣り合う lambda window の overlap (0.03 以上) と、window ごとの相関の
@@ -163,7 +163,7 @@ production の時間ブロックから求め、解析的な値より小さくは
 
 | メッセージ | 意味 | 対処 |
 |---|---|---|
-| `NOT RELIABLE` | production で、隣り合う 2 つの lambda window の overlap が、全 iteration で見たとき、または自由エネルギーを推定する標本で見たときに 0.03 未満。overlap がなければ自由エネルギーは使えない | その stage の lambda window を増やして leg を最初から計算し直す。推定に使う標本だけが基準を下回る場合は、production を長くすることも有効 |
+| `NOT RELIABLE (overlap)` | production で、隣り合う 2 つの lambda window の overlap が、全 iteration で見たとき、または自由エネルギーを推定する標本で見たときに 0.03 未満。overlap がなければ自由エネルギーは使えない | その stage の lambda window を増やして leg を最初から計算し直す。推定に使う標本だけが基準を下回る場合は、production を長くすることも有効 |
 | `few independent samples` | ある lambda window が MBAR に渡す相関のない標本が 50 未満 (Mey ら 2020)。自由エネルギーとその不確かさが少ない標本に基づいている | leg を長くする。止まったところから続く |
 | `FAILED` | leg が終わらなかった、中断された、またはその標本では自由エネルギーが決まらない。そのリガンドはその leg からの結合自由エネルギーを持たない | メッセージを読み、leg を計算し直す |
 | `LEGS MADE UNDER DIFFERENT CONDITIONS` | complex leg と solvent leg (または 2 つの repeat) で、温度、圧力、準備した系、テール補正が異なる。そのリガンドは結合自由エネルギーを持たない | 異なる leg を、他の leg の条件で計算し直す |
@@ -174,9 +174,11 @@ production の時間ブロックから求め、解析的な値より小さくは
 | `checks of this version not made` | `cufep benchmark report` が以前の版の cuFEP が書いた要約を読んだ | leg を解析し直す |
 | `origin of files not recorded` | leg が、何から作ったかの記録のない以前の版のファイルを使った | 必要なら新しい出力ディレクトリにする |
 
-これらが結果に付くメッセージです。解析を判定するのは、文献の 2 つの検査による `NOT RELIABLE` と
+これらが解析のフラグと注記です。解析を判定するのは、文献の 2 つの検査による `NOT RELIABLE` と
 `few independent samples` だけです。他のメッセージは、何かが欠けている、比べられない、または
-production の一部にしか基づかないことを示します。その他の量は数値として報告します: 平衡化の終わりの膜の変化 (`bilayer`)、
+production の一部にしか基づかないことを示します。実行のその他の警告 (例えば stock OpenMM への退避、
+完了していない repeat、リガンドのグラフの対称性、準備で変えたこと) は結果の行の下に表示され、
+`summary.json` に残ります。その他の量は数値として報告します: 平衡化の終わりの膜の変化 (`bilayer`)、
 入力ポーズからのリガンドの距離 (`ligand_rmsd_from_input_A`)、結合状態でのリガンドの動き
 (`structure`)、forward と reverse の系列、前半と後半、ブロック、BAR。1 回の計算が収束していることを
 示せる検査はありません。計算の間に起きなかった遅い変化は、その計算からは見えません。
@@ -297,7 +299,7 @@ cuFEP を、実験値と、セットとともに公開されている FEP+ の�
 
 | 文書 | 内容 |
 |---|---|
-| [docs/protocol.md](docs/protocol.md) | 方法: 系、熱力学サイクル、lambda window、REST2、解析と検査、GPU、他のソフトウェアとの比較 (英語) |
+| [docs/protocol.md](docs/protocol.md) | 方法: 系、熱力学サイクル、lambda window、REST2、解析と検査、GPU、OpenFE のプロトコルとの比較 (英語) |
 | [docs/configuration.md](docs/configuration.md) | すべての設定、既定値とその根拠 (英語) |
 | [docs/LICENSING.md](docs/LICENSING.md) | cuFEP、cuPotential ランタイム、ベンチマークの入力のライセンス (英語) |
 | [docs/M0_REPORT.md](docs/M0_REPORT.md) | プラグインとプラットフォームの最初のリスク確認 (英語) |
