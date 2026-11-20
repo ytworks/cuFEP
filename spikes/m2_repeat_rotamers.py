@@ -6,7 +6,9 @@ Used to explain why repeats of the TYK2 ejm_31 complex leg differ (ILE960 chi1).
 """
 import sys
 from pathlib import Path
-import mdtraj as md, numpy as np, yaml
+
+import mdtraj as md
+import numpy as np
 from stored_frames import stored_frames
 
 run_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "runs/tyk2_ejm_31")

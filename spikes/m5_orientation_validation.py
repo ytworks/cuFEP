@@ -73,8 +73,14 @@ def analyse(task):
     import openmm.app as app
     import openmm.unit as u
 
-    from cufep.prep.orient import (Orientation, OrientationError, consensus_orientation, memembed_orientation,
-                                   slab_orientation, transfer_energy_orientation)
+    from cufep.prep.orient import (
+        Orientation,
+        OrientationError,
+        consensus_orientation,
+        memembed_orientation,
+        slab_orientation,
+        transfer_energy_orientation,
+    )
     rec = {"id": pdb_id}
     try:
         text = []
@@ -115,16 +121,21 @@ def analyse(task):
 
 def summarise(records, out: Path) -> str:
     mem = [r for r in records if "error" not in r]
-    lines = ["# Membrane orientation: validation against OPM", "",
-             f"{len(mem)} transmembrane structures (OPM and PDBTM annotated, OPM coordinates as reference); "
-             f"{len(records) - len(mem)} files could not be read.", "",
-             "| method | structures | median tilt (deg) | tilt < 10 deg | tilt < 15 deg | median depth (A) | depth < 3 A |",
-             "|---|---|---|---|---|---|---|"]
+    lines = [
+        "# Membrane orientation: validation against OPM",
+        "",
+        f"{len(mem)} transmembrane structures (OPM and PDBTM annotated, OPM coordinates as reference); "
+        f"{len(records) - len(mem)} files could not be read.",
+        "",
+        "| method | structures | median tilt (deg) | tilt < 10 deg | tilt < 15 deg | median depth (A) | depth < 3 A |",
+        "|---|---|---|---|---|---|---|",
+    ]
     for name in ("transfer", "slab", "memembed", "consensus"):
         rows = [r for r in mem if r.get(f"{name}_tilt") is not None]
         if not rows:
             continue
-        tilt = np.array([r[f"{name}_tilt"] for r in rows]); depth = np.array([r[f"{name}_depth_A"] for r in rows])
+        tilt = np.array([r[f"{name}_tilt"] for r in rows])
+        depth = np.array([r[f"{name}_depth_A"] for r in rows])
         lines.append(f"| {name} | {len(rows)} | {np.median(tilt):.1f} | {100 * np.mean(tilt < 10):.0f}% | "
                      f"{100 * np.mean(tilt < 15):.0f}% | {np.median(depth):.1f} | {100 * np.mean(depth < 3):.0f}% |")
     none = sum(1 for r in mem if "consensus" in r and r["consensus"] is None)

@@ -9,10 +9,10 @@ configurations of all windows, for each repeat.
 import sys
 from pathlib import Path
 
-from stored_frames import stored_frames
 import numpy as np
 from openff.toolkit import Molecule
 from rdkit import Chem
+from stored_frames import stored_frames
 
 
 def dihedral(x, i, j, k, l):

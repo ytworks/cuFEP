@@ -16,13 +16,12 @@ measured in units of the restraint width, is taken. Force constants are OpenFE's
 """
 from __future__ import annotations
 
-import math
 import dataclasses
+import math
 from dataclasses import asdict, dataclass
 
 import numpy as np
 import openmm as mm
-import openmm.unit as unit
 
 from cufep.alchemy.factory import LAMBDA_RESTRAINTS, RESTRAINT_GROUP
 
@@ -119,10 +118,10 @@ class BoreschRestraint:
                                  0.0, r_hi, points=[self.r0], limit=200)[0]
             z = z_r
             for k, t0 in ((self.k_theta_a, self.theta_a0), (self.k_theta_b, self.theta_b0)):
-                z *= integrate.quad(lambda t: math.sin(t) * math.exp(-0.5 * beta * k * (t - t0) ** 2),
+                z *= integrate.quad(lambda t, k=k, t0=t0: math.sin(t) * math.exp(-0.5 * beta * k * (t - t0) ** 2),
                                     0.0, math.pi, points=[t0], limit=200)[0]
             for k in (self.k_phi_a, self.k_phi_b, self.k_phi_c):
-                z *= integrate.quad(lambda p: math.exp(-0.5 * beta * k * p * p), -math.pi, math.pi,
+                z *= integrate.quad(lambda p, k=k: math.exp(-0.5 * beta * k * p * p), -math.pi, math.pi,
                                     points=[0.0], limit=200)[0]
         else:
             raise ValueError("method must be 'numerical' or 'analytical'")
@@ -579,7 +578,8 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     for b in topology.bonds():
         i, j = b[0].index, b[1].index
         if i in pool_set and j in pool_set:
-            bonded[i].add(j); bonded[j].add(i)
+            bonded[i].add(j)
+            bonded[j].add(i)
 
     sig_r = math.sqrt(kt / s.k_r)
     sig_a = math.sqrt(kt / s.k_angle)

@@ -35,19 +35,29 @@ for run in map(Path, args):
             c, s = legs["complex"], legs["solvent"]
             bind = (s["delta_g_decouple"] - c["delta_g_decouple"] - c["restraint_release"]) / KJ
             binds.append(bind)
-            print(f"{lig_dir.name} {rep.name}: dG_bind {bind:7.2f} kcal/mol | complex {c['delta_g_decouple'] / KJ:6.2f} "
-                  f"(MBAR ± {c['delta_g_mbar_error'] / KJ:.2f}) solvent {s['delta_g_decouple'] / KJ:6.2f} "
-                  f"(± {s['delta_g_mbar_error'] / KJ:.2f}) release {c['restraint_release'] / KJ:6.2f}")
+            print(
+                f"{lig_dir.name} {rep.name}: dG_bind {bind:7.2f} kcal/mol | complex {c['delta_g_decouple'] / KJ:6.2f} "
+                f"(MBAR ± {c['delta_g_mbar_error'] / KJ:.2f}) solvent {s['delta_g_decouple'] / KJ:6.2f} "
+                f"(± {s['delta_g_mbar_error'] / KJ:.2f}) release {c['restraint_release'] / KJ:6.2f}"
+            )
             for leg, r in legs.items():
                 a = r["analysis"]
                 windows = r.get("lambda_windows", {})
-                acc = [x for x in (a.get("swap_acceptance_neighbour") or a.get("neighbour_transition_fraction") or []) if x is not None]
+                acc = [
+                    x
+                    for x in (a.get("swap_acceptance_neighbour") or a.get("neighbour_transition_fraction") or [])
+                    if x is not None
+                ]
                 stage = ", ".join(f"{k} {v / KJ:.2f}" for k, v in a["stage_delta_g"].items())
-                print(f"    {leg:8s} {r['n_states']:2d} windows ("
-                      + ", ".join(f"{k} {len(v)}" for k, v in windows.items()) + f"); stages {stage}; "
-                      f"lowest overlap {a['min_overlap']:.3f}; neighbour exchange lowest {min(acc):.2f} mean {np.mean(acc):.2f}; "
-                      f"round trips {a['round_trips']}; N_eff/window {a['effective_samples_per_state']:.0f}; "
-                      f"forward/reverse gap {a['forward_reverse_gap'] / KJ:.2f}")
+                print(
+                    f"    {leg:8s} {r['n_states']:2d} windows ("
+                    + ", ".join(f"{k} {len(v)}" for k, v in windows.items())
+                    + f"); stages {stage}; "
+                    f"lowest overlap {a['min_overlap']:.3f}; neighbour exchange lowest {min(acc):.2f} mean "
+                    f"{np.mean(acc):.2f}; "
+                    f"round trips {a['round_trips']}; N_eff/window {a['effective_samples_per_state']:.0f}; "
+                    f"forward/reverse gap {a['forward_reverse_gap'] / KJ:.2f}"
+                )
                 for note in r.get("notes", []):
                     print(f"        note: {note}")
                 if pairs:
@@ -55,7 +65,10 @@ for run in map(Path, args):
                     for name, vals in windows.items():
                         n = len(vals) - 1
                         print(f"        {name:9s} lambda   " + " ".join(f"{v:5.2f}" for v in vals))
-                        print(f"        {'':9s} overlap     " + " ".join(f"{v:5.3f}" for v in a["overlap_neighbour"][k:k + n]))
+                        print(
+                            f"        {'':9s} overlap     "
+                            + " ".join(f"{v:5.3f}" for v in a["overlap_neighbour"][k : k + n])
+                        )
                         print(f"        {'':9s} exchange    " + " ".join(f"{v:5.3f}" for v in acc[k:k + n]))
                         k += n
                 if timing and (rep / leg / "timing.json").exists():
@@ -70,5 +83,8 @@ for run in map(Path, args):
     if timing and (run / "timing.json").exists():
         t = json.loads((run / "timing.json").read_text())
         util = t["gpu_utilization_percent"]["while_sampling"]
-        print(f"timing: wall {t['wall_seconds'] / 60:.1f} min, preparation {t['preparation_seconds'] / 60:.1f} min, MPS {t['mps']}; "
-              "GPU utilization while sampling: " + ", ".join(f"{g}: {v:.0f}%" for g, v in util.items() if v is not None))
+        print(
+            f"timing: wall {t['wall_seconds'] / 60:.1f} min, preparation {t['preparation_seconds'] / 60:.1f} min, MPS "
+            f"{t['mps']}; "
+            "GPU utilization while sampling: " + ", ".join(f"{g}: {v:.0f}%" for g, v in util.items() if v is not None)
+        )

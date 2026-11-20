@@ -247,11 +247,12 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
         if drift["area_change"] is not None:
             water = "" if drift["pocket_water_change"] is None else \
                 f", water molecules near the ligand {drift['pocket_water_change']:+.1f}"
-            log(f"bilayer between the last two quarters of its equilibration: area {100 * drift['area_change']:+.2f} %{water}")
+            log(f"bilayer between the last two quarters of its equilibration: "
+                f"area {100 * drift['area_change']:+.2f} %{water}")
     pos, vel, bx = _state_arrays(ctx)
     # the time that was integrated, not the one asked for
     simulated_ns = steps_done * float(dt_fs) * 1.0e-6
-    del ctx, integ
+    ctx = integ = None                  # release the Context (advance() is not called again)
     half = len(frames) // 2
     boxes_arr = np.asarray(boxes)
     return EquilibrationResult(positions=pos, velocities=vel, box=bx, frames=np.asarray(frames), frame_boxes=boxes_arr,

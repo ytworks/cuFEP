@@ -45,15 +45,22 @@ set_state(ref_c, S)
 box0 = [mm.Vec3(*r) for r in data["box"]]
 for name, prec in (("openmm", "mixed"), ("cupotential", "mixed")):
     c, integ = make(name, prec)
-    c.setPeriodicBoxVectors(*box0); c.setPositions(data["positions"]); c.setVelocities(data["velocities"])
+    c.setPeriodicBoxVectors(*box0)
+    c.setPositions(data["positions"])
+    c.setVelocities(data["velocities"])
     set_state(c, S)
     for seg in range(6):
         integ.step(1250)                              # 5 ps
         st = c.getState(getPositions=True)
         e, f = soft(c)                                # soft-core group alone, straight after MD
-        ref_c.setPeriodicBoxVectors(*st.getPeriodicBoxVectors()); ref_c.setPositions(st.getPositions(asNumpy=True))
+        ref_c.setPeriodicBoxVectors(*st.getPeriodicBoxVectors())
+        ref_c.setPositions(st.getPositions(asNumpy=True))
         ref_c.getState(getEnergy=True)                # all groups once: lists rebuilt together
         e_ref, f_ref = soft(ref_c)
-        print(f"{name:11s} {prec} after {5 * (seg + 1):3d} ps: soft-core energy {e:10.4f} kT, error {e - e_ref:+9.4f} kT; "
-              f"max |force error| {np.abs(f - f_ref).max():8.3f} kJ/mol/nm (max |force| {np.abs(f_ref).max():.0f})", flush=True)
+        print(
+            f"{name:11s} {prec} after {5 * (seg + 1):3d} ps: soft-core energy {e:10.4f} kT, error {e - e_ref:+9.4f} "
+            f"kT; "
+            f"max |force error| {np.abs(f - f_ref).max():8.3f} kJ/mol/nm (max |force| {np.abs(f_ref).max():.0f})",
+            flush=True,
+        )
     del c

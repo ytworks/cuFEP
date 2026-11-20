@@ -19,7 +19,6 @@ import openmm.app as app
 import openmm.unit as u
 
 from cufep.backends import get_backend
-from cufep.backends.base import clone_system
 
 T = 298.15 * u.kelvin
 P = 1.0 * u.bar
@@ -52,7 +51,9 @@ def run_md(label, backend, system, positions, box, barostat=None, steps=5000, dt
     if barostat == "iso":
         prepared.addForce(backend.make_isotropic_barostat(P, T, 25, seed=11))
     elif barostat == "stock-iso":
-        b = mm.MonteCarloBarostat(P, T, 25); b.setRandomNumberSeed(11); prepared.addForce(b)
+        b = mm.MonteCarloBarostat(P, T, 25)
+        b.setRandomNumberSeed(11)
+        prepared.addForce(b)
     elif barostat == "membrane":
         prepared.addForce(backend.make_membrane_barostat(P, T, 25, seed=11))
     integ = backend.make_integrator(T, 1 / u.picosecond, dt_fs * u.femtoseconds, seed=7)

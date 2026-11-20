@@ -142,15 +142,25 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         first = (s.get("repeats") or [{}])[0]
         added = first.get("lambda_windows_added") or {}
         flags = flags_of(s)
-        rows.append({"ligand": s["ligand"], "exp": ref["exp"], "fepplus": ref["fepplus"], "cufep": s["dg_bind"],
-                     "cufep_error": s.get("dg_bind_error"), "cufep_std": s.get("dg_bind_std"), "n_repeats": s["n_repeats"],
-                     "windows_complex": (first.get("lambda_windows") or {}).get("complex"),
-                     "windows_solvent": (first.get("lambda_windows") or {}).get("solvent"),
-                     "windows_added_complex": None if added.get("complex") is None else sum(added["complex"].values()),
-                     "windows_added_solvent": None if added.get("solvent") is None else sum(added["solvent"].values()),
-                     "lowest_overlap": s.get("min_overlap"), "lowest_overlap_used": s.get("min_overlap_used"),
-                     "flags": "; ".join(flags),
-                     "warnings": len(s.get("warnings", []))})
+        rows.append(
+            {
+                "ligand": s["ligand"],
+                "exp": ref["exp"],
+                "fepplus": ref["fepplus"],
+                "cufep": s["dg_bind"],
+                "cufep_error": s.get("dg_bind_error"),
+                "cufep_std": s.get("dg_bind_std"),
+                "n_repeats": s["n_repeats"],
+                "windows_complex": (first.get("lambda_windows") or {}).get("complex"),
+                "windows_solvent": (first.get("lambda_windows") or {}).get("solvent"),
+                "windows_added_complex": None if added.get("complex") is None else sum(added["complex"].values()),
+                "windows_added_solvent": None if added.get("solvent") is None else sum(added["solvent"].values()),
+                "lowest_overlap": s.get("min_overlap"),
+                "lowest_overlap_used": s.get("min_overlap_used"),
+                "flags": "; ".join(flags),
+                "warnings": len(s.get("warnings", [])),
+            }
+        )
     title = load_registry()[name]["title"]
     lines = [f"# cuFEP benchmark report: {name}", "", title, "",
              f"Ligands with a result: {len(rows)} of {len(summary)} run ({len(reference)} in the set).", ""]
@@ -195,19 +205,24 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     def count(value) -> str:
         return "" if value is None else str(value)
 
-    lines += ["", "## Lambda windows and checks of the analysis", "",
-              "Windows per leg, how many of them adaptive lambda scheduling added to its start, the lowest overlap "
-              "of neighbouring windows in the production (from all iterations with equal numbers of samples per "
-              "window, and among the samples the free energy is estimated from), and the legs that do not meet a "
-              "level of the checks (first repeat). The checks are the two of the literature: NOT RELIABLE (overlap "
-              "below 0.03, Klimovich et al. 2015) makes a result unusable; few independent samples (fewer than 50 "
-              "in a window, Mey et al. 2020) says that more sampling is advisable. A result that an earlier version "
-              "of cuFEP analysed carries the flag that the checks of this version were not made; they are made when "
-              "its legs are analysed again.", "",
-              "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags |",
-              "|---|---|---|---|---|---|"]
+    lines += [
+        "",
+        "## Lambda windows and checks of the analysis",
+        "",
+        "Windows per leg, how many of them adaptive lambda scheduling added to its start, the lowest overlap "
+        "of neighbouring windows in the production (from all iterations with equal numbers of samples per "
+        "window, and among the samples the free energy is estimated from), and the legs that do not meet a "
+        "level of the checks (first repeat). The checks are the two of the literature: NOT RELIABLE (overlap "
+        "below 0.03, Klimovich et al. 2015) makes a result unusable; few independent samples (fewer than 50 "
+        "in a window, Mey et al. 2020) says that more sampling is advisable. A result that an earlier version "
+        "of cuFEP analysed carries the flag that the checks of this version were not made; they are made when "
+        "its legs are analysed again.",
+        "",
+        "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags |",
+        "|---|---|---|---|---|---|",
+    ]
     for r in sorted(rows, key=lambda r: r["exp"]):
-        def cell_windows(leg: str) -> str:
+        def cell_windows(leg: str, r=r) -> str:
             n, extra = r[f"windows_{leg}"], r[f"windows_added_{leg}"]
             return count(n) + ("" if extra is None else f" ({extra})")
         low = "" if r["lowest_overlap"] is None else f"{r['lowest_overlap']:.3f}"
@@ -217,8 +232,11 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     scheduled = [r[f"windows_added_{leg}"] for r in rows for leg in ("complex", "solvent")
                  if r[f"windows_added_{leg}"] is not None]
     if scheduled:
-        lines += ["", f"Adaptive lambda scheduling added windows in {sum(1 for n in scheduled if n > 0)} of "
-                      f"{len(scheduled)} legs. {sum(1 for r in rows if r['flags'])} of {len(rows)} ligands have a flag."]
+        lines += [
+            "",
+            f"Adaptive lambda scheduling added windows in {sum(1 for n in scheduled if n > 0)} of "
+            f"{len(scheduled)} legs. {sum(1 for r in rows if r['flags'])} of {len(rows)} ligands have a flag.",
+        ]
     exp = [r["exp"] for r in rows]
     table = {"cuFEP": [r["cufep"] for r in rows], "FEP+": [r["fepplus"] for r in rows]}
     stats = {k: (metrics(v, exp), bootstrap(v, exp) if len(rows) >= 4 else {}) for k, v in table.items()}
@@ -290,9 +308,12 @@ def _plot(rows: list[dict], path: Path, name: str) -> None:
     ax.errorbar(exp, [r["cufep"] for r in rows], yerr=[error_bar(r) for r in rows], fmt="o",
                 color="#1f6f8b", label="cuFEP (absolute; " + error_bar_label(rows) + ")", capsize=2)
     ax.plot(exp, [r["fepplus"] for r in rows], "s", mfc="none", color="#c0392b", label="FEP+ (relative, shifted)")
-    ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
-    ax.set_xlabel("experiment (kcal/mol)"); ax.set_ylabel("calculated (kcal/mol)")
-    ax.set_title(f"{name}: binding free energies"); ax.legend(frameon=False, fontsize=8)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_xlabel("experiment (kcal/mol)")
+    ax.set_ylabel("calculated (kcal/mol)")
+    ax.set_title(f"{name}: binding free energies")
+    ax.legend(frameon=False, fontsize=8)
     from cufep.files import publish_with
 
     fig.tight_layout()
@@ -320,7 +341,7 @@ def freeze_schedules(name: str, run_dir: str | Path, dest: str | Path | None = N
         leg, repeat, ligand = sched.parent.name, sched.parent.parent.name.split("_")[1], sched.parent.parent.parent.name
         target = dest / ligand / f"{leg}_r{repeat}.yaml"
         target.parent.mkdir(parents=True, exist_ok=True)
-        publish(target, lambda tmp: shutil.copy(sched, tmp))
+        publish(target, lambda tmp, sched=sched: shutil.copy(sched, tmp))
         n += 1
     if n == 0:
         raise FileNotFoundError(f"no schedule.yaml found under {run_dir}")

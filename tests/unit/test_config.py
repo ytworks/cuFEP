@@ -1,5 +1,6 @@
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from cufep.config.schema import Config, dump_config, load_config
 
@@ -95,7 +96,7 @@ def test_files_of_earlier_versions_are_read(tmp_path, capsys):
         load_config(write(tmp_path, older))
 
     # a key that no version had is still an error, and a file of this version gives no notice
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {**base, "analysis": {"convergence_tolerance": 2.0}}))
     assert load_config_with_notices(write(tmp_path, full))[1] == []
     # a record of an earlier run is read as it is written, whatever it holds
@@ -104,21 +105,21 @@ def test_files_of_earlier_versions_are_read(tmp_path, capsys):
 
 
 def test_unknown_keys_are_rejected(tmp_path):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "sampling": {"repeat": 2}}))
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "typo": 1}))
 
 
 def test_membrane_is_an_explicit_switch(tmp_path):
     base = {"system": {"protein": "p.pdb", "ligand": "l.sdf"}}
     assert load_config(write(tmp_path, {**base, "membrane": {"enabled": True}})).membrane.enabled is True
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {**base, "membrane": {"enabled": "auto"}}))
 
 
 def test_missing_inputs_are_rejected(tmp_path):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {"system": {"protein": "p.pdb"}}))
 
 
@@ -139,7 +140,7 @@ def test_every_setting_has_a_default():
                 assert path + (key,) in optional, f"{'.'.join(path + (key,))} has no default"
 
     walk(dumped)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Config.model_validate({})
 
 
@@ -169,11 +170,17 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert list(w.for_leg("complex")) == ["restrain", "discharge", "vanish"]
     assert cfg.lambda_schedule.adaptive.overlap_threshold == 0.03
     assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 5}
-    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
+    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {
+        "restrain": 3,
+        "discharge": 5,
+        "vanish": 9,
+    }
 
 
 def test_precalculation_lengths_are_one_number_or_one_per_leg(tmp_path):
-    one = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"window_ps": 20, "equilibration_ps": 0}}}))
+    one = load_config(
+        write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"window_ps": 20, "equilibration_ps": 0}}})
+    )
     a = one.lambda_schedule.adaptive
     assert (a.window("complex"), a.window("solvent"), a.equilibration("complex")) == (20.0, 20.0, 0.0)
     per_leg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {
@@ -183,7 +190,7 @@ def test_precalculation_lengths_are_one_number_or_one_per_leg(tmp_path):
     assert (a.equilibration("complex"), a.equilibration("solvent")) == (100.0, 0.0)
     for bad in ({"window_ps": 0}, {"window_ps": {"complex": 500, "solvent": 0}}, {"equilibration_ps": -1},
                 {"window_ps": {"complex": 500}}):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": bad}}))
 
 
@@ -200,10 +207,12 @@ def test_rest2_is_on_by_default_and_can_be_set(tmp_path):
     assert "hot region: the ligand; 1.5 times the temperature" in lambda_window_table(cfg)
     cfg = load_config(write(tmp_path, {**BASE, "sampling": {"rest2": {"scale": 1.0}}}))
     assert "off (sampling.rest2.scale is 1)" in lambda_window_table(cfg)
-    cfg = load_config(write(tmp_path, {**BASE, "sampling": {"rest2": {"scale": 2, "region": "pocket", "residues": ["A:960"]}}}))
+    cfg = load_config(
+        write(tmp_path, {**BASE, "sampling": {"rest2": {"scale": 2, "region": "pocket", "residues": ["A:960"]}}})
+    )
     assert "protein residues within 0.4 nm of it (A:960)" in lambda_window_table(cfg)
     for bad in ({"scale": 0.9}, {"region": "protein"}, {"pocket_cutoff_nm": 0}):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             load_config(write(tmp_path, {**BASE, "sampling": {"rest2": bad}}))
 
 
@@ -217,7 +226,7 @@ def test_one_value_of_a_section_can_be_set_and_the_rest_keep_their_defaults(tmp_
 
 @pytest.mark.parametrize("bad", [1, 0, [0.0], [0.1, 1.0], [0.0, 0.9], [0.0, 0.6, 0.5, 1.0], [0.0, 0.5, 0.5, 1.0]])
 def test_bad_lambda_windows_are_rejected(tmp_path, bad):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {**BASE, "lambda_schedule": {"windows": {"solvent": {"vanish": bad}}}}))
 
 
@@ -226,7 +235,7 @@ def test_bad_lambda_windows_are_rejected(tmp_path, bad):
                                      {"adaptive": {"initial_windows": {"vanish": 9}}}, {"mode": "automatic"},
                                      {"preset": "fast"}])
 def test_bad_schedule_settings_are_rejected(tmp_path, section):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {**BASE, "lambda_schedule": section}))
 
 
@@ -237,7 +246,7 @@ def test_lengths_per_leg(tmp_path):
     assert cfg.sampling.equilibration("complex") == 0.5 == cfg.sampling.equilibration("solvent")
     assert cfg.sampling.repeats == 3
     for bad in ({"production_ns": 0}, {"production_ns": {"complex": 5}}, {"repeats": 0}, {"production_ns": [5, 10]}):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             load_config(write(tmp_path, {**BASE, "sampling": bad}))
 
 
@@ -264,14 +273,16 @@ def test_the_numbers_of_time_blocks_for_the_standard_error_are_settings(tmp_path
     assert record != analysis_record(cfg)                       # a result made with others is made again
     assert analysis_settings_of(record).analysis.error_blocks == [20, 8]
     for bad in ({"error_blocks": []}, {"error_blocks": [10, 1]}, {"part_error_blocks": 1}):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             load_config(write(tmp_path, {**BASE, "analysis": bad}))
     # the name of an earlier version is the setting of this one, in files and in stored records alike
     # (review of PR 1: a record with 2 was read as 5 without a word, a file with 3 was refused)
     for value in (5, 3):
         cfg, notices = load_config_with_notices(write(tmp_path, {**BASE, "analysis": {"halves_error_blocks": value}}))
         assert cfg.analysis.part_error_blocks == value
-        assert notices[0].startswith(f"analysis.halves_error_blocks: {value} is analysis.part_error_blocks in this version")
+        assert notices[0].startswith(
+            f"analysis.halves_error_blocks: {value} is analysis.part_error_blocks in this version"
+        )
     assert analysis_settings_of({"version": 4, "halves_error_blocks": 2}).analysis.part_error_blocks == 2
 
 
@@ -304,13 +315,22 @@ def test_barostat_frequency_is_a_setting_and_every_shared_stretch_of_md_gets_mov
     # a window of the precalculation starts from a configuration of its own in a Context it shares, so it
     # counts; the walks through the windows are one trajectory, and no other shares its Context
     with pytest.raises(Exception, match="window_ps"):
-        load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"window_ps": 0.05, "equilibration_ps": 0.0,
-                                                                              "sample_interval_ps": 0.025}}}))
+        load_config(
+            write(
+                tmp_path,
+                {
+                    **BASE,
+                    "lambda_schedule": {
+                        "adaptive": {"window_ps": 0.05, "equilibration_ps": 0.0, "sample_interval_ps": 0.025}
+                    },
+                },
+            )
+        )
     load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "adaptive": {
         "window_ps": 0.05, "equilibration_ps": 0.0, "sample_interval_ps": 0.025}}}))
     load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"walk_ps": 0.05}}}))
     load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "fixed_walk_ps": 0.05}}))
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         load_config(write(tmp_path, {**BASE, "dynamics": {"barostat_frequency": 0}}))
 
 

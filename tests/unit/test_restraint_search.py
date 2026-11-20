@@ -1,6 +1,5 @@
 """Automatic Boresch restraint selection on a synthetic trajectory of the TYK2 complex."""
 import numpy as np
-import openmm.app as app
 import openmm.unit as u
 import pytest
 
@@ -8,7 +7,6 @@ from cufep.alchemy.restraints import find_boresch_restraint, heavy_atom_symmetri
 from cufep.prep.ligand import load_ligands
 from cufep.prep.protein import prepare_protein
 from cufep.prep.solvate import combine, ligand_atom_indices
-
 
 pytestmark = pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 
@@ -155,8 +153,12 @@ def test_pose_rmsd_ignores_swaps_of_symmetry_equivalent_atoms(tyk2_complex):
 
 
 def test_force_constants_from_fluctuations():
-    from cufep.alchemy.restraints import (K_ANGLE_DEFAULT, K_R_DEFAULT, BoreschRestraint,
-                                          with_force_constants_from_fluctuations)
+    from cufep.alchemy.restraints import (
+        K_ANGLE_DEFAULT,
+        K_R_DEFAULT,
+        BoreschRestraint,
+        with_force_constants_from_fluctuations,
+    )
 
     kt = 8.31446261815324e-3 * 298.15
     base = BoreschRestraint((0, 1, 2), (3, 4, 5), 0.8, 1.6, 1.6, 0.0, 2.0, 1.0)

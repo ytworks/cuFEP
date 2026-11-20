@@ -31,7 +31,9 @@ def beyond_cutoff(ligand, forcefield, cutoff_nm: float) -> dict:
     n = offmol.n_atoms
     sigma, epsilon = np.zeros(n), np.zeros(n)
     for (i,), p in labels.items():
-        sigma[i] = p.sigma.m_as("nanometer") if p.sigma is not None else p.rmin_half.m_as("nanometer") * 2 / 2 ** (1 / 6)
+        sigma[i] = (
+            p.sigma.m_as("nanometer") if p.sigma is not None else p.rmin_half.m_as("nanometer") * 2 / 2 ** (1 / 6)
+        )
         epsilon[i] = p.epsilon.m_as("kilojoule / mole")
     pos = ligand.positions_nm()
     bonds_apart = Chem.GetDistanceMatrix(offmol.to_rdkit())
@@ -74,8 +76,11 @@ def main() -> None:
     print(f"Lennard-Jones energy inside the ligand beyond {cutoff:g} nm, input poses, OpenFF 2.2.1")
     print(f"{'benchmark':9s} {'ligand':8s} heavy  longest distance (nm)  pairs beyond  energy (kJ/mol)  (kcal/mol)")
     for r in rows:
-        print(f"{r['benchmark']:9s} {r['ligand']:8s} {r['heavy_atoms']:4d}   {r['longest_distance_nm']:8.2f}             "
-              f"{r['pairs_beyond_cutoff']:6d}       {r['lj_beyond_cutoff_kJ_mol']:8.3f}      {r['lj_beyond_cutoff_kcal_mol']:7.3f}")
+        print(
+            f"{r['benchmark']:9s} {r['ligand']:8s} {r['heavy_atoms']:4d}   {r['longest_distance_nm']:8.2f}             "
+            f"{r['pairs_beyond_cutoff']:6d}       {r['lj_beyond_cutoff_kJ_mol']:8.3f}      "
+            f"{r['lj_beyond_cutoff_kcal_mol']:7.3f}"
+        )
     for name in sorted({r["benchmark"] for r in rows}):
         e = [r["lj_beyond_cutoff_kcal_mol"] for r in rows if r["benchmark"] == name]
         print(f"{name}: {len(e)} ligands, {min(e):.3f} to {max(e):.3f} kcal/mol, mean {np.mean(e):.3f}, "

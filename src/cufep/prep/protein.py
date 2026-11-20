@@ -45,8 +45,12 @@ MAX_CA_CA_NM = 0.42
 #: protonated carboxyl groups: the two oxygens, the oxygen and the hydrogen names of the protonated
 #: form in the force field (Amber: ASH carries HD2 on OD2, GLH HE2 on OE2), and the hydrogen names a
 #: file may use
-CARBOXYLS = {"ASP": (("OD1", "OD2"), "OD2", "HD2", ("HD1", "HD2")), "ASH": (("OD1", "OD2"), "OD2", "HD2", ("HD1", "HD2")),
-             "GLU": (("OE1", "OE2"), "OE2", "HE2", ("HE1", "HE2")), "GLH": (("OE1", "OE2"), "OE2", "HE2", ("HE1", "HE2"))}
+CARBOXYLS = {
+    "ASP": (("OD1", "OD2"), "OD2", "HD2", ("HD1", "HD2")),
+    "ASH": (("OD1", "OD2"), "OD2", "HD2", ("HD1", "HD2")),
+    "GLU": (("OE1", "OE2"), "OE2", "HE2", ("HE1", "HE2")),
+    "GLH": (("OE1", "OE2"), "OE2", "HE2", ("HE1", "HE2")),
+}
 MAX_OH_BOND_NM = 0.13
 _CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -160,7 +164,8 @@ def _rename_cap(kind: str, atoms, nbrs) -> dict[int, str]:
                 if a.index in nbrs[n_atom.index]:
                     names[a.index] = "H"
                 else:
-                    names[a.index] = f"H{k}"; k += 1
+                    names[a.index] = f"H{k}"
+                    k += 1
     return names
 
 
@@ -410,8 +415,10 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
                     report.warnings.append(f"{_label(last)}: neutral COOH terminus made charged (HXT removed)")
             elif stray or c_h or internal_end or report.had_hydrogens:
                 # no OXT in a file that carries hydrogens: not a charged terminus -> neutral cap
-                drop_atoms.update(stray); drop_atoms.update(c_h)
-                add_nme.add(last.index); no_oxt.add(last.index)
+                drop_atoms.update(stray)
+                drop_atoms.update(c_h)
+                add_nme.add(last.index)
+                no_oxt.add(last.index)
             # else: no hydrogens in file, chain end without OXT -> PDBFixer adds OXT (charged)
         else:
             no_oxt.add(last.index)
@@ -478,7 +485,8 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
         for res in residues:
             kind = kinds[res.index]
             copy_res(res, chain, "HOH" if kind == "water" else res.name)
-            n_water += kind == "water"; n_ion += kind == "ion"
+            n_water += kind == "water"
+            n_ion += kind == "ion"
     if report.caps_added:
         report.notes.append("caps added: " + ", ".join(report.caps_added))
     report.notes.append(f"{len(aa_res)} residues in {len(segments)} segment(s); kept {n_water} waters and {n_ion} ions")
@@ -491,7 +499,9 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
     fixer = PDBFixer(pdbfile=buf, platform=_preparation_platform())
     fixer.missingResidues = dict(cap_plan)
     fixer.findMissingAtoms()
-    capped_last = {(_CHAIN_IDS[s], *residue_key(seg[-1])[1:]) for s, seg in enumerate(segments) if seg[-1].index in no_oxt}
+    capped_last = {
+        (_CHAIN_IDS[s], *residue_key(seg[-1])[1:]) for s, seg in enumerate(segments) if seg[-1].index in no_oxt
+    }
     fixer.missingTerminals = {r: a for r, a in fixer.missingTerminals.items() if residue_key(r) not in capped_last}
     rebuilt = [f"{_label(r)}:{'+'.join(a.name for a in atoms)}" for r, atoms in fixer.missingAtoms.items()]
     if rebuilt:

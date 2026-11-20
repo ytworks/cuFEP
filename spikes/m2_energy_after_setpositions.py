@@ -28,10 +28,13 @@ be = get_backend("openmm", precision=prec)
 integ = be.make_integrator(298.15 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds, seed=1)
 c = be.make_context(be.prepare_system(system), integ, DEVICE)
 ev = StateEnergyEvaluator(c, schedule.states, 298.15, None)
-c.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in data["box"]]); c.setPositions(data["positions"]); c.setVelocities(data["velocities"])
+c.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in data["box"]])
+c.setPositions(data["positions"])
+c.setVelocities(data["velocities"])
 saved = []
 for k in (0, 5, 10, 5, 0):
-    set_state(c, schedule.states[k]); integ.step(625)
+    set_state(c, schedule.states[k])
+    integ.step(625)
     st = c.getState(getPositions=True, getForces=True)
     saved.append((st.getPositions(asNumpy=True), st.getPeriodicBoxVectors(), ev.reduced_potentials()[0],
                   st.getForces(asNumpy=True).value_in_unit(KJ / u.nanometer)))
@@ -39,7 +42,8 @@ first, last = saved[0], saved[-1]
 
 
 def go_to(cfg):
-    c.setPeriodicBoxVectors(*cfg[1]); c.setPositions(cfg[0])
+    c.setPeriodicBoxVectors(*cfg[1])
+    c.setPositions(cfg[0])
 
 
 def all_forces():
@@ -57,14 +61,17 @@ REMEDIES = {
 }
 np.set_printoptions(linewidth=200, precision=3, suppress=True)
 for label, remedy in REMEDIES.items():
-    go_to(last); all_forces()                         # consistent at the last configuration
+    go_to(last)
+    all_forces()                         # consistent at the last configuration
     go_to(first)
     remedy()
     x = ev.reduced_potentials()[0]
     err = x - first[2]
     print(f"[{prec}] setPositions + {label:34s}: max |state energy error| {np.abs(err).max():8.4f} kT")
-go_to(last); all_forces()
-go_to(first); set_state(c, schedule.states[0])
+go_to(last)
+all_forces()
+go_to(first)
+set_state(c, schedule.states[0])
 f = all_forces()
 print(f"[{prec}] first all-group force evaluation after setPositions: max |force error| "
       f"{np.abs(f - first[3]).max():.4f} kJ/mol/nm (mean |force| {np.abs(first[3]).mean():.0f})")

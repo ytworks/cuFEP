@@ -1,9 +1,7 @@
 """M5 spike: build the A2A complex in a bilayer and report what was built (no dynamics)."""
-import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import openmm.app as app
 
 from cufep.config.schema import Config
@@ -13,7 +11,8 @@ from cufep.prep.membrane import add_membrane
 from cufep.prep.protein import prepare_protein
 from cufep.prep.solvate import combine, ligand_atom_indices
 
-out = Path("spikes/out/mem"); out.mkdir(parents=True, exist_ok=True)
+out = Path("spikes/out/mem")
+out.mkdir(parents=True, exist_ok=True)
 cfg = Config.model_validate({"system": {"protein": "examples/membrane_a2a/protein.pdb",
                                         "ligand": "examples/membrane_a2a/ligand.sdf"}})
 protein = prepare_protein(cfg.system.protein)

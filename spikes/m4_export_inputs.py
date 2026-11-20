@@ -14,4 +14,6 @@ out.mkdir(parents=True, exist_ok=True)
 shutil.copy(run_dir / "protein_prepared.pdb", out / "protein.pdb")
 mol = Molecule.from_json((run_dir / ligand / "prep" / "ligand.json").read_text())
 mol.to_file(str(out / "ligand_charged.sdf"), "SDF")
-print("wrote", out / "protein.pdb", "and", out / "ligand_charged.sdf", "| charge sum", float(sum(mol.partial_charges.m)))
+print(
+    "wrote", out / "protein.pdb", "and", out / "ligand_charged.sdf", "| charge sum", float(sum(mol.partial_charges.m))
+)

@@ -456,8 +456,13 @@ def md_segments(cfg: "Config") -> list[tuple[str, int]]:
         for leg in ("complex", "solvent"):
             eq_steps, n_samples, per_sample = precalculation_steps(a.window(leg), a.equilibration(leg),
                                                                    a.sample_interval_ps, dt)
-            out.append((f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
-                        "the precalculation, which starts from a configuration of its own)", eq_steps + n_samples * per_sample))
+            out.append(
+                (
+                    f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
+                    "the precalculation, which starts from a configuration of its own)",
+                    eq_steps + n_samples * per_sample,
+                )
+            )
     return out
 
 
@@ -560,7 +565,7 @@ def renamed_settings(section: str, record: dict) -> tuple[dict, list[str]]:
     """A flat record of the settings of one section (``record``, as results store it) with the
     names of this version, and what was renamed."""
     record, notices = dict(record), []
-    for (old_section, old), ((new_section, new), what) in RENAMED_SETTINGS.items():
+    for (old_section, old), ((_new_section, new), what) in RENAMED_SETTINGS.items():
         if old_section == section and old in record:
             value = record.pop(old)
             if new not in record:

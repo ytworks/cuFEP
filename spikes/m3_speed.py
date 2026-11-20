@@ -101,7 +101,6 @@ def cmd_breakdown(args) -> dict:
     import openmm as mm
     import openmm.unit as u
 
-    from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_STERICS, MAIN_GROUP, SOFTCORE_GROUP
     from cufep.sampling.states import set_state
     from cufep.sampling.worker import ReplicaWorker, SharedArrays
 
@@ -117,8 +116,11 @@ def cmd_breakdown(args) -> dict:
     reps = list(range(k)) * args.rounds
     # warm-up
     for r in range(min(k, 4)):
-        ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in arrays.box[0, r]]); ctx.setPositions(arrays.pos[0, r])
-        ctx.setVelocities(arrays.vel[0, r]); set_state(ctx, states[r]); integ.step(100)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in arrays.box[0, r]])
+        ctx.setPositions(arrays.pos[0, r])
+        ctx.setVelocities(arrays.vel[0, r])
+        set_state(ctx, states[r])
+        integ.step(100)
 
     def tick(key, t0):
         ctx.getState()                                   # make sure queued GPU work is finished
@@ -129,7 +131,8 @@ def cmd_breakdown(args) -> dict:
     for r in reps:
         t = time.perf_counter()
         ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in arrays.box[0, r]])
-        ctx.setPositions(arrays.pos[0, r]); ctx.setVelocities(arrays.vel[0, r])
+        ctx.setPositions(arrays.pos[0, r])
+        ctx.setVelocities(arrays.vel[0, r])
         t = tick("load", t)
         set_state(ctx, states[r])
         t = tick("set_state", t)
@@ -147,7 +150,8 @@ def cmd_breakdown(args) -> dict:
         t = tick("main_group", t)
         ev.softcore_group()
         t = tick("softcore_group", t)
-        ev.restraint_energy(); ev.volume_nm3()
+        ev.restraint_energy()
+        ev.volume_nm3()
         t = tick("restraint_volume", t)
         arrays.pos[1, r], arrays.vel[1, r], arrays.box[1, r] = pos, vel, box
         t = tick("write", t)
@@ -157,7 +161,8 @@ def cmd_breakdown(args) -> dict:
     out = {"what": "breakdown", "leg": spec.name, "backend": spec.backend, "atoms": spec.n_atoms, "windows": k,
            "distinct_lambda_sterics": int(len(ev._ls_unique)), "ms_per_replica_iteration": ms, "total_ms": total,  # noqa: SLF001
            "md_ns_per_day": 2.5e-3 / (ms["md"] / 1000.0) * 86400.0, "md_fraction": ms["md"] / total}
-    w.close(); arrays.close()
+    w.close()
+    arrays.close()
     return out
 
 
@@ -166,16 +171,22 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("iter", "breakdown"):
         p = sub.add_parser(name)
-        p.add_argument("run_dir"); p.add_argument("ligand"); p.add_argument("repeat", type=int); p.add_argument("leg")
+        p.add_argument("run_dir")
+        p.add_argument("ligand")
+        p.add_argument("repeat", type=int)
+        p.add_argument("leg")
         p.add_argument("--backend", default=None)
         p.add_argument("--windows", type=int, default=None, help="use only this many of the windows")
         p.add_argument("--scratch", default="/dev/shm")
         p.add_argument("--out", default="spikes/out/m3_speed/results.jsonl")
     it = sub.choices["iter"]
-    it.add_argument("--devices", required=True); it.add_argument("--iterations", type=int, default=30)
-    it.add_argument("--warmup", type=int, default=4); it.add_argument("--mps", action="store_true")
+    it.add_argument("--devices", required=True)
+    it.add_argument("--iterations", type=int, default=30)
+    it.add_argument("--warmup", type=int, default=4)
+    it.add_argument("--mps", action="store_true")
     bd = sub.choices["breakdown"]
-    bd.add_argument("--device", type=int, default=0); bd.add_argument("--rounds", type=int, default=2)
+    bd.add_argument("--device", type=int, default=0)
+    bd.add_argument("--rounds", type=int, default=2)
     args = ap.parse_args()
     out = cmd_iter(args) if args.cmd == "iter" else cmd_breakdown(args)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

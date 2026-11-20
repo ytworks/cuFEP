@@ -26,7 +26,10 @@ def test_cuda_visible_devices_is_read_as_cuda_reads_it():
     assert [(g.logical, g.physical) for g in visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": "2"})] == [(0, 2)]
     assert [(g.logical, g.physical) for g in visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": "3,1"})] == [(0, 3), (1, 1)]
     assert [(g.logical, g.physical) for g in visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": "GPU-cccc"})] == [(0, 2)]
-    assert visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": "-1"}) == [] and visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": ""}) == []
+    assert (
+        visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": "-1"}) == []
+        and visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": ""}) == []
+    )
     # CUDA stops at the first entry that is not a GPU, and at a repeated one
     assert [g.physical for g in visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": "1,7,3"})] == [1]
     assert [g.physical for g in visible_gpus(FOUR, {"CUDA_VISIBLE_DEVICES": "1,1,3"})] == [1]
@@ -211,7 +214,6 @@ def test_a_run_ended_by_a_signal_stops_its_jobs_before_its_lock_goes(tmp_path, h
     """Review of PR 1 (P1): the jobs run in process groups of their own; a SIGTERM (kill, GNU timeout) or a hangup
     ended the run without stopping them, its lock went, and the jobs went on writing (heartbeat 11 -> 17 lines in
     3 s)."""
-    import signal
 
     out = tmp_path / "out"
     proc, legs = _start_run(out, ["slow-1", "polite"])
@@ -235,7 +237,6 @@ def test_a_run_ended_by_a_signal_stops_its_jobs_before_its_lock_goes(tmp_path, h
 def test_a_run_that_is_killed_leaves_no_job_behind_and_no_second_run_meets_one(tmp_path):
     """SIGKILL cannot be caught: the jobs get a signal from the kernel when their scheduler ends and stop in
     order, and while one still stops, a new run in the same directory is refused."""
-    import signal
 
     from cufep.run import lock_output_directory
     from cufep.workflow import WorkflowError
@@ -255,7 +256,6 @@ def test_a_run_that_is_killed_leaves_no_job_behind_and_no_second_run_meets_one(t
 def test_a_second_interrupt_does_not_release_the_lock_while_jobs_stop(tmp_path):
     """Review of PR 1 (P2): a second Ctrl-C while the jobs stopped left stop_jobs, and the lock went while a job
     was still stopping."""
-    import signal
 
     out = tmp_path / "out"
     proc, legs = _start_run(out, ["slow-3"])
@@ -283,8 +283,13 @@ def test_the_clients_of_cufeps_mps_daemon_do_not_carry_the_device_mask(monkeypat
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
     monkeypatch.setattr(mps.shutil, "which", lambda name: "/usr/bin/" + name)
     seen = []
-    monkeypatch.setattr(mps.subprocess, "run", lambda args, **kw: seen.append(kw.get("env", {}).get("CUDA_VISIBLE_DEVICES"))
-                        or sp.CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(
+        mps.subprocess,
+        "run",
+        lambda args, **kw: (
+            seen.append(kw.get("env", {}).get("CUDA_VISIBLE_DEVICES")) or sp.CompletedProcess(args, 0, "", "")
+        ),
+    )
     monitor = scheduler.GpuMonitor([0], interval=0.01)
     daemon = mps.start(lambda m: None)
     try:

@@ -18,7 +18,10 @@ import yaml
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir"); ap.add_argument("ligand"); ap.add_argument("repeat", type=int); ap.add_argument("leg")
+    ap.add_argument("run_dir")
+    ap.add_argument("ligand")
+    ap.add_argument("repeat", type=int)
+    ap.add_argument("leg")
     ap.add_argument("--device", type=int, default=0)
     ap.add_argument("--window", type=int, default=None)
     ap.add_argument("--backend", default=None)
@@ -44,23 +47,38 @@ def main() -> None:
     eq = np.load(leg_dir / "equil.npz")
     system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
     rest2 = cfg.sampling.rest2
-    hot = rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"], prep["protein"])[0] if args.leg == "complex" else []
-    alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha, rest2=rest2.scale > 1.0, rest2_atoms=hot,
-                                  bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()])
+    hot = (
+        rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"], prep["protein"])[0]
+        if args.leg == "complex"
+        else []
+    )
+    alch = make_alchemical_system(
+        system,
+        prep["ligand"],
+        cfg.alchemy.softcore_alpha,
+        rest2=rest2.scale > 1.0,
+        rest2_atoms=hot,
+        bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()],
+    )
     if args.leg == "complex":
-        alch.system.addForce(BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]).create_force())
+        alch.system.addForce(
+            BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]).create_force()
+        )
     schedule = Schedule.load(leg_dir / "schedule.yaml")
     meta = yaml.safe_load((leg_dir / "schedule.yaml").read_text())
     backend_name = args.backend or meta.get("backend", "cupotential")
     T, dt = cfg.thermodynamics.temperature_K, float(eq["timestep_fs"])
     backend = get_backend(backend_name, precision="mixed")
     prepared = backend.prepare_system(alch.system)
-    integ = backend.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond, dt * u.femtoseconds, seed=4)
+    integ = backend.make_integrator(
+        T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond, dt * u.femtoseconds, seed=4
+    )
     ctx = backend.make_context(prepared, integ, args.device)
     start = np.load(leg_dir / "start_configs.npz")
     k = len(schedule.states) // 3 if args.window is None else args.window
     ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in start["boxes"][k]])
-    ctx.setPositions(start["positions"][k]); ctx.setVelocities(start["velocities"][k])
+    ctx.setPositions(start["positions"][k])
+    ctx.setVelocities(start["velocities"][k])
     set_state(ctx, schedule.states[k])
     integ.step(500)
     kt = R_GAS * T
@@ -71,7 +89,10 @@ def main() -> None:
         direct.append(ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole) / kt)
     direct = np.array(direct)
     err = (red - red[k]) - (direct - direct[k])
-    print(f"{args.ligand} {args.leg}, backend {backend_name}, {len(schedule.states)} windows, configuration of window {k} (REST2 scale {schedule.states[k].rest2_scale:.2f})")
+    print(
+        f"{args.ligand} {args.leg}, backend {backend_name}, {len(schedule.states)} windows, configuration of window "
+        f"{k} (REST2 scale {schedule.states[k].rest2_scale:.2f})"
+    )
     print("  REST2 scale of the windows:   " + " ".join(f"{s.rest2_scale:7.2f}" for s in schedule.states))
     print("  u(window) - u(own), direct:   " + " ".join(f"{v:7.1f}" for v in direct - direct[k]))
     print("  evaluator - direct (kT):      " + " ".join(f"{v:7.3f}" for v in err))

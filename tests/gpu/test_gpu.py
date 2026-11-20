@@ -333,7 +333,6 @@ def test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends(
     """Review of PR 1 (P2): `cufep validate` compares the System that a run samples, with REST2 and its region;
     here the pocket region holds the whole second peptide and the windows in the middle carry the scale 1.5."""
     import openmm.unit as u
-
     from conftest import build_dipeptides_in_water
 
     from cufep.config.schema import Config

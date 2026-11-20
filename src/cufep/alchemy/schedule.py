@@ -45,8 +45,16 @@ import numpy as np
 import yaml
 
 from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS
-from cufep.sampling.states import (R_GAS, STAGE_ALIASES, AlchemicalState, StateEnergyEvaluator, canonical_stage,
-                                   set_state, stage_state, validate_states)
+from cufep.sampling.states import (
+    R_GAS,
+    STAGE_ALIASES,
+    AlchemicalState,
+    StateEnergyEvaluator,
+    canonical_stage,
+    set_state,
+    stage_state,
+    validate_states,
+)
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
            "bad_sections", "choose_section", "redistribute", "als_step", "adaptive_schedule", "run_window",
@@ -164,7 +172,9 @@ def _assemble(stages: list[str], values: dict[str, list[float]], mode: str, rest
         for j, v in enumerate(values[name]):
             if k > 0 and j == 0:
                 continue                                   # shared with the end of the previous stage
-            states.append(stage_state(name, v, stages, rest2_scale)); stage_of.append(k); lam.append(float(v))
+            states.append(stage_state(name, v, stages, rest2_scale))
+            stage_of.append(k)
+            lam.append(float(v))
     validate_states(states)
     return Schedule(stages=list(stages), states=states, stage_of_state=stage_of, stage_lambda=lam, mode=mode,
                     rest2_scale=float(rest2_scale), **extra)
@@ -210,7 +220,8 @@ def bad_sections(superdiagonal, threshold: float) -> list[tuple[int, int]]:
         if deficient and start is None:
             start = k
         if not deficient and start is not None:
-            out.append((start, k)); start = None
+            out.append((start, k))
+            start = None
     if start is not None:
         out.append((start, len(superdiagonal)))
     return out
@@ -370,8 +381,6 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     Returns ``(schedule, configurations)`` with one ``(positions_nm, box_nm, velocities)``
     tuple per window: the last configuration of that window's precalculation run.
     """
-    import openmm as mm
-    import openmm.unit as unit
 
     s = settings or AlsSettings()
     params = context.getParameters()
@@ -480,7 +489,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                                      "initial_windows": {n: int(s.initial_windows.get(n, 3)) for n in stages},
                                      "windows_simulated": len(runs), "iterations": records})
     configs = []
-    for k, name in enumerate(stages):
+    for k, _name in enumerate(stages):
         for j, i in enumerate(windows[k]):
             if k > 0 and j == 0:
                 continue

@@ -9,7 +9,6 @@ import openmm.unit as unit
 
 from cufep.prep.ligand import LIGAND_RESNAME, Ligand
 
-
 #: OpenMM's rule for a periodic cutoff: the cutoff may be at most half of every height of the box
 #: (NonbondedForce: "The cutoff distance cannot be greater than half the periodic box size"); the
 #: cuPotential plugin needs three times the cutoff (:data:`cufep.backends.cupotential.MIN_BOX_CUTOFF_RATIO`)

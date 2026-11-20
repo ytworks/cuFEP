@@ -8,8 +8,14 @@ import pytest
 
 from cufep.alchemy.factory import make_alchemical_system
 from cufep.alchemy.schedule import fixed_schedule
-from cufep.analysis.mbar import (analyze_leg, assemble, count_round_trips, solve_mbar, stage_boundaries,
-                                 statistical_inefficiency)
+from cufep.analysis.mbar import (
+    analyze_leg,
+    assemble,
+    count_round_trips,
+    solve_mbar,
+    stage_boundaries,
+    statistical_inefficiency,
+)
 from cufep.sampling.hrex import ReplicaExchangeSampler, mix_replicas
 from cufep.sampling.storage import LegStorage, read_samples
 from cufep.sampling.worker import LegSpec
@@ -264,7 +270,9 @@ def test_checks_of_a_leg_use_the_levels_of_the_literature():
     # halves far apart and BAR far from MBAR give no verdict: they are no check (the owner, 2026-11-20)
     new = dict(old, window_effective_samples=[100.0, 30.0, 80.0], window_statistical_inefficiency=[1.0, 3.4, 1.2])
     q = quality_checks(dict(new, first_half=[float("nan"), float("nan")], second_half=[10.1, 0.7], bar_delta_g=15.0))
-    assert set(q) == {"overlap", "samples", "uncertainty"} and q["samples"]["ok"] is False and q["samples"]["window"] == 1
+    assert (
+        set(q) == {"overlap", "samples", "uncertainty"} and q["samples"]["ok"] is False and q["samples"]["window"] == 1
+    )
     q = quality_checks(dict(new, window_effective_samples=[100.0, 60.0, 80.0], first_half=[10.5, 0.4],
                             second_half=[7.5, 0.3], bar_delta_g=20.0))
     assert q["overlap"]["ok"] and q["samples"]["ok"] and set(q) == {"overlap", "samples", "uncertainty"}
@@ -369,10 +377,16 @@ def test_a_window_is_decorrelated_by_the_slower_of_its_two_neighbours():
     for r in legs:
         usable = [value for value in r.delta_g_error_blocks.values() if value is not None]
         assert r.delta_g_error == pytest.approx(max(usable + [r.delta_g_mbar_error]))
-        assert r.delta_g_error_from == ("time blocks" if usable and max(usable) >= r.delta_g_mbar_error else "analytical")
+        assert r.delta_g_error_from == (
+            "time blocks" if usable and max(usable) >= r.delta_g_mbar_error else "analytical"
+        )
     # 40 blocks of 15 iterations are shorter than the interval at which the slow window keeps its samples
     assert legs[0].delta_g_error_blocks["40"] is None and legs[0].delta_g_error_blocks["5"] is not None
-    assert legs[0].delta_g_error_blocks_note["40"].startswith("a block of 15 iteration(s) is shorter than the interval of ")
+    assert (
+        legs[0]
+        .delta_g_error_blocks_note["40"]
+        .startswith("a block of 15 iteration(s) is shorter than the interval of ")
+    )
 
 
 def travelling_samples(seed, n_iter=600, rho=0.97, k=8):
@@ -399,9 +413,18 @@ def test_the_standard_error_of_a_leg_is_that_of_time_blocks_common_to_all_window
     """Review of PR 1: in replica exchange a slow configuration travels between the windows. Every window
     looked decorrelated on its own, the standard error of MBAR was a quarter of the scatter of independent
     runs (0.027 against 0.106 kT over 48 seeds), and all four checks passed."""
-    from cufep.analysis.mbar import (BLOCK_COUNTS, TailSeries, TimeRangeEstimator, decorrelated, free_energies_from,
-                                     kept_iterations, kept_sample_iterations, quality_checks, solve_decorrelated,
-                                     window_inefficiencies)
+    from cufep.analysis.mbar import (
+        BLOCK_COUNTS,
+        TailSeries,
+        TimeRangeEstimator,
+        decorrelated,
+        free_energies_from,
+        kept_iterations,
+        kept_sample_iterations,
+        quality_checks,
+        solve_decorrelated,
+        window_inefficiencies,
+    )
 
     kt = 8.31446261815324e-3 * 298.15
 
@@ -418,7 +441,9 @@ def test_the_standard_error_of_a_leg_is_that_of_time_blocks_common_to_all_window
     assert list(first.delta_g_error_blocks) == [str(count) for count in BLOCK_COUNTS] == ["40", "20", "10", "5"]
     assert first.delta_g_error == max(first.delta_g_error_blocks.values()) and first.delta_g_error_from == "time blocks"
     assert first.delta_g_error == first.delta_g_error_blocks[str(first.delta_g_error_n_blocks)]
-    assert first.delta_g_error_note == "" and first.delta_g_error_blocks_note == {} and first.halves_error_blocks == [5, 5]
+    assert (
+        first.delta_g_error_note == "" and first.delta_g_error_blocks_note == {} and first.halves_error_blocks == [5, 5]
+    )
     # without a tail correction the value is the MBAR part, and so are its errors
     assert first.delta_g == first.delta_g_mbar and first.delta_g_mbar_error_blocks == first.delta_g_error_blocks
     # the correlation that travels between the windows shows in the standard error from time blocks, which is
@@ -508,19 +533,27 @@ def test_the_standard_error_and_the_halves_are_those_of_the_value_with_its_tail_
     dg_bind = (solvent_leg.delta_g - complex_leg.delta_g) / kcal
     assert dg_bind == pytest.approx(-1.0464, abs=5e-4)
     # ten blocks of 60 iterations, each holding 15 tail energies, by hand
-    without = [-kt * np.log((60 + 75 * np.exp(8.0 / kt)) / 135)] * 5 + [-kt * np.log((75 + 60 * np.exp(8.0 / kt)) / 135)] * 5
+    without = [-kt * np.log((60 + 75 * np.exp(8.0 / kt)) / 135)] * 5 + [
+        -kt * np.log((75 + 60 * np.exp(8.0 / kt)) / 135)
+    ] * 5
     by_hand = np.sqrt(9 / 10 * np.sum((np.array(without) - np.mean(without)) ** 2))
-    assert complex_leg.delta_g_error_blocks["10"] == pytest.approx(by_hand) and by_hand / kcal == pytest.approx(0.183, abs=5e-4)
+    assert complex_leg.delta_g_error_blocks["10"] == pytest.approx(by_hand) and by_hand / kcal == pytest.approx(
+        0.183, abs=5e-4
+    )
     assert complex_leg.delta_g_error >= by_hand and complex_leg.delta_g_error_from == "time blocks"
     assert complex_leg.delta_g_mbar_error_blocks["10"] == pytest.approx(0.0, abs=1e-9)      # the MBAR part has none
     # the halves are of the corrected value: 0 and 8 kJ/mol
-    assert complex_leg.first_half[0] == pytest.approx(0.0, abs=1e-9) and complex_leg.second_half[0] == pytest.approx(8.0)
+    assert complex_leg.first_half[0] == pytest.approx(0.0, abs=1e-9) and complex_leg.second_half[0] == pytest.approx(
+        8.0
+    )
     assert round((complex_leg.second_half[0] - complex_leg.first_half[0]) / kt, 2) == 3.23
     # BAR is computed without the correction, on the same samples as the MBAR part: they agree (a number, no verdict)
     assert complex_leg.bar_delta_g == pytest.approx(complex_leg.delta_g_mbar, abs=0.01)
     assert set(quality_checks(complex_leg.to_dict())) == {"overlap", "samples", "uncertainty"}
     # the forward and reverse series and the consecutive blocks are of the corrected value too
-    assert complex_leg.forward[-1][1] == complex_leg.delta_g and complex_leg.blocks[0][2] == pytest.approx(0.0, abs=1e-9)
+    assert complex_leg.forward[-1][1] == complex_leg.delta_g and complex_leg.blocks[0][2] == pytest.approx(
+        0.0, abs=1e-9
+    )
     assert complex_leg.blocks[-1][2] == pytest.approx(8.0)
     # a constant correction has no spread: the solvent leg's error is the analytical one of zero
     assert solvent_leg.delta_g == pytest.approx(2.0) and solvent_leg.delta_g_error == pytest.approx(0.0, abs=1e-9)
@@ -532,9 +565,8 @@ def test_a_part_of_the_production_whose_windows_do_not_overlap_has_no_estimate(m
     connect the windows the MBAR equations hold for any free energy, so the solver returned the value it was
     started from (-10, 2 or 10 kT alike); both halves were reported as the same 4.958 kJ/mol and all checks
     passed."""
-    from cufep.analysis.mbar import TailSeries, TimeRangeEstimator, decorrelated, free_energies_from, quality_checks
-
     import cufep.analysis.mbar as mbar
+    from cufep.analysis.mbar import TailSeries, TimeRangeEstimator, decorrelated, free_energies_from, quality_checks
 
     # every iteration counts as independent: the jump of the cross energies at iteration 120 would otherwise
     # make the statistical inefficiency so long that a half keeps too few samples, which is not the point here
@@ -750,22 +782,39 @@ def golden_analysis():
              ("below the level", _two_harmonic_windows(0, 600, 3.2), dict(min_overlap=0.0813), True),
              ("connected only at first", _connected_only_at_first(), {}, True)]
     for name, samples, settings, independent in cases:
-        with mock.patch.object(mbar, "neighbour_inefficiencies",
-                               (lambda u, states: np.ones((u.shape[2], 2))) if independent else mbar.neighbour_inefficiencies):
+        with mock.patch.object(
+            mbar,
+            "neighbour_inefficiencies",
+            (lambda u, states: np.ones((u.shape[2], 2))) if independent else mbar.neighbour_inefficiencies,
+        ):
             res = analyze_leg(samples, 298.15, n_equilibration=0, **settings)
         quality = mbar.quality_checks(dataclasses.asdict(res), min_overlap=settings.get("min_overlap", 0.03))
-        out[name] = {"delta_g": res.delta_g, "delta_g_error": res.delta_g_error, "delta_g_error_from": res.delta_g_error_from,
-                     "delta_g_mbar": res.delta_g_mbar, "delta_g_mbar_error": res.delta_g_mbar_error,
-                     "correction": res.correction, "first_half": list(res.first_half), "second_half": list(res.second_half),
-                     "forward": [list(point) for point in res.forward], "reverse": [list(point) for point in res.reverse],
-                     "blocks": [list(b) for b in res.blocks], "delta_g_error_blocks": res.delta_g_error_blocks,
-                     "parts_not_determined": res.parts_not_determined, "parts_below_level": res.parts_below_level,
-                     "convergence_note": res.convergence_note, "halves_warning": res.halves_warning,
-                     "bar_delta_g": res.bar_delta_g, "bar_delta_g_error": res.bar_delta_g_error,
-                     "bar_delta_g_error_n_blocks": res.bar_delta_g_error_n_blocks,
-                     "not_determined": res.not_determined,
-                     "quality": {check: {key: quality[check].get(key) for key in ("ok", "lowest", "counted")}
-                                 for check in mbar.QUALITY_CHECKS}}
+        out[name] = {
+            "delta_g": res.delta_g,
+            "delta_g_error": res.delta_g_error,
+            "delta_g_error_from": res.delta_g_error_from,
+            "delta_g_mbar": res.delta_g_mbar,
+            "delta_g_mbar_error": res.delta_g_mbar_error,
+            "correction": res.correction,
+            "first_half": list(res.first_half),
+            "second_half": list(res.second_half),
+            "forward": [list(point) for point in res.forward],
+            "reverse": [list(point) for point in res.reverse],
+            "blocks": [list(b) for b in res.blocks],
+            "delta_g_error_blocks": res.delta_g_error_blocks,
+            "parts_not_determined": res.parts_not_determined,
+            "parts_below_level": res.parts_below_level,
+            "convergence_note": res.convergence_note,
+            "halves_warning": res.halves_warning,
+            "bar_delta_g": res.bar_delta_g,
+            "bar_delta_g_error": res.bar_delta_g_error,
+            "bar_delta_g_error_n_blocks": res.bar_delta_g_error_n_blocks,
+            "not_determined": res.not_determined,
+            "quality": {
+                check: {key: quality[check].get(key) for key in ("ok", "lowest", "counted")}
+                for check in mbar.QUALITY_CHECKS
+            },
+        }
     return out
 
 
@@ -811,7 +860,6 @@ def test_a_long_chain_of_windows_that_overlap_is_connected(monkeypatch):
     import cufep.analysis.mbar as mbar
     monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
     k, n = 24, 200
-    points = np.arange(k + 1)
     energy = np.full((k + 1, k), 1000.0)                   # energy[point, window]
     for j in range(k):
         energy[j, j] = energy[j + 1, j] = 0.1 * j
@@ -870,11 +918,17 @@ def test_a_damaged_tail_is_refused_and_a_correction_for_comparison_never_stops_t
         analyze_leg(broken, 298.15, n_equilibration=0, tail="reweight")
     zero = dict(samples, volume=np.zeros((60, 3)))
     res = analyze_leg(zero, 298.15, n_equilibration=0, tail="reweight")
-    assert res.correction == pytest.approx(-2.0) and res.lrc_isotropic is None and res.lrc_reweight == pytest.approx(-2.0)
-    with pytest.raises(NoCorrection, match="volumes of the coupled state in these iterations are not finite and positive"):
+    assert (
+        res.correction == pytest.approx(-2.0) and res.lrc_isotropic is None and res.lrc_reweight == pytest.approx(-2.0)
+    )
+    with pytest.raises(
+        NoCorrection, match="volumes of the coupled state in these iterations are not finite and positive"
+    ):
         analyze_leg(zero, 298.15, n_equilibration=0, tail="isotropic")
     # the effective number of the exponential weights of the correction: 15 equal ones count as 15
-    assert res.correction_effective_samples == pytest.approx(15.0) and res.correction_largest_weight == pytest.approx(1 / 15)
+    assert res.correction_effective_samples == pytest.approx(15.0) and res.correction_largest_weight == pytest.approx(
+        1 / 15
+    )
     skewed = dict(samples, lrc_du=np.where(np.arange(15) < 2, -40.0, 0.0))
     few = analyze_leg(skewed, 298.15, n_equilibration=0, tail="reweight")
     assert few.correction_effective_samples == pytest.approx(2.0, abs=1e-3) and few.correction_largest_weight > 0.49
@@ -898,6 +952,7 @@ def test_the_reread_of_stored_legs_gives_what_cufep_analyze_gives(tmp_path):
     script wrote 1.7317 and then failed."""
     import importlib.util
     import sys as system
+
     from click.testing import CliRunner
 
     from cufep.cli import main
@@ -909,7 +964,9 @@ def test_the_reread_of_stored_legs_gives_what_cufep_analyze_gives(tmp_path):
     storage.set_meta(temperature_K=298.15, iteration_ps=2.5, backend="openmm", leg="solvent", lrc_s6=1.0, lrc_s12=1.0,
                      lrc_cutoff_nm=0.9)
     storage.set_plan(0, 120)
-    u, states, _ = harmonic_samples(120, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(9))
+    u, states, _ = harmonic_samples(
+        120, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(9)
+    )
     for it in range(120):
         storage.append(u[it], states[it], np.ones(4))
         if it % 4 == 0:
@@ -930,8 +987,9 @@ def test_the_reread_of_stored_legs_gives_what_cufep_analyze_gives(tmp_path):
     assert row["delta_g"] * 4.184 == pytest.approx(shown["delta_g_decouple"]) and shown["lrc"] == pytest.approx(-4.0)
     assert row["error"] * 4.184 == pytest.approx(shown["delta_g_error"])
     # the halves are a number of the reread, without a verdict
-    assert row["halves_kT"] == pytest.approx(abs(row["first_half"] - row["second_half"]) * 4.184 / (0.0083144626 * 298.15),
-                                             rel=1e-6)
+    assert row["halves_kT"] == pytest.approx(
+        abs(row["first_half"] - row["second_half"]) * 4.184 / (0.0083144626 * 298.15), rel=1e-6
+    )
     assert "halves_ok" not in row and "estimators_ok" not in row
 
 
@@ -976,11 +1034,15 @@ def test_the_reread_and_cufep_analyze_agree_whatever_the_settings(tmp_path, case
                      lrc_cutoff_nm=0.9)
     if case != "boundary unknown":
         storage.set_plan(20, 140)
-    u, states, _ = harmonic_samples(140, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(9))
+    u, states, _ = harmonic_samples(
+        140, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(9)
+    )
     for it in range(140):
         storage.append(u[it], states[it], np.full(4, 30.0))
         if it % 4 == 0 and (case != "no tail in production" or it < 20):
-            storage.append_record(it, {"lrc_du": float("nan") if (case == "a tail energy not finite" and it == 40) else -4.0})
+            storage.append_record(
+                it, {"lrc_du": float("nan") if (case == "a tail energy not finite" and it == 40) else -4.0}
+            )
     storage.close()
     settings = {"reweight": {}, "isotropic": {"lrc": "isotropic"}, "none": {"lrc": "none"},
                 "strict levels": {"min_effective_samples": 150.0, "error_blocks": [7]}}.get(case, {})
@@ -1073,7 +1135,9 @@ def test_a_tail_correction_without_observations_in_the_production_is_no_correcti
         if it < 20 and it % 4 == 0:
             storage.append_record(it, {"lrc_du": -2.0})
     storage.close()
-    with pytest.raises(WorkflowError, match="the tail correction .reweight. cannot be estimated from the production: 0 tail"):
+    with pytest.raises(
+        WorkflowError, match="the tail correction .reweight. cannot be estimated from the production: 0 tail"
+    ):
         leg_result_from_samples(leg, AnalysisConfig(lrc="reweight"), {"leg": "solvent"})
     shown = CliRunner().invoke(main, ["analyze", str(leg)])
     assert shown.exit_code == 1 and "cannot be estimated from the production" in shown.output
@@ -1085,7 +1149,7 @@ def test_every_part_is_the_reported_quantity_and_its_error_agrees_with_the_scatt
     unbiased and its standard error agrees with the scatter; every part equals MBAR of its own samples
     minus the correction of its own tail energies; the reported error is never below the analytical one."""
     from cufep.alchemy.lrc import tail_free_energy
-    from cufep.analysis.mbar import decorrelated, solve_decorrelated, window_inefficiencies
+    from cufep.analysis.mbar import decorrelated, solve_decorrelated
 
     kt = 8.31446261815324e-3 * 298.15
     mu, sd = -3.0, 1.5
@@ -1098,7 +1162,7 @@ def test_every_part_is_the_reported_quantity_and_its_error_agrees_with_the_scatt
     scatter = values.std(ddof=1)
     assert abs(values.mean() - truth) < 3 * scatter / np.sqrt(len(values))
     assert 0.8 * scatter < np.sqrt(np.mean([res.delta_g_error ** 2 for _, res in legs])) < 1.4 * scatter
-    for samples, res in legs:
+    for _samples, res in legs:
         sm, sc, rho = res.delta_g_mbar_error, res.correction_error, res.correction_correlation
         analytic = sm + sc if rho is None else np.sqrt(sm ** 2 + sc ** 2 - 2 * rho * sm * sc)
         assert res.delta_g_error >= analytic - 1e-12 and res.delta_g == pytest.approx(res.delta_g_mbar - res.correction)
@@ -1130,7 +1194,12 @@ def test_a_leg_too_short_for_time_blocks_reports_the_error_of_mbar(monkeypatch):
     four = analyze_leg({"u": u, "states": states}, 298.15)
     assert four.delta_g_error == four.delta_g_mbar_error and np.isfinite(four.delta_g_error)
     assert four.delta_g_error_from == "analytical"
-    assert four.delta_g_error_n_blocks is None and four.delta_g_error_blocks == {"40": None, "20": None, "10": None, "5": None}
+    assert four.delta_g_error_n_blocks is None and four.delta_g_error_blocks == {
+        "40": None,
+        "20": None,
+        "10": None,
+        "5": None,
+    }
     assert four.delta_g_error_note.startswith("no number of time blocks could be used: 40 blocks: a block of 0 "
                                               "iteration(s) is shorter than the interval of 1 iterations")
     assert "; 5 blocks: a block of 0 iteration(s)" in four.delta_g_error_note
@@ -1247,8 +1316,15 @@ def test_results_are_json_that_every_parser_reads():
 
     back = json.loads(jsonio.dumps({"analysis": stored, "quality": quality_checks(stored)}), parse_constant=not_json)
     assert "halves" not in back["quality"] and back["analysis"]["convergence_note"] == stored["convergence_note"]
-    assert jsonio.clean({"a": float("inf"), "b": np.float64("nan"), "c": np.int64(3), "d": (1.0, np.array([2.0, np.nan])),
-                         "e": np.bool_(True)}) == {"a": None, "b": None, "c": 3, "d": [1.0, [2.0, None]], "e": True}
+    assert jsonio.clean(
+        {
+            "a": float("inf"),
+            "b": np.float64("nan"),
+            "c": np.int64(3),
+            "d": (1.0, np.array([2.0, np.nan])),
+            "e": np.bool_(True),
+        }
+    ) == {"a": None, "b": None, "c": 3, "d": [1.0, [2.0, None]], "e": True}
 
     base = {"delta_g": 10.0, "delta_g_error": 0.0, "min_overlap": 0.2, "overlap_neighbour": [0.2],
             "window_effective_samples": [100.0, 100.0], "window_statistical_inefficiency": [1.0, 1.0]}
@@ -1311,8 +1387,12 @@ def _assert_exactly(directory, n):
     assert [float(x) for x in data["u"][:, 0, 0]] == [float(it) for it in range(n)]
     assert [list(row) for row in data["states"]] == [list(np.roll(np.arange(3), it)) for it in range(n)]
     assert data["volume"][:, 0].tolist() == [10.0 + it for it in range(n)]
-    assert data["lrc_iter"].tolist() == list(range(0, n, 2)) and data["lrc_du"].tolist() == [-float(it) for it in range(0, n, 2)]
-    assert data["frame_iter"].tolist() == list(range(0, n, 2)) and data["frames"][:, 0, 0].tolist() == list(range(0, n, 2))
+    assert data["lrc_iter"].tolist() == list(range(0, n, 2)) and data["lrc_du"].tolist() == [
+        -float(it) for it in range(0, n, 2)
+    ]
+    assert data["frame_iter"].tolist() == list(range(0, n, 2)) and data["frames"][:, 0, 0].tolist() == list(
+        range(0, n, 2)
+    )
     assert data["frame_box"].shape[0] == len(data["frame_iter"])
 
 
@@ -1535,7 +1615,9 @@ def test_an_interrupt_after_the_part_is_named_is_read_and_closed_without_twice(t
 
     st = LegStorage(tmp_path / "leg", 3, 3, n_frame_atoms=2)
     _fill(st, _rows(0, 6), 0)
-    st.write_checkpoint(np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6, {"start": 0, "rows": 6})
+    st.write_checkpoint(
+        np.zeros((3, 4, 3)), np.zeros((3, 4, 3)), np.zeros((3, 3, 3)), [0, 1, 2], 6, {"start": 0, "rows": 6}
+    )
     _fill(st, _rows(6, 4), 6)
     real_settle, fired = LegStorage._settle, []
 
@@ -1672,7 +1754,9 @@ def test_the_storage_says_when_it_could_not_store_and_restore_refuses_samples_sh
     # samples that hold fewer iterations than their checkpoint names are not continued
     manifest = read_manifest(tmp_path / "hrex")
     assert sum(part["rows"] for part in manifest["parts"]) == 4
-    manifest["parts"] = [part for part in manifest["parts"] if part["rows"] == 0] +         [part for part in manifest["parts"] if part["rows"]][:1]
+    manifest["parts"] = [part for part in manifest["parts"] if part["rows"] == 0] + [
+        part for part in manifest["parts"] if part["rows"]
+    ][:1]
     _write_manifest(tmp_path / "hrex", manifest)
     with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=log.append) as s:
         with pytest.raises(StorageError, match="holds 2 iterations, fewer than the 4 that its checkpoint names"):
@@ -1971,8 +2055,14 @@ def test_a_final_checkpoint_that_cannot_be_stored_is_no_failure_of_the_backend(t
         == "not a failure of the backend"
     assert backend_fallback_refusal(WorkerError("worker 3 died"), "cupotential", "openmm", False) is None
     assert backend_fallback_refusal(mm.OpenMMException("CUDA error"), "cupotential", "openmm", False) is None
-    assert backend_fallback_refusal(WorkerError("died"), "cupotential", "openmm", True) == "the leg had samples from an earlier run"
-    assert backend_fallback_refusal(WorkerError("died"), "openmm", "openmm", False) == "the leg runs on stock OpenMM already"
+    assert (
+        backend_fallback_refusal(WorkerError("died"), "cupotential", "openmm", True)
+        == "the leg had samples from an earlier run"
+    )
+    assert (
+        backend_fallback_refusal(WorkerError("died"), "openmm", "openmm", False)
+        == "the leg runs on stock OpenMM already"
+    )
     assert backend_fallback_refusal(WorkerError("died"), "cupotential", "none", False) == "backend.fallback is none"
     assert backend_fallback_refusal(OSError("disk"), "cupotential", "openmm", False) == "not a failure of the backend"
 
@@ -1989,7 +2079,9 @@ def test_the_samples_of_a_failed_backend_run_are_kept_and_archived(tmp_path):
         (leg / "schedule.yaml").write_text(f"schedule {n}")
         kept = set_aside_failed_backend(leg)
         assert kept.name == ("hrex_failed_cupotential" if n == 0 else f"hrex_failed_cupotential_{n + 1}")
-        assert (kept / "samples.h5").read_text() == f"run {n}" and (kept / "schedule.yaml").read_text() == f"schedule {n}"
+        assert (kept / "samples.h5").read_text() == f"run {n}" and (
+            kept / "schedule.yaml"
+        ).read_text() == f"schedule {n}"
         assert not (leg / "hrex").exists() and not (leg / "schedule.yaml").exists()
     previous = archive_leg(leg)
     assert sorted(p.name for p in previous.iterdir()) == ["hrex_failed_cupotential", "hrex_failed_cupotential_2",
@@ -2028,7 +2120,9 @@ def test_another_process_reads_the_samples_of_a_leg_that_is_being_sampled(tmp_pa
     from cufep.sampling.storage import open_samples
 
     leg = tmp_path / "lig" / "repeat_0" / "solvent"
-    u, states, _ = harmonic_samples(107, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12))
+    u, states, _ = harmonic_samples(
+        107, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12)
+    )
     storage = LegStorage(leg / "hrex", 4, 4, n_frame_atoms=2)
     storage.set_meta(temperature_K=310.0, iteration_ps=2.5, backend="openmm", leg="solvent")
     storage.set_plan(4, 400)
@@ -2050,7 +2144,11 @@ def test_another_process_reads_the_samples_of_a_leg_that_is_being_sampled(tmp_pa
                              timeout=300)
     assert analyze.returncode == 0, analyze.stderr
     shown = json.loads(analyze.stdout)
-    assert shown["n_iterations_stored"] == 100 and shown["n_iterations_used"] == 96 and shown["n_planned_iterations"] == 400
+    assert (
+        shown["n_iterations_stored"] == 100
+        and shown["n_iterations_used"] == 96
+        and shown["n_planned_iterations"] == 400
+    )
     assert read_samples(leg / "hrex")["u"].shape[0] == 100                  # and this process too
     assert np.array_equal(read_samples(leg / "hrex")["u"], u[:100])
 
@@ -2064,7 +2162,9 @@ def test_another_process_reads_the_samples_of_a_leg_that_is_being_sampled(tmp_pa
         release(reader)
     assert storage.read_checkpoint()["iteration"] == 107 and storage.n_iterations == storage.n_stored == 107
     data = read_samples(leg / "hrex")
-    assert np.array_equal(data["u"], u) and np.array_equal(data["states"], states) and data["lrc_iter"].tolist()[-1] == 104
+    assert (
+        np.array_equal(data["u"], u) and np.array_equal(data["states"], states) and data["lrc_iter"].tolist()[-1] == 104
+    )
     assert data["frames"].shape == (27, 2, 3) and data["frame_iter"].tolist() == list(range(0, 107, 4))
     assert storage.flush() is True                                          # nothing is left in memory
 
@@ -2098,8 +2198,10 @@ def test_another_process_reads_the_samples_of_a_leg_that_is_being_sampled(tmp_pa
     assert data["u"].shape[0] == data["states"].shape[0] == data["volume"].shape[0] == 107
     assert len(data["lrc_iter"]) == len(data["lrc_du"]) == 27
     named = [part["file"] for part in read_manifest(leg / "hrex")["parts"]]
-    again = LegStorage(leg / "hrex", 4, 4, n_frame_atoms=2)           # the writer removes them when it opens the leg
-    assert not (leg / "hrex" / "segment_000098.h5.writing").exists() and not (leg / "hrex" / "segment_000099.h5").exists()
+    again = LegStorage(leg / "hrex", 4, 4, n_frame_atoms=2)  # the writer removes them when it opens the leg
+    assert (
+        not (leg / "hrex" / "segment_000098.h5.writing").exists() and not (leg / "hrex" / "segment_000099.h5").exists()
+    )
     again.append(u[0], states[0], np.ones(4))
     again.close()
     assert read_manifest(leg / "hrex")["parts"][-1]["file"] not in named
@@ -2352,8 +2454,6 @@ def test_samples_are_continued_only_under_the_conditions_they_were_made_under(tm
     """Review of PR 1: a leg ended at 300 K was reopened at 315 K and analysed as if nothing had changed."""
     import dataclasses
 
-    import h5py
-
     from cufep.sampling.storage import ConditionsError, stored_backend
 
     spec, pos, box = tiny_leg
@@ -2410,12 +2510,22 @@ def test_the_tail_correction_is_recorded_with_the_samples_as_a_summary(tmp_path,
 
     spec, _pos, _box = tiny_leg
     rng = np.random.default_rng(9)
-    tail = TailEnergy(ligand=np.arange(3), lig_sigma=np.full(3, 0.3), lig_epsilon=np.full(3, 0.4), env=np.arange(3, 30003),
-                      env_sigma=rng.uniform(0.2, 0.4, 30000), env_epsilon=rng.uniform(0.1, 0.8, 30000),
-                      cutoff_nm=0.9, long_cutoff_nm=2.0)
+    tail = TailEnergy(
+        ligand=np.arange(3),
+        lig_sigma=np.full(3, 0.3),
+        lig_epsilon=np.full(3, 0.4),
+        env=np.arange(3, 30003),
+        env_sigma=rng.uniform(0.2, 0.4, 30000),
+        env_epsilon=rng.uniform(0.1, 0.8, 30000),
+        cutoff_nm=0.9,
+        long_cutoff_nm=2.0,
+    )
     with_tail = dataclasses.replace(spec, lrc=tail.to_dict())
     conditions = with_tail.conditions()
-    assert conditions["lrc"] == tail.summary() == tail_summary(tail.summary()) and conditions["lrc"]["n_environment"] == 30000
+    assert (
+        conditions["lrc"] == tail.summary() == tail_summary(tail.summary())
+        and conditions["lrc"]["n_environment"] == 30000
+    )
     assert len(json.dumps(conditions["lrc"])) < 400 < 1_000_000 < len(json.dumps(tail.to_dict()))
     assert spec.conditions()["lrc"] is None
 
@@ -2430,7 +2540,9 @@ def test_the_tail_correction_is_recorded_with_the_samples_as_a_summary(tmp_path,
     other_radius = dataclasses.replace(with_tail, lrc=dataclasses.replace(tail, long_cutoff_nm=1.5).to_dict())
     with pytest.raises(ConditionsError, match="the tail correction .long_cutoff_nm: 2.0 -> 1.5."):
         storage.check_conditions(other_radius.conditions())
-    other_atoms = dataclasses.replace(with_tail, lrc=dataclasses.replace(tail, env_epsilon=tail.env_epsilon * 1.01).to_dict())
+    other_atoms = dataclasses.replace(
+        with_tail, lrc=dataclasses.replace(tail, env_epsilon=tail.env_epsilon * 1.01).to_dict()
+    )
     with pytest.raises(ConditionsError, match="the Lennard-Jones parameters of the ligand's dispersion tail"):
         storage.check_conditions(other_atoms.conditions())
     with pytest.raises(ConditionsError, match="the tail correction .recorded with the samples or not."):
@@ -2555,7 +2667,9 @@ def test_an_interrupted_leg_is_not_analysed_with_its_equilibration(tmp_path, tin
 
 def synthetic_leg(leg_dir, n=300, temperature=310.0, n_equilibration=20, lambda_states=None):
     """A leg directory with harmonic samples, as a finished run leaves it (no tail data, no schedule)."""
-    u, states, _ = harmonic_samples(n, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12))
+    u, states, _ = harmonic_samples(
+        n, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12)
+    )
     storage = LegStorage(leg_dir / "hrex", 4, 4)
     for it in range(n):
         storage.append(u[it], states[it], np.ones(4))
@@ -2591,7 +2705,10 @@ def test_analyze_says_what_the_run_said(tmp_path):
     result = leg_result_from_samples(leg, settings, run)
     # temperature, length and boundary are those of the samples; no configuration is asked for them
     assert result["temperature_K"] == 310.0 and result["production_ns"] == pytest.approx(280 * 2.5 / 1000.0)
-    assert result["analysis_record"] == analysis_record(settings) and result["analysis_record"]["version"] == ANALYSIS_VERSION
+    assert (
+        result["analysis_record"] == analysis_record(settings)
+        and result["analysis_record"]["version"] == ANALYSIS_VERSION
+    )
     # the standard error of the leg: that of time blocks or the analytical one, whichever is larger. At the
     # overlap level of 0.5 asked for here every part of these samples is below the level: determined, and
     # shown with its error and a warning (review of PR 1)
@@ -2640,7 +2757,9 @@ def test_analyze_says_what_the_run_said(tmp_path):
     # notes of that version's analysis are not carried over
     older = {k: v for k, v in result.items() if k not in ("analysis_record", "run")}
     older["notes"] = ["a note of the run", "NOT CONVERGED: the first half of the production gives ..."]
-    (leg / "result.json").write_text(json.dumps(json.loads(__import__("cufep.jsonio", fromlist=["dumps"]).dumps(older))))
+    (leg / "result.json").write_text(
+        json.dumps(json.loads(__import__("cufep.jsonio", fromlist=["dumps"]).dumps(older)))
+    )
     shown = json.loads(CliRunner().invoke(main, ["analyze", str(leg)]).output)
     assert shown["analysis_settings_from"].startswith("the defaults") and shown["lrc_method"] == "none"
     assert shown["quality"]["overlap"]["threshold"] == 0.03 and shown["notes"] == ["a note of the run"]
@@ -2659,7 +2778,9 @@ def test_a_leg_whose_first_run_was_interrupted_is_judged_by_the_levels_of_that_r
                                  "analysis": {"lrc": "none", "min_overlap": 0.45, "convergence_points": 4,
                                               "convergence_blocks": 2}})
     record = analysis_record(cfg)
-    assert record["min_overlap"] == 0.45 and record["error_blocks"] == [40, 20, 10, 5] and record["part_error_blocks"] == 5
+    assert (
+        record["min_overlap"] == 0.45 and record["error_blocks"] == [40, 20, 10, 5] and record["part_error_blocks"] == 5
+    )
     # the levels of cuFEP's own for notes on the bilayer and the pose are gone with the notes (the owner, 2026-11-20)
     assert not any("tolerance" in key or "pose" in key for key in record)
     # the settings a record describes give the same record, and an analysis section alone the default levels
@@ -2669,7 +2790,9 @@ def test_a_leg_whose_first_run_was_interrupted_is_judged_by_the_levels_of_that_r
 
     # the run stores them with the samples before its first iteration; it is interrupted after 100
     leg = tmp_path / "lig" / "repeat_0" / "solvent"
-    u, states, _ = harmonic_samples(100, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12))
+    u, states, _ = harmonic_samples(
+        100, np.array([1.0, 1.6, 2.6, 4.2]), np.linspace(0.0, 0.6, 4), np.random.default_rng(12)
+    )
     storage = LegStorage(leg / "hrex", 4, 4)
     storage.set_meta(temperature_K=310.0, iteration_ps=2.5, backend="openmm", leg="solvent")
     storage.set_plan(4, 400, record)
@@ -2744,8 +2867,13 @@ def test_a_result_of_another_analysis_is_made_again_before_the_legs_are_combined
     from cufep import jsonio
     from cufep.analysis.mbar import ANALYSIS_VERSION
     from cufep.config.schema import AnalysisConfig
-    from cufep.workflow import (analysis_record, combine_ligand, leg_result_from_samples, refresh_leg_result,
-                                write_leg_result)
+    from cufep.workflow import (
+        analysis_record,
+        combine_ligand,
+        leg_result_from_samples,
+        refresh_leg_result,
+        write_leg_result,
+    )
 
     lig, settings, results = tmp_path / "lig", AnalysisConfig(lrc="none"), {}
     for leg in ("complex", "solvent"):
@@ -2811,8 +2939,14 @@ def test_samples_of_unrecorded_conditions_must_be_what_the_run_asks_for(tmp_path
     from cufep.alchemy.restraints import BoreschRestraint
     from cufep.config.schema import AnalysisConfig, Config
     from cufep.sampling.storage import stored_attributes
-    from cufep.workflow import (WorkflowError, combine_ligand, leg_result_from_samples, restraint_release_of,
-                                unrecorded_samples_problems, write_leg_result)
+    from cufep.workflow import (
+        WorkflowError,
+        combine_ligand,
+        leg_result_from_samples,
+        restraint_release_of,
+        unrecorded_samples_problems,
+        write_leg_result,
+    )
 
     def config(**sections):
         return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, **sections})
@@ -2833,7 +2967,9 @@ def test_samples_of_unrecorded_conditions_must_be_what_the_run_asks_for(tmp_path
     assert n == 60 and "conditions" not in attrs and attrs["temperature_K"] == 300.0
 
     def problems(cfg, production_ns, held=attrs, lambda_states=bound, timestep_fs=4.0):
-        return unrecorded_samples_problems(held, n, complex_dir, cfg, "complex", production_ns, lambda_states, timestep_fs)
+        return unrecorded_samples_problems(
+            held, n, complex_dir, cfg, "complex", production_ns, lambda_states, timestep_fs
+        )
 
     asked = {"equilibration_ns": 0.05, "production_ns": 0.1}
     same = config(thermodynamics={"temperature_K": 300.0}, sampling=asked)
@@ -2847,7 +2983,9 @@ def test_samples_of_unrecorded_conditions_must_be_what_the_run_asks_for(tmp_path
         "(samples of unrecorded conditions are not added to)"]
     assert problems(same, 0.2) == ["production per lambda window: the samples hold 40 iterations (0.1 ns) and 0.2 ns "
                                    "are 80 iterations (samples of unrecorded conditions are not added to)"]
-    assert problems(config(thermodynamics={"temperature_K": 310.0}, sampling=asked), 0.1) == ["temperature: 300 K -> 310 K"]
+    assert problems(config(thermodynamics={"temperature_K": 310.0}, sampling=asked), 0.1) == [
+        "temperature: 300 K -> 310 K"
+    ]
     assert problems(config(thermodynamics={"temperature_K": 300.0}, sampling=dict(asked, equilibration_ns=0.1)), 0.1) \
         == ["equilibration per lambda window: 20 iterations (0.05 ns) -> 40 (0.1 ns)"]
     assert problems(same, 0.1, lambda_states=free) == ["the lambda states"]
@@ -2868,24 +3006,31 @@ def test_samples_of_unrecorded_conditions_must_be_what_the_run_asks_for(tmp_path
         leg_result_from_samples(complex_dir, AnalysisConfig(lrc="none"), run)
     (complex_dir / "restraint.json").write_text(json.dumps({"restraint": restraint.to_dict(), "info": {}}))
     at_300 = restraint.release_free_energy(300.0, "numerical")
-    assert restraint_release_of(complex_dir, attrs, 300.0) == pytest.approx((at_300, restraint.release_free_energy(300.0, "analytical")))
+    assert restraint_release_of(complex_dir, attrs, 300.0) == pytest.approx(
+        (at_300, restraint.release_free_energy(300.0, "analytical"))
+    )
     assert abs(restraint.release_free_energy(315.0, "numerical") - at_300) > 1.0   # kJ/mol: the temperature matters
     assert restraint_release_of(complex_dir / "previous_1", attrs, 300.0)[0] == pytest.approx(at_300)
     assert restraint_release_of(solvent_dir, stored_attributes(solvent_dir / "hrex")[1], 300.0) == (0.0, 0.0)
     bound_result = leg_result_from_samples(complex_dir, AnalysisConfig(lrc="none"), run)
     assert bound_result["temperature_K"] == 300.0 and bound_result["restraint_release"] == pytest.approx(at_300)
-    assert bound_result["pressure_bar"] is None                    # not recorded, and not filled in from a configuration
+    assert bound_result["pressure_bar"] is None  # not recorded, and not filled in from a configuration
     free_result = leg_result_from_samples(solvent_dir, AnalysisConfig(lrc="none"), dict(run, leg="solvent"))
     assert free_result["restraint_release"] == 0.0
     write_leg_result(complex_dir, bound_result)
     write_leg_result(solvent_dir, free_result)
     out = combine_ligand(lig, "lig", 1)
-    assert out["dg_bind"] == pytest.approx((free_result["delta_g_decouple"] - bound_result["delta_g_decouple"] - at_300) / 4.184)
+    assert out["dg_bind"] == pytest.approx(
+        (free_result["delta_g_decouple"] - bound_result["delta_g_decouple"] - at_300) / 4.184
+    )
     assert "pressure (bar): not recorded for the complex leg, the solvent leg" in out["not_compared"]
     # samples that do record their conditions give their pressure
     with h5py.File(solvent_dir / "hrex" / "samples.h5", "a") as h5:
         h5.attrs["conditions"] = json.dumps({"pressure_bar": 1.0})
-    assert leg_result_from_samples(solvent_dir, AnalysisConfig(lrc="none"), dict(run, leg="solvent"))["pressure_bar"] == 1.0
+    assert (
+        leg_result_from_samples(solvent_dir, AnalysisConfig(lrc="none"), dict(run, leg="solvent"))["pressure_bar"]
+        == 1.0
+    )
 
 
 def test_an_interruption_before_the_first_checkpoint_does_not_leave_samples_twice(tmp_path, tiny_leg):
@@ -2925,7 +3070,9 @@ if __name__ == "__main__":
         from cufep.analysis.mbar import ANALYSIS_VERSION
 
         GOLDEN.parent.mkdir(exist_ok=True)
-        GOLDEN.write_text(json.dumps({"version": ANALYSIS_VERSION, "numbers": golden_analysis()}, indent=1, default=float))
+        GOLDEN.write_text(
+            json.dumps({"version": ANALYSIS_VERSION, "numbers": golden_analysis()}, indent=1, default=float)
+        )
         print(f"recorded {GOLDEN} for version {ANALYSIS_VERSION}")
 
 
@@ -2959,7 +3106,8 @@ def test_replica_exchange_stores_the_swaps_of_every_iteration(tmp_path, tiny_leg
 
 
 def test_the_exchange_a_sampler_runs_is_the_one_its_samples_record(tmp_path):
-    """Review of 037bdf1 (P2): ReplicaExchangeSampler(..., exchange=False) ran independent windows, but the conditions of
+    """Review of 037bdf1 (P2): ReplicaExchangeSampler(..., exchange=False) ran independent windows, but the conditions
+    of
     its samples came from the spec, whose default is replica exchange. On the Reference platform the samples are stored
     as 'none', continued under the same method from 2 to 3 rows with no exchange proposed, and a run with exchange is
     refused."""

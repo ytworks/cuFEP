@@ -9,8 +9,14 @@ import pytest
 
 from cufep.alchemy.restraints import BoreschRestraint
 from cufep.config.schema import Config
-from cufep.workflow import (OUTPUT_ROOT_NAMES, WorkflowError, ligand_dir_name, ligand_directories,
-                            restraint_anchor_problems, select_names)
+from cufep.workflow import (
+    OUTPUT_ROOT_NAMES,
+    WorkflowError,
+    ligand_dir_name,
+    ligand_directories,
+    restraint_anchor_problems,
+    select_names,
+)
 
 
 def write_sdf(path: Path, repo: Path, titles: list[str]) -> Path:

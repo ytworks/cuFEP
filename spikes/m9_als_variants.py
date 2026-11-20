@@ -20,7 +20,10 @@ import yaml
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir"); ap.add_argument("ligand"); ap.add_argument("repeat", type=int); ap.add_argument("leg")
+    ap.add_argument("run_dir")
+    ap.add_argument("ligand")
+    ap.add_argument("repeat", type=int)
+    ap.add_argument("leg")
     ap.add_argument("--devices", default="0")
     ap.add_argument("--window-ps", type=float, default=50.0)
     ap.add_argument("--equilibration-ps", type=float, default=0.0)
@@ -57,22 +60,34 @@ def main() -> None:
     system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
     alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha)
     if args.leg == "complex":
-        alch.system.addForce(BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]).create_force())
+        alch.system.addForce(
+            BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]).create_force()
+        )
     stages = list(STAGES_COMPLEX if args.leg == "complex" else STAGES_SOLVENT)
     T, dt = cfg.thermodynamics.temperature_K, float(eq["timestep_fs"])
     backend_name = yaml.safe_load((leg_dir / "schedule.yaml").read_text()).get("backend", "cupotential")
     backend = get_backend(backend_name, precision="mixed")
     prepared = backend.prepare_system(alch.system)
-    prepared.addForce(backend.make_isotropic_barostat(cfg.thermodynamics.pressure_bar * u.bar, T * u.kelvin, 25, seed=3))
-    integ = backend.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond, dt * u.femtoseconds, seed=4)
+    prepared.addForce(
+        backend.make_isotropic_barostat(cfg.thermodynamics.pressure_bar * u.bar, T * u.kelvin, 25, seed=3)
+    )
+    integ = backend.make_integrator(
+        T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond, dt * u.femtoseconds, seed=4
+    )
     devices = [int(x) for x in args.devices.split(",")]
     ctx = backend.make_context(prepared, integ, devices[0])
     ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
-    ctx.setPositions(eq["positions"]); ctx.setVelocities(eq["velocities"])
+    ctx.setPositions(eq["positions"])
+    ctx.setVelocities(eq["velocities"])
     r, d, v = (int(x) for x in args.initial.split(","))
-    settings = AlsSettings(overlap_threshold=args.threshold, window_ps=args.window_ps, equilibration_ps=args.equilibration_ps,
-                           sample_interval_ps=args.sample_interval_ps, initial_windows={"restrain": r, "discharge": d, "vanish": v},
-                           max_windows=48 if args.leg == "complex" else 32)
+    settings = AlsSettings(
+        overlap_threshold=args.threshold,
+        window_ps=args.window_ps,
+        equilibration_ps=args.equilibration_ps,
+        sample_interval_ps=args.sample_interval_ps,
+        initial_windows={"restrain": r, "discharge": d, "vanish": v},
+        max_windows=48 if args.leg == "complex" else 32,
+    )
     t0 = time.perf_counter()
     if args.serial:
         schedule, _ = adaptive_schedule(ctx, integ, stages, T, dt, settings, print)

@@ -11,7 +11,6 @@ import numpy as np
 from cufep.alchemy.restraints import kabsch_align, nearest_image_of_ligand
 
 
-
 def structural_analysis(samples: dict, n_equilibration: int = 0) -> dict | None:
     """Return RMSD statistics, or None if the leg has no protein frames."""
     attrs = samples.get("attrs", {})

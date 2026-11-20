@@ -41,11 +41,14 @@ def leg_line(name: str, res: dict) -> str:
     bar, mbar = a.get("bar_delta_g"), a.get("delta_g_mbar")
     bar_cell = "-" if bar is None or mbar is None else f"{abs(bar - mbar) / KCAL:.2f}"
     g = s.get("statistical_inefficiency")
-    return (f"| {name} | {windows} (+{added}) | {res['delta_g_decouple'] / KCAL:.2f} ± {res['delta_g_error'] / KCAL:.2f} "
-            f"| {a['min_overlap']:.3f} / {'-' if used is None else f'{used:.3f}'} "
-            f"| {s.get('fewest', float('nan')):.0f} / {s.get('kept')} (window {s.get('window')}, g {'-' if g is None else f'{g:.0f}'}) "
-            f"| {'; '.join(k for k in ('overlap', 'samples') if q[k].get('ok') is False) or 'none'} "
-            f"| {halves_cell} | {bar_cell} |")
+    return (
+        f"| {name} | {windows} (+{added}) | {res['delta_g_decouple'] / KCAL:.2f} ± {res['delta_g_error'] / KCAL:.2f} "
+        f"| {a['min_overlap']:.3f} / {'-' if used is None else f'{used:.3f}'} "
+        f"| {s.get('fewest', float('nan')):.0f} / {s.get('kept')} (window {s.get('window')}, g "
+        f"{'-' if g is None else f'{g:.0f}'}) "
+        f"| {'; '.join(k for k in ('overlap', 'samples') if q[k].get('ok') is False) or 'none'} "
+        f"| {halves_cell} | {bar_cell} |"
+    )
 
 
 def main() -> None:
@@ -59,11 +62,17 @@ def main() -> None:
             print(f"no binding free energy: {lig.get('warnings')}\n")
             continue
         error = lig.get("dg_bind_error", lig.get("dg_bind_mbar_error", float("nan")))
-        print(f"dG_bind {dg:.2f} ± {error:.2f} kcal/mol (standard error, one calculation; "
-              f"MBAR alone ± {lig.get('dg_bind_mbar_error', float('nan')):.2f}); experiment {experiment:.2f}; signed error "
-              f"{dg - experiment:+.2f}\n")
-        print("| leg | windows (added) | dG of the leg, kcal/mol | lowest overlap: all / used | fewest samples: estimated / kept "
-              "| checks not met (overlap 0.03, 50 samples) | halves (no verdict) | BAR - MBAR, kcal/mol (no verdict) |")
+        print(
+            f"dG_bind {dg:.2f} ± {error:.2f} kcal/mol (standard error, one calculation; "
+            f"MBAR alone ± {lig.get('dg_bind_mbar_error', float('nan')):.2f}); experiment {experiment:.2f}; signed "
+            f"error "
+            f"{dg - experiment:+.2f}\n"
+        )
+        print(
+            "| leg | windows (added) | dG of the leg, kcal/mol | lowest overlap: all / used | fewest samples: "
+            "estimated / kept "
+            "| checks not met (overlap 0.03, 50 samples) | halves (no verdict) | BAR - MBAR, kcal/mol (no verdict) |"
+        )
         print("|---|---|---|---|---|---|---|---|")
         for leg in ("complex", "solvent"):
             res = json.loads((run / ligand / "repeat_0" / leg / "result.json").read_text())

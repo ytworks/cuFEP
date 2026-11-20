@@ -18,8 +18,15 @@ import openmm.unit as unit
 from openmm.app import element as elem
 
 from cufep.prep.ligand import LIGAND_RESNAME
-from cufep.prep.orient import (Orientation, OrientationError, consensus_orientation, memembed_orientation,
-                               orientation_matrix, slab_orientation, transfer_energy_orientation)
+from cufep.prep.orient import (
+    Orientation,
+    OrientationError,
+    consensus_orientation,
+    memembed_orientation,
+    orientation_matrix,
+    slab_orientation,
+    transfer_energy_orientation,
+)
 from cufep.prep.protein import AMINO_ACIDS, CAPS, WATER
 
 WATER_SPACING_NM = 0.29
@@ -142,7 +149,9 @@ def membrane_quality(modeller) -> dict:
                            and a.residue.name not in AMINO_ACIDS], dtype=int)
     protein = np.array([a.index for a in top.atoms() if a.residue.name in AMINO_ACIDS
                         and a.element is not None and a.element != elem.hydrogen], dtype=int)
-    water_o = np.array([a.index for a in top.atoms() if a.residue.name in WATER and a.element == elem.oxygen], dtype=int)
+    water_o = np.array(
+        [a.index for a in top.atoms() if a.residue.name in WATER and a.element == elem.oxygen], dtype=int
+    )
     zp = pos[phosphorus, 2] if len(phosphorus) else np.array([])
     upper, lower = int(np.sum(zp > 0)), int(np.sum(zp < 0))
     core_waters = 0
@@ -224,7 +233,6 @@ def trim_membrane(modeller, padding_nm: float, log=print) -> dict:
     semi-isotropic NPT.
     """
     import openmm as mm
-    from scipy.spatial import cKDTree
 
     top, pos = modeller.topology, _positions(modeller)
     atoms = list(top.atoms())

@@ -12,9 +12,13 @@ from cufep.prep.membrane import add_ions
 
 def _counts(modeller, forcefield):
     names = [r.name for r in modeller.topology.residues()]
-    system = forcefield.createSystem(modeller.topology, nonbondedMethod=app.NoCutoff, constraints=None, rigidWater=False)
+    system = forcefield.createSystem(
+        modeller.topology, nonbondedMethod=app.NoCutoff, constraints=None, rigidWater=False
+    )
     nb = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
-    charge = sum(nb.getParticleParameters(i)[0].value_in_unit(u.elementary_charge) for i in range(system.getNumParticles()))
+    charge = sum(
+        nb.getParticleParameters(i)[0].value_in_unit(u.elementary_charge) for i in range(system.getNumParticles())
+    )
     return {"water": names.count("HOH"), "NA": names.count("NA"), "CL": names.count("CL"), "charge": round(charge, 6)}
 
 
@@ -86,18 +90,26 @@ def test_how_the_bilayer_changed_is_given_as_numbers_without_a_verdict():
     assert membrane_drift(steady, [])["pocket_water_change"] is None
     assert membrane_drift(steady[:12], waters[:12]) == {"area_change": None, "pocket_water_change": None}
     # no levels and no extension
-    assert not set(EquilibrationSettings.__dataclass_fields__) & {"max_production_ns", "area_tolerance", "water_tolerance"}
+    assert not set(EquilibrationSettings.__dataclass_fields__) & {
+        "max_production_ns",
+        "area_tolerance",
+        "water_tolerance",
+    }
     assert "settled" not in EquilibrationResult.__dataclass_fields__
 
 
 #: the notes with levels of cuFEP's own that version 9 wrote on a bilayer, a pose and a structure
-BILAYER_VERDICT = ("the bilayer had not settled after 10 ns of equilibration: between the last two quarters the area in "
-                   "the membrane plane changed by -1.5 % (tolerance 1 %). A longer membrane.equilibration_ns, in a new "
-                   "output.dir, gives it more time")
+BILAYER_VERDICT = (
+    "the bilayer had not settled after 10 ns of equilibration: between the last two quarters the area in "
+    "the membrane plane changed by -1.5 % (tolerance 1 %). A longer membrane.equilibration_ns, in a new "
+    "output.dir, gives it more time"
+)
 POSE_VERDICT = ("the ligand moved away from its input pose in the pre-equilibration MD (heavy-atom RMSD 2.5 A over the "
                 "second half, above restraints.pose_rmsd_warning_nm = 2 A); the result is for the pose it moved to")
-UNCOMPARED_POSE = ("the distance of the ligand from its input pose was measured by an earlier version of cuFEP in another "
-                   "way (or not stored) and could not be compared with restraints.pose_rmsd_warning_nm of this run")
+UNCOMPARED_POSE = (
+    "the distance of the ligand from its input pose was measured by an earlier version of cuFEP in another "
+    "way (or not stored) and could not be compared with restraints.pose_rmsd_warning_nm of this run"
+)
 STRUCTURE_VERDICT = ("the ligand's centre of mass drifted 6.0 A in the coupled state; it may have left the pocket")
 
 
@@ -136,8 +148,16 @@ def test_a_leg_result_gives_the_bilayer_and_the_pose_as_numbers_without_verdicts
 
     from cufep.alchemy.restraints import BoreschRestraint
     from cufep.config.schema import Config
-    from cufep.workflow import (analysis_record, archive_leg, combine_ligand, leg_files, leg_result_from_samples,
-                                notes_of_leg_files, refresh_leg_result, write_leg_result)
+    from cufep.workflow import (
+        analysis_record,
+        archive_leg,
+        combine_ligand,
+        leg_files,
+        leg_result_from_samples,
+        notes_of_leg_files,
+        refresh_leg_result,
+        write_leg_result,
+    )
 
     cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "membrane": {"enabled": True},
                                  "analysis": {"lrc": "none"}})
