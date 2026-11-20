@@ -26,8 +26,8 @@ from pathlib import Path
 import numpy as np
 
 from cufep import jsonio
-from cufep.files import publish, publish_npz, publish_text, publish_with
 from cufep.config.schema import Config, WindowsConfig
+from cufep.files import publish, publish_npz, publish_text, publish_with
 
 KCAL = 4.184
 R_GAS = 8.31446261815324e-3
@@ -153,16 +153,26 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
         # rule of every frame). The rule of a trajectory (on a line in every frame) and the reference frame
         # are checked when the restraint is made from the frames of the pre-equilibration (review of
         # 7b49066). A run whose legs all have their restraint is not checked here (review of PR 1)
-        from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, anchor_geometry_problem,
-                                              anchor_margins, nearest_image_of_ligand)
+        from cufep.alchemy.restraints import (
+            BoreschRestraint,
+            RestraintSearchSettings,
+            anchor_geometry_problem,
+            anchor_margins,
+            nearest_image_of_ligand,
+        )
 
         prep = load_prepared(Path(lig_dir) / "prep", "complex")
         rc = cfg.restraints
         host, guest = tuple(int(i) for i in rc.host_atoms), tuple(int(i) for i in rc.guest_atoms)
-        pose = nearest_image_of_ligand(np.asarray(prep["positions"], dtype=float), np.asarray(prep["ligand"], dtype=int),
-                                       np.asarray(prep["positions"], dtype=float)[list(host)].mean(axis=0),
-                                       np.asarray(prep["box"], dtype=float))
-        settings = RestraintSearchSettings(k_r=rc.k_r_kcal_per_A2 * KCAL * 100.0, k_angle=rc.k_angle_kcal_per_rad2 * KCAL)
+        pose = nearest_image_of_ligand(
+            np.asarray(prep["positions"], dtype=float),
+            np.asarray(prep["ligand"], dtype=int),
+            np.asarray(prep["positions"], dtype=float)[list(host)].mean(axis=0),
+            np.asarray(prep["box"], dtype=float),
+        )
+        settings = RestraintSearchSettings(
+            k_r=rc.k_r_kcal_per_A2 * KCAL * 100.0, k_angle=rc.k_angle_kcal_per_rad2 * KCAL
+        )
         problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None],
                                           anchor_margins(settings, cfg.thermodynamics.temperature_K), trajectory=False)
         if problem:
@@ -171,7 +181,9 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
     rest2 = cfg.sampling.rest2
     if rest2.scale > 1.0 and rest2.residues:
         prep = load_prepared(Path(lig_dir) / "prep", "complex")
-        rest2_region(rest2, prep["topology"], prep["positions"], prep["ligand"], prep["protein"], prep.get("input_chains"))
+        rest2_region(
+            rest2, prep["topology"], prep["positions"], prep["ligand"], prep["protein"], prep.get("input_chains")
+        )
     if cfg.restraints.selection == "manual":
         for r in complex_repeats:
             leg_dir = Path(lig_dir) / f"repeat_{r}" / "complex"
@@ -207,7 +219,9 @@ def check_manual_anchors(cfg: Config, lig_dir: Path) -> None:
     rc = cfg.restraints
     if rc.selection != "manual":
         return
-    problems = restraint_anchor_problems(rc.host_atoms, rc.guest_atoms, load_prepared(Path(lig_dir) / "prep", "complex"))
+    problems = restraint_anchor_problems(
+        rc.host_atoms, rc.guest_atoms, load_prepared(Path(lig_dir) / "prep", "complex")
+    )
     if problems:
         raise WorkflowError("; ".join(problems))
 
@@ -394,7 +408,6 @@ def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[s
     one after the automatic fall-back to 2 fs: only a larger one is a contradiction. The MD of a
     bilayer system could be extended by earlier versions, so there only a shorter one is.
     """
-    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
     out = []
     files = set(eq.files)
     if "timestep_fs" in files and float(eq["timestep_fs"]) > float(cfg.dynamics.timestep_fs) + 1e-9:
@@ -427,13 +440,21 @@ def check_restraint_file(stored: dict, rfile: Path, cfg: Config, log=print) -> b
     (:func:`manual_constants_of_an_earlier_version`; review of PR 1: such files had a record and were
     used, with the configured constants under a run that records auto). One rule for the check
     before any job and for the leg. Returns whether its origin is recorded."""
-    recorded = check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_made_with(cfg), log,
-                               contradictions=restraint_contradictions(stored, cfg))
+    recorded = check_made_from(
+        "the restraint of this leg",
+        rfile,
+        stored.get("made_with"),
+        restraint_made_with(cfg),
+        log,
+        contradictions=restraint_contradictions(stored, cfg),
+    )
     if recorded and manual_constants_of_an_earlier_version(stored, cfg):
         raise WorkflowError(
-            f"the restraint of this leg in {rfile} cannot be used again: it is a manual restraint of a version that used "
+            f"the restraint of this leg in {rfile} cannot be used again: "
+            "it is a manual restraint of a version that used "
             "the configured force constants where restraints.force_constants: auto asks for constants from the "
-            "fluctuations of the anchors. Nothing was changed; run the calculation in a new output.dir")
+            "fluctuations of the anchors. Nothing was changed; run the calculation in a new output.dir"
+        )
     return recorded
 
 
@@ -458,13 +479,21 @@ def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
     if rc.force_constants != "auto":
         from cufep.sampling.storage import _same
         if "k_r" in restraint and not _same(float(restraint["k_r"]), rc.k_r_kcal_per_A2 * KCAL * 100.0):
-            out.append(f"restraints.k_r_kcal_per_A2: {float(restraint['k_r']) / (KCAL * 100.0):g} -> {rc.k_r_kcal_per_A2:g}")
-        angles = {key: float(restraint[key]) / KCAL for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")
-                  if key in restraint}
+            out.append(
+                f"restraints.k_r_kcal_per_A2: {float(restraint['k_r']) / (KCAL * 100.0):g} -> {rc.k_r_kcal_per_A2:g}"
+            )
+        angles = {
+            key: float(restraint[key]) / KCAL
+            for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")
+            if key in restraint
+        }
         other = {key: value for key, value in angles.items() if not _same(value, float(rc.k_angle_kcal_per_rad2))}
         if other:
-            out.append("restraints.k_angle_kcal_per_rad2: " + ", ".join(f"{key} {value:g}" for key, value in other.items())
-                       + f" -> {rc.k_angle_kcal_per_rad2:g}")
+            out.append(
+                "restraints.k_angle_kcal_per_rad2: "
+                + ", ".join(f"{key} {value:g}" for key, value in other.items())
+                + f" -> {rc.k_angle_kcal_per_rad2:g}"
+            )
     return out
 
 
@@ -558,14 +587,28 @@ def leg_spec(cfg: Config, built, states: list[dict], barostat: str, timestep_fs:
 
     iteration_ps = cfg.sampling.time_per_iteration_ps
     return LegSpec(
-        name=more.pop("name", "leg"), system_xml=built.xml, states=states, n_atoms=built.alch.system.getNumParticles(), backend=backend_name,
-        precision=_precision(cfg, backend_name), platform=cfg.backend.platform,
-        temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
-        barostat=barostat, barostat_frequency=cfg.dynamics.barostat_frequency, exchange=cfg.sampling.exchange,
-        friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
-        steps_per_iteration=planned_iterations(iteration_ps, timestep_fs, 0.0, 0.0).steps_per_iteration, seed=seed,
-        cpu_threads=cfg.resources.cpu_threads_per_worker, lrc=built.tail, settings=samples_settings(cfg),
-        box_safety=1.3 if barostat == "membrane" else None, **more)
+        name=more.pop("name", "leg"),
+        system_xml=built.xml,
+        states=states,
+        n_atoms=built.alch.system.getNumParticles(),
+        backend=backend_name,
+        precision=_precision(cfg, backend_name),
+        platform=cfg.backend.platform,
+        temperature_K=cfg.thermodynamics.temperature_K,
+        pressure_bar=cfg.thermodynamics.pressure_bar,
+        barostat=barostat,
+        barostat_frequency=cfg.dynamics.barostat_frequency,
+        exchange=cfg.sampling.exchange,
+        friction_per_ps=cfg.dynamics.friction_per_ps,
+        timestep_fs=timestep_fs,
+        steps_per_iteration=planned_iterations(iteration_ps, timestep_fs, 0.0, 0.0).steps_per_iteration,
+        seed=seed,
+        cpu_threads=cfg.resources.cpu_threads_per_worker,
+        lrc=built.tail,
+        settings=samples_settings(cfg),
+        box_safety=1.3 if barostat == "membrane" else None,
+        **more,
+    )
 
 
 def conditions_of_this_run(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info: dict, backend_name: str,
@@ -602,7 +645,9 @@ def conditions_of_this_run(cfg: Config, lig_dir: Path, leg: str, repeat: int, pr
     eq = np.load(leg_dir / "equil.npz")
     restraint = BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]) \
         if is_complex else None
-    built = alchemical_leg(cfg, mm.XmlSerializer.deserialize(prep["system_xml"]), prep, eq["box"], restraint, is_complex)
+    built = alchemical_leg(
+        cfg, mm.XmlSerializer.deserialize(prep["system_xml"]), prep, eq["box"], restraint, is_complex
+    )
     states = [state.to_dict() for state in Schedule.load(leg_dir / "schedule.yaml").states]
     barostat = prep_info["complex_barostat"] if is_complex else "isotropic"
     return leg_spec(cfg, built, states, barostat, float(eq["timestep_fs"]), backend_name, 0).conditions()
@@ -684,8 +729,13 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     or ConditionsError.
     """
     from cufep.alchemy.schedule import Schedule
-    from cufep.sampling.storage import (ConditionsError, _same, conditions_differences, other_conditions,
-                                        stored_conditions)
+    from cufep.sampling.storage import (
+        ConditionsError,
+        _same,
+        conditions_differences,
+        other_conditions,
+        stored_conditions,
+    )
 
     leg_dir = lig_dir / f"repeat_{repeat}" / leg
     is_complex = leg == "complex"
@@ -714,7 +764,9 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         return
     # a leg that is to be continued from a checkpoint of an earlier version (run_leg analyses a leg
     # that has all its iterations as it is, without its checkpoint)
-    used_timestep = float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+    used_timestep = (
+        float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+    )
     plan = planned_iterations(cfg.sampling.time_per_iteration_ps, used_timestep, cfg.sampling.equilibration(leg),
                               production_ns)
     refusal = old_checkpoint_refusal(leg_dir / "hrex")
@@ -724,7 +776,9 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     if conditions is None:
         from cufep.sampling.storage import stored_attributes
 
-        used_timestep = float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+        used_timestep = (
+            float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+        )
         states = [state.to_dict() for state in Schedule.load(sched_file).states] if sched_file.exists() else None
         problems = unrecorded_samples_problems(stored_attributes(leg_dir / "hrex")[1], n_stored, leg_dir, cfg, leg,
                                                production_ns, states, used_timestep)
@@ -854,9 +908,15 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
     coordinates over the frames, as for anchors the search chose (review of PR 1: they were ignored
     for manual anchors). Returns (restraint, fluctuations).
     """
-    from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, anchor_geometry_problem,
-                                          anchor_margins, coordinate_fluctuations, nearest_image_of_ligand,
-                                          with_force_constants_from_fluctuations)
+    from cufep.alchemy.restraints import (
+        BoreschRestraint,
+        RestraintSearchSettings,
+        anchor_geometry_problem,
+        anchor_margins,
+        coordinate_fluctuations,
+        nearest_image_of_ligand,
+        with_force_constants_from_fluctuations,
+    )
 
     if "frame_boxes" not in eq:
         raise WorkflowError(f"{where} holds no boxes of its frames (an earlier version wrote it): the reference "
@@ -865,8 +925,10 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
     frame_atoms = np.asarray(eq["frame_atoms"], dtype=int)
     missing = sorted(set(int(i) for i in (*host_atoms, *guest_atoms)) - set(frame_atoms.tolist()))
     if missing:
-        raise WorkflowError(f"restraints.host_atoms / guest_atoms {missing} are not among the atoms whose positions the "
-                            f"pre-equilibration kept ({where}); the anchors must be atoms of the protein and the ligand")
+        raise WorkflowError(
+            f"restraints.host_atoms / guest_atoms {missing} are not among the atoms whose positions the "
+            f"pre-equilibration kept ({where}); the anchors must be atoms of the protein and the ligand"
+        )
     frames = np.asarray(eq["frames"], dtype=float)
     full = np.zeros((frames.shape[0], int(n_atoms), 3))
     full[:, frame_atoms, :] = frames
@@ -879,8 +941,14 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
     copies = []
     if "positions" in eq and "box" in eq:
         start = np.asarray(eq["positions"], dtype=float)
-        copies.append(nearest_image_of_ligand(start, np.asarray(ligand_atoms, dtype=int), start[list(host)].mean(axis=0),
-                                              np.asarray(eq["box"], dtype=float)))
+        copies.append(
+            nearest_image_of_ligand(
+                start,
+                np.asarray(ligand_atoms, dtype=int),
+                start[list(host)].mean(axis=0),
+                np.asarray(eq["box"], dtype=float),
+            )
+        )
     problem = anchor_geometry_problem(probe, full, anchor_margins(settings, temperature_K), reference_copies=copies)
     if problem:
         raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}: {problem}. Choose other "
@@ -1119,7 +1187,9 @@ def leg_files(sample_dir: Path) -> dict[str, Path | None]:
     which the leg used again. None for a file that is not there."""
     out = {}
     for name in LEG_INPUT_FILES:
-        candidates = [sample_dir / name] + ([sample_dir.parent / name] if sample_dir.name.startswith("previous_") else [])
+        candidates = [sample_dir / name] + (
+            [sample_dir.parent / name] if sample_dir.name.startswith("previous_") else []
+        )
         out[name] = next((f for f in candidates if f.exists()), None)
     return out
 
@@ -1130,7 +1200,6 @@ def archive_leg(leg_dir: Path) -> Path | None:
     The leg then starts anew from its pre-equilibration and restraint, which stay where they
     are. Nothing is deleted. Returns the new directory, or None if the leg had none of these.
     """
-    import os
 
     present = [leg_dir / name for name in LEG_RUN_FILES if (leg_dir / name).exists()]
     present += sorted(path for path in leg_dir.glob(f"{FAILED_BACKEND_DIR}_*") if path.is_dir())
@@ -1323,8 +1392,13 @@ def run_leg(job: LegJob) -> dict:
     import openmm as mm
     import openmm.unit as u
 
-    from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, find_boresch_restraint,
-                                          ligand_symmetry_number, with_force_constants_from_fluctuations)
+    from cufep.alchemy.restraints import (
+        BoreschRestraint,
+        RestraintSearchSettings,
+        find_boresch_restraint,
+        ligand_symmetry_number,
+        with_force_constants_from_fluctuations,
+    )
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
@@ -1341,7 +1415,9 @@ def run_leg(job: LegJob) -> dict:
     if job.reschedule:
         previous = archive_leg(leg_dir)
         if previous is not None:
-            log(f"the lambda windows are determined again; the windows and samples this leg had are in {previous.name}/")
+            log(
+                f"the lambda windows are determined again; the windows and samples this leg had are in {previous.name}/"
+            )
     is_complex = job.leg == "complex"
     lig_dir = Path(job.lig_dir)
     prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())
@@ -1475,9 +1551,19 @@ def run_leg(job: LegJob) -> dict:
                                                    dssp_filter=rc.dssp_filter)
                 # the pose is compared with the prepared input: the frames kept for the search begin
                 # only after the first part of the pre-equilibration
-                found = find_boresch_restraint(prep["topology"], full, prep["ligand"], rdmol, T, settings,
-                                               input_pose_nm=prep["positions"], frame_boxes_nm=eq["frame_boxes"],
-                                               input_box_nm=prep["box"], start_nm=eq["positions"], start_box_nm=eq["box"])
+                found = find_boresch_restraint(
+                    prep["topology"],
+                    full,
+                    prep["ligand"],
+                    rdmol,
+                    T,
+                    settings,
+                    input_pose_nm=prep["positions"],
+                    frame_boxes_nm=eq["frame_boxes"],
+                    input_box_nm=prep["box"],
+                    start_nm=eq["positions"],
+                    start_box_nm=eq["box"],
+                )
                 restraint = found.restraint
                 if rc.force_constants == "auto":
                     restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)
@@ -1499,14 +1585,20 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 3. alchemical System ------------------------------------------------------------------
     built = alchemical_leg(cfg, system, prep, eq["box"], restraint, is_complex)
-    alch, alch_xml, tail = built.alch, built.xml, built.tail
+    alch, alch_xml = built.alch, built.xml
     rest2 = cfg.sampling.rest2
     rest2_on, hot_atoms, hot_residues = built.rest2_on, built.hot_atoms, built.hot_residues
     if rest2_on:
-        log(f"REST2: hot region = ligand ({len(prep['ligand'])} atoms)"
-            + (f" and {len(hot_atoms)} atoms of {len(hot_residues)} protein residues ({' '.join(hot_residues)})"
-               if hot_atoms else "")
-            + f"; {alch.rest2_torsions} torsion terms scaled; {rest2.scale:g} times the temperature in the middle of the leg")
+        log(
+            f"REST2: hot region = ligand ({len(prep['ligand'])} atoms)"
+            + (
+                f" and {len(hot_atoms)} atoms of {len(hot_residues)} protein residues ({' '.join(hot_residues)})"
+                if hot_atoms
+                else ""
+            )
+            + f"; {alch.rest2_torsions} torsion terms scaled; "
+            f"{rest2.scale:g} times the temperature in the middle of the leg"
+        )
     backend_name, bnotes = _choose_backend(cfg, alch.system, log)
     notes += bnotes
     # samples of two backends are never mixed: a leg that has samples goes on with their backend
@@ -1593,16 +1685,25 @@ def run_leg(job: LegJob) -> dict:
                     schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log)
                 else:
                     pool_spec = LegSpec(
-                        name=job.tag, system_xml=alch_xml, states=[stage_state(stages[0], 0.0).to_dict(),
-                                                                   stage_state(stages[-1], 1.0).to_dict()],
-                        n_atoms=alch.system.getNumParticles(), backend=backend_name,
-                        precision=_precision(cfg, backend_name), platform=cfg.backend.platform, temperature_K=T,
-                        pressure_bar=pressure, barostat=barostat,
-                        barostat_frequency=cfg.dynamics.barostat_frequency, friction_per_ps=cfg.dynamics.friction_per_ps,
-                        timestep_fs=timestep_fs, steps_per_iteration=steps_per_iteration, seed=seed + 23,
+                        name=job.tag,
+                        system_xml=alch_xml,
+                        states=[stage_state(stages[0], 0.0).to_dict(), stage_state(stages[-1], 1.0).to_dict()],
+                        n_atoms=alch.system.getNumParticles(),
+                        backend=backend_name,
+                        precision=_precision(cfg, backend_name),
+                        platform=cfg.backend.platform,
+                        temperature_K=T,
+                        pressure_bar=pressure,
+                        barostat=barostat,
+                        barostat_frequency=cfg.dynamics.barostat_frequency,
+                        friction_per_ps=cfg.dynamics.friction_per_ps,
+                        timestep_fs=timestep_fs,
+                        steps_per_iteration=steps_per_iteration,
+                        seed=seed + 23,
                         cpu_threads=cfg.resources.cpu_threads_per_worker,
                         box_safety=1.3 if barostat == "membrane" else None,
-                        mps_thread_percentage=thread_percentage(job.oversubscription))
+                        mps_thread_percentage=thread_percentage(job.oversubscription),
+                    )
                     with WindowPool(pool_spec, devices[:n_first], log) as pool:
                         schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, pool=pool)
             schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
@@ -1611,13 +1712,17 @@ def run_leg(job: LegJob) -> dict:
             configs = (np.array([c[0] for c in cfgs]), np.array([c[1] for c in cfgs]), np.array([c[2] for c in cfgs]))
             publish_npz(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2])
             timed("lambda_schedule", t0)
-            log(f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows in {time.perf_counter() - t0:.0f} s: "
-                + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items()))
+            log(
+                f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows "
+                f"in {time.perf_counter() - t0:.0f} s: "
+                + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items())
+            )
 
         if abs(schedule.rest2_scale - (rest2.scale if rest2_on else 1.0)) > 1e-9:
             raise WorkflowError(
                 f"the lambda schedule of this leg was made with a REST2 scale of {schedule.rest2_scale:g} but "
-                f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a new one")
+                f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a new one"
+            )
 
         # ---- 5. replica exchange -----------------------------------------------------------------
         spec = leg_spec(cfg, built, [s.to_dict() for s in schedule.states], barostat, timestep_fs, backend_name,
@@ -1833,7 +1938,6 @@ def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs:
     import openmm.unit as u
 
     from cufep.sampling.states import set_state
-
     from cufep.steps import md_steps
 
     steps = md_steps(window_ps, timestep_fs)
@@ -1896,7 +2000,6 @@ def analyse_leg_directory(directory, config=None, equilibration_ns: float | None
     (and NoProduction, NoCorrection through it) with the reason. The one way for every tool that
     analyses a leg directory, so that they cannot differ in settings or in the equilibration."""
     from cufep.analysis.mbar import NoProduction
-    from cufep.config.schema import AnalysisConfig
     from cufep.sampling.storage import equilibration_boundary, read_samples
 
     if equilibration_ns is not None and equilibration_iterations is not None:
@@ -2049,17 +2152,29 @@ def notes_of_leg_files(leg_dir: Path) -> tuple[list[str], dict]:
 
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
 #: samples gets them anew
-_ANALYSIS_NOTES = ("NOT RELIABLE", "NO FREE ENERGY", "NOT CONVERGED", "convergence not assessed", "few independent samples",
-                   "the standard error of this leg is the one MBAR gives", "the standard error of this leg is the "
-                   "analytical one", "parts of the production without an estimate",
-                   "parts of the production whose lambda windows overlap below", "the comparison of the two halves",
-                   "the two halves of the production", "half of the production does not",
-                   "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record",
-                   # verdicts of earlier versions with levels of cuFEP's own, no longer made (the owner, 2026-11-20)
-                   "the bilayer had not settled after", "the ligand moved away from its",
-                   "the distance of the ligand from its input pose was measured by an earlier version",
-                   "the ligand moved ", "the ligand's centre of mass drifted",
-                   "bilayer area or pocket hydration still drifting")
+_ANALYSIS_NOTES = (
+    "NOT RELIABLE",
+    "NO FREE ENERGY",
+    "NOT CONVERGED",
+    "convergence not assessed",
+    "few independent samples",
+    "the standard error of this leg is the one MBAR gives",
+    "the standard error of this leg is the analytical one",
+    "parts of the production without an estimate",
+    "parts of the production whose lambda windows overlap below",
+    "the comparison of the two halves",
+    "the two halves of the production",
+    "half of the production does not",
+    "BAR between neighbouring lambda windows",
+    "written by an earlier version of cuFEP without a record",
+    # verdicts of earlier versions with levels of cuFEP's own, no longer made (the owner, 2026-11-20)
+    "the bilayer had not settled after",
+    "the ligand moved away from its",
+    "the distance of the ligand from its input pose was measured by an earlier version",
+    "the ligand moved ",
+    "the ligand's centre of mass drifted",
+    "bilayer area or pocket hydration still drifting",
+)
 #: what the run of a leg knows and its samples do not hold
 _RUN_KEYS = ("ligand", "leg", "repeat", "backend", "timestep_fs", "ligand_symmetry_number", "rest2",
              "origin_not_recorded", "prepared_systems_sha256")
@@ -2110,8 +2225,14 @@ def unrecorded_samples_problems(attrs: dict, n_stored: int, leg_dir: Path, cfg: 
 
     problems = []
     if "temperature_K" in attrs and not _same(float(attrs["temperature_K"]), float(cfg.thermodynamics.temperature_K)):
-        problems.append(f"temperature: {float(attrs['temperature_K']):g} K -> {float(cfg.thermodynamics.temperature_K):g} K")
-    if states is not None and isinstance(attrs.get("states"), list) and not _same(normal(attrs["states"]), normal(states)):
+        problems.append(
+            f"temperature: {float(attrs['temperature_K']):g} K -> {float(cfg.thermodynamics.temperature_K):g} K"
+        )
+    if (
+        states is not None
+        and isinstance(attrs.get("states"), list)
+        and not _same(normal(attrs["states"]), normal(states))
+    ):
         problems.append("the lambda states")
     if "iteration_ps" not in attrs:
         return problems + ["the file does not record the length of an iteration"]
@@ -2132,13 +2253,17 @@ def unrecorded_samples_problems(attrs: dict, n_stored: int, leg_dir: Path, cfg: 
     n_equil = plan.n_equilibration if same_length else iterations_for(asked_equil, stored_ps, 1)
     n_prod = plan.n_production if same_length else iterations_for(production_ns, stored_ps, 4)
     if boundary != n_equil:
-        problems.append(f"equilibration per lambda window: {boundary} iterations ({boundary * stored_ps / 1000.0:g} ns) "
-                        f"-> {n_equil} ({asked_equil:g} ns)")
+        problems.append(
+            f"equilibration per lambda window: {boundary} iterations ({boundary * stored_ps / 1000.0:g} ns) "
+            f"-> {n_equil} ({asked_equil:g} ns)"
+        )
     held = max(0, n_stored - boundary)
     if held < n_prod:
-        problems.append(f"production per lambda window: the samples hold {held} iterations ({held * stored_ps / 1000.0:g} "
-                        f"ns) and {production_ns:g} ns are {n_prod} iterations (samples of unrecorded conditions are "
-                        "not added to)")
+        problems.append(
+            f"production per lambda window: the samples hold {held} iterations ({held * stored_ps / 1000.0:g} "
+            f"ns) and {production_ns:g} ns are {n_prod} iterations (samples of unrecorded conditions are "
+            "not added to)"
+        )
     return problems
 
 
@@ -2162,7 +2287,9 @@ def run_record_of(result: dict | None, leg_dir: Path | None = None) -> dict:
     if result:
         structure = set((result.get("structure") or {}).get("warnings", []))
         record.update({key: result[key] for key in _RUN_KEYS if key in result})
-        record["notes"] = [n for n in result.get("notes", []) if not n.startswith(_ANALYSIS_NOTES) and n not in structure]
+        record["notes"] = [
+            n for n in result.get("notes", []) if not n.startswith(_ANALYSIS_NOTES) and n not in structure
+        ]
     return record
 
 
@@ -2484,9 +2611,13 @@ def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: 
     exist. Raises WorkflowError with what differs, before any time is spent on a leg whose result
     could not be used.
     """
-    own = {"temperature_K": float(cfg.thermodynamics.temperature_K), "pressure_bar": float(cfg.thermodynamics.pressure_bar),
-           "prepared_systems_sha256": record_digest((prep_info or {}).get("made_from")), "lrc_method": cfg.analysis.lrc,
-           "lrc_long_cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}
+    own = {
+        "temperature_K": float(cfg.thermodynamics.temperature_K),
+        "pressure_bar": float(cfg.thermodynamics.pressure_bar),
+        "prepared_systems_sha256": record_digest((prep_info or {}).get("made_from")),
+        "lrc_method": cfg.analysis.lrc,
+        "lrc_long_cutoff_nm": float(cfg.analysis.lrc_cutoff_nm),
+    }
     legs, differing = [("the legs this run samples", own)], []
     for r in range(repeats):
         for leg in ("complex", "solvent"):
@@ -2611,28 +2742,44 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
         dg = s["delta_g_decouple"] - c["delta_g_decouple"] - c["restraint_release"]
         # the standard error of a leg (from time blocks since version 4 of the analysis; a result of
         # an earlier version holds MBAR's alone) and the one MBAR gives
-        reported = [leg["delta_g_error"] if isinstance(leg.get("delta_g_error"), (int, float)) else leg["delta_g_mbar_error"]
-                    for leg in (c, s)]
+        reported = [
+            leg["delta_g_error"] if isinstance(leg.get("delta_g_error"), (int, float)) else leg["delta_g_mbar_error"]
+            for leg in (c, s)
+        ]
         # MBAR's own error is shown next to the reported one; a leg without it (pymbar gave none) is
         # combined all the same, and the ligand has none (review of PR 1: np.hypot(None, ...) stopped it)
         own = [leg.get("delta_g_mbar_error") for leg in (c, s)]
         own = [float(x) if isinstance(x, (int, float)) and np.isfinite(x) else None for x in own]
-        per_repeat.append({
-            "repeat": r, "dg_bind": dg, "error": float(np.hypot(*reported)),
-            "mbar_error": float(np.hypot(*own)) if None not in own else None,
-            "error_from_time_blocks": all(error_from_time_blocks(leg) for leg in (c, s)),
-            "dg_complex": c["delta_g_decouple"],
-            "dg_solvent": s["delta_g_decouple"], "restraint_release": c["restraint_release"],
-            "lrc_complex": c["lrc"], "lrc_solvent": s["lrc"], "backend_complex": c["backend"],
-            "backend_solvent": s["backend"], "stage_complex": c["analysis"]["stage_delta_g"],
-            "stage_solvent": s["analysis"]["stage_delta_g"],
-            "lambda_windows": {"complex": c["n_states"], "solvent": s["n_states"]},
-            "lambda_windows_added": {"complex": c.get("lambda_windows_added"), "solvent": s.get("lambda_windows_added")},
-            "min_overlap": {"complex": c["analysis"]["min_overlap"], "solvent": s["analysis"]["min_overlap"]},
-            # among the samples the free energy is estimated from (None in results that lack it)
-            "min_overlap_used": {"complex": c["analysis"].get("min_overlap_used"),
-                                 "solvent": s["analysis"].get("min_overlap_used")},
-            "production_ns": {"complex": c["production_ns"], "solvent": s["production_ns"]}})
+        per_repeat.append(
+            {
+                "repeat": r,
+                "dg_bind": dg,
+                "error": float(np.hypot(*reported)),
+                "mbar_error": float(np.hypot(*own)) if None not in own else None,
+                "error_from_time_blocks": all(error_from_time_blocks(leg) for leg in (c, s)),
+                "dg_complex": c["delta_g_decouple"],
+                "dg_solvent": s["delta_g_decouple"],
+                "restraint_release": c["restraint_release"],
+                "lrc_complex": c["lrc"],
+                "lrc_solvent": s["lrc"],
+                "backend_complex": c["backend"],
+                "backend_solvent": s["backend"],
+                "stage_complex": c["analysis"]["stage_delta_g"],
+                "stage_solvent": s["analysis"]["stage_delta_g"],
+                "lambda_windows": {"complex": c["n_states"], "solvent": s["n_states"]},
+                "lambda_windows_added": {
+                    "complex": c.get("lambda_windows_added"),
+                    "solvent": s.get("lambda_windows_added"),
+                },
+                "min_overlap": {"complex": c["analysis"]["min_overlap"], "solvent": s["analysis"]["min_overlap"]},
+                # among the samples the free energy is estimated from (None in results that lack it)
+                "min_overlap_used": {
+                    "complex": c["analysis"].get("min_overlap_used"),
+                    "solvent": s["analysis"].get("min_overlap_used"),
+                },
+                "production_ns": {"complex": c["production_ns"], "solvent": s["production_ns"]},
+            }
+        )
         for leg_result in (c, s):
             notes = [n for n in leg_result.get("notes", []) if not str(n).startswith(_ANALYSIS_NOTES)]
             notes += quality_warnings(leg_result, levels)
@@ -2662,17 +2809,34 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
                 # what the numbers of such a result cannot decide (it lacks those of the samples)
                 quality = leg_quality(result["analysis"], levels)
                 not_made = [] if quality["samples"]["ok"] is not None else ["independent samples"]
-                old_analysis.append(f"{where}: {differs}" + (f"; not checked: {', '.join(not_made)}" if not_made else ""))
-        warnings += [f"the result of the {item}. Its free energy and uncertainty are combined as they are" for item in old_analysis]
+                old_analysis.append(
+                    f"{where}: {differs}" + (f"; not checked: {', '.join(not_made)}" if not_made else "")
+                )
+        warnings += [
+            f"the result of the {item}. Its free energy and uncertainty are combined as they are"
+            for item in old_analysis
+        ]
     # the version of the analysis behind every leg that is combined (None: not recorded)
     versions = sorted({(result.get("analysis_record") or {}).get("version") for _where, result in complete},
                       key=lambda v: -1 if v is None else v)
-    out: dict = {"ligand": ligand_name, "units": "kcal/mol", "n_repeats": len(per_repeat), "warnings": warnings,
-                 "analysis_versions": versions,
-                 "failed_legs": failed_legs, "failed_leg_ids": failed_leg_ids, "inconsistent_legs": inconsistent, "not_compared": not_compared,
-                 "origin_not_recorded": unrecorded, "old_analysis": old_analysis,
-                 "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
-                 "repeats_planned": int(repeats), "analysis_record": run_record, "leg_digests": digests}
+    out: dict = {
+        "ligand": ligand_name,
+        "units": "kcal/mol",
+        "n_repeats": len(per_repeat),
+        "warnings": warnings,
+        "analysis_versions": versions,
+        "failed_legs": failed_legs,
+        "failed_leg_ids": failed_leg_ids,
+        "inconsistent_legs": inconsistent,
+        "not_compared": not_compared,
+        "origin_not_recorded": unrecorded,
+        "old_analysis": old_analysis,
+        "not_reliable": flagged["overlap"],
+        "few_samples": flagged["samples"],
+        "repeats_planned": int(repeats),
+        "analysis_record": run_record,
+        "leg_digests": digests,
+    }
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL
         out["dg_bind"] = float(vals.mean())

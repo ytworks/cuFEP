@@ -5,14 +5,18 @@ import numpy as np
 import openmm as mm
 import openmm.unit as u
 import pytest
-
-from cufep.alchemy.factory import (REST2_DQ, REST2_DS, REST2_GROUP, AlchemyError, bonded_pairs,
-                                   make_alchemical_system)
-from cufep.backends.base import clone_system
-from cufep.sampling.states import (AlchemicalState, StateEnergyEvaluator, rest2_scale_along_leg, set_state,
-                                   stage_state, validate_states)
-
 from conftest import potential, reference_context
+
+from cufep.alchemy.factory import REST2_DQ, REST2_DS, REST2_GROUP, AlchemyError, bonded_pairs, make_alchemical_system
+from cufep.backends.base import clone_system
+from cufep.sampling.states import (
+    AlchemicalState,
+    StateEnergyEvaluator,
+    rest2_scale_along_leg,
+    set_state,
+    stage_state,
+    validate_states,
+)
 
 
 def scaled_by_hand(system, region, s):
@@ -56,7 +60,8 @@ def test_scale_one_is_the_physical_system(dipeptides_in_water, rest):
     # every alchemical state without REST2 has the energy of the System built without it
     ctx0 = reference_context(plain.system, pos, box)
     for state in (AlchemicalState(1, 0.4, 1.0), AlchemicalState(1, 0.0, 0.6), AlchemicalState(1, 0.0, 0.0)):
-        set_state(ctx, state); set_state(ctx0, state)
+        set_state(ctx, state)
+        set_state(ctx0, state)
         assert potential(ctx) == pytest.approx(potential(ctx0), abs=5e-3)
     assert alch.rest2 and alch.rest2_atoms == tuple(hot) and alch.rest2_torsions > 10
     assert not plain.rest2 and REST2_DS not in ctx0.getParameters()
@@ -72,7 +77,9 @@ def test_scaled_hamiltonian_is_that_of_the_rest2_rules(dipeptides_in_water, rest
     reference = potential(reference_context(scaled_by_hand(system, region, s), pos, box))
     ctx = reference_context(alch.system, pos, box)
     set_state(ctx, AlchemicalState(1.0, 1.0, 1.0, rest2_scale=temperature_scale))
-    assert ctx.getParameter(REST2_DS) == pytest.approx(s - 1.0) and ctx.getParameter(REST2_DQ) == pytest.approx(math.sqrt(s) - 1.0)
+    assert ctx.getParameter(REST2_DS) == pytest.approx(s - 1.0) and ctx.getParameter(REST2_DQ) == pytest.approx(
+        math.sqrt(s) - 1.0
+    )
     assert potential(ctx) == pytest.approx(reference, abs=5e-3)
     # the torsions inside the region are the only thing in the REST2 force group, and they scale by s
     torsions = potential(ctx, {REST2_GROUP})
@@ -100,9 +107,11 @@ def test_only_proper_torsions_inside_the_region_are_scaled(dipeptides_in_water):
         proper = all((min(a, b), max(a, b)) in bonds for a, b in ((i, j), (j, k), (k, l)))
         if {i, j, k, l} <= lig and kval.value_in_unit(u.kilojoule_per_mole) != 0.0:
             if proper:
-                assert k_now == 0.0; n_moved += 1
+                assert k_now == 0.0
+                n_moved += 1
             else:
-                assert k_now == kval.value_in_unit(u.kilojoule_per_mole); n_improper += 1
+                assert k_now == kval.value_in_unit(u.kilojoule_per_mole)
+                n_improper += 1
     assert n_moved == hot.getNumTorsions() > 0 and n_improper > 0
     with pytest.raises(AlchemyError):
         make_alchemical_system(system, ligand, rest2_atoms=other[:3])          # hot atoms without rest2
@@ -221,7 +230,10 @@ def test_hot_region_of_the_complex_leg(dipeptides_in_water):
     hot, names = rest2_region(Rest2Config(scale=2.0, region="ligand", residues=["2"]), top, pos, ligand, other, same)
     assert names == ["ALA2"] and {atoms[i].residue.name for i in hot} == {"ALA"} and len(hot) == 10
     chain = atoms[other[0]].residue.chain.id
-    assert rest2_region(Rest2Config(scale=2.0, region="ligand", residues=[f"{chain}:2"]), top, pos, ligand, other, same)[0] == hot
+    assert (
+        rest2_region(Rest2Config(scale=2.0, region="ligand", residues=[f"{chain}:2"]), top, pos, ligand, other, same)[0]
+        == hot
+    )
     with pytest.raises(WorkflowError):
         rest2_region(Rest2Config(scale=2.0, region="ligand", residues=["99"]), top, pos, ligand, other, same)
 
@@ -242,10 +254,14 @@ def test_a_residue_number_of_two_input_chains_needs_its_chain():
     chains = {"A": "X", "B": "X", "C": "Y"}
 
     def names(*residues):
-        return rest2_region(Rest2Config(scale=1.5, region="ligand", residues=list(residues)), top, pos, [], [0, 1, 2], chains)[1]
+        return rest2_region(
+            Rest2Config(scale=1.5, region="ligand", residues=list(residues)), top, pos, [], [0, 1, 2], chains
+        )[1]
 
     assert names("X:960") == ["ILE960"] and names("Y:960") == ["ILE960"] and names("961") == ["ILE961"]
-    assert rest2_region(Rest2Config(scale=1.5, region="ligand", residues=["Y:960"]), top, pos, [], [0, 1, 2], chains)[0] == [2]
+    assert rest2_region(Rest2Config(scale=1.5, region="ligand", residues=["Y:960"]), top, pos, [], [0, 1, 2], chains)[
+        0
+    ] == [2]
     with pytest.raises(WorkflowError, match="'960' is a residue of the chains X, Y of the input PDB; give the chain"):
         names("960")
 
@@ -304,7 +320,9 @@ def test_validate_gives_the_differences_of_every_pair_without_a_verdict(compared
         out = []
         for lam in (0.0, 1.0):
             context.setParameter("lam", lam)
-            out.append(context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole) / kT)
+            out.append(
+                context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole) / kT
+            )
         return [out]                                      # one configuration, sampled in state 0
 
     reference, other = rows("Reference", 80.0), rows("CPU", compared_kT)
@@ -333,8 +351,10 @@ def test_a_leg_without_a_pair_finite_on_both_backends_is_not_compared():
                 "cuPotential": between_state_differences(reference, lost, own)}
     assert compared["cuPotential"]["compared"] == 0 and compared["cuPotential"]["one_sided"] == 18
     reason = not_compared_reason(compared)
-    assert reason == "no pair of states has finite energies on both backends for cuPotential (18 pair(s) finite on one " \
-                     "backend only)"
+    assert (
+        reason == "no pair of states has finite energies on both backends for cuPotential (18 pair(s) finite on one "
+        "backend only)"
+    )
     assert verdict({"complex": None, "solvent": True}) is False
     for offset in (0.0, 80.679):
         shifted = reference + np.where(np.arange(3) == 2, offset, 0.0)

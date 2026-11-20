@@ -2,7 +2,7 @@
 
 Without MPS, processes on the same GPU take turns. Small systems leave most of a modern GPU
 idle, so running several replicas of a leg on one GPU at the same time raises the total
-throughput (SOMD2 calls this the oversubscription factor, Desmond ``mps_factor``).
+throughput (SOMD2 calls this the oversubscription factor).
 
 cuFEP starts its own daemon with its own pipe directory and never attaches to a daemon that
 was started by somebody else. If the daemon cannot be started, cuFEP runs one worker per

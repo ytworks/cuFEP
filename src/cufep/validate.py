@@ -116,7 +116,9 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
     from cufep.sampling.states import StateEnergyEvaluator
     from cufep.workflow import load_prepared, prepare_ligand
 
-    prepare_ligand(resolved, ligand, protein, lig_dir, bool(resolved.membrane.enabled), resolved.solvation.box_shape, echo)
+    prepare_ligand(
+        resolved, ligand, protein, lig_dir, bool(resolved.membrane.enabled), resolved.solvation.box_shape, echo
+    )
     info = json.loads((lig_dir / "prep" / "prep.json").read_text())
     T = resolved.thermodynamics.temperature_K
     results: dict[str, bool | None] = {}
@@ -159,7 +161,9 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
             contexts[name] = (c, integ, StateEnergyEvaluator(c, schedule.states, T, None))
         frames = []
         c, integ, _ = contexts["stock mixed"]
-        c.setPeriodicBoxVectors(*box0); c.setPositions(pos0); c.setVelocitiesToTemperature(T * u.kelvin, 3)
+        c.setPeriodicBoxVectors(*box0)
+        c.setPositions(pos0)
+        c.setVelocitiesToTemperature(T * u.kelvin, 3)
         from cufep.sampling.states import set_state
         for state in (schedule.states[0], schedule.states[len(schedule.states) // 2], schedule.states[-1]):
             set_state(c, state)
@@ -171,7 +175,8 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
         rows = {name: [] for name in contexts}
         for _state, p, b in frames:
             for name, (c, _i, ev) in contexts.items():
-                c.setPeriodicBoxVectors(*b); c.setPositions(p)
+                c.setPeriodicBoxVectors(*b)
+                c.setPositions(p)
                 rows[name].append(ev.reduced_potentials()[0])
         own = [schedule.states.index(f[0]) for f in frames]
         compared = {name: between_state_differences(rows["stock double"], rows[name], own)
@@ -191,10 +196,13 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
             return f"max {worst} over {c['compared']} pairs{one}"
 
         rel = compared["cuPotential"]["relative"]
-        echo(f"{leg} ({alch.system.getNumParticles()} atoms, barostat {barostat}, {region}): between-state energy differences vs "
-             f"stock double precision: cuPotential {shown(compared['cuPotential'])}; stock mixed "
-             f"{shown(compared['stock mixed'])}; relative total-energy difference of cuPotential "
-             f"{'none' if rel is None else f'{rel:.1e}'}")
+        echo(
+            f"{leg} ({alch.system.getNumParticles()} atoms, barostat {barostat}, {region}): "
+            "between-state energy differences vs "
+            f"stock double precision: cuPotential {shown(compared['cuPotential'])}; stock mixed "
+            f"{shown(compared['stock mixed'])}; relative total-energy difference of cuPotential "
+            f"{'none' if rel is None else f'{rel:.1e}'}"
+        )
         for c, _i, _e in contexts.values():
             del c
     echo("The two backends approximate Ewald sums differently; cuFEP never mixes samples from both backends in one "

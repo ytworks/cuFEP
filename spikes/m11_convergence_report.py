@@ -12,7 +12,6 @@ written; the table goes to standard output and the rows to a JSON file.
 """
 from __future__ import annotations
 
-import json
 import sys
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
@@ -95,8 +94,12 @@ def one_leg(leg_dir: str) -> dict | None:
             for it in prov.get("iterations", []):
                 last[it["stage"]] = it
             lows = [min(it["superdiagonal"]) for it in last.values() if it.get("superdiagonal")]
-            row.update(start="/".join(str(start[k]) for k in final), added=sum(final[k] - start[k] for k in final),
-                       precalculation_lowest_overlap=min(lows) if lows else None, threshold=prov.get("overlap_threshold"))
+            row.update(
+                start="/".join(str(start[k]) for k in final),
+                added=sum(final[k] - start[k] for k in final),
+                precalculation_lowest_overlap=min(lows) if lows else None,
+                threshold=prov.get("overlap_threshold"),
+            )
     return row
 
 
@@ -123,8 +126,11 @@ def main() -> None:
     from cufep import jsonio
 
     out.write_text(jsonio.dumps(rows, indent=1))
-    print(f"{'run':30s} {'ligand':7s} {'leg':7s} win  overlap: all  used      dG     ±   | fewest samples: estimated kept "
-          f"(window, to, g) | halves (no verdict): kT  sigma | overlap samples  trips")
+    print(
+        f"{'run':30s} {'ligand':7s} {'leg':7s} win  overlap: all  used      dG     ±   | fewest samples: estimated "
+        f"kept "
+        f"(window, to, g) | halves (no verdict): kT  sigma | overlap samples  trips"
+    )
     for r in rows:
         if "leg" not in r:
             print(f"{r['leg_dir']}: {r['error']}")
@@ -138,10 +144,14 @@ def main() -> None:
         used = "    -" if r["lowest_overlap_used"] is None else f"{r['lowest_overlap_used']:.3f}"
         to = {-1: "prev", 1: "next"}.get(r["neighbour"], "-")
         energy = "      -     -" if r["delta_g"] is None else f"{r['delta_g']:7.2f} {r['error'] or 0.0:5.2f}"
-        print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s} {r['windows']:3d}         {r['lowest_overlap']:.3f} {used}  "
-              f"{energy}  |          {r['fewest_samples']:6.0f}   {r['kept_samples']:5d}  ({r['slowest_window']:2d}, {to:4s}, "
-              f"{r['g_slowest']:5.0f})     | {halves}       | {flag(r['overlap_ok']):6s} {flag(r['samples_ok']):6s}  "
-              f"{r['round_trips']:4d}")
+        print(
+            f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s} {r['windows']:3d}         "
+            f"{r['lowest_overlap']:.3f} {used}  "
+            f"{energy}  |          {r['fewest_samples']:6.0f}   {r['kept_samples']:5d}  ({r['slowest_window']:2d}, "
+            f"{to:4s}, "
+            f"{r['g_slowest']:5.0f})     | {halves}       | {flag(r['overlap_ok']):6s} {flag(r['samples_ok']):6s}  "
+            f"{r['round_trips']:4d}"
+        )
     done = [r for r in rows if "leg" in r]
     import numpy as np
 
@@ -181,8 +191,10 @@ def main() -> None:
         if sub:
             # every leg is judged by the levels it was analysed with (review of PR 1: the summary named the
             # default levels for legs judged by others); the levels that occur are listed with their legs
-            def levels(key: str) -> str:
-                return ", ".join(f"{value:g} in {m}" for value, m in sorted(Counter(r["levels"][key] for r in sub).items()))
+            def levels(key: str, sub=sub) -> str:
+                return ", ".join(
+                    f"{value:g} in {m}" for value, m in sorted(Counter(r["levels"][key] for r in sub).items())
+                )
 
             print(f"{leg}: {len(sub)} legs; below their level of overlap ({levels('min_overlap')}) in "
                   f"{sum(r['overlap_ok'] is False for r in sub)} "

@@ -226,7 +226,7 @@ def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: floa
     if rest2:
         sc.addGlobalParameter(REST2_DQ, 0.0)
         sc.addPerParticleParameter("hot")
-    for i, (q, sig, eps) in enumerate(params):
+    for i, (_q, sig, eps) in enumerate(params):
         # sigma is irrelevant when epsilon is zero; keep it finite to avoid r/0.
         sc.addParticle([sig if sig > 0.0 else 0.3, eps] + ([1.0 if i in region else 0.0] if rest2 else []))
     sc.setNonbondedMethod(mm.CustomNonbondedForce.CutoffPeriodic)

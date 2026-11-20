@@ -1,21 +1,25 @@
 # Docker execution rule
 
-Everything except CI is executed and tested in the official image, as in fmeta.
+Everything except CI is executed and tested in the official image, as in
+[fmeta](https://github.com/ytworks/fmeta).
 
 ## The rule
 
 - `cufep` commands, simulations, `pytest`, the scripts in `scripts/` and `spikes/`, the GPU tests
   and the benchmarks run in a container of the official image, through `scripts/in_docker.sh`
-  (`spikes/run.sh` and `spikes/run_frozen.sh` call the image the same way).
+  (`spikes/run.sh` calls it; `spikes/run_frozen.sh` runs the code built into an image of a
+  commit, through the entrypoint of the image, for runs whose result matters).
 - On the host: `git`, `gh`, `docker`, file editing and read-only state checks (`nvidia-smi`,
   `docker logs`, `docker ps`). No Python environment on the host (no conda, venv or
   `pip install`), and the project's Python is never run there.
-- Exactly two exceptions:
+- Exactly three exceptions:
   1. CI (`.github/workflows/`). The `unit` job builds the conda environment of
      `docker/environment.yml` on the runner (stock OpenMM, no GPU, no plugin); the `harness` job
      runs the standard-library checks of `scripts/` with the runner's Python.
   2. The SessionStart hook (`scripts/check_progress_size.py`, standard library only), which must
      also work in a session that has no Docker.
+  3. ruff runs in its own official image, pinned in `scripts/lint.sh`, locally and in CI; it reads
+     the code and needs nothing of the cuFEP image.
 - A session without Docker does not fall back to the host: leave the verification to CI and
   report "not verified here".
 
@@ -48,7 +52,12 @@ scripts/in_docker.sh --build cufep --help                    # rebuild the image
   files it writes belong to that user.
 - `--gpus` takes host GPU numbers and passes only those (none when omitted). Inside the container
   they are numbered from 0 again: `--gpus 6,7` outside is `0,1` inside, and that is what
-  `resources.gpus` and `--gpus` of `cufep run` see.
+  `resources.gpus` and `--gpus` of `cufep run` see. `--docker-gpus` passes a value to
+  `docker run --gpus` as it is (a count, `all`, `"device=..."`); `spikes/run.sh` uses it for
+  `$GPUS`, with `--workdir /work`, so its GPUs and its working directory are those it had before
+  the wrapper existed.
+- An image is built only with `--build`; a missing image stops the wrapper, so a tag such as
+  `cufep:<commit>` never names a tree it was not built from.
 - `--shm-size=16g` is set: replica coordinates are shared between worker processes in memory, and
   Docker's default of 64 MB is too small.
 - cuFEP starts and stops its own NVIDIA MPS daemon for the workers that share a GPU

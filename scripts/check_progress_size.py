@@ -11,22 +11,35 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # check_readme_pair, beside this file
+
 MAX_TOTAL_LINES = 200
 MAX_CHANGELOG_ENTRIES = 10
 SECTIONS = ["## Product", "## Current Status", "## Change Log"]
+#: lines of a section after its heading
+MAX_SECTION_LINES = {"## Product": 25, "## Current Status": 80}
 
 
 def problems_in(text: str) -> list[str]:
-    """Rule violations of a PROGRESS.md given as text (empty list: none)."""
+    """Rule violations of a PROGRESS.md given as text (empty list: none). Lines of fenced code
+    blocks are neither headings nor entries (fences read as scripts/check_readme_pair.py reads
+    them)."""
+    from check_readme_pair import OUTSIDE, fence_states
+
     lines = text.splitlines()
-    sections = [ln.rstrip() for ln in lines if ln.startswith("## ")]
-    in_changelog = False
+    sections, section_lines = [], {}
+    current = None
     entries = 0
-    for line in lines:
-        if line.startswith("## "):
-            in_changelog = line.rstrip() == "## Change Log"
-        elif in_changelog and line.startswith("### "):
+    for line, state in zip(lines, fence_states(lines)):
+        if state == OUTSIDE and line.startswith("## "):
+            current = line.rstrip()
+            sections.append(current)
+            section_lines[current] = 0
+            continue
+        if state == OUTSIDE and current == "## Change Log" and line.startswith("### "):
             entries += 1
+        if current is not None:
+            section_lines[current] += 1
 
     problems = []
     if sections != SECTIONS:
@@ -35,6 +48,9 @@ def problems_in(text: str) -> list[str]:
         problems.append(f"{len(lines)} lines (budget: {MAX_TOTAL_LINES})")
     if entries > MAX_CHANGELOG_ENTRIES:
         problems.append(f"{entries} Change Log entries (budget: {MAX_CHANGELOG_ENTRIES})")
+    for section, budget in MAX_SECTION_LINES.items():
+        if section_lines.get(section, 0) > budget:
+            problems.append(f"{section} has {section_lines[section]} lines (budget: {budget})")
     return problems
 
 

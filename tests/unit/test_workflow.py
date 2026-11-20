@@ -182,7 +182,9 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
                                           "estimators_disagree"))
     # results of before the standard error from time blocks hold the one of MBAR alone: it is what is combined
     assert out["dg_bind_error"] == out["dg_bind_mbar_error"] == pytest.approx(np.hypot(0.4, 0.4) / 4.184)
-    assert out["dg_bind_error_from_time_blocks"] is False and out["repeats"][0]["error"] == out["repeats"][0]["mbar_error"]
+    assert (
+        out["dg_bind_error_from_time_blocks"] is False and out["repeats"][0]["error"] == out["repeats"][0]["mbar_error"]
+    )
 
     # the standard error of a leg is the one from time blocks; that of MBAR is kept next to it
     def with_blocks(r, name, error, n_blocks):
@@ -195,9 +197,14 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
         with_blocks(r, "complex", 1.2, 5)
         with_blocks(r, "solvent", 0.5, 20)
     out = combine_ligand(tmp_path, "lig", 2)
-    assert out["dg_bind_error"] == pytest.approx(np.hypot(1.2, 0.5) / 4.184) and out["dg_bind_error_from_time_blocks"] is True
+    assert (
+        out["dg_bind_error"] == pytest.approx(np.hypot(1.2, 0.5) / 4.184)
+        and out["dg_bind_error_from_time_blocks"] is True
+    )
     assert out["dg_bind_mbar_error"] == pytest.approx(np.hypot(0.4, 0.4) / 4.184)
-    assert out["repeats"][1]["error"] == pytest.approx(1.3 / 4.184) and out["repeats"][1]["error_from_time_blocks"] is True
+    assert (
+        out["repeats"][1]["error"] == pytest.approx(1.3 / 4.184) and out["repeats"][1]["error_from_time_blocks"] is True
+    )
     # one leg too short for blocks reports the error of MBAR: the binding free energy says "standard error" alone
     with_blocks(1, "solvent", 0.4, None)
     out = combine_ligand(tmp_path, "lig", 2)
@@ -213,10 +220,20 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
     kcal = 4.184
     # kT is 0.59 kcal/mol: the halves of the steady leg differ by 0.5 kT, those of the other by 2.9 kT
-    steady = {"delta_g": 100.0 * kcal, "delta_g_error": 0.2 * kcal, "min_overlap": 0.11, "overlap_neighbour": [0.2, 0.11],
-              "first_half": [100.2 * kcal, 0.3 * kcal], "second_half": [99.9 * kcal, 0.3 * kcal],
-              "bar_delta_g": 100.1 * kcal, "stage_delta_g": {"vanish": 1.0}, "n_states": 3, "temperature_K": 298.15,
-              "window_effective_samples": [400.0, 120.0, 300.0], "window_statistical_inefficiency": [6.0, 20.0, 8.0]}
+    steady = {
+        "delta_g": 100.0 * kcal,
+        "delta_g_error": 0.2 * kcal,
+        "min_overlap": 0.11,
+        "overlap_neighbour": [0.2, 0.11],
+        "first_half": [100.2 * kcal, 0.3 * kcal],
+        "second_half": [99.9 * kcal, 0.3 * kcal],
+        "bar_delta_g": 100.1 * kcal,
+        "stage_delta_g": {"vanish": 1.0},
+        "n_states": 3,
+        "temperature_K": 298.15,
+        "window_effective_samples": [400.0, 120.0, 300.0],
+        "window_statistical_inefficiency": [6.0, 20.0, 8.0],
+    }
     poor = dict(steady, first_half=[100.9 * kcal, 0.3 * kcal], second_half=[99.2 * kcal, 0.3 * kcal],
                 min_overlap=0.02, overlap_neighbour=[0.2, 0.02], bar_delta_g=101.5 * kcal,
                 window_effective_samples=[400.0, 12.0, 300.0], window_statistical_inefficiency=[6.0, 200.0, 8.0])
@@ -231,13 +248,16 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     # the overlap comes first, and it alone says NOT RELIABLE
     assert notes[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 is 0.020, below 0.03")
     assert not any("NOT" in note for note in notes[1:])
-    assert notes[1].startswith("few independent samples: lambda window 1 has 12 (its energy difference to the next "
-                               "window is correlated over 200 iterations); 50 are recommended for MBAR (Mey et al. 2020)")
+    assert notes[1].startswith(
+        "few independent samples: lambda window 1 has 12 (its energy difference to the next "
+        "window is correlated over 200 iterations); 50 are recommended for MBAR (Mey et al. 2020)"
+    )
     assert "sampling.production_ns" in notes[1]
     staged = quality_warnings({"analysis": poor, "leg": "complex",
                                "lambda_windows": {"restrain": [0.0, 1.0], "vanish": [0.0, 0.5, 1.0]}}, cfg)
-    assert staged[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 (vanish stage, lambda 0 and 0.5) "
-                                "is 0.020")
+    assert staged[0].startswith(
+        "NOT RELIABLE: the overlap between lambda windows 1 and 2 (vanish stage, lambda 0 and 0.5) is 0.020"
+    )
     assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[1]
     assert staged[1].startswith("few independent samples: lambda window 1 (vanish stage) has 12")
     # the overlap among the samples of the estimate, and what MBAR gets from the slowest window
@@ -359,7 +379,9 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     write(tmp_path / "b", 0, "complex", temperature_K=298.15, lrc_method="isotropic")
     out = combine_ligand(tmp_path / "b", "lig", 1)
     assert "dg_bind" not in out
-    assert out["inconsistent_legs"] == ["correction for the dispersion tail: complex leg isotropic, solvent leg reweight"]
+    assert out["inconsistent_legs"] == [
+        "correction for the dispersion tail: complex leg isotropic, solvent leg reweight"
+    ]
 
     # pressure and the prepared systems are part of the cycle as well, where a result records them
     write(tmp_path / "p", 0, "solvent", pressure_bar=1.0, prepared_systems_sha256="abc", **usual)
@@ -431,8 +453,10 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
     with pytest.raises(WorkflowError, match="temperature .K.: the legs this run samples 315.0, the solvent leg of "
                                             "repeat 0 .finished, not part of this run. 298.15.*Nothing was run"):
         check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(315.0))
-    check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))                 # the same conditions
-    check_partner_legs(tmp_path / "f", "lig", {(0, "complex"), (0, "solvent")}, 1, config(315.0))  # its own samples decide
+    check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))  # the same conditions
+    check_partner_legs(
+        tmp_path / "f", "lig", {(0, "complex"), (0, "solvent")}, 1, config(315.0)
+    )  # its own samples decide
     with pytest.raises(WorkflowError, match="the solvent leg of repeat 0"):                        # a further repeat
         check_partner_legs(tmp_path / "f", "lig", {(1, "complex"), (1, "solvent")}, 2, config(315.0))
     # the outer radius of the tail: what the samples of the finished leg hold against what this run asks for
@@ -444,15 +468,22 @@ def test_legs_made_under_different_conditions_are_not_combined(tmp_path):
         storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
         storage.append_record(it, {"lrc_du": -1.0})
     storage.close()
-    with pytest.raises(WorkflowError, match="outer radius of the tail correction .nm.: the legs this run samples 2.0, "
-                                            "the solvent leg of repeat 0 .finished, not part of this run. 1.0.*the "
-                                            "solvent leg of repeat 0 .finished, not part of this run. has samples that "
-                                            "cannot be analysed with the settings of this run: their tail energies were "
-                                            "recorded to an outer radius of 1 nm.*Nothing was run"):
+    with pytest.raises(
+        WorkflowError,
+        match="outer radius of the tail correction .nm.: the legs this run samples 2.0, "
+        "the solvent leg of repeat 0 .finished, not part of this run. 1.0.*the "
+        "solvent leg of repeat 0 .finished, not part of this run. has samples that "
+        "cannot be analysed with the settings of this run: their tail energies were "
+        "recorded to an outer radius of 1 nm.*Nothing was run",
+    ):
         check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, config(298.15))
-    shorter = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc_cutoff_nm": 1.0}})
-    check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, shorter)                         # the same radius
-    isotropic = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "isotropic"}})
+    shorter = Config.model_validate(
+        {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc_cutoff_nm": 1.0}}
+    )
+    check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, shorter)  # the same radius
+    isotropic = Config.model_validate(
+        {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "isotropic"}}
+    )
     check_partner_legs(tmp_path / "f", "lig", {(0, "complex")}, 1, isotropic)                       # does not use it
 
 
@@ -506,7 +537,7 @@ def test_a_leg_that_fails_while_it_is_continued_does_not_count_with_its_old_resu
 
     # the leg runs again and finishes: the error is gone and the new result counts
     begin_leg(leg_dir)
-    assert leg_state(leg_dir)[0] == "failed" and leg_state(leg_dir)[1]["interrupted"]      # started, nothing written yet
+    assert leg_state(leg_dir)[0] == "failed" and leg_state(leg_dir)[1]["interrupted"]  # started, nothing written yet
     (leg_dir / "result.json").write_text(json.dumps(_leg_result(164.184, production_ns=10.0)))
     out = combine_ligand(lig, "lig", 1)
     assert out["failed_legs"] == [] and out["repeats"][0]["production_ns"] == {"complex": 10.0, "solvent": 5.0}
@@ -540,7 +571,11 @@ def test_a_leg_whose_process_was_killed_is_a_failed_leg(tmp_path):
     assert (job.leg_dir / STARTED_FILE).exists() and not (job.leg_dir / "result.json").exists()
     # ... and nothing more is written: the process was killed, and so was the scheduler (or Ctrl-C)
     state, data = leg_state(job.leg_dir)
-    assert state == "failed" and data["interrupted"] and (data["ligand"], data["leg"], data["repeat"]) == ("lig", "complex", 1)
+    assert (
+        state == "failed"
+        and data["interrupted"]
+        and (data["ligand"], data["leg"], data["repeat"]) == ("lig", "complex", 1)
+    )
     assert read_result(job)["error"].startswith("the run of this leg was interrupted before it wrote a result")
     out = combine_ligand(lig, "lig", 2)
     assert out["failed_legs"] == ["complex leg of repeat 1"] and out["n_repeats"] == 1 and "dg_bind" in out
@@ -579,7 +614,9 @@ def test_commands_end_with_an_error_when_a_leg_failed(tmp_path, monkeypatch):
     from cufep.cli import main
 
     cfg = tmp_path / "config.yaml"
-    cfg.write_text(yaml.safe_dump({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "output": {"dir": str(tmp_path / "out")}}))
+    cfg.write_text(
+        yaml.safe_dump({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "output": {"dir": str(tmp_path / "out")}})
+    )
     good = {"ligand": "a", "dg_bind": -9.0, "selected_legs": [[0, "complex"], [0, "solvent"]], "failed_leg_ids": []}
     bad = {"ligand": "b", "dg_bind": -8.0, "selected_legs": [[0, "complex"]], "failed_leg_ids": [[0, "complex"]]}
     assert driver.failed_legs([good, bad]) == ["b: complex leg failed or has no free energy"]
@@ -598,9 +635,19 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     import shutil
 
     from cufep.config.schema import Config
-    from cufep.workflow import (WorkflowError, check_made_from, equil_contradictions, equil_in_membrane,
-                                equil_made_with, prep_contradictions, prep_made_from, prepare_ligand,
-                                restraint_contradictions, restraint_made_with, settings_differences)
+    from cufep.workflow import (
+        WorkflowError,
+        check_made_from,
+        equil_contradictions,
+        equil_in_membrane,
+        equil_made_with,
+        prep_contradictions,
+        prep_made_from,
+        prepare_ligand,
+        restraint_contradictions,
+        restraint_made_with,
+        settings_differences,
+    )
 
     protein = tmp_path / "protein.pdb"
     shutil.copy(repo / "benchmarks/tyk2/inputs/tyk2_protein.pdb", protein)
@@ -616,10 +663,12 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         "membrane.enabled: False -> True", "membrane.lipid: not recorded -> POPC",
         "membrane.orientation: not recorded -> auto", "membrane.padding_nm: not recorded -> 1.5",
         "solvation.box_shape: dodecahedron -> cube"]
-    assert settings_differences(made, prep_made_from(config(forcefield={"ligand_charges": "am1bcc-nagl"}), lig, False,
-                                                     "dodecahedron")) == ["forcefield.ligand_charges: am1bcc -> am1bcc-nagl"]
-    assert [d.split(":")[0] for d in settings_differences(made, prep_made_from(cfg, ligands[1], False, "dodecahedron"))] \
-        == ["ligand"]
+    assert settings_differences(
+        made, prep_made_from(config(forcefield={"ligand_charges": "am1bcc-nagl"}), lig, False, "dodecahedron")
+    ) == ["forcefield.ligand_charges: am1bcc -> am1bcc-nagl"]
+    assert [
+        d.split(":")[0] for d in settings_differences(made, prep_made_from(cfg, ligands[1], False, "dodecahedron"))
+    ] == ["ligand"]
     protein.write_text(protein.read_text() + "REMARK changed\n")
     assert [d.split(":")[0] for d in settings_differences(made, prep_made_from(cfg, lig, False, "dodecahedron"))] \
         == ["protein_sha256"]
@@ -651,7 +700,9 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert notes == []
     assert prepare_ligand(cfg, lig, None, lig_dir, False, "dodecahedron", log=notes.append)["ligand"] == lig.name
     assert "did not record what it was made from; nothing it holds contradicts this run" in notes[0]
-    assert check_made_from("x", tmp_path, None, {}, log=notes.append) is False and check_made_from("x", tmp_path, {}, {})
+    assert check_made_from("x", tmp_path, None, {}, log=notes.append) is False and check_made_from(
+        "x", tmp_path, {}, {}
+    )
 
     # the pre-equilibration of such a version: the time step in the file is the one that was used.
     # The area of the box is recorded for every system, the water molecules near the ligand only in a
@@ -753,10 +804,15 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     # pre-equilibration and restraint of a leg
     eq = equil_made_with(cfg, "complex", False, 7)
     longer = config(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}})
-    assert settings_differences(eq, equil_made_with(longer, "complex", False, 7)) == ["pre_equilibration.md_ns: 5.0 -> 1.0"]
-    assert settings_differences(eq, equil_made_with(longer, "solvent", False, 7))[0].startswith("pre_equilibration.md_ns")
-    assert settings_differences(eq, equil_made_with(config(thermodynamics={"temperature_K": 310.0}), "complex", False, 7)) \
-        == ["temperature_K: 298.15 -> 310.0"]
+    assert settings_differences(eq, equil_made_with(longer, "complex", False, 7)) == [
+        "pre_equilibration.md_ns: 5.0 -> 1.0"
+    ]
+    assert settings_differences(eq, equil_made_with(longer, "solvent", False, 7))[0].startswith(
+        "pre_equilibration.md_ns"
+    )
+    assert settings_differences(
+        eq, equil_made_with(config(thermodynamics={"temperature_K": 310.0}), "complex", False, 7)
+    ) == ["temperature_K: 298.15 -> 310.0"]
     in_membrane = equil_made_with(config(membrane={"enabled": True, "equilibration_ns": 20.0}), "complex", True, 7)
     assert settings_differences(equil_made_with(config(membrane={"enabled": True}), "complex", True, 7), in_membrane) \
         == ["membrane_equilibration_ns: 10.0 -> 20.0"]
@@ -789,7 +845,10 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
             Path(path).write_text("ATOM")
 
     from pathlib import Path
-    monkeypatch.setattr(driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
+
+    monkeypatch.setattr(
+        driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig])
+    )
     monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: [])
     monkeypatch.setattr(driver, "write_timing", lambda *args, **kwargs: None)
     monkeypatch.setattr(driver, "refresh_leg_result", lambda *args, **kwargs: "current")
@@ -866,7 +925,9 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
-def test_samples_without_a_record_of_their_settings_are_checked_before_anything_is_written(tmp_path, monkeypatch, ligands):
+def test_samples_without_a_record_of_their_settings_are_checked_before_anything_is_written(
+    tmp_path, monkeypatch, ligands
+):
     """Review of PR 1: one version of cuFEP recorded the conditions of the samples with a checksum of the
     System and without the settings behind it. A run with another soft-core passed the checks before the
     run; the sampler then found the other System, when resolved_config.yaml was already rewritten, the
@@ -884,8 +945,18 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
     from cufep.config.auto import AutoReport
     from cufep.config.schema import Config
     from cufep.sampling.storage import ConditionsError, LegStorage
-    from cufep.workflow import (WorkflowError, _write_system, alchemical_leg, check_leg_reuse, conditions_of_this_run,
-                                equil_made_with, leg_seed, leg_spec, load_prepared, prep_made_from)
+    from cufep.workflow import (
+        WorkflowError,
+        _write_system,
+        alchemical_leg,
+        check_leg_reuse,
+        conditions_of_this_run,
+        equil_made_with,
+        leg_seed,
+        leg_spec,
+        load_prepared,
+        prep_made_from,
+    )
 
     lig = ligands[0]
     out = tmp_path / "out"
@@ -917,7 +988,9 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
     # the length its record was made for (sampling.pre_equilibration.solvent.md_ns: 0.5 ns), all of it integrated
     np.savez(leg_dir / "equil.npz", box=box, timestep_fs=2.0, simulated_ns=0.5,
              made_with=json.dumps(equil_made_with(first, "solvent", False, leg_seed(first, 0, "solvent"))))
-    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 2}, rest2_scale=first.sampling.rest2.scale)
+    schedule = fixed_schedule(
+        ["discharge", "vanish"], {"discharge": 1, "vanish": 2}, rest2_scale=first.sampling.rest2.scale
+    )
     schedule.save(leg_dir / "schedule.yaml", leg="solvent")
     states = [state.to_dict() for state in schedule.states]
 
@@ -962,7 +1035,9 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
         def write_pdb(self, path):
             Path(path).write_text("ATOM")
 
-    monkeypatch.setattr(driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig]))
+    monkeypatch.setattr(
+        driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig])
+    )
     monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: pytest.fail("the run was not refused"))
     (out / "resolved_config.yaml").write_text("the record of the run that made the samples")
     before = {path: path.read_bytes() for path in (out / "resolved_config.yaml", leg_dir / "result.json",
@@ -1017,9 +1092,15 @@ def test_what_an_analysis_needs_from_the_samples_is_checked_in_one_place_before_
 
     from cufep.cli import main
     from cufep.config.schema import AnalysisConfig, Config
-    from cufep.workflow import WorkflowError, analysis_problems, analysis_record, analysis_settings_of, \
-        check_partner_legs, leg_result_from_samples
     from cufep.sampling.storage import stored_attributes
+    from cufep.workflow import (
+        WorkflowError,
+        analysis_problems,
+        analysis_record,
+        analysis_settings_of,
+        check_partner_legs,
+        leg_result_from_samples,
+    )
 
     def config(**analysis):
         return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": analysis})
@@ -1117,8 +1198,13 @@ def test_one_state_of_a_leg_gives_one_answer_through_every_way_in(tmp_path, stat
 
     from cufep.cli import main
     from cufep.config.schema import Config
-    from cufep.workflow import (WorkflowError, analysis_record, check_partner_legs, leg_result_from_samples,
-                                refresh_leg_result)
+    from cufep.workflow import (
+        WorkflowError,
+        analysis_record,
+        check_partner_legs,
+        leg_result_from_samples,
+        refresh_leg_result,
+    )
 
     lig = tmp_path / "lig"
     leg = lig / "repeat_0" / "complex"
@@ -1186,12 +1272,10 @@ def test_the_check_before_a_run_takes_a_finished_leg_as_it_will_be_combined(tmp_
     result, passed and was refused at the combination; (3) tail energies were counted from the boundary
     on, also beyond the stored rows, where the analysis counts the production only."""
     import h5py
+    from conftest import as_earlier_version, edit_attributes
 
     from cufep.config.schema import Config
-    from cufep.sampling.storage import LegStorage
     from cufep.workflow import WorkflowError, analysis_record, check_partner_legs
-
-    from conftest import as_earlier_version, edit_attributes
 
     cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
 
@@ -1247,7 +1331,9 @@ def test_the_check_before_a_run_takes_a_finished_leg_as_it_will_be_combined(tmp_
     tail_leg(partial)
     edit_attributes(partial / "hrex", remove=("lrc_s12",))
     (partial / "result.json").write_text((beyond / "result.json").read_text())
-    isotropic = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "isotropic"}})
+    isotropic = Config.model_validate(
+        {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"lrc": "isotropic"}}
+    )
     with pytest.raises(WorkflowError, match="no Lennard-Jones sums of the ligand"):
         check_partner_legs(tmp_path / "f", "lig", {(0, "solvent")}, 1, isotropic)
 
@@ -1341,8 +1427,10 @@ def test_a_leg_is_not_continued_from_a_checkpoint_that_does_not_record_its_rows(
 
     leg(3, {"start": 0})                       # 2 + 4 iterations are planned: it would be continued
     assert "does not record how many of its iterations were stored" in old_checkpoint_refusal(hrex)
-    with pytest.raises(ConditionsError, match="the solvent leg of repeat 0: its checkpoint .* was written by an earlier "
-                                              "version.*Nothing was changed"):
+    with pytest.raises(
+        ConditionsError,
+        match="the solvent leg of repeat 0: its checkpoint .* was written by an earlier version.*Nothing was changed",
+    ):
         check_leg_reuse(cfg, lig_dir, "solvent", 0, prep_info, 0.01)
     leg(6, {"start": 0})                       # all its iterations, but nothing shows which rows are its own
     with pytest.raises(ConditionsError, match="does not record how many of its iterations were stored"):
@@ -1381,7 +1469,9 @@ def test_the_equilibration_of_cufep_analyze_is_given_one_way_and_is_a_length(tmp
 
     leg = tmp_path / "lig" / "repeat_0" / "solvent"
     tail_leg(leg, n_equilibration=20, n=120)
-    both = CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-ns", "0.05", "--equilibration-iterations", "0"])
+    both = CliRunner().invoke(
+        main, ["analyze", str(leg), "--equilibration-ns", "0.05", "--equilibration-iterations", "0"]
+    )
     assert both.exit_code == 1 and "either as a length or as a number of iterations, not both" in both.output
     for bad in ("-0.5", "nan", "inf"):
         out = CliRunner().invoke(main, ["analyze", str(leg), "--equilibration-ns", bad])
@@ -1393,11 +1483,11 @@ def test_the_equilibration_of_cufep_analyze_is_given_one_way_and_is_a_length(tmp
 def test_a_complete_leg_is_analysed_with_the_boundary_of_this_run(tmp_path):
     """Review of PR 1 (f515d9a, 1): a leg finished as 20 + 100 iterations, run again as 40 + 80, was taken as
     complete and analysed with the old boundary (100 rows, 1.686020 kJ/mol where 80 rows give 1.677377)."""
+    from test_sampling import synthetic_leg
+
     from cufep.config.schema import Config
     from cufep.sampling.storage import LegStorage
     from cufep.workflow import leg_result_from_samples, take_complete_leg
-
-    from test_sampling import synthetic_leg
 
     leg = tmp_path / "lig" / "repeat_0" / "solvent"
     synthetic_leg(leg, n=120, n_equilibration=20)
@@ -1451,7 +1541,10 @@ def test_a_run_can_be_restricted_to_ligands_and_legs():
 
     names = ["a", "b"]
     assert select_jobs(names, 1) == [("a", 0, "complex"), ("a", 0, "solvent"), ("b", 0, "complex"), ("b", 0, "solvent")]
-    assert select_jobs(names, 2, only_ligands=("b",), only_legs=("complex",)) == [("b", 0, "complex"), ("b", 1, "complex")]
+    assert select_jobs(names, 2, only_ligands=("b",), only_legs=("complex",)) == [
+        ("b", 0, "complex"),
+        ("b", 1, "complex"),
+    ]
     assert select_jobs(names, 1, only_legs=["solvent"]) == [("a", 0, "solvent"), ("b", 0, "solvent")]
     with pytest.raises(WorkflowError, match="not among the ligands"):
         select_jobs(names, 1, only_ligands=["c"])
@@ -1543,13 +1636,13 @@ def test_solvation_box_meets_the_minimum_height(shape, ratio):
 def test_a_stock_openmm_box_is_at_least_twice_the_cutoff_high(cutoff, height):
     """Review of 037bdf1 (P2): for stock OpenMM a small solute in a dodecahedron with 1.5 nm padding and a 1.2 nm cutoff
     got a box 2.121 nm high, and no Context could be made. With the rule of 2 x cutoff and the margin of 8 % the box
-    is 2.592 nm high and the PME energy is computed on the Reference platform; with a 0.9 nm cutoff it stays 2.121 nm."""
+    is 2.592 nm high and the PME energy is computed on the Reference platform; with a 0.9 nm cutoff it stays 2.121
+    nm."""
     import openmm as mm
     import openmm.app as app
     import openmm.unit as u
 
-    from cufep.prep.solvate import (SolvationSpec, box_height_problem, box_heights_nm, min_box_height_nm,
-                                    solvate)
+    from cufep.prep.solvate import SolvationSpec, box_height_problem, box_heights_nm, min_box_height_nm, solvate
 
     ff = app.ForceField("amber14/tip3p.xml")
 
@@ -1615,7 +1708,8 @@ def test_a_run_of_one_ligand_shows_the_others_as_their_legs_give_them(tmp_path, 
     """Review of PR 1 (P1): ligand B had a result of three repeats (mean -2.0 kcal/mol); a run of ligand A alone with
     one repeat recombined B as one repeat (-1.0). Review of 037bdf1 (P2): once the complex leg of B's last repeat had
     been interrupted, a run of A alone showed B's old mean of three repeats and success again; B's own repeats give
-    -1.5 and a failed leg, and after that leg was run again -3.0. In a result of today and of an earlier version, and B's
+    -1.5 and a failed leg, and after that leg was run again -3.0. In a result of today and of an earlier version, and
+    B's
     files are never written."""
     import csv
     from pathlib import Path
@@ -1635,12 +1729,16 @@ def test_a_run_of_one_ligand_shows_the_others_as_their_legs_give_them(tmp_path, 
         def write_pdb(self, path):
             Path(path).write_text("ATOM")
 
-    monkeypatch.setattr(driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [a, b]))
+    monkeypatch.setattr(
+        driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [a, b])
+    )
     monkeypatch.setattr(driver, "prepare_ligand", lambda *args, **kwargs: None)
     monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: [])
     monkeypatch.setattr(driver, "write_timing", lambda *args, **kwargs: None)
     refreshed = []
-    monkeypatch.setattr(driver, "refresh_leg_result", lambda leg_dir, *args, **kwargs: refreshed.append(leg_dir) or "current")
+    monkeypatch.setattr(
+        driver, "refresh_leg_result", lambda leg_dir, *args, **kwargs: refreshed.append(leg_dir) or "current"
+    )
     plotted = []
     monkeypatch.setattr(driver, "plot_repeat", lambda repeat_dir, *args, **kwargs: plotted.append(repeat_dir))
     (out / a.name / "prep").mkdir(parents=True)
@@ -1650,26 +1748,38 @@ def test_a_run_of_one_ligand_shows_the_others_as_their_legs_give_them(tmp_path, 
     stored = workflow.combine_ligand(b_dir, b.name, 3, cfg)            # B's own run, three repeats
     assert stored["dg_bind"] == pytest.approx(-2.0) and stored["repeats_planned"] == 3
     if version == "earlier":
-        (b_dir / "result.json").write_text(json.dumps({k: v for k, v in stored.items() if k not in RECORD_OF_THE_COMBINATION}))
+        (b_dir / "result.json").write_text(
+            json.dumps({k: v for k, v in stored.items() if k not in RECORD_OF_THE_COMBINATION})
+        )
 
     def b_files():
-        return {p.relative_to(b_dir): (p.read_bytes(), p.stat().st_mtime_ns) for p in sorted(b_dir.rglob("*")) if p.is_file()}
+        return {
+            p.relative_to(b_dir): (p.read_bytes(), p.stat().st_mtime_ns)
+            for p in sorted(b_dir.rglob("*"))
+            if p.is_file()
+        }
 
     def run_a():
         before = b_files()
         summary = driver._run(cfg, out, False, lambda m: None, only_ligands=[a.name])
         assert b_files() == before                                   # nothing of B is written
         entry = next(s for s in summary if s["ligand"] == b.name)
-        assert entry["not_part_of_this_run"] is True and entry["n_repeats_planned"] == 3 and entry["selected_legs"] == []
+        assert (
+            entry["not_part_of_this_run"] is True and entry["n_repeats_planned"] == 3 and entry["selected_legs"] == []
+        )
         assert json.loads((out / "summary.json").read_text())[1].get("dg_bind") == pytest.approx(entry.get("dg_bind"))
         row = next(r for r in csv.DictReader((out / "summary.csv").open()) if r["ligand"] == b.name)
         return entry, row
 
     entry, row = run_a()
-    assert entry["dg_bind"] == pytest.approx(-2.0) and entry["n_repeats"] == 3 and not entry.get("combined_again_from_legs")
+    assert (
+        entry["dg_bind"] == pytest.approx(-2.0)
+        and entry["n_repeats"] == 3
+        and not entry.get("combined_again_from_legs")
+    )
     assert row["dg_bind_kcal_mol"] == "-2.000" and row["n_repeats"] == "3"
 
-    workflow.begin_leg(b_dir / "repeat_2" / "complex")             # B's last complex leg starts again and is interrupted
+    workflow.begin_leg(b_dir / "repeat_2" / "complex")  # B's last complex leg starts again and is interrupted
     entry, row = run_a()
     assert entry["dg_bind"] == pytest.approx(-1.5) and entry["n_repeats"] == 2 and entry["combined_again_from_legs"]
     assert entry["failed_leg_ids"] == [[2, "complex"]] and entry["warnings"][0].startswith("not part of this run")
@@ -1699,7 +1809,9 @@ def test_a_ligand_not_part_of_a_run_keeps_its_own_repeats_and_analysis_settings(
     assert workflow.stored_ligand_result(lig, "b")["dg_bind"] == pytest.approx(-2.0)
     workflow.write_leg_result(lig / "repeat_0" / "solvent", _leg_result(0.0, leg="solvent"))   # the same result again
     assert not workflow.stored_ligand_result(lig, "b").get("combined_again_from_legs")
-    workflow.write_leg_result(lig / "repeat_0" / "solvent", dict(_leg_result(0.0, leg="solvent"), analysis_record={"version": 1}))
+    workflow.write_leg_result(
+        lig / "repeat_0" / "solvent", dict(_leg_result(0.0, leg="solvent"), analysis_record={"version": 1})
+    )
     again = workflow.stored_ligand_result(lig, "b")
     assert again["combined_again_from_legs"] and again["n_repeats"] == 3 and again["repeats_planned"] == 3
     assert again["analysis_record"]["min_overlap"] == 0.05             # B's settings, not the defaults
@@ -1797,7 +1909,9 @@ def test_validate_takes_the_lock_of_the_output_directory(tmp_path, monkeypatch):
     class Ligand:
         name = "lig"
 
-    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "output": {"dir": str(tmp_path / "out")}})
+    cfg = Config.model_validate(
+        {"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "output": {"dir": str(tmp_path / "out")}}
+    )
     monkeypatch.setattr(CuPotentialBackend, "available", staticmethod(lambda: (True, "")))
     monkeypatch.setattr(workflow, "ligands_of_run", lambda cfg, names=(): [Ligand()])
     monkeypatch.setattr(driver, "plan", lambda cfg, echo=print, ligands=None: (cfg, None, None, ligands))

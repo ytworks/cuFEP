@@ -43,8 +43,8 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
 - **水溶性タンパク質と膜タンパク質。** `membrane: {enabled: true}` で、複合体の向きを決めて POPC の
   脂質二重膜に埋め込みます。膜を付けるかどうかを cuFEP が自分で判断することはありません。
 - **確立したプロトコル。** 自動で選ぶ Boresch restraints による double decoupling、リガンドと
-  ポケットに REST2 をかけた Hamiltonian replica exchange、MBAR。既定値と用語は確立した方法と
-  文献に合わせ、各既定値の根拠を文書に書いています。
+  ポケットに REST2 をかけた Hamiltonian replica exchange、MBAR。既定値と用語は文献と公開された
+  方法に合わせ、各既定値の出典を文書に書いています。
 - **lambda window。** 既定は adaptive lambda scheduling (Midgley ら 2025)。leg と stage ごとに
   window の数や lambda の値の列で固定することもできます。
 - **判定は文献の基準だけ。** 隣り合う lambda window の overlap (0.03 以上) と、window ごとの相関の
@@ -84,8 +84,11 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
 - Docker と
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
   が使える Linux。
-- NVIDIA の GPU。イメージは CUDA 13.4 向けです。業務用・データセンター用の GPU はイメージ内の
-  forward-compatibility パッケージによりドライバ R535 系以降で動き、GeForce は R615 以降が必要です。
+- NVIDIA の GPU。イメージは CUDA 13.4 向けです。NVIDIA RTX PRO 6000 Blackwell Server Edition と
+  ドライバ 595.99.02 で確認しており、このドライバではイメージ内の forward-compatibility パッケージで
+  CUDA 13.4 が動きます。他のドライバや GPU で動くかどうかは NVIDIA の
+  [CUDA 互換性の規則](https://docs.nvidia.com/deploy/cuda-compatibility/latest/forward-compatibility.html)
+  に従います。
 - イメージと計算結果を置くディスク容量。
 
 それ以外 (OpenMM 8.4、cuPotential プラグイン、OpenFF、AmberTools、pymbar、PDBFixer、RDKit) は
@@ -120,7 +123,7 @@ cufep() { docker run --rm --gpus all --shm-size=16g -u "$(id -u):$(id -g)" \
                      -v "$PWD":/work cufep:latest "$@"; }
 
 cufep check-env                                   # ソフトウェア、GPU、両バックエンドの確認
-cufep init protein.pdb ligand.sdf -o config.yaml  # 2 行の設定ファイルを書く
+cufep init protein.pdb ligand.sdf -o config.yaml  # 最小の設定ファイルを書く
 cufep plan config.yaml                            # 計算せずに、何を行うかを表示
 cufep run config.yaml                             # 実行、または再開
 ```
@@ -129,7 +132,7 @@ cufep run config.yaml                             # 実行、または再開
 共有して受け渡しており、Docker の既定の 64 MB では足りません。指定がないと、cuFEP は出力
 ディレクトリのファイルで代用し、そのことをログに書きます。
 
-`cufep run` はリガンドごとに次のような 1 行を表示します。
+`cufep run` はリガンドごとに、時刻に続けて次のような 1 行を表示します。
 
 ```text
 RESULT ejm_31: dG_bind = ... ± ... kcal/mol (standard error from time blocks, 1 repeat)
@@ -160,17 +163,22 @@ production の時間ブロックから求め、解析的な値より小さくは
 
 | メッセージ | 意味 | 対処 |
 |---|---|---|
-| `NOT RELIABLE` | production で、隣り合う 2 つの lambda window の overlap が、全 iteration で見ても、自由エネルギーを推定する標本で見ても 0.03 未満。overlap がなければ自由エネルギーは使えない | その stage の lambda window を増やして leg を最初から計算し直す。推定に使う標本だけが基準を下回る場合は、production を長くすることも有効 |
-| few independent samples | ある lambda window が MBAR に渡す相関のない標本が 50 未満 (Mey ら 2020)。自由エネルギーとその不確かさが少ない標本に基づいている | leg を長くする。止まったところから続く |
+| `NOT RELIABLE (overlap)` | production で、隣り合う 2 つの lambda window の overlap が、全 iteration で見たとき、または自由エネルギーを推定する標本で見たときに 0.03 未満。overlap がなければ自由エネルギーは使えない | その stage の lambda window を増やして leg を最初から計算し直す。推定に使う標本だけが基準を下回る場合は、production を長くすることも有効 |
+| `few independent samples` | ある lambda window が MBAR に渡す相関のない標本が 50 未満 (Mey ら 2020)。自由エネルギーとその不確かさが少ない標本に基づいている | leg を長くする。止まったところから続く |
 | `FAILED` | leg が終わらなかった、中断された、またはその標本では自由エネルギーが決まらない。そのリガンドはその leg からの結合自由エネルギーを持たない | メッセージを読み、leg を計算し直す |
-| legs made under different conditions | complex leg と solvent leg (または 2 つの repeat) で、温度、圧力、準備した系、テール補正が異なる。そのリガンドは結合自由エネルギーを持たない | 異なる leg を、他の leg の条件で計算し直す |
-| old analysis | この実行で標本を取らなかった leg が以前の版の解析結果を持ち、その標本が残っていない | その leg を計算し直す |
-| the standard error is the analytical one | leg が短く時間ブロックが取れないため、標準誤差は標本を独立とみなした値 | leg を長くする |
-| parts of the production without an estimate | forward と reverse の系列の一部の点やブロックで、標本が少ないなどの理由で自由エネルギーが決まらない。それらは `analysis.png` から除かれる | 何もしなくてよい |
-| checks of this version not made | `cufep benchmark report` が以前の版の cuFEP が書いた要約を読んだ | leg を解析し直す |
-| origin of files not recorded | leg が、何から作ったかの記録のない以前の版のファイルを使った | 必要なら新しい出力ディレクトリにする |
+| `LEGS MADE UNDER DIFFERENT CONDITIONS` | complex leg と solvent leg (または 2 つの repeat) で、温度、圧力、準備した系、テール補正が異なる。そのリガンドは結合自由エネルギーを持たない | 異なる leg を、他の leg の条件で計算し直す |
+| `old analysis` | この実行で標本を取らなかった leg が以前の版の解析結果を持ち、その標本が残っていない | その leg を計算し直す |
+| `the standard error of this leg is the analytical one ...` | leg が短く時間ブロックが取れないため、標準誤差は標本を独立とみなした値 | leg を長くする |
+| `parts of the production without an estimate` | forward と reverse の系列の一部の点やブロックで、標本が少ないなどの理由で自由エネルギーが決まらない。それらは `analysis.png` から除かれる | 何もしなくてよい |
+| `parts of the production whose lambda windows overlap below the level of a reliable estimate` | 系列、前半と後半、ブロックの一部が、0.03 未満の overlap に基づいている。それらの推定はこの注記付きで `analysis.png` に示される | 何もしなくてよい |
+| `checks of this version not made` | `cufep benchmark report` が以前の版の cuFEP が書いた要約を読んだ | leg を解析し直す |
+| `origin of files not recorded` | leg が、何から作ったかの記録のない以前の版のファイルを使った | 必要なら新しい出力ディレクトリにする |
 
-判定はこれだけです。その他の量は数値として報告します: 平衡化の終わりの膜の変化 (`bilayer`)、
+これらが解析のフラグと注記です。解析を判定するのは、文献の 2 つの検査による `NOT RELIABLE` と
+`few independent samples` だけです。他のメッセージは、何かが欠けている、比べられない、または
+production の一部にしか基づかないことを示します。実行のその他の警告 (例えば stock OpenMM への退避、
+完了していない repeat、リガンドのグラフの対称性、準備で変えたこと) は結果の行の下に表示され、
+`summary.json` に残ります。その他の量は数値として報告します: 平衡化の終わりの膜の変化 (`bilayer`)、
 入力ポーズからのリガンドの距離 (`ligand_rmsd_from_input_A`)、結合状態でのリガンドの動き
 (`structure`)、forward と reverse の系列、前半と後半、ブロック、BAR。1 回の計算が収束していることを
 示せる検査はありません。計算の間に起きなかった遅い変化は、その計算からは見えません。
@@ -227,8 +235,9 @@ resources:
 output: {dir: runs/my_ligand}
 ```
 
-`cufep plan config.yaml` は実行で使う lambda window を表示し、実行は使ったすべての設定を
-`resolved_config.yaml` に書きます。
+`cufep plan config.yaml` は実行で使う設定を表示します。fixed では lambda window を、adaptive では
+規則と、前計算が始める window を表示します (window そのものは実行の開始時に決まります)。実行は
+使ったすべての設定を `resolved_config.yaml` に書きます。
 
 ## 例
 
@@ -241,13 +250,13 @@ output: {dir: runs/my_ligand}
 cufep run examples/kinase_tyk2/config.yaml
 cufep run examples/membrane_a2a/config.yaml
 
-# すぐ終わるお試し (結果に意味はない)
-cufep run examples/kinase_tyk2/config.yaml --production-ns 0.2 -o runs/tyk2_try
+# パイプラインの短い確認: 1 リガンド、ごく短いサンプリング
+cufep benchmark run tyk2 --tier smoke
 ```
 
-バージョン 0.1 の開発中に、production を lambda window あたり 10 ns ではなく 5 ns にした以外は現在の
-既定値で、各 example を 1 回ずつ計算した結果は、TYK2 ejm_31 が -8.94 ± 0.77 kcal/mol、A2A 4e が
--11.95 ± 0.73 kcal/mol でした (1 回の計算の標準誤差。[docs/configuration.md](docs/configuration.md)
+バージョン 0.1 の以前のコミットで、ALS の基準 0.18、ポケットの REST2、lambda window あたり 5 ns の
+production (既定は 10 ns) で各 example を 1 回ずつ計算した結果は、TYK2 ejm_31 が
+-8.94 ± 0.77 kcal/mol、A2A 4e が -11.95 ± 0.73 kcal/mol でした (1 回の計算の標準誤差。[docs/configuration.md](docs/configuration.md)
 の `sampling.rest2.region`)。どちらも 1 回だけの計算で、complex leg を繰り返し計算したときの値の
 ばらつきはこれらの誤差より大きくなっています ([protocol: REST2](docs/protocol.md#rest2))。
 
@@ -290,7 +299,7 @@ cuFEP を、実験値と、セットとともに公開されている FEP+ の�
 
 | 文書 | 内容 |
 |---|---|
-| [docs/protocol.md](docs/protocol.md) | 方法: 系、熱力学サイクル、lambda window、REST2、解析と検査、GPU、他のソフトウェアとの比較 (英語) |
+| [docs/protocol.md](docs/protocol.md) | 方法: 系、熱力学サイクル、lambda window、REST2、解析と検査、GPU、OpenFE のプロトコルとの比較 (英語) |
 | [docs/configuration.md](docs/configuration.md) | すべての設定、既定値とその根拠 (英語) |
 | [docs/LICENSING.md](docs/LICENSING.md) | cuFEP、cuPotential ランタイム、ベンチマークの入力のライセンス (英語) |
 | [docs/M0_REPORT.md](docs/M0_REPORT.md) | プラグインとプラットフォームの最初のリスク確認 (英語) |

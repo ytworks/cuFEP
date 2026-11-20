@@ -386,7 +386,7 @@ def _stop_started(running: dict[int, dict], jobs: list[LegJob], log, grace: floa
     import signal
 
     started = {i: r for i, r in running.items() if r.get("proc") is not None and r["proc"].pid is not None}
-    for i, r in started.items():
+    for _i, r in started.items():
         if r["proc"].is_alive():
             try:
                 r["proc"].terminate()

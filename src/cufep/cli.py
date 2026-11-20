@@ -1,7 +1,6 @@
 """Command line interface."""
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -37,7 +36,12 @@ def init(protein: str, ligand: str, output: str, full: bool) -> None:
     from cufep.config.schema import Config, dump_config
 
     out = Path(output)
-    rel = lambda p: str(Path(p).resolve().relative_to(out.resolve().parent)) if Path(p).resolve().is_relative_to(out.resolve().parent) else str(Path(p).resolve())  # noqa: E731
+
+    def rel(p):
+        if Path(p).resolve().is_relative_to(out.resolve().parent):
+            return str(Path(p).resolve().relative_to(out.resolve().parent))
+        return str(Path(p).resolve())
+
     data = {"system": {"protein": rel(protein), "ligand": rel(ligand)},
             "output": {"dir": f"runs/{Path(ligand).stem}"}}
     if full:
@@ -88,17 +92,24 @@ def lambda_window_table(cfg) -> str:
         return "\n".join(lines + [f"taken from {ls.file}"])
     if ls.mode == "adaptive":
         a = ls.adaptive
-        lines += ["mode adaptive: adaptive lambda scheduling decides the windows in a precalculation.",
-                  f"  a window is added where the overlap of neighbouring windows is at or below {a.overlap_threshold:g};",
-                  f"  {a.candidates} candidate lambda values per stage; MD per new window: " + "; ".join(
-                      f"{leg} leg {a.window(leg):g} ps"
-                      + (f" after {a.equilibration(leg):g} ps of equilibration" if a.equilibration(leg) > 0 else "")
-                      for leg in ("complex", "solvent")) + ";",
-                  "  start: " + "; ".join(
-                      f"{leg} leg " + ", ".join(f"{k} {v}" for k, v in a.initial_windows.for_leg(leg).items())
-                      for leg in ("complex", "solvent"))
-                  + f"; at most {a.max_windows.complex} (complex) / {a.max_windows.solvent} (solvent) windows.",
-                  "The windows of mode fixed, for reference:"]
+        lines += [
+            "mode adaptive: adaptive lambda scheduling decides the windows in a precalculation.",
+            f"  a window is added where the overlap of neighbouring windows is at or below {a.overlap_threshold:g};",
+            f"  {a.candidates} candidate lambda values per stage; MD per new window: "
+            + "; ".join(
+                f"{leg} leg {a.window(leg):g} ps"
+                + (f" after {a.equilibration(leg):g} ps of equilibration" if a.equilibration(leg) > 0 else "")
+                for leg in ("complex", "solvent")
+            )
+            + ";",
+            "  start: "
+            + "; ".join(
+                f"{leg} leg " + ", ".join(f"{k} {v}" for k, v in a.initial_windows.for_leg(leg).items())
+                for leg in ("complex", "solvent")
+            )
+            + f"; at most {a.max_windows.complex} (complex) / {a.max_windows.solvent} (solvent) windows.",
+            "The windows of mode fixed, for reference:",
+        ]
     else:
         lines.append("mode fixed: the windows below are used.")
     recommended = WindowsConfig()
@@ -108,12 +119,20 @@ def lambda_window_table(cfg) -> str:
             values = stage_values(spec, recommended.for_leg(leg)[stage])
             total += len(values)
             lines.append(f"  {leg:8s} {stage:10s} {len(values):2d}: " + " ".join(f"{v:g}" for v in values))
-        lines.append(f"  {leg:8s} {'total':10s} {total - (len(ls.windows.for_leg(leg)) - 1):2d} (stage boundaries are shared)")
+        lines.append(
+            f"  {leg:8s} {'total':10s} {total - (len(ls.windows.for_leg(leg)) - 1):2d} (stage boundaries are shared)"
+        )
     r2 = cfg.sampling.rest2
     if r2.scale > 1.0:
-        region = "the ligand" if r2.region == "ligand" and not r2.residues else (
-            "the ligand and protein residues" + (f" within {r2.pocket_cutoff_nm:g} nm of it" if r2.region == "pocket" else "")
-            + (f" ({', '.join(r2.residues)})" if r2.residues else ""))
+        region = (
+            "the ligand"
+            if r2.region == "ligand" and not r2.residues
+            else (
+                "the ligand and protein residues"
+                + (f" within {r2.pocket_cutoff_nm:g} nm of it" if r2.region == "pocket" else "")
+                + (f" ({', '.join(r2.residues)})" if r2.residues else "")
+            )
+        )
         lines += ["# REST2", f"hot region: {region}; {r2.scale:g} times the temperature in the middle of each leg, "
                              "unscaled in the first and the last lambda window."]
     else:
@@ -210,8 +229,11 @@ def analyze(directory: str, config, equilibration_ns, equilibration_iterations) 
     result, samples, n_equilibration = done["result"], done["samples"], done["n_equilibration"]
     attrs = samples["attrs"]
     source = f"--config {config}" if config is not None else done["source"]
-    out = {k: v for k, v in result["analysis"].items() if k not in ("f_k", "df_k", "overlap_matrix", "overlap_used_matrix",
-                                                                    "overlap_used_weighted_by_number")}
+    out = {
+        k: v
+        for k, v in result["analysis"].items()
+        if k not in ("f_k", "df_k", "overlap_matrix", "overlap_used_matrix", "overlap_used_weighted_by_number")
+    }
     out.update(n_equilibration_iterations=n_equilibration, n_iterations_stored=int(samples["u"].shape[0]))
     if "n_planned_iterations" in attrs:
         out["n_planned_iterations"] = int(attrs["n_planned_iterations"])
@@ -254,7 +276,9 @@ def benchmark_list() -> None:
     """Show the benchmark sets."""
     from cufep.benchmarks.runner import load_registry, read_reference
     for name, entry in load_registry().items():
-        click.echo(f"{name}: {entry['title']} ({len(read_reference(name))} ligands; subset: {', '.join(entry['subset'])})")
+        click.echo(
+            f"{name}: {entry['title']} ({len(read_reference(name))} ligands; subset: {', '.join(entry['subset'])})"
+        )
 
 
 @benchmark.command("run")

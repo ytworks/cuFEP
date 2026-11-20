@@ -110,8 +110,10 @@ def committed_counts(h5) -> tuple[int, int, int]:
         short = [name for names, need in ((ROW_DATASETS, rows), (TAIL_DATASETS, tail), (FRAME_DATASETS, frames))
                  for name in names if name in lengths and lengths[name] < need]
         if short:
-            raise StorageError(f"{h5.filename}: the datasets {', '.join(short)} are shorter than the {rows} iterations, "
-                               f"{tail} tail records and {frames} frame records the file says it holds; it is damaged")
+            raise StorageError(
+                f"{h5.filename}: the datasets {', '.join(short)} are shorter than the {rows} iterations, "
+                f"{tail} tail records and {frames} frame records the file says it holds; it is damaged"
+            )
         return rows, tail, frames
     rows = min(lengths[name] for name in ROW_DATASETS)
 
@@ -223,7 +225,8 @@ WRITING = ".writing"
 
 
 # one way to make a file or a directory durable, for the samples and for every other file (cufep.files)
-from cufep.files import _NO_DIRECTORY_SYNC, fsync_path as _fsync_path  # noqa: E402,F401
+from cufep.files import _NO_DIRECTORY_SYNC  # noqa: E402,F401
+from cufep.files import fsync_path as _fsync_path  # noqa: E402
 
 
 def _replace(source: Path, target: Path) -> None:
@@ -470,8 +473,14 @@ class LegStorage:
                 h5.create_dataset(COUNTS, data=np.zeros(3, dtype="i8"))
             _fsync_path(part)
             _replace(part, self.h5_path)
-            _write_manifest(self.dir, {"format": 2, "parts": [{"file": "samples.h5", "rows": 0, "tail": 0, "frames": 0}],
-                                       "attrs": {"n_equilibration_iterations": 0}})
+            _write_manifest(
+                self.dir,
+                {
+                    "format": 2,
+                    "parts": [{"file": "samples.h5", "rows": 0, "tail": 0, "frames": 0}],
+                    "attrs": {"n_equilibration_iterations": 0},
+                },
+            )
         with open_samples(self.h5_path) as h5:
             if h5["u"].shape[1:] != (n_replicas, n_states):
                 raise ValueError(f"{self.h5_path} was written for a different number of replicas/states")

@@ -66,7 +66,7 @@ def test_benchmark_tiers(tmp_path):
     assert smoke.lambda_schedule.adaptive.equilibration("complex") == 0.0
     subset = benchmark_config("a2a", "subset", tmp_path / "x")
     assert subset.system.ligand_names == load_registry()["a2a"]["subset"]
-    assert subset.sampling.repeats == 1 and subset.membrane.enabled is True     # one run per ligand, as FEP+
+    assert subset.sampling.repeats == 1 and subset.membrane.enabled is True     # one run per ligand
     full = benchmark_config("tyk2", "full")
     assert full.system.ligand_names is None and full.sampling.production_ns == 10.0
     assert full.membrane.enabled is False and smoke.membrane.enabled is False
@@ -88,7 +88,9 @@ def test_report_from_a_synthetic_run(tmp_path):
     assert "Ligands with a result: 16 of 17 run (16 in the set)." in text
     assert "| mean signed error (kcal/mol) | -1." in text and "0 by construction" not in text
     # over the whole curated TYK2 set the FEP+ values have no mean error ...
-    assert [line.split("|")[3].split("[")[0].strip() for line in text.splitlines() if line.startswith("| mean signed")] == ["0.00"]
+    assert [
+        line.split("|")[3].split("[")[0].strip() for line in text.splitlines() if line.startswith("| mean signed")
+    ] == ["0.00"]
     # ... over the five ligands of the subset they have (review of PR 1: the table said "0 by construction")
     subset = {"jmc_23", "jmc_30", "ejm_45", "ejm_48", "ejm_44"}
     part = tmp_path / "subset"
@@ -97,7 +99,9 @@ def test_report_from_a_synthetic_run(tmp_path):
     text = report("tyk2", part)
     expected = np.mean([ref[name]["fepplus"] - ref[name]["exp"] for name in subset])
     assert expected == pytest.approx(0.244, abs=0.001)
-    assert [line.split("|")[3].split("[")[0].strip() for line in text.splitlines() if line.startswith("| mean signed")] == ["0.24"]
+    assert [
+        line.split("|")[3].split("[")[0].strip() for line in text.splitlines() if line.startswith("| mean signed")
+    ] == ["0.24"]
     assert "over a part of that set their mean signed error is not zero" in text
     assert (tmp_path / "benchmark_report.md").exists() and (tmp_path / "benchmark_report.csv").exists()
     with open(tmp_path / "benchmark_report.csv") as fh:
@@ -174,12 +178,25 @@ def test_a_summary_of_an_earlier_version_is_not_shown_as_if_it_had_passed_the_ch
     assert NOT_CHECKED == "checks of this version not made"
     earlier_version = f"{NOT_CHECKED} (analysed by an earlier version of cuFEP)"
     # as the versions before the corrected analysis wrote it
-    earlier = {"ligand": "jmc_23", "units": "kcal/mol", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3,
-               "n_repeats": 1, "warnings": [], "failed_legs": [], "not_reliable": [], "not_converged": ["complex leg"],
-               "convergence_not_assessed": ["solvent leg"], "estimators_disagree": [], "min_overlap": 0.08,
-               "repeats": [{"lambda_windows": {"complex": 16, "solvent": 13}}]}
+    earlier = {
+        "ligand": "jmc_23",
+        "units": "kcal/mol",
+        "dg_bind": -11.0,
+        "dg_bind_std": None,
+        "dg_bind_mbar_error": 0.3,
+        "n_repeats": 1,
+        "warnings": [],
+        "failed_legs": [],
+        "not_reliable": [],
+        "not_converged": ["complex leg"],
+        "convergence_not_assessed": ["solvent leg"],
+        "estimators_disagree": [],
+        "min_overlap": 0.08,
+        "repeats": [{"lambda_windows": {"complex": 16, "solvent": 13}}],
+    }
     # the owner, 2026-11-20: the verdicts of checks of cuFEP's own (NOT CONVERGED, halves, BAR against MBAR) are not
-    # shown, also not from summaries of the versions that made them; the flag says the checks of this version are not made
+    # shown, also not from summaries of the versions that made them; the flag says the checks of this version are not
+    # made
     said = [earlier_version]
     assert flags_of(earlier) == said
     (tmp_path / "summary.json").write_text(json.dumps([earlier]))
@@ -220,7 +237,9 @@ def test_the_report_shows_the_standard_error_of_one_calculation(tmp_path):
     (tmp_path / "summary.json").write_text(json.dumps([one, older, three]))
     text = report("tyk2", tmp_path)
     assert "| ligand | experiment | cuFEP | standard error | SD over repeats | repeats | FEP+ |" in text
-    assert "| -11.00 | 0.75 |  | 1 |" in text and "| -10.50 | - |  | 1 |" in text and "| -9.00 | 0.50 | 1.20 | 3 |" in text
+    assert (
+        "| -11.00 | 0.75 |  | 1 |" in text and "| -10.50 | - |  | 1 |" in text and "| -9.00 | 0.50 | 1.20 | 3 |" in text
+    )
     with open(tmp_path / "benchmark_report.csv") as fh:
         rows = {row["ligand"]: row for row in csv.DictReader(fh)}
     assert rows["jmc_23"]["cufep_error"] == "0.75" and rows["jmc_23"]["cufep_std"] == ""
@@ -260,7 +279,8 @@ def test_the_figure_shows_a_prediction_far_from_experiment_with_its_whole_error_
 def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path):
     """Review of PR 1: a leg whose only failed check was named in summary.json and nowhere a person looks: not in the
     flags of the report, not in summary.csv, not in the result line. The checks are the two of the literature (the
-    owner, 2026-11-20): the keys of the checks of cuFEP's own that earlier versions wrote are no flags and no columns."""
+    owner, 2026-11-20): the keys of the checks of cuFEP's own that earlier versions wrote are no flags and no
+    columns."""
     from types import SimpleNamespace
 
     from cufep.analysis.mbar import ANALYSIS_VERSION, QUALITY_CHECKS
@@ -270,12 +290,24 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
     assert QUALITY_CHECKS == ("overlap", "samples")
     assert [key for key, _name in LEG_FLAGS] == ["failed_legs", "inconsistent_legs", "not_reliable", "old_analysis",
                                                  "few_samples", "origin_not_recorded"]
-    only_samples = {"ligand": "jmc_23", "dg_bind": -11.0, "dg_bind_std": None, "dg_bind_mbar_error": 0.3,
-                    "dg_bind_error": 0.5, "dg_bind_error_from_time_blocks": True, "analysis_versions": [ANALYSIS_VERSION],
-                    "n_repeats": 1, "warnings": ["repeat 0 complex: few independent samples: ..."],
-                    "failed_legs": [], "not_reliable": [], "few_samples": ["complex leg"], "min_overlap": 0.08,
-                    # keys of an earlier version, for checks that are no longer made: shown nowhere
-                    "halves_differ": ["complex leg"], "estimators_disagree": ["complex leg"]}
+    only_samples = {
+        "ligand": "jmc_23",
+        "dg_bind": -11.0,
+        "dg_bind_std": None,
+        "dg_bind_mbar_error": 0.3,
+        "dg_bind_error": 0.5,
+        "dg_bind_error_from_time_blocks": True,
+        "analysis_versions": [ANALYSIS_VERSION],
+        "n_repeats": 1,
+        "warnings": ["repeat 0 complex: few independent samples: ..."],
+        "failed_legs": [],
+        "not_reliable": [],
+        "few_samples": ["complex leg"],
+        "min_overlap": 0.08,
+        # keys of an earlier version, for checks that are no longer made: shown nowhere
+        "halves_differ": ["complex leg"],
+        "estimators_disagree": ["complex leg"],
+    }
     assert flags_of(only_samples) == ["few independent samples: complex leg"]
     (tmp_path / "summary.json").write_text(json.dumps([only_samples]))
     text = report("tyk2", tmp_path)
@@ -294,21 +326,34 @@ def test_every_check_reaches_the_report_the_summary_and_the_result_line(tmp_path
     blocks = dict(only_samples, dg_bind_error=0.9, dg_bind_error_from_time_blocks=True)
     assert result_line(blocks).startswith("RESULT jmc_23: dG_bind = -11.00 ± 0.90 kcal/mol (standard error from time "
                                           "blocks, 1 repeat); few independent samples")
-    assert " ± 0.90 kcal/mol (standard error, 1 repeat);" in result_line(dict(blocks, dg_bind_error_from_time_blocks=False))
+    assert " ± 0.90 kcal/mol (standard error, 1 repeat);" in result_line(
+        dict(blocks, dg_bind_error_from_time_blocks=False)
+    )
     write_summary(tmp_path, [blocks], [SimpleNamespace(name="jmc_23", properties={})])
     with open(tmp_path / "summary.csv") as fh:
         row = list(csv.DictReader(fh))[0]
     assert row["standard_error"] == "0.900" and row["mbar_error"] == "0.300"
 
     # all of them at once, in the order of their weight; the overlap is given with the number
-    everything = dict(only_samples, failed_legs=["solvent leg of repeat 1"], not_reliable=["complex leg"],
-                      inconsistent_legs=[], old_analysis=["solvent leg: version 2 of the analysis; this run uses version 3"],
-                      few_samples=["complex leg"], halves_not_compared=["solvent leg"], halves_below_level=["complex leg"],
-                      origin_not_recorded=["complex leg: the samples"], min_overlap=0.02, min_overlap_used=0.012)
+    everything = dict(
+        only_samples,
+        failed_legs=["solvent leg of repeat 1"],
+        not_reliable=["complex leg"],
+        inconsistent_legs=[],
+        old_analysis=["solvent leg: version 2 of the analysis; this run uses version 3"],
+        few_samples=["complex leg"],
+        halves_not_compared=["solvent leg"],
+        halves_below_level=["complex leg"],
+        origin_not_recorded=["complex leg: the samples"],
+        min_overlap=0.02,
+        min_overlap_used=0.012,
+    )
     assert flags_of(everything) == [
         "FAILED: solvent leg of repeat 1", "NOT RELIABLE (overlap): complex leg", "old analysis: solvent leg",
         "few independent samples: complex leg", "origin of files not recorded: complex leg"]
-    assert "; NOT RELIABLE (overlap): complex leg (neighbouring lambda windows overlap by only 0.012);" in result_line(everything)
+    assert "; NOT RELIABLE (overlap): complex leg (neighbouring lambda windows overlap by only 0.012);" in result_line(
+        everything
+    )
     nothing = {"ligand": "x", "n_repeats": 0, "warnings": []}
     assert result_line(nothing) == "RESULT x: no binding free energy; no complete repeat"
     assert result_line(dict(nothing, inconsistent_legs=["temperature (K): complex leg 315.0, solvent leg 298.15"])) \

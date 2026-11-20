@@ -21,7 +21,7 @@ import openmm as mm
 import openmm.app as app
 import openmm.unit as u
 
-from cufep.alchemy.factory import (LAMBDA_ELECTROSTATICS, LAMBDA_STERICS, make_alchemical_system, set_lambdas)
+from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_STERICS, make_alchemical_system, set_lambdas
 from cufep.backends import get_backend
 from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
 from cufep.prep.ligand import assign_partial_charges, load_ligands
@@ -181,10 +181,16 @@ def main() -> int:
     relF = np.array(relF)
     print("\n[2] reference = stock OpenMM in double precision")
     print(f"  (frame, state) pairs within 60 kT of the sampled state: {mask.sum()} of {mask.size}")
-    print(f"  absolute energy, cupo vs double: max rel {relE.max():.2e}; offset mean {off.mean():+.3f} kJ/mol, sd {off.std():.4f}")
+    print(
+        f"  absolute energy, cupo vs double: max rel {relE.max():.2e}; offset mean {off.mean():+.3f} kJ/mol, sd "
+        f"{off.std():.4f}"
+    )
     print(f"  between-state dU error [kT]: cupo max {err_cupo.max():.4f} mean {err_cupo.mean():.4f} | "
           f"stock mixed max {err_stock.max():.4f} mean {err_stock.mean():.4f}")
-    print(f"  forces at sampled state, cupo vs double: whole system max rel {relF[:, 0].max():.2e}; ligand atoms max rel {relF[:, 1].max():.2e}")
+    print(
+        f"  forces at sampled state, cupo vs double: whole system max rel {relF[:, 0].max():.2e}; ligand atoms max rel "
+        f"{relF[:, 1].max():.2e}"
+    )
     # accuracy against the tight Ewald reference: is the plugin's splitting as accurate as
     # stock PME at the same nominal tolerance?
     mask_t = np.abs(dU["tight"]) < 60.0
@@ -212,7 +218,9 @@ def main() -> int:
             _state, p, b = frames[f]
             load(ctx, p, b)
             g0 = {le: group_energy(ctx, 0, (le, 1.0)) for le in (0.0, 0.25, 0.5, 0.75, 1.0)}
-            c = g0[0.0]; a2 = 2 * (g0[1.0] - 2 * g0[0.5] + g0[0.0]); a1 = g0[1.0] - g0[0.0] - a2
+            c = g0[0.0]
+            a2 = 2 * (g0[1.0] - 2 * g0[0.5] + g0[0.0])
+            a1 = g0[1.0] - g0[0.0] - a2
             for le in (0.25, 0.75):
                 quad_err.append(abs(c + a1 * le + a2 * le * le - g0[le]) / KT)
             for (le, ls) in ((1.0, 1.0), (0.5, 1.0), (0.0, 0.5), (0.0, 0.0)):
@@ -226,12 +234,14 @@ def main() -> int:
             verdict["group_decomposition"] = bool(max(quad_err) < 0.01 and max(add_err) < 0.01)
 
     def tcost(fn, n=40):
-        fn(0); t0 = time.perf_counter()
+        fn(0)
+        t0 = time.perf_counter()
         for i in range(n):
             fn(i)
         return 1e3 * (time.perf_counter() - t0) / n
 
-    load(c_c, frames[0][1], frames[0][2]); load(c_s, frames[0][1], frames[0][2])
+    load(c_c, frames[0][1], frames[0][2])
+    load(c_s, frames[0][1], frames[0][2])
     for name, ctx in (("stock", c_s), ("cupo ", c_c)):
         a = tcost(lambda i, c=ctx: group_energy(c, 0, ((i % 5) / 4.0, 1.0)))
         bq = tcost(lambda i, c=ctx: group_energy(c, 1, (0.0, (i % 11) / 10.0)))
@@ -241,8 +251,13 @@ def main() -> int:
 
     # ---- [4a] live charge-offset update: energy returns after a round trip -----------
     load(c_c, frames[0][1], frames[0][2])
-    e_a = energy(c_c, (1.0, 1.0)); e_b = energy(c_c, (0.3, 1.0)); e_c = energy(c_c, (1.0, 1.0))
-    print(f"\n[4a] offsets live: E(1)={e_a:.3f} E(0.3)={e_b:.3f} back E(1)={e_c:.3f}  |round trip|={abs(e_c - e_a):.2e} kJ/mol")
+    e_a = energy(c_c, (1.0, 1.0))
+    e_b = energy(c_c, (0.3, 1.0))
+    e_c = energy(c_c, (1.0, 1.0))
+    print(
+        f"\n[4a] offsets live: E(1)={e_a:.3f} E(0.3)={e_b:.3f} back E(1)={e_c:.3f}  |round trip|={abs(e_c - e_a):.2e} "
+        f"kJ/mol"
+    )
     verdict["offset_roundtrip"] = bool(abs(e_c - e_a) < 1e-3 and abs(e_b - e_a) > 0.1)
 
     # ---- [5] cost of set-lambda + energy, and MD steps (internal) ---------------------
@@ -253,7 +268,8 @@ def main() -> int:
         return 1e3 * (time.perf_counter() - t0) / n
 
     def cost_same(ctx, n=40):
-        energy(ctx, STATES[0]); t0 = time.perf_counter()
+        energy(ctx, STATES[0])
+        t0 = time.perf_counter()
         for _ in range(n):
             ctx.getState(getEnergy=True)
         return 1e3 * (time.perf_counter() - t0) / n
@@ -266,8 +282,13 @@ def main() -> int:
         return 1e3 * (time.perf_counter() - t0) / n
 
     def steps(ctx, integ, n=5000):
-        load(ctx, pos, box, vel); set_lambdas(ctx, {LAMBDA_ELECTROSTATICS: 1.0, LAMBDA_STERICS: 1.0})
-        integ.step(500); ctx.getState(getEnergy=True); t0 = time.perf_counter(); integ.step(n); ctx.getState(getEnergy=True)
+        load(ctx, pos, box, vel)
+        set_lambdas(ctx, {LAMBDA_ELECTROSTATICS: 1.0, LAMBDA_STERICS: 1.0})
+        integ.step(500)
+        ctx.getState(getEnergy=True)
+        t0 = time.perf_counter()
+        integ.step(n)
+        ctx.getState(getEnergy=True)
         return 1e3 * (time.perf_counter() - t0) / n
 
     print("\n[5] costs in ms (internal use only)")
@@ -282,22 +303,30 @@ def main() -> int:
             (frames[-1][1], frames[-1][2], STATES[-1])]
     for cyc in range(3):
         for p, b, s in reps:
-            load(c_c, p, b); c_c.setVelocitiesToTemperature(T, cyc + 1)
+            load(c_c, p, b)
+            c_c.setVelocitiesToTemperature(T, cyc + 1)
             set_lambdas(c_c, {LAMBDA_ELECTROSTATICS: s[0], LAMBDA_STERICS: s[1]})
             i_c.step(250)
             ok &= bool(np.isfinite(energy(c_c)))
-    print(f"\n[4b] replica time-slicing through one plugin Context (3 replicas x 3 cycles x 250 steps): {'OK' if ok else 'BAD'}")
+    print(
+        f"\n[4b] replica time-slicing through one plugin Context (3 replicas x 3 cycles x 250 steps): "
+        f"{'OK' if ok else 'BAD'}"
+    )
     verdict["replica_time_slicing"] = ok
     del c_c, c_s
 
     # ---- [4c] plugin integrator + stock restraint force --------------------------------
     restr = mm.CustomCompoundBondForce(2, "0.5*lambda_restraints*k*(distance(p1,p2)-r0)^2")
-    restr.addGlobalParameter("lambda_restraints", 1.0); restr.addPerBondParameter("k"); restr.addPerBondParameter("r0")
+    restr.addGlobalParameter("lambda_restraints", 1.0)
+    restr.addPerBondParameter("k")
+    restr.addPerBondParameter("r0")
     ca = [a.index for a in top.atoms() if a.name == "CA"][100]
-    restr.addBond([ca, lig[0]], [4184.0, 1.0]); restr.setUsesPeriodicBoundaryConditions(True)
+    restr.addBond([ca, lig[0]], [4184.0, 1.0])
+    restr.setUsesPeriodicBoundaryConditions(True)
     c_r, i_r = make_ctx(cupo, alch.system, args.device, barostat=True, extra_force=restr)
     c_x, _ = make_ctx(stock, alch.system, args.device, extra_force=restr)
-    load(c_r, pos, box, vel); i_r.step(2500)
+    load(c_r, pos, box, vel)
+    i_r.step(2500)
     st = c_r.getState(getPositions=True, getEnergy=True)
     load(c_x, st.getPositions(asNumpy=True), st.getPeriodicBoxVectors())
     e_p, e_x = st.getPotentialEnergy().value_in_unit(KJ), energy(c_x)
@@ -309,16 +338,20 @@ def main() -> int:
     # ---- [3] decoupled-state stability ------------------------------------------------
     nsteps = 250000 if args.long else 25000
     set_lambdas(c_r, {LAMBDA_ELECTROSTATICS: 0.0, LAMBDA_STERICS: 0.0, "lambda_restraints": 1.0})
-    load(c_r, frames[-1][1], frames[-1][2]); c_r.setVelocitiesToTemperature(T, 9)
-    t0 = time.perf_counter(); bad = False
+    load(c_r, frames[-1][1], frames[-1][2])
+    c_r.setVelocitiesToTemperature(T, 9)
+    t0 = time.perf_counter()
+    bad = False
     try:
-        for chunk in range(nsteps // 5000):
+        for _chunk in range(nsteps // 5000):
             i_r.step(5000)
             e = energy(c_r)
             if not np.isfinite(e):
-                bad = True; break
+                bad = True
+                break
     except Exception as exc:  # noqa: BLE001
-        bad = True; print("   decoupled run failed:", type(exc).__name__, str(exc)[:200])
+        bad = True
+        print("   decoupled run failed:", type(exc).__name__, str(exc)[:200])
     print(f"[3] fully decoupled state, plugin, NPT, {nsteps * 4e-6:.2f} ns: {'FAILED' if bad else 'stable'} "
           f"({time.perf_counter() - t0:.0f} s wall)")
     verdict["decoupled_stable"] = not bad

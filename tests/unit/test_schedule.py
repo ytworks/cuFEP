@@ -9,9 +9,21 @@ import pytest
 import yaml
 
 from cufep.alchemy.factory import make_alchemical_system
-from cufep.alchemy.schedule import (AlsSettings, Schedule, adaptive_schedule, als_step, bad_sections, choose_section,
-                                    fixed_schedule, initial_indices, redistribute, run_window, schedule_from_windows,
-                                    stage_overlap, stage_values)
+from cufep.alchemy.schedule import (
+    AlsSettings,
+    Schedule,
+    adaptive_schedule,
+    als_step,
+    bad_sections,
+    choose_section,
+    fixed_schedule,
+    initial_indices,
+    redistribute,
+    run_window,
+    schedule_from_windows,
+    stage_overlap,
+    stage_values,
+)
 from cufep.config.schema import RECOMMENDED_VANISH_COMPLEX, RECOMMENDED_VANISH_SOLVENT, WindowsConfig
 from cufep.sampling.states import AlchemicalState
 
@@ -193,7 +205,9 @@ def test_precalculation_on_a_small_system(water_ligand_system):
     schedule, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings, messages.append)
     assert schedule.mode == "adaptive" and schedule.stages == ["discharge", "vanish"]
     assert len(configs) == len(schedule.states) <= 9
-    assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(1.0, 0.0, 0.0)
+    assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(
+        1.0, 0.0, 0.0
+    )
     w = schedule.windows()
     assert w["discharge"][0] == 0.0 and w["discharge"][-1] == 1.0 and w["vanish"][0] == 0.0 and w["vanish"][-1] == 1.0
     assert all(abs(v * 20 - round(v * 20)) < 1e-9 for vals in w.values() for v in vals)       # on the candidate grid
@@ -251,7 +265,9 @@ def test_precalculation_with_the_windows_of_an_iteration_run_by_a_pool(water_lig
     assert sum(len(c) for c in pool.calls) == schedule.provenance["windows_simulated"]
     assert schedule.provenance["windows_run_concurrently"] is True and schedule.provenance["equilibration_ps"] == 0.02
     assert len(configs) == len(schedule.states) <= 6
-    assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(1.0, 0.0, 0.0)
+    assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(
+        1.0, 0.0, 0.0
+    )
 
 
 def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):
@@ -271,7 +287,9 @@ def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):
         of_complex.check_leg("solvent", solvent_stages)
 
     # the right stage names do not help if the states are not the ends of the leg
-    restrained_from_the_start = replace(of_complex, states=[replace(st, lambda_restraints=1.0) for st in of_complex.states])
+    restrained_from_the_start = replace(
+        of_complex, states=[replace(st, lambda_restraints=1.0) for st in of_complex.states]
+    )
     with pytest.raises(ValueError, match="its first state .restraint 1,.* is not the coupled end of the complex leg"):
         restrained_from_the_start.check_leg("complex", complex_stages)
     cut_short = replace(of_complex, states=of_complex.states[:-1])
@@ -284,7 +302,9 @@ def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):
     of_complex.save(complex_file, leg="complex", ligand="lig", repeat=0)
     assert Schedule.load(solvent_file).leg == "solvent"
     assert len(_schedule_of_this_leg(complex_file, "complex", complex_stages).states) == len(of_complex.states)
-    with pytest.raises(WorkflowError, match="solvent.yaml cannot be used for the complex leg: it was written for the solvent leg"):
+    with pytest.raises(
+        WorkflowError, match="solvent.yaml cannot be used for the complex leg: it was written for the solvent leg"
+    ):
         _schedule_of_this_leg(solvent_file, "complex", complex_stages)
     of_solvent.save(solvent_file)                                       # a file that does not name its leg
     with pytest.raises(WorkflowError, match="cannot be used for the complex leg: its stages are discharge, vanish"):

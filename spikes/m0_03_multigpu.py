@@ -62,14 +62,18 @@ def run(n: int, backend_name: str, nsteps: int = 20000) -> bool:
     for d in range(n):
         parent, child = ctx.Pipe()
         p = ctx.Process(target=worker, args=(d, backend_name, nsteps, child), daemon=True)
-        p.start(); procs.append(p); pipes.append(parent)
+        p.start()
+        procs.append(p)
+        pipes.append(parent)
     ok = True
     for pipe in pipes:
         if not pipe.poll(300):
-            print("  a worker did not start within 300 s"); return False
+            print("  a worker did not start within 300 s")
+            return False
         msg = pipe.recv()
         if msg[0] != "ready":
-            print("  worker failed:", msg); ok = False
+            print("  worker failed:", msg)
+            ok = False
         else:
             print(f"  worker {msg[1]} ready on {msg[2]}")
     if not ok:
@@ -80,10 +84,12 @@ def run(n: int, backend_name: str, nsteps: int = 20000) -> bool:
     times = []
     for pipe in pipes:
         if not pipe.poll(600):
-            print("  a worker hung (no result within 600 s)"); return False
+            print("  a worker hung (no result within 600 s)")
+            return False
         msg = pipe.recv()
         if msg[0] != "done" or not msg[3]:
-            print("  worker failed:", msg); ok = False
+            print("  worker failed:", msg)
+            ok = False
         else:
             times.append(msg[2])
     wall = time.perf_counter() - t0
@@ -99,7 +105,8 @@ def run(n: int, backend_name: str, nsteps: int = 20000) -> bool:
 def main() -> int:
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     if not (OUT / f"{TAG}_alch_system.xml").exists():
-        print("run spike 2 first (it writes the serialized System)"); return 2
+        print("run spike 2 first (it writes the serialized System)")
+        return 2
     ok = True
     for backend_name in ("cupotential", "openmm"):
         print(f"[6] {n} worker processes, backend {backend_name}")

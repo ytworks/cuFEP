@@ -15,9 +15,9 @@ import json
 import sys
 from pathlib import Path
 
-from stored_frames import stored_frames
 import mdtraj as md
 import numpy as np
+from stored_frames import stored_frames
 
 KJ = 4.184
 LIGAND_TORSION = (5, 3, 12, 4)          # atom numbers within ejm_31
@@ -68,18 +68,28 @@ def main() -> None:
                 if f.exists():
                     res[leg] = json.loads(f.read_text())
             if len(res) < 2:
-                print(out[0], "incomplete"); continue
+                print(out[0], "incomplete")
+                continue
             c, s = res["complex"], res["solvent"]
             bind = (s["delta_g_decouple"] - c["delta_g_decouple"] - c["restraint_release"]) / KJ
-            out.append(f"dG_bind {bind:6.2f} (complex {c['delta_g_decouple'] / KJ:.2f}, solvent {s['delta_g_decouple'] / KJ:.2f})")
+            out.append(
+                f"dG_bind {bind:6.2f} (complex {c['delta_g_decouple'] / KJ:.2f}, solvent "
+                f"{s['delta_g_decouple'] / KJ:.2f})"
+            )
             for leg, r in res.items():
                 a = r["analysis"]
                 rest = r.get("rest2", {})
-                out.append(f"\n    {leg:7s} {r['n_states']:2d} windows (" + "/".join(str(len(v)) for v in r["lambda_windows"].values())
-                           + f"), REST2 scale {rest.get('scale', 1.0):g}"
-                           + (f" with {len(rest.get('hot_residues', []))} residues" if rest.get("hot_residues") else "")
-                           + f"; lowest overlap {a['min_overlap']:.3f}, lowest exchange {min(x for x in (a.get('swap_acceptance_neighbour') or a.get('neighbour_transition_fraction') or [float('nan')]) if x is not None):.3f}, "
-                           f"round trips {a['round_trips']}, forward/reverse gap {a['forward_reverse_gap'] / KJ:.2f}")
+                out.append(
+                    f"\n    {leg:7s} {r['n_states']:2d} windows ("
+                    + "/".join(str(len(v)) for v in r["lambda_windows"].values())
+                    + f"), REST2 scale {rest.get('scale', 1.0):g}"
+                    + (f" with {len(rest.get('hot_residues', []))} residues" if rest.get("hot_residues") else "")
+                    + f"; lowest overlap {a['min_overlap']:.3f}, lowest exchange "
+                      f"{min(x for x in (a.get('swap_acceptance_neighbour')
+                                         or a.get('neighbour_transition_fraction') or [float('nan')])
+                             if x is not None):.3f}, "
+                    f"round trips {a['round_trips']}, forward/reverse gap {a['forward_reverse_gap'] / KJ:.2f}"
+                )
                 eq = np.load(rep / leg / "equil.npz")
                 frames = frames_of(rep / leg)
                 prep = load_prepared(lig_dir / "prep", leg)
@@ -87,17 +97,22 @@ def main() -> None:
                 local = np.array([atoms.index(i) for i in prep["ligand"]])
                 angle = dihedral(frames[:, local, :], *LIGAND_TORSION)
                 frac, changes = two_state(angle, 0.0, 180.0)
-                out.append(f"\n            ligand torsion: as bound in {100 * frac:3.0f}% of {len(frames)} frames, {changes} changes")
+                out.append(
+                    f"\n            ligand torsion: as bound in {100 * frac:3.0f}% of {len(frames)} frames, {changes} "
+                    f"changes"
+                )
                 if leg == "complex":
                     traj = md.Trajectory(frames, top_all.subset(eq["frame_atoms"]))
                     idx, val = md.compute_chi1(traj)
                     for resseq, name in ((960, "ILE960"), (981, "VAL981")):
-                        col = next(k for k, ix in enumerate(idx) if traj.topology.atom(int(ix[1])).residue.resSeq == resseq)
+                        col = next(
+                            k for k, ix in enumerate(idx) if traj.topology.atom(int(ix[1])).residue.resSeq == resseq
+                        )
                         frac, changes = two_state(np.degrees(val[:, col]), 180.0, -60.0)
                         out.append(f"; {name} chi1 trans in {100 * frac:3.0f}%, {changes} changes")
                 if timing and (rep / leg / "timing.json").exists():
                     t = json.loads((rep / leg / "timing.json").read_text())
-                    out.append(f"\n            timing: " + ", ".join(f"{k} {v:.0f} s" for k, v in t["phases"].items())
+                    out.append("\n            timing: " + ", ".join(f"{k} {v:.0f} s" for k, v in t["phases"].items())
                                + f"; {t['sampling']['seconds_per_iteration']:.3f} s per iteration")
             print(" ".join(out[:2]) + "".join(out[2:]))
 

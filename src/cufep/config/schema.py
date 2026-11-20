@@ -309,7 +309,7 @@ class LegLengths(_Section):
 
 
 class Rest2Config(_Section):
-    """REST2, replica exchange with solute scaling (Wang, Friesner, Berne 2011), as FEP+ and SOMD2 use it.
+    """REST2, replica exchange with solute scaling (Wang, Friesner, Berne 2011), as SOMD2 uses it.
 
     The energy inside a hot region is scaled so that the region behaves as if it were at a
     higher temperature in the lambda windows in the middle of a leg; the first and the last
@@ -322,7 +322,7 @@ class Rest2Config(_Section):
     scale: float = Field(default=1.5, ge=1.0)
     #: complex leg: ligand = the ligand only; pocket = also the protein residues that have a
     #: heavy atom within pocket_cutoff_nm of a heavy atom of the ligand in the prepared structure.
-    #: pocket is the owner's choice of 2026-11-20 (the default of FEP+ and SOMD2 is the ligand)
+    #: pocket is the owner's choice of 2026-11-20 (the default of SOMD2 is the ligand)
     region: Literal["ligand", "pocket"] = "pocket"
     pocket_cutoff_nm: float = Field(default=0.4, gt=0.0)
     #: protein residues added to the hot region, named as in the input PDB: "960", with the chain
@@ -339,7 +339,7 @@ class SamplingConfig(_Section):
     #: per lambda window, discarded; one number or {complex: ..., solvent: ...}
     equilibration_ns: float | LegLengths = 1.0
     #: per lambda window, used for the estimate; one number or {complex: ..., solvent: ...}.
-    #: 10 ns is the default of OpenFE's ABFE protocol (FEP+ uses 5 ns): with 5 ns the lambda
+    #: 10 ns is the default of OpenFE's ABFE protocol: with 5 ns the lambda
     #: window with the fewest independent samples of a TYK2 complex leg held about 29, where
     #: 50 are recommended for MBAR (docs/protocol.md, "Checks of the analysis")
     production_ns: float | LegLengths = 10.0
@@ -456,8 +456,13 @@ def md_segments(cfg: "Config") -> list[tuple[str, int]]:
         for leg in ("complex", "solvent"):
             eq_steps, n_samples, per_sample = precalculation_steps(a.window(leg), a.equilibration(leg),
                                                                    a.sample_interval_ps, dt)
-            out.append((f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
-                        "the precalculation, which starts from a configuration of its own)", eq_steps + n_samples * per_sample))
+            out.append(
+                (
+                    f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
+                    "the precalculation, which starts from a configuration of its own)",
+                    eq_steps + n_samples * per_sample,
+                )
+            )
     return out
 
 
@@ -560,7 +565,7 @@ def renamed_settings(section: str, record: dict) -> tuple[dict, list[str]]:
     """A flat record of the settings of one section (``record``, as results store it) with the
     names of this version, and what was renamed."""
     record, notices = dict(record), []
-    for (old_section, old), ((new_section, new), what) in RENAMED_SETTINGS.items():
+    for (old_section, old), ((_new_section, new), what) in RENAMED_SETTINGS.items():
         if old_section == section and old in record:
             value = record.pop(old)
             if new not in record:

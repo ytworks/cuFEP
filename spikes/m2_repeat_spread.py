@@ -15,14 +15,16 @@ import json
 import sys
 from pathlib import Path
 
-from stored_frames import stored_frames
 import mdtraj as md
 import numpy as np
+from stored_frames import stored_frames
 
 run_dir, ligand = Path(sys.argv[1]), sys.argv[2]
 lig_dir = run_dir / ligand
 top_all = md.load(str(lig_dir / "prep" / "complex.pdb")).topology
-repeats = sorted(int(p.name.split("_")[1]) for p in lig_dir.glob("repeat_*") if (p / "complex" / "result.json").exists())
+repeats = sorted(
+    int(p.name.split("_")[1]) for p in lig_dir.glob("repeat_*") if (p / "complex" / "result.json").exists()
+)
 KJ = 4.184
 
 
@@ -33,7 +35,11 @@ def leg(r):
 first = np.load(leg(repeats[0]) / "equil.npz")
 frame_atoms = first["frame_atoms"]
 top = top_all.subset(frame_atoms)
-lig_res = [res for res in top.residues if res.name in ("LIG", "UNL", "MOL") or (not res.is_protein and not res.is_water and res.n_atoms > 6)][-1]
+lig_res = [
+    res
+    for res in top.residues
+    if res.name in ("LIG", "UNL", "MOL") or (not res.is_protein and not res.is_water and res.n_atoms > 6)
+][-1]
 lig_idx = np.array([a.index for a in lig_res.atoms])
 lig_heavy = np.array([a.index for a in lig_res.atoms if a.element.symbol != "H"])
 lig_polar = np.array([a.index for a in lig_res.atoms if a.element.symbol in ("N", "O")])
@@ -49,12 +55,18 @@ def traj(frames):
 
 def name(i):
     a = top.atom(int(i))
-    return f"{a.residue.name}{a.residue.resSeq}:{a.name}" if a.residue.is_protein else f"LIG:{a.name or a.element.symbol + str(a.index - lig_idx[0])}"
+    return (
+        f"{a.residue.name}{a.residue.resSeq}:{a.name}"
+        if a.residue.is_protein
+        else f"LIG:{a.name or a.element.symbol + str(a.index - lig_idx[0])}"
+    )
 
 
 # ---- reference: the input pose (first pre-equilibration frame of the first repeat) -----------
 ref = traj(first["frames"][:1])
-near = md.compute_neighbors(ref, 0.5, lig_heavy, haystack_indices=np.array([a.index for a in top.atoms if a.residue.is_protein]))[0]
+near = md.compute_neighbors(
+    ref, 0.5, lig_heavy, haystack_indices=np.array([a.index for a in top.atoms if a.residue.is_protein])
+)[0]
 pocket_res = sorted({top.atom(int(i)).residue.index for i in near})
 print(f"pocket: {len(pocket_res)} residues within 5 A of the ligand: "
       + " ".join(f"{top.residue(i).name}{top.residue(i).resSeq}" for i in pocket_res))
@@ -69,7 +81,8 @@ chi2_res = [top.atom(int(ix[1])).residue.index for ix in chi2]
 bonds = [(a.index, b.index) for a, b in top.bonds if a.residue is lig_res and b.residue is lig_res]
 nbrs: dict[int, list[int]] = {}
 for a, b in bonds:
-    nbrs.setdefault(a, []).append(b); nbrs.setdefault(b, []).append(a)
+    nbrs.setdefault(a, []).append(b)
+    nbrs.setdefault(b, []).append(a)
 heavy = set(lig_heavy.tolist())
 graph = top.to_bondgraph()
 
@@ -116,33 +129,55 @@ for r in repeats:
     eq = np.load(leg(r) / "equil.npz")
     fr = stored_frames(leg(r) / "hrex")                # the run may have been stopped while writing
     res = json.loads((leg(r) / "result.json").read_text())
-    data[r] = {"pre": describe(eq["frames"], "plain MD"), "hrex": describe(fr, "window 0"), "dg": res["delta_g_decouple"] / KJ,
-               "stage": {k: v / KJ for k, v in res["analysis"]["stage_delta_g"].items()}}
+    data[r] = {
+        "pre": describe(eq["frames"], "plain MD"),
+        "hrex": describe(fr, "window 0"),
+        "dg": res["delta_g_decouple"] / KJ,
+        "stage": {k: v / KJ for k, v in res["analysis"]["stage_delta_g"].items()},
+    }
 
 print("\n== free energies (kcal/mol)")
 for r in repeats:
-    print(f"repeat {r}: complex leg {data[r]['dg']:.2f}; stages " + ", ".join(f"{k} {v:.2f}" for k, v in data[r]["stage"].items()))
+    print(
+        f"repeat {r}: complex leg {data[r]['dg']:.2f}; stages "
+        + ", ".join(f"{k} {v:.2f}" for k, v in data[r]["stage"].items())
+    )
 
 print("\n== ligand RMSD to the input pose after CA superposition (A): mean, max")
 for r in repeats:
-    print(f"repeat {r}: " + "; ".join(f"{data[r][p]['label']} {data[r][p]['rmsd'].mean():.2f}, {data[r][p]['rmsd'].max():.2f}" for p in ("pre", "hrex")))
+    print(
+        f"repeat {r}: "
+        + "; ".join(
+            f"{data[r][p]['label']} {data[r][p]['rmsd'].mean():.2f}, {data[r][p]['rmsd'].max():.2f}"
+            for p in ("pre", "hrex")
+        )
+    )
 
 print("\n== ligand-protein polar contacts (N/O within 3.3 A), occupancy; rows where any repeat exceeds 0.2")
 keep = sorted({int(i) for r in repeats for p in ("pre", "hrex") for i in np.nonzero(data[r][p]["occ"] > 0.2)[0]})
 print(f"{'contact':38s}" + "".join(f" r{r}:MD  r{r}:w0" for r in repeats))
 for i in keep:
     a, b = pairs[i]
-    print(f"{name(a) + ' - ' + name(b):38s}" + "".join(f"  {data[r]['pre']['occ'][i]:5.2f}  {data[r]['hrex']['occ'][i]:5.2f}" for r in repeats))
+    print(
+        f"{name(a) + ' - ' + name(b):38s}"
+        + "".join(f"  {data[r]['pre']['occ'][i]:5.2f}  {data[r]['hrex']['occ'][i]:5.2f}" for r in repeats)
+    )
 
 print("\n== ligand torsions: circular mean (deg) in window 0, and fraction of frames within 60 deg of repeat-0 mean")
 for k, tq in enumerate(torsions):
     means = [np.degrees(np.angle(np.exp(1j * data[r]["hrex"]["tor"][:, k]).mean())) for r in repeats]
-    frac = [np.mean(np.abs(np.angle(np.exp(1j * (data[r]["hrex"]["tor"][:, k] - np.radians(means[0]))))) < np.pi / 3) for r in repeats]
+    frac = [
+        np.mean(np.abs(np.angle(np.exp(1j * (data[r]["hrex"]["tor"][:, k] - np.radians(means[0]))))) < np.pi / 3)
+        for r in repeats
+    ]
     flag = "  <-- differs" if max(frac) - min(frac) > 0.3 else ""
     print(f"{'-'.join(name(a).split(':')[1] for a in tq):28s} " + " ".join(f"{m:7.1f}" for m in means)
           + "   " + " ".join(f"{f:4.2f}" for f in frac) + flag)
 
-print("\n== side-chain rotamers of pocket residues in window 0 (g-/t/g+ fractions); rows that differ between repeats by > 0.3")
+print(
+    "\n== side-chain rotamers of pocket residues in window 0 (g-/t/g+ fractions); rows that differ between repeats by "
+    "> 0.3"
+)
 for label, idx_list, key in (("chi1", chi1_res, "chi1"), ("chi2", chi2_res, "chi2")):
     for col, ri in enumerate(idx_list):
         if ri not in pocket_res:
@@ -150,13 +185,16 @@ for label, idx_list, key in (("chi1", chi1_res, "chi1"), ("chi2", chi2_res, "chi
         rot = np.array([rotamer(data[r]["hrex"][key][:, col]) for r in repeats])
         if np.max(rot.max(0) - rot.min(0)) > 0.3:
             res_ = top.residue(ri)
-            print(f"{res_.name}{res_.resSeq} {label}: " + " | ".join(f"r{r} " + "/".join(f"{x:.2f}" for x in rot[n]) for n, r in enumerate(repeats)))
+            print(
+                f"{res_.name}{res_.resSeq} {label}: "
+                + " | ".join(f"r{r} " + "/".join(f"{x:.2f}" for x in rot[n]) for n, r in enumerate(repeats))
+            )
 
 # ---- water in the pocket, all atoms, per lambda window -----------------------------------------
 print("\n== water oxygens within 3.5 A of any ligand heavy atom, per lambda window at the last checkpoint")
 water_o = np.array([a.index for a in top_all.atoms if a.residue.is_water and a.element.symbol == "O"])
 lig_all = np.array([a.index for a in top_all.atoms if a.index in set(frame_atoms[lig_heavy].tolist())])
-import yaml
+import yaml  # noqa: E402
 
 for r in repeats:
     ck = np.load(leg(r) / "hrex" / "checkpoint.npz")
@@ -175,4 +213,7 @@ for r in repeats:
     eq = np.load(leg(r) / "equil.npz")
     t = md.Trajectory(eq["positions"][None].astype(np.float32), top_all)
     t.unitcell_vectors = eq["box"][None].astype(np.float32)
-    print(f"   end of plain MD: {len(md.compute_neighbors(t, 0.35, lig_all, haystack_indices=water_o, periodic=True)[0])} waters")
+    print(
+        f"   end of plain MD: "
+        f"{len(md.compute_neighbors(t, 0.35, lig_all, haystack_indices=water_o, periodic=True)[0])} waters"
+    )

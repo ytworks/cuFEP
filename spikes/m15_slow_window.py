@@ -28,7 +28,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-
 from stored_frames import stored_frames
 
 from cufep.alchemy.restraints import R_GAS
@@ -79,8 +78,12 @@ def main() -> None:
     from openff.toolkit import Molecule
     from rdkit import Chem
 
-    from cufep.alchemy.restraints import (BoreschRestraint, binding_site_frames, heavy_atom_symmetries, kabsch_align,
-                                          nearest_image_of_ligand)
+    from cufep.alchemy.restraints import (
+        BoreschRestraint,
+        heavy_atom_symmetries,
+        kabsch_align,
+        nearest_image_of_ligand,
+    )
     from cufep.sampling.storage import equilibration_boundary, read_samples
     from cufep.workflow import load_prepared
 
@@ -117,7 +120,10 @@ def main() -> None:
             u[frame_iter, [int(np.nonzero(states[n] == 0)[0][0]) for n in frame_iter], 0]
         lig_sys = [int(i) for i in prep["ligand"]]
         lig = np.array([where[i] for i in lig_sys])
-        print(f"frames of window 0 in the production: {len(frames)} (every {int(np.median(np.diff(frame_iter)))} iterations)")
+        print(
+            f"frames of window 0 in the production: {len(frames)} (every {int(np.median(np.diff(frame_iter)))} "
+            f"iterations)"
+        )
 
         # ---- Boresch coordinates ---------------------------------------------------------------
         stored = json.loads((leg / "restraint.json").read_text())["restraint"]
@@ -141,15 +147,17 @@ def main() -> None:
         for k, n in enumerate(names):
             shown = values[:, k] * (10.0 if k == 0 else 180.0 / np.pi)
             unit = "A" if k == 0 else "deg"
-            print(f"  {n:7s} ref {ref[k] * (10.0 if k == 0 else 180.0 / np.pi):8.2f} {unit}; mean {shown.mean():8.2f}, sd "
-                  f"{shown.std():6.2f}; energy {terms[:, k].mean():5.2f} kT (share of the variance of the total "
-                  f"{np.cov(terms[:, k], total)[0, 1] / max(total.var(), 1e-12):5.2f}); g {g_of(terms[:, k]):5.0f}; "
-                  f"blocks {blocks(shown)}")
+            print(
+                f"  {n:7s} ref {ref[k] * (10.0 if k == 0 else 180.0 / np.pi):8.2f} {unit}; mean {shown.mean():8.2f}, "
+                f"sd "
+                f"{shown.std():6.2f}; energy {terms[:, k].mean():5.2f} kT (share of the variance of the total "
+                f"{np.cov(terms[:, k], total)[0, 1] / max(total.var(), 1e-12):5.2f}); g {g_of(terms[:, k]):5.0f}; "
+                f"blocks {blocks(shown)}"
+            )
 
         # ---- ligand pose -------------------------------------------------------------------------
         rdmol = Molecule.from_json((lig_dir / "prep" / "ligand.json").read_text()).to_rdkit()
         heavy_local = [i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]
-        sub_top_index = {a.index: k for k, a in enumerate(atoms) if a.index in where}
         backbone = np.array([where[a.index] for a in atoms if a.index in where and a.name in ("N", "CA", "C")
                              and a.residue.name not in ("LIG",)])
         centroid = frames[0, lig[heavy_local]].mean(axis=0)
@@ -163,9 +171,11 @@ def main() -> None:
         for perm in heavy_atom_symmetries(rdmol):
             d = np.sqrt(((aligned[:, lig[heavy_local][perm], :] - reference) ** 2).sum(axis=2).mean(axis=1))
             rmsd = d if rmsd is None else np.minimum(rmsd, d)
-        print(f"ligand heavy-atom RMSD from the input pose (A): mean {10 * rmsd.mean():.2f}, max {10 * rmsd.max():.2f}, "
-              f"g {g_of(rmsd):.0f}, blocks {[round(10 * b, 2) for b in blocks(rmsd)]}, correlation with u1 - u0 "
-              f"{corr(rmsd, du_at):.2f}")
+        print(
+            f"ligand heavy-atom RMSD from the input pose (A): mean {10 * rmsd.mean():.2f}, max {10 * rmsd.max():.2f}, "
+            f"g {g_of(rmsd):.0f}, blocks {[round(10 * b, 2) for b in blocks(rmsd)]}, correlation with u1 - u0 "
+            f"{corr(rmsd, du_at):.2f}"
+        )
 
         # ---- ligand torsions -----------------------------------------------------------------------
         patt = Chem.MolFromSmarts("[!$([NH])&!$([NH2])&!$(C(F)(F)F)&!D1&!$(*#*)]-&!@[!$([NH])&!$([NH2])&!D1&!$(*#*)]")
@@ -181,9 +191,11 @@ def main() -> None:
             ang = dihedral(aligned[:, lig, :], a_, b, c, d_)
             ang0 = dihedral(given[lig][None], a_, b, c, d_)[0]
             near = np.abs((ang - ang0 + 180.0) % 360.0 - 180.0) < 60.0
-            print(f"  ligand torsion {a_}-{b}-{c}-{d_}: input {ang0:7.1f} deg; near it in {100 * near.mean():5.1f} % of "
-                  f"the frames, {changes(list(near))} changes; correlation of near/away with u1 - u0 "
-                  f"{corr(near.astype(float), du_at):.2f}")
+            print(
+                f"  ligand torsion {a_}-{b}-{c}-{d_}: input {ang0:7.1f} deg; near it in {100 * near.mean():5.1f} % of "
+                f"the frames, {changes(list(near))} changes; correlation of near/away with u1 - u0 "
+                f"{corr(near.astype(float), du_at):.2f}"
+            )
 
         # ---- pocket side chains --------------------------------------------------------------------
         lig_xyz = given[lig[heavy_local]]
@@ -193,7 +205,9 @@ def main() -> None:
             names_ = {a.name: a.index for a in res.atoms()}
             if not all(n in names_ for n in ("N", "CA", "CB")) or not any(g in names_ for g in gamma):
                 continue
-            heavy_res = [a.index for a in res.atoms() if a.element is not None and a.element.symbol != "H" and a.index in where]
+            heavy_res = [
+                a.index for a in res.atoms() if a.element is not None and a.element.symbol != "H" and a.index in where
+            ]
             if not heavy_res:
                 continue
             dmin = np.min(np.linalg.norm(given[[where[i] for i in heavy_res]][:, None] - lig_xyz[None], axis=2))
@@ -205,11 +219,16 @@ def main() -> None:
             rot = rotamer(ang)
             values_, counts = np.unique(rot, return_counts=True)
             top_rot = values_[np.argmax(counts)]
-            report.append((changes(rot), f"  {res.name}{res.id}/{res.chain.id} chi1: {dict(zip(values_, counts))}, "
-                                          f"{changes(rot)} changes, most populated {top_rot} "
-                                          f"{100 * counts.max() / len(rot):.0f} %, input {rotamer(dihedral(given[None], *idx))[0]}; "
-                                          f"correlation of 'in the most populated' with u1 - u0 "
-                                          f"{corr(np.array([x == top_rot for x in rot], dtype=float), du_at):.2f}"))
+            report.append(
+                (
+                    changes(rot),
+                    f"  {res.name}{res.id}/{res.chain.id} chi1: {dict(zip(values_, counts))}, "
+                    f"{changes(rot)} changes, most populated {top_rot} "
+                    f"{100 * counts.max() / len(rot):.0f} %, input {rotamer(dihedral(given[None], *idx))[0]}; "
+                    f"correlation of 'in the most populated' with u1 - u0 "
+                    f"{corr(np.array([x == top_rot for x in rot], dtype=float), du_at):.2f}",
+                )
+            )
         print(f"pocket residues with chi1 within 0.5 nm of the ligand: {len(report)}")
         for _n, line in sorted(report, key=lambda t: t[0]):
             print(line)

@@ -72,7 +72,9 @@ def run(mode: str, seed: int, ns: float, device: int, cutoff_nm: float = 0.9, hm
     prepared.addForce(backend.make_membrane_barostat(P, T, 25, seed=seed + 1000))
     integ = backend.make_integrator(T, 1 / u.picosecond, dt_fs * u.femtoseconds, seed=seed + 2000)
     ctx = backend.make_context(prepared, integ, device)
-    ctx.setPeriodicBoxVectors(*start[2]); ctx.setPositions(start[0]); ctx.setVelocities(start[1])
+    ctx.setPeriodicBoxVectors(*start[2])
+    ctx.setPositions(start[0])
+    ctx.setVelocities(start[1])
 
     n_rec = int(round(ns * 1000 / 10))                     # one record per 10 ps
     rec = np.zeros((n_rec, 5))
@@ -101,7 +103,8 @@ def block_se(x: np.ndarray, nblocks: int = 5) -> float:
 def analyze(skip_ns: float = 4.0) -> int:
     files = sorted(glob.glob(str(OUT / "*_seed*.npz")))
     if not files:
-        print("no results"); return 2
+        print("no results")
+        return 2
     skip = int(skip_ns * 100)
     summary: dict[str, list] = {}
     print(f"{'run':22s} {'area/lipid [A^2]':>20s} {'box z [nm]':>16s} {'volume [nm^3]':>18s} {'U [kJ/mol]':>20s}")
@@ -121,7 +124,9 @@ def analyze(skip_ns: float = 4.0) -> int:
     for mode, rows in summary.items():
         means = np.array([[q[0] for q in row] for row in rows]).mean(axis=0)
         ses = np.sqrt((np.array([[q[1] for q in row] for row in rows]) ** 2).sum(axis=0)) / len(rows)
-        line = f"{mode:11s} mean over {len(rows)} runs: " + ", ".join(f"{n}={m:.3f}±{s:.3f}" for n, m, s in zip(names, means, ses))
+        line = f"{mode:11s} mean over {len(rows)} runs: " + ", ".join(
+            f"{n}={m:.3f}±{s:.3f}" for n, m, s in zip(names, means, ses)
+        )
         if ref is not None and mode != "stock":
             rmeans = np.array([[q[0] for q in row] for row in ref]).mean(axis=0)
             rses = np.sqrt((np.array([[q[1] for q in row] for row in ref]) ** 2).sum(axis=0)) / len(ref)

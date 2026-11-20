@@ -23,11 +23,16 @@ import numpy as np
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir"); ap.add_argument("ligand"); ap.add_argument("repeat", type=int)
+    ap.add_argument("run_dir")
+    ap.add_argument("ligand")
+    ap.add_argument("repeat", type=int)
     ap.add_argument("--device", type=int, default=0)
     ap.add_argument("--cutoff-nm", type=float, default=0.5, help="residues with a heavy atom this close to the ligand")
-    ap.add_argument("--no-dispersion-correction", action="store_true",
-                    help="switch the long-range dispersion correction off in all Systems, to see whether it explains a difference")
+    ap.add_argument(
+        "--no-dispersion-correction",
+        action="store_true",
+        help="switch the long-range dispersion correction off in all Systems, to see whether it explains a difference",
+    )
     args = ap.parse_args()
 
     import openmm as mm
@@ -83,7 +88,9 @@ def main() -> None:
         for k in range(f.getNumExceptions()):
             i, j, qq, sig, eps = f.getExceptionParameters(k)
             n_hot = (i in region_set) + (j in region_set)
-            if n_hot == 0 or (qq.value_in_unit(u.elementary_charge ** 2) == 0.0 and eps.value_in_unit(u.kilojoule_per_mole) == 0.0):
+            if n_hot == 0 or (
+                qq.value_in_unit(u.elementary_charge**2) == 0.0 and eps.value_in_unit(u.kilojoule_per_mole) == 0.0
+            ):
                 continue
             f.addExceptionParameterOffset("rest2_scale" if n_hot == 2 else "rest2_sqrt", k, qq, 0.0, eps)
             n_exc += 1
@@ -133,29 +140,37 @@ def main() -> None:
             continue
         e1 = None
         for s in scales:
-            ctx.setParameter("rest2_sqrt", math.sqrt(s) - 1.0); ctx.setParameter("rest2_scale", s - 1.0)
+            ctx.setParameter("rest2_sqrt", math.sqrt(s) - 1.0)
+            ctx.setParameter("rest2_scale", s - 1.0)
             e, f = energy_forces(ctx)
             e1 = e if e1 is None else e1
             de, de_ref = e - e1, ref[s][0] - ref[1.0][0]
             fr = ref[s][1]
             rel = np.linalg.norm(f - fr) / np.linalg.norm(fr)
             hot = np.linalg.norm(f[region] - fr[region]) / np.linalg.norm(fr[region])
-            print(f"  {name:11s} s = {s:.1f} (T_hot {298.15 / s:5.0f} K): E(s) - E(1) = {de:12.2f} kJ/mol, reference {de_ref:12.2f}, "
-                  f"difference {de - de_ref:8.3f}; relative force difference {rel:.1e} (hot atoms {hot:.1e})")
+            print(
+                f"  {name:11s} s = {s:.1f} (T_hot {298.15 / s:5.0f} K): E(s) - E(1) = {de:12.2f} kJ/mol, reference "
+                f"{de_ref:12.2f}, "
+                f"difference {de - de_ref:8.3f}; relative force difference {rel:.1e} (hot atoms {hot:.1e})"
+            )
         # cost of switching the scale and evaluating the energy
         t0 = time.perf_counter()
         n = 20
         for k in range(n):
             s = 0.5 if k % 2 else 0.8
-            ctx.setParameter("rest2_sqrt", math.sqrt(s) - 1.0); ctx.setParameter("rest2_scale", s - 1.0)
+            ctx.setParameter("rest2_sqrt", math.sqrt(s) - 1.0)
+            ctx.setParameter("rest2_scale", s - 1.0)
             ctx.getState(getEnergy=True)
         dt = (time.perf_counter() - t0) / n
         ctx.getState(getEnergy=True)
         t0 = time.perf_counter()
-        for k in range(n):
+        for _k in range(n):
             ctx.getState(getEnergy=True)
         dt0 = (time.perf_counter() - t0) / n
-        print(f"  {name:11s} energy evaluation {1000 * dt0:.1f} ms; with a change of the two parameters {1000 * dt:.1f} ms")
+        print(
+            f"  {name:11s} energy evaluation {1000 * dt0:.1f} ms; with a change of the two parameters {1000 * dt:.1f} "
+            f"ms"
+        )
         del ctx
 
 

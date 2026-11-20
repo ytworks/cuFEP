@@ -3,17 +3,22 @@ import math
 
 import numpy as np
 import openmm as mm
-import openmm.unit as u
 import pytest
+from conftest import potential, reference_context
 
-from cufep.alchemy.factory import (LAMBDA_ELECTROSTATICS, LAMBDA_STERICS, MAIN_GROUP, SOFTCORE_GROUP,
-                                   AlchemyError, make_alchemical_system, set_lambdas)
+from cufep.alchemy.factory import (
+    LAMBDA_ELECTROSTATICS,
+    LAMBDA_STERICS,
+    MAIN_GROUP,
+    SOFTCORE_GROUP,
+    AlchemyError,
+    make_alchemical_system,
+    set_lambdas,
+)
 from cufep.alchemy.lrc import TailEnergy, minimum_image, tail_free_energy
 from cufep.alchemy.restraints import BoreschRestraint
 from cufep.backends.base import clone_system
 from cufep.sampling.states import AlchemicalState, StateEnergyEvaluator, set_state, validate_states
-
-from conftest import potential, reference_context
 
 
 @pytest.fixture(scope="module")
@@ -170,7 +175,8 @@ def test_restraint_values_at_reference_geometry_give_zero_energy():
     # build six points that realise the reference values exactly
     def place(a, b, c, dist, angle, dihedral):
         bc = (c - b) / np.linalg.norm(c - b)
-        n = np.cross(b - a, bc); n /= np.linalg.norm(n)
+        n = np.cross(b - a, bc)
+        n /= np.linalg.norm(n)
         m = np.cross(n, bc)
         d = np.array([-dist * math.cos(angle), dist * math.sin(angle) * math.cos(dihedral),
                       dist * math.sin(angle) * math.sin(dihedral)])

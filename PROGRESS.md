@@ -19,7 +19,7 @@ OpenMM, on all GPUs of a machine, from two files.
 - Protocol: double decoupling with Boresch restraints chosen as OpenFE chooses them,
   Hamiltonian replica exchange with REST2 on the ligand and its pocket, adaptive lambda
   scheduling (Midgley et al. 2025), MBAR with the checks of the literature. Defaults and terms
-  follow established programs and the literature (`docs/protocol.md`); one calculation per
+  follow the literature and published open methods (`docs/configuration.md`); one calculation per
   ligand.
 - Speed is a requirement: replicas spread over all GPUs in proportion to the work, several
   workers per GPU through NVIDIA MPS.
@@ -31,30 +31,40 @@ OpenMM, on all GPUs of a machine, from two files.
 
 ## Current Status
 
-Snapshot date: 2026-11-20. `main` is 31a720e (PR #1 merged): the engine of plan
-`docs/plans/2026-11-18-abfe-engine.md`, revisions 1 to 15. Analysis version 10.
+Snapshot date: 2026-11-20. `main` is 99b59fe (PR #1, the engine of plan
+`docs/plans/2026-11-18-abfe-engine.md`, and PR #2, the README and the harness). PR #3 (plan
+`docs/plans/2026-11-20-wording-and-lint.md`): wording fixes and ruff. Analysis version 10.
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 550 passed on the code of 31a720e (2026-11-20, image `cufep:dev`, `scripts/in_docker.sh python -m pytest`); PR #2 adds the tests of the harness |
-| GPU tests | 17 passed on the code of 31a720e (2026-11-20, one GPU, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
-| CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` added by PR #2 |
+| Unit tests (CPU) | 559 passed on PR #3 (2026-11-20, image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 17 passed on PR #3 (2026-11-20, one GPU, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
+| CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | one calculation with ALS threshold 0.18, REST2 on the pocket and 5 ns of production per window: -8.94 ± 0.77 kcal/mol (`docs/configuration.md`, `sampling.rest2.region`). Not run with the default of 10 ns |
 | A2A example (4e, experiment -12.07 kcal/mol) | the same settings: -11.95 ± 0.73 kcal/mol. Not run with the default of 10 ns |
 | Benchmarks | smoke and five-ligand subset tiers ran on earlier versions to check the pipeline; the full sets (TYK2 16 ligands, A2A 17 compounds) not run |
 | Accuracy cross-check against OpenFE | stopped (plan of 2026-11-18, step 11) |
 | Official image | built locally from `docker/Dockerfile`; not published |
-| Development harness | PR #2 (plan `docs/plans/2026-11-20-oss-readme-and-harness.md`) |
+| Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
 - The examples with the default settings (10 ns of production per window) in an image of the
   current code; the full benchmarks. Both wait for the owner's decision.
-- Lint: ruff is not used yet. With fmeta's rules it reports about 1800 findings in the current
-  tree, most of them line length; it is left to a pull request of its own.
+- `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
+  5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
+  decision (`.claude/rules/fep-invariants.md`).
 - The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4 and CUDA 13.4
   only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-20 — [progress] Wording fixes and ruff
+- What: the findings of the independent review of PR #2 (README, rules, wrappers, harness
+  checks); no decision presented as following a commercial FEP product, enforced by
+  `scripts/check_names.py`; ruff 0.17.5 with the rules of fmeta, the code changed to pass it
+  (behaviour unchanged: the ASTs of the mechanical steps compared, 558 unit and 17 GPU tests).
+- Why: the owner's rule on names of commercial products; lint left from PR #2.
+- Refs: PR #3, `docs/plans/2026-11-20-wording-and-lint.md`
 
 ### 2026-11-20 — [progress] Development harness and OSS README
 - What: `CLAUDE.md` / `AGENTS.md`, `.claude/rules/` (Docker execution, progress log, free-energy

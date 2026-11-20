@@ -12,9 +12,8 @@ how replicas are spread over workers.
 """
 from __future__ import annotations
 
-import os
-
 import multiprocessing as mp
+import os
 import time
 from dataclasses import dataclass
 
@@ -46,8 +45,13 @@ class IterationStats:
     all_workers: float = 0.0
 
 
-def mix_replicas(u: np.ndarray, state_of_replica: np.ndarray, rng: np.random.Generator,
-                 n_attempts: int | None = None, neighbour_counts: np.ndarray | None = None) -> tuple[np.ndarray, int, int]:
+def mix_replicas(
+    u: np.ndarray,
+    state_of_replica: np.ndarray,
+    rng: np.random.Generator,
+    n_attempts: int | None = None,
+    neighbour_counts: np.ndarray | None = None,
+) -> tuple[np.ndarray, int, int]:
     """Gibbs-style mixing: many Metropolis swaps between random replica pairs.
 
     ``u[r, k]`` is the reduced potential of replica ``r``'s configuration in state ``k``.
@@ -204,8 +208,10 @@ class WindowPool:
                         if not worker.proc.is_alive():
                             raise WorkerError(f"a worker of the lambda precalculation died (device {worker.device})")
                         if time.time() - started[pos] > window_timeout:
-                            raise WorkerError(f"a window of the lambda precalculation on device {worker.device} did not "
-                                              f"finish within {window_timeout:.0f} s of its start")
+                            raise WorkerError(
+                                f"a window of the lambda precalculation on device {worker.device} did not "
+                                f"finish within {window_timeout:.0f} s of its start"
+                            )
                         continue
                     msg = worker.parent.recv()
                 except (EOFError, OSError) as exc:
@@ -376,8 +382,9 @@ class ReplicaExchangeSampler:
         # stopped workers, and asking for them again changed nothing)
         self.workers = keep
         self.devices = [w.device for w in keep]
-        new, _ready = start_workers([lambda d=d, i=i: _Process(ctx, self.spec, d, self.arrays.names, i, self.start_number)
-                                     for d, i in ids])
+        new, _ready = start_workers(
+            [lambda d=d, i=i: _Process(ctx, self.spec, d, self.arrays.names, i, self.start_number) for d, i in ids]
+        )
         self.workers = keep + new
         self.devices = [w.device for w in self.workers]
         self.log(f"[{self.spec.name}] iteration {self.iteration}: now {len(self.workers)} worker(s) on "
@@ -482,7 +489,8 @@ class ReplicaExchangeSampler:
             raise StorageError(
                 f"{self.storage.dir} holds {self.storage.n_iterations} iterations, fewer than the "
                 f"{rows} that its checkpoint names: the samples were changed after the checkpoint was written. "
-                "Nothing was changed; the samples can be analysed (cufep analyze), and --reschedule starts the leg anew")
+                "Nothing was changed; the samples can be analysed (cufep analyze), and --reschedule starts the leg anew"
+            )
         self.state_of_replica = ckpt["state_of_replica"].astype(int)
         self.iteration = ckpt["iteration"]
         self.last_checkpoint = int(ckpt["iteration"])

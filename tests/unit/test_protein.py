@@ -5,7 +5,6 @@ import pytest
 
 from cufep.prep.protein import ProteinError, infer_variant, prepare_protein
 
-
 pytestmark = pytest.mark.needs("pdbfixer")
 
 
@@ -76,7 +75,9 @@ def test_systems_can_be_parameterized(tyk2, a2a):
     for prep, charge in ((tyk2, -3), (a2a, 11)):
         system = ff.createSystem(prep.topology, nonbondedMethod=app.NoCutoff)
         nb = [f for f in system.getForces() if f.__class__.__name__ == "NonbondedForce"][0]
-        q = sum(nb.getParticleParameters(i)[0].value_in_unit(u.elementary_charge) for i in range(system.getNumParticles()))
+        q = sum(
+            nb.getParticleParameters(i)[0].value_in_unit(u.elementary_charge) for i in range(system.getNumParticles())
+        )
         assert round(q) == charge and abs(q - round(q)) < 1e-3
 
 
@@ -181,7 +182,9 @@ def test_rest2_residues_are_named_as_in_the_input_pdb(repo, tmp_path):
     chains = prepared.input_chains
 
     def region(*residues, input_chains=chains):
-        return rest2_region(Rest2Config(scale=1.5, region="ligand", residues=list(residues)), top, pos, [], protein, input_chains)[1]
+        return rest2_region(
+            Rest2Config(scale=1.5, region="ligand", residues=list(residues)), top, pos, [], protein, input_chains
+        )[1]
 
     assert region("B:960") == ["ILE960"] and region("960") == ["ILE960"]
     assert region("B:898A") == ["LYS898A"] and region("B:898") == ["LYS898"]
@@ -289,7 +292,8 @@ def test_a_carboxyl_proton_stays_on_its_oxygen(repo, tmp_path, resname, number, 
         pytest.skip(f"{resname} {number} is not in the TYK2 input")
     c = _tyk2_atom(repo, resname, number, carbon)
     h = o + 0.095 * (o - c) / np.linalg.norm(o - c)
-    line = f"ATOM   9100 {proton:<4s} {resname} A{number:>4d}    {10 * h[0]:8.3f}{10 * h[1]:8.3f}{10 * h[2]:8.3f}  1.00  0.00           H"
+    line = (f"ATOM   9100 {proton:<4s} {resname} A{number:>4d}    "
+            f"{10 * h[0]:8.3f}{10 * h[1]:8.3f}{10 * h[2]:8.3f}  1.00  0.00           H")
     prepared = prepare_protein(_modified_tyk2(repo, tmp_path, extra=[line]))
     pos = prepared.positions_nm()
     residue = next(r for r in prepared.topology.residues() if r.id == str(number) and r.chain.id == "A")

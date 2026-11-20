@@ -18,23 +18,26 @@ import numpy as np
 import yaml
 
 ap = argparse.ArgumentParser()
-ap.add_argument("run_dir"); ap.add_argument("ligand"); ap.add_argument("repeat", type=int); ap.add_argument("leg")
+ap.add_argument("run_dir")
+ap.add_argument("ligand")
+ap.add_argument("repeat", type=int)
+ap.add_argument("leg")
 ap.add_argument("--device", type=int, default=0)
 ap.add_argument("--ns", type=float, default=1.0)
 ap.add_argument("--stage", default="vanish")
 ap.add_argument("--out", default="spikes/out/m9_precalc")
 args = ap.parse_args()
 
-import openmm as mm
-import openmm.unit as u
+import openmm as mm  # noqa: E402
+import openmm.unit as u  # noqa: E402
 
-from cufep.alchemy.factory import LAMBDA_STERICS, make_alchemical_system
-from cufep.alchemy.restraints import BoreschRestraint
-from cufep.alchemy.schedule import candidate_energies, stage_overlap
-from cufep.backends import get_backend
-from cufep.config.schema import Config
-from cufep.sampling.states import R_GAS, set_state, stage_state
-from cufep.workflow import load_prepared
+from cufep.alchemy.factory import LAMBDA_STERICS, make_alchemical_system  # noqa: E402
+from cufep.alchemy.restraints import BoreschRestraint  # noqa: E402
+from cufep.alchemy.schedule import candidate_energies, stage_overlap  # noqa: E402
+from cufep.backends import get_backend  # noqa: E402
+from cufep.config.schema import Config  # noqa: E402
+from cufep.sampling.states import R_GAS, set_state, stage_state  # noqa: E402
+from cufep.workflow import load_prepared  # noqa: E402
 
 run_dir = Path(args.run_dir)
 raw = yaml.safe_load((run_dir / "resolved_config.yaml").read_text())
@@ -50,7 +53,9 @@ eq = np.load(leg_dir / "equil.npz")
 system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
 alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha)
 if args.leg == "complex":
-    alch.system.addForce(BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]).create_force())
+    alch.system.addForce(
+        BoreschRestraint.from_dict(json.loads((leg_dir / "restraint.json").read_text())["restraint"]).create_force()
+    )
 sched = yaml.safe_load((leg_dir / "schedule.yaml").read_text())
 T = cfg.thermodynamics.temperature_K
 dt = float(eq["timestep_fs"])
@@ -77,7 +82,8 @@ has_soft = LAMBDA_STERICS in ctx.getParameters()
 first_state = stage_state(stage, lams[0]).to_dict()
 index0 = next(i for i, s in enumerate(sched["states"]) if all(abs(s[k] - first_state[k]) < 1e-9 for k in first_state))
 ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in start["boxes"][index0]])
-ctx.setPositions(start["positions"][index0]); ctx.setVelocities(start["velocities"][index0])
+ctx.setPositions(start["positions"][index0])
+ctx.setVelocities(start["velocities"][index0])
 energies = []
 for lam in lams:
     state = stage_state(stage, lam)
@@ -91,8 +97,11 @@ for lam in lams:
         set_state(ctx, state)
     energies.append(e)
     print(f"window lambda {lam:g} done", flush=True)
-out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
-np.savez_compressed(out / f"{args.ligand}_{args.leg}_{stage}.npz", energies=np.array(energies), windows=np.array(windows))
+out = Path(args.out)
+out.mkdir(parents=True, exist_ok=True)
+np.savez_compressed(
+    out / f"{args.ligand}_{args.leg}_{stage}.npz", energies=np.array(energies), windows=np.array(windows)
+)
 
 res = json.loads((leg_dir / "result.json").read_text())
 stage_names = list(sched["windows"])

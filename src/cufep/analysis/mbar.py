@@ -510,8 +510,10 @@ def tail_series(samples: dict, method: str, n_equilibration: int, n: int, temper
         return TailSeries("reweight", times[inside], values[inside], temperature_K)
     if method == "isotropic":
         if not all(key in attrs for key in ("lrc_s6", "lrc_s12", "lrc_cutoff_nm")):
-            raise NoCorrection("the samples hold no Lennard-Jones sums of the ligand (they were made with analysis.lrc: "
-                               "none); the isotropic correction needs them")
+            raise NoCorrection(
+                "the samples hold no Lennard-Jones sums of the ligand (they were made with analysis.lrc: "
+                "none); the isotropic correction needs them"
+            )
         states = np.asarray(samples["states"][n_equilibration:n_equilibration + n])
         coupled = np.argsort(states, axis=1)[:, 0]                    # the replica in state 0
         volumes = np.asarray(samples["volume"][n_equilibration:n_equilibration + n], dtype=float)
@@ -608,8 +610,10 @@ def not_determined_reason(reduced_u_kn: np.ndarray, n_k: np.ndarray, f_k: np.nda
 
 
 def _windows_shown(groups: list[list[int]]) -> str:
-    return "; ".join(f"windows {g[0]}-{g[-1]}" if g == list(range(g[0], g[-1] + 1)) else "windows " + ", ".join(map(str, g))
-                     for g in groups)
+    return "; ".join(
+        f"windows {g[0]}-{g[-1]}" if g == list(range(g[0], g[-1] + 1)) else "windows " + ", ".join(map(str, g))
+        for g in groups
+    )
 
 
 @dataclass
@@ -994,10 +998,10 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
     overlap      every pair of neighbouring lambda windows overlaps by at least ``min_overlap``:
                  "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy
                  estimate"; below it "the free energy estimate itself will likely be substantially
-                 incorrect" (Klimovich, Shirts and Mobley 2015, section 3.5; also the warning level
-                 of Flare). Two matrices are examined, both in the normalisation of equal numbers of
-                 samples per window: that of all iterations, and that of the samples the free
-                 energy is estimated from (``used``, :func:`overlap_with_equal_weights`).
+                 incorrect" (Klimovich, Shirts and Mobley 2015, section 3.5). Two matrices are
+                 examined, both in the normalisation of equal numbers of samples per window: that of
+                 all iterations, and that of the samples the free energy is estimated from
+                 (``used``, :func:`overlap_with_equal_weights`).
                  ``below`` names the one that is under the level.
     samples      the window with the fewest uncorrelated samples has at least
                  ``min_effective_samples``: "it is recommended that the effective number of
@@ -1007,8 +1011,8 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
                  (``fewest``), and not more than the samples MBAR really gets from it (``kept``).
 
     ``ok`` is None where the analysis does not hold the numbers for a check. The forward and
-    reverse estimates, the two halves and BAR stay in the analysis as numbers (as FEP+ and OpenFE
-    show them), without a verdict.
+    reverse estimates, the two halves and BAR stay in the analysis as numbers without a verdict
+    (OpenFE shows its forward and reverse series without one).
     """
     error = _number(analysis.get("delta_g_error"))
     kept = analysis.get("window_kept_samples") or []

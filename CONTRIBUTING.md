@@ -33,11 +33,13 @@ scripts/in_docker.sh cufep --help
 ```bash
 scripts/in_docker.sh python -m pytest -q                       # unit tests (CPU, stock OpenMM)
 scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu -q    # GPU tests (CUDA, both backends)
+scripts/lint.sh                                                # ruff, as in CI
 scripts/in_docker.sh python scripts/check_progress_size.py     # harness checks, as in CI
 scripts/in_docker.sh python scripts/check_readme_pair.py
+scripts/in_docker.sh python scripts/check_names.py
 ```
 
-CI runs the unit tests and the harness checks on every pull request; it has no GPU, so run the
+CI runs the unit tests, the harness checks and ruff on every pull request; it has no GPU, so run the
 GPU tests yourself when a change touches what they cover. Read the exit status of the command
 itself: a pipe such as `pytest | tail` hides a failure.
 
@@ -53,8 +55,9 @@ contribution meets most often:
 
 - **Only published criteria decide.** A threshold that stops, refuses or warns needs a
   published source, quoted in [docs/configuration.md](docs/configuration.md). Everything else
-  is reported as a number.
-- **Defaults and terms follow established practice and the literature**; give the source of a
+  is reported as a number. One stop of the code has no such source yet and waits for a decision
+  (the agreement of the membrane orientation methods, see the rules file).
+- **Defaults and terms follow the literature and published open methods**; give the source of a
   new default in [docs/configuration.md](docs/configuration.md). One calculation per ligand is
   the default.
 - **Every setting has a recommended default** with its basis in

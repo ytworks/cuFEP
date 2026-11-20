@@ -11,9 +11,10 @@ concurrency:
 
 jobs:
   harness:
-    # The checks of the development harness (.claude/rules/progress-log.md): standard library only,
-    # so they need neither the conda environment nor the image.
-    name: harness (checks of the development harness)
+    # The checks of the development harness (.claude/rules/progress-log.md; standard library only)
+    # and ruff (in its own image, scripts/lint.sh): they need neither the conda environment nor the
+    # image of cuFEP.
+    name: harness (checks of the development harness, ruff)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -25,6 +26,10 @@ jobs:
         run: python scripts/check_progress_size.py
       - name: README.md and README.ja.md have the same headings, commands and links
         run: python scripts/check_readme_pair.py
+      - name: Names of commercial FEP products only for accuracy and sources
+        run: python scripts/check_names.py
+      - name: Lint (ruff, pinned in scripts/lint.sh)
+        run: scripts/lint.sh
 
   unit:
     name: unit tests (CPU, stock OpenMM)

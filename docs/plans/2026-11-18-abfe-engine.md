@@ -9,17 +9,17 @@ cuPotential の速度に関わる実測値と所要時間の目標値は、NVIDI
 
 ## 方針
 
-1. **世間の FEP の仕様と用語に合わせる。** 既定値と語は Schrödinger FEP+、Cresset Flare、
-   OpenFE のどれに従ったかを protocol.md の比較表に書く。1 つの計算は既定で 1 回だけ走らせる
-   (FEP+ と Flare と同じ)。`sampling.repeats` で独立な repeat を増やせる (OpenFE と同じ意味)。
+1. **文献と公開された方法の仕様と用語に合わせる。** 既定値の出典は configuration.md に書く。
+   1 つの計算は既定で 1 回だけ走らせる。`sampling.repeats` で独立な repeat を増やせる (OpenFE と
+   同じ意味)。
 2. **すべての設定は YAML で変えられ、既定値は根拠のある推奨値である。** lambda window は
    leg と stage ごとに、数または値の列で指定できる。`auto` は入力から計算しないと決まらない
    項目だけに使う。
 3. **lambda window の既定は adaptive lambda scheduling** (Midgley ら、J. Chem. Inf. Model.
-   2025, 65, 512。Cresset Flare の方式)。window が差し込まれる条件は protocol.md に論文の
+   2025, 65, 512)。window が差し込まれる条件は protocol.md に論文の
    記述どおりに書いた。論文に無い点は、無いと明記して規則を決めた。
 4. **速度は要件である。** replica を全 GPU に配り、NVIDIA MPS で GPU 1 個に複数の worker を
-   同時に載せる (SOMD2 の oversubscription factor、Desmond の `mps_factor` と同じ方式)。
+   同時に載せる (SOMD2 の oversubscription factor と同じ方式)。
    GPU の配分は job の残りの仕事量に比例させ、空いた分は動いている job に渡す。
 5. **膜は設定で付ける** (`membrane.enabled`)。膜タンパク質かどうかの判定はしない。
 6. **自動で決めるのは名指しされたものだけ**: Boresch restraints、lambda window (adaptive)、
@@ -78,7 +78,7 @@ complex leg の vanish 0.75-0.88 の組は、前計算 (各 window 500 ps の平
 では 0.024-0.042 だった (TYK2 0.096 → 0.024、A2A 0.073 → 0.024、B4 0.245 → 0.042)。この組に window が足されるかどうかは前計算の
 揺らぎで決まり、TYK2 では -11.44 (足された) と -13.10 (足されない) に分かれた。改善の方針はオーナーが決める。
 
-オーナーの目標 (2026-11-20): ALS の基準 0.10、production 5 ns で、Cresset や FEP+ と同じ時間で収束させる。まず既定から
+オーナーの目標 (2026-11-20): ALS の基準 0.10、production 5 ns で収束させる。まず既定から
 この二つだけを変えて両 example を 1 回ずつ走らせた (`cufep:add8b55`、GPU 8 枚、`runs/configs/chain_t010_p5.sh`)。
 
 | | TYK2 / ejm_31 | A2A / 4e |
@@ -112,7 +112,7 @@ Mobley 2015、3.5 節)、各 window の相関の無い標本が 50 以上 (Mey e
 数と、MBAR が受け取る数の小さいほう)。cuFEP 独自の判定はすべて外した: 前半と後半の差 1 kT (Mey らの図 9 の説明にある目安で、
 相対計算の一段に当てたもの。leg 全体では標準誤差 0.6 kcal/mol のとき偶然の揺れだけで約 2 kT になる)、BAR と MBAR の差 1 kcal/mol、
 時間ブロックの誤差と MBAR の誤差の比による標本数の割引き。forward と reverse、前半と後半、ブロック、BAR は判定なしの数値として残す
-(FEP+ や OpenFE と同じ)。判定と警告は保存された数値から毎回作り直すので、以前の版の判定は結果に出ない。解析の版は 9 (数値は版 8 と
+(OpenFE と同じ)。判定と警告は保存された数値から毎回作り直すので、以前の版の判定は結果に出ない。解析の版は 9 (数値は版 8 と
 同じ)。設定 `analysis.halves_tolerance_kT`、`analysis.estimators_tolerance_kcal_mol` は廃止 (古い既定値なら注記付きで読み、他の値は拒否)。
 
 ### 自前の判定をすべて外す (オーナーの指示、2026-11-20)
@@ -151,8 +151,7 @@ cuPotential が使えないときの stock OpenMM への退避。
 
 オーナーの指示: ポケットの REST2 を example も含めて既定にする。`sampling.rest2.region` の既定値を `ligand` から `pocket` に
 変えた (リガンドから 0.4 nm 以内に重原子がある残基を hot region に入れる。scale 1.5 は変えない)。2 つの example は REST2 を
-設定していないので、既定値のまま両方ともポケットになる。FEP+ と SOMD2 の既定はリガンドだけで、FEP+ はポケットを選択肢として
-持つ。上の表の最後の行がこの設定の 1 回ずつの計算で、どちらも 1 回だけの値であり、実行ごとの揺れより小さい差は区別できない。
+設定していないので、既定値のまま両方ともポケットになる。SOMD2 の既定はリガンドだけ。上の表の最後の行がこの設定の 1 回ずつの計算で、どちらも 1 回だけの値であり、実行ごとの揺れより小さい差は区別できない。
 
 ### `7b49066` へのレビュー 5991065565 の修正 (2026-11-20)
 
@@ -417,15 +416,15 @@ production の既定を 1 window あたり 5 ns から 10 ns にした (オー�
 
 ## 改訂 8 の手順と状態 (2026-11-19 から)
 
-改訂 8 の要点は 3 つ。adaptive lambda scheduling は Cresset の方式のとおり、production の前の
-precalculation だけで window を決める。解析で leg を検査する。結果に報告が付いた leg は、Flare と
-同じく、ユーザーが window を増やすか時間を延ばしてその leg だけ走らせ直す。OpenFE との照合は
+改訂 8 の要点は 3 つ。adaptive lambda scheduling は論文の方式のとおり、production の前の
+precalculation だけで window を決める。解析で leg を検査する。結果に報告が付いた leg は、
+ユーザーが window を増やすか時間を延ばしてその leg だけ走らせ直す。OpenFE との照合は
 オーナーの指示でやめた。
 
 | # | 作業 | 状態 |
 |---|---|---|
 | 0 | 残っていた実行の後始末 | 済 |
-| 1 | adaptive lambda scheduling を Cresset の方式に戻す。改訂 7 の途中で足した「equilibration の間の差し込み」(Cresset に無い動作) を取り除く。開始 window は restrain 3、discharge 5、vanish 9 | 済 |
+| 1 | adaptive lambda scheduling を論文の方式に戻す。改訂 7 の途中で足した「equilibration の間の差し込み」(論文に無い動作) を取り除く。開始 window は restrain 3、discharge 5、vanish 9 | 済 |
 | 2 | 解析の検査: overlap、production の前半と後半の ΔG (forward と reverse)、推定量の比較 | 済 (protocol.md の "Checks of the analysis")。判定の基準は改訂 9 の「解析の訂正」で出典のあるものに直した |
 | 3 | production の後に、1 つの leg だけを window を増やすか時間を延ばして走らせ直す手段 | 済 (`cufep run --ligand --leg` と `--production-ns` または `--reschedule`。protocol.md の "When a leg is flagged") |
 | 4 | REST2 の既定値を、ベンチマークの数値で判断する | 済。数値は protocol.md の REST2 の "What was measured"。オーナーの判断で scale 1.5 のまま |
@@ -549,14 +548,13 @@ VAL981 の chi1 が trans である割合との相関は 0.4〜0.5 で、側鎖�
 説明するが、全部ではない。21 回の dG_bind の平均は -11.2、標準偏差は 1.5 kcal/mol
 (実験 -9.54、FEP+ -9.91)。
 
-FEP+ は結合部位とリガンドの REST2 と水の GCMC でこの種の問題に対処している。cuFEP の
+cuFEP の
 既定は 1 回の実行で、これは変えない。repeat を増やして平均することは対策にしない。
 
 **オーナーの決定 (2026-11-19): REST2 を入れる。** 実装は protocol.md の "REST2" に書いた
 (Wang, Friesner, Berne 2011 の式、Sire / SOMD2 と同じ項の扱い、leg に沿った三角形の
-スケジュール)。`sampling.rest2` で設定する。既定は on で、hot region はリガンド (FEP+ と
-SOMD2 の既定)、scale は 1.5 (298 K で 447 K。根拠は configuration.md)。最初は FEP+ の値に
-合わせて 2.5 にしたが、hot な window でリガンドのアミド結合が異性化し、5 リガンドのうち 3 つで
+スケジュール)。`sampling.rest2` で設定する。既定は on で、hot region はリガンド (SOMD2 の
+既定)、scale は 1.5 (298 K で 447 K。根拠は configuration.md)。最初は 2.5 にしたが、hot な window でリガンドのアミド結合が異性化し、5 リガンドのうち 3 つで
 dG_bind が実験から 4〜5 kcal/mol 離れたので下げた。ポケットの残基は
 `sampling.rest2.region: pocket` か `sampling.rest2.residues` で hot region に足せる。
 

@@ -44,8 +44,8 @@ compute backend; stock OpenMM is the second backend and is always available.
   embedded in a POPC bilayer. cuFEP never decides this by itself.
 - **An established protocol.** Double decoupling with Boresch restraints chosen automatically,
   Hamiltonian replica exchange with REST2 on the ligand and its pocket, and MBAR. Defaults and
-  terms follow established practice and the literature, and the documentation gives the basis of
-  each default.
+  terms follow the literature and published open methods, and the documentation gives the source
+  of each default.
 - **Lambda windows.** Adaptive lambda scheduling by default (Midgley et al. 2025), or a fixed
   number or list of lambda values per leg and stage.
 - **Checks from the literature only.** The overlap of neighbouring lambda windows (at least 0.03)
@@ -85,9 +85,10 @@ from the protein (complex leg) and from water (solvent leg).
 
 - Linux with Docker and the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
-- An NVIDIA GPU. The image is built for CUDA 13.4; professional and data-centre GPUs work with
-  driver branch R535 or newer through the forward-compatibility package in the image, GeForce
-  cards need R615 or newer.
+- An NVIDIA GPU. The image is built for CUDA 13.4. It is tested on NVIDIA RTX PRO 6000 Blackwell
+  Server Edition GPUs with driver 595.99.02, which runs CUDA 13.4 through the forward-compatibility
+  package of the image; which other drivers and GPUs work follows NVIDIA's
+  [CUDA compatibility rules](https://docs.nvidia.com/deploy/cuda-compatibility/latest/forward-compatibility.html).
 - Disk space for the image and the runs.
 
 Everything else (OpenMM 8.4, the cuPotential plugin, OpenFF, AmberTools, pymbar, PDBFixer,
@@ -122,7 +123,7 @@ cufep() { docker run --rm --gpus all --shm-size=16g -u "$(id -u):$(id -g)" \
                      -v "$PWD":/work cufep:latest "$@"; }
 
 cufep check-env                                   # software, GPUs, both backends
-cufep init protein.pdb ligand.sdf -o config.yaml  # write a two-line configuration
+cufep init protein.pdb ligand.sdf -o config.yaml  # write a minimal configuration
 cufep plan config.yaml                            # what will be done, without simulating
 cufep run config.yaml                             # run or resume
 ```
@@ -131,7 +132,7 @@ cufep run config.yaml                             # run or resume
 processes in memory, and Docker's default of 64 MB is too small. Without it cuFEP falls back to
 files in the output directory and says so.
 
-`cufep run` prints one line per ligand, for example
+`cufep run` prints one line per ligand after the time of day, for example
 
 ```text
 RESULT ejm_31: dG_bind = ... ± ... kcal/mol (standard error from time blocks, 1 repeat)
@@ -163,17 +164,23 @@ calculation keeps its results.
 
 | message | meaning | what to do |
 |---|---|---|
-| `NOT RELIABLE` | two neighbouring lambda windows overlap by less than 0.03 in the production, among all iterations or among the samples the free energy is estimated from. Without overlap the free energy cannot be used | give that stage more lambda windows and start the leg anew; if only the samples of the estimate are below the level, a longer production also helps |
-| few independent samples | a lambda window gives MBAR fewer than 50 uncorrelated samples (Mey et al. 2020); the free energy and its uncertainty rest on few samples | run the leg longer; it continues from where it stopped |
+| `NOT RELIABLE (overlap)` | two neighbouring lambda windows overlap by less than 0.03 in the production, among all iterations or among the samples the free energy is estimated from. Without overlap the free energy cannot be used | give that stage more lambda windows and start the leg anew; if only the samples of the estimate are below the level, a longer production also helps |
+| `few independent samples` | a lambda window gives MBAR fewer than 50 uncorrelated samples (Mey et al. 2020); the free energy and its uncertainty rest on few samples | run the leg longer; it continues from where it stopped |
 | `FAILED` | a leg did not finish, was interrupted, or its samples determine no free energy; the ligand has no binding free energy from that leg | read the message, then run the leg again |
-| legs made under different conditions | the complex and the solvent leg (or two repeats) differ in temperature, pressure, prepared systems or tail correction; the ligand gets no binding free energy | run the legs that differ again under the conditions of the others |
-| old analysis | a leg that this run did not sample has a result of an earlier version of the analysis and its samples are gone | run that leg again |
-| the standard error is the analytical one | the leg is too short for blocks of time, so its standard error takes the samples as independent | run the leg longer |
-| parts of the production without an estimate | some points of the forward and reverse series or some blocks have no determined free energy, for example too few samples in that part; they are left out of `analysis.png` | nothing |
-| checks of this version not made | `cufep benchmark report` read a summary written by an earlier version of cuFEP | analyse the legs again |
-| origin of files not recorded | the leg used files of an earlier version of cuFEP that do not say what they were made from | a new output directory, if that matters |
+| `LEGS MADE UNDER DIFFERENT CONDITIONS` | the complex and the solvent leg (or two repeats) differ in temperature, pressure, prepared systems or tail correction; the ligand gets no binding free energy | run the legs that differ again under the conditions of the others |
+| `old analysis` | a leg that this run did not sample has a result of an earlier version of the analysis and its samples are gone | run that leg again |
+| `the standard error of this leg is the analytical one ...` | the leg is too short for blocks of time, so its standard error takes the samples as independent | run the leg longer |
+| `parts of the production without an estimate` | some points of the forward and reverse series or some blocks have no determined free energy, for example too few samples in that part; they are left out of `analysis.png` | nothing |
+| `parts of the production whose lambda windows overlap below the level of a reliable estimate` | some points of the series, halves or blocks rest on an overlap below 0.03; their estimates are shown in `analysis.png` with this note | nothing |
+| `checks of this version not made` | `cufep benchmark report` read a summary written by an earlier version of cuFEP | analyse the legs again |
+| `origin of files not recorded` | the leg used files of an earlier version of cuFEP that do not say what they were made from | a new output directory, if that matters |
 
-These are the only verdicts. Other quantities are reported as numbers: how the bilayer changed at
+These are the flags and the notes of the analysis. Only `NOT RELIABLE` and `few independent
+samples` judge the analysis, by the two checks of the literature; the others say that something is
+missing, cannot be compared or rests on less than the whole production. Other warnings of a run
+(for example a fall-back to stock OpenMM, an incomplete repeat, the graph symmetry of the ligand,
+what the preparation changed) are printed under the result line and kept in `summary.json`.
+Other quantities are reported as numbers: how the bilayer changed at
 the end of its equilibration (`bilayer`), how far the ligand was from its input pose
 (`ligand_rmsd_from_input_A`) and how far it moved in the coupled state (`structure`), the
 forward and reverse series, the halves, the blocks and BAR. No check can show that one run is
@@ -232,8 +239,9 @@ resources:
 output: {dir: runs/my_ligand}
 ```
 
-`cufep plan config.yaml` prints the lambda windows a run would use, and every run writes the
-settings it used to `resolved_config.yaml`.
+`cufep plan config.yaml` prints the settings a run would use: in fixed mode its lambda windows, in
+adaptive mode the rule and the windows the precalculation starts from (the windows themselves are
+chosen when the run starts). Every run writes the settings it used to `resolved_config.yaml`.
 
 ## Examples
 
@@ -246,13 +254,14 @@ settings it used to `resolved_config.yaml`.
 cufep run examples/kinase_tyk2/config.yaml
 cufep run examples/membrane_a2a/config.yaml
 
-# a first look that finishes quickly (the result is then not meaningful)
-cufep run examples/kinase_tyk2/config.yaml --production-ns 0.2 -o runs/tyk2_try
+# a quick check of the pipeline: one ligand with very short sampling
+cufep benchmark run tyk2 --tier smoke
 ```
 
-One calculation of each example during the development of version 0.1, with the current
-defaults except 5 ns instead of 10 ns of production per lambda window, gave -8.94 ± 0.77 kcal/mol
-for TYK2 ejm_31 and -11.95 ± 0.73 kcal/mol for A2A 4e (standard errors of the one calculation;
+One calculation of each example on an earlier commit of version 0.1, with the ALS threshold 0.18,
+REST2 on the pocket and 5 ns of production per lambda window (the default is 10 ns), gave
+-8.94 ± 0.77 kcal/mol for TYK2 ejm_31 and -11.95 ± 0.73 kcal/mol for A2A 4e (standard errors of
+the one calculation;
 [docs/configuration.md](docs/configuration.md), `sampling.rest2.region`). These are single
 calculations, and repeated runs of a complex leg differ among themselves by more than these
 errors ([protocol: REST2](docs/protocol.md#rest2)).
@@ -298,7 +307,7 @@ See [protocol: Limits of version 0.1](docs/protocol.md#limits-of-version-01).
 
 | document | content |
 |---|---|
-| [docs/protocol.md](docs/protocol.md) | the method: systems, thermodynamic cycle, lambda windows, REST2, analysis and its checks, GPUs, comparison with other software |
+| [docs/protocol.md](docs/protocol.md) | the method: systems, thermodynamic cycle, lambda windows, REST2, analysis and its checks, GPUs, comparison with OpenFE's protocol |
 | [docs/configuration.md](docs/configuration.md) | every setting, its default and the basis of the default |
 | [docs/LICENSING.md](docs/LICENSING.md) | licences of cuFEP, of the cuPotential runtime and of the benchmark inputs |
 | [docs/M0_REPORT.md](docs/M0_REPORT.md) | the first risk checks of the plugin and the platform |

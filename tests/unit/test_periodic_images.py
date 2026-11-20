@@ -158,7 +158,9 @@ def test_a_guest_on_a_straight_line_is_refused_and_would_give_nan():
     system.addForce(straight.create_force())
     context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
     context.setPositions(exact * unit.nanometer)
-    forces = context.getState(getForces=True).getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
+    forces = (
+        context.getState(getForces=True).getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
+    )
     assert not np.all(np.isfinite(forces))                                      # what the reviewer saw
     problem = anchor_geometry_problem(probe, frames, anchor_margins(RestraintSearchSettings(), 298.15))
     assert problem is not None and "on a straight line in every frame" in problem and "is_collinear" in problem
@@ -181,7 +183,9 @@ def test_manual_anchors_take_their_force_constants_from_their_fluctuations():
     expected = with_force_constants_from_fluctuations(fixed, fluct, 298.15)
     assert auto.k_r == pytest.approx(expected.k_r) and auto.k_phi_c == pytest.approx(expected.k_phi_c)
     assert auto.k_r != K_R
-    assert fluct == pytest.approx(coordinate_fluctuations(BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0).values(frames)))
+    assert fluct == pytest.approx(
+        coordinate_fluctuations(BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0).values(frames))
+    )
 
 
 def _site_and_ligand(n_frames=10, seed=5):
@@ -250,7 +254,8 @@ def _pose_with_theta_a(degrees):
 
 def test_the_prepared_pose_is_held_to_openfes_rule_of_every_frame(tmp_path, monkeypatch):
     """Independent review of c691e37 (P2) and the owner, 2026-11-20: the anchors are held to OpenFE's rules only. The
-    rule of cuFEP's own that the frame the reference values come from be 30 degrees from a straight line is gone: theta_A
+    rule of cuFEP's own that the frame the reference values come from be 30 degrees from a straight line is gone:
+    theta_A
     of 27 degrees passes in the prepared pose, and a last frame of 25 degrees among frames of up to 45 passes too (25
     degrees is on a straight line by OpenFE's is_collinear, |cos| 0.906, which refuses anchors only on the line in every
     frame); 10 degrees is within 22 degrees (10 kT with the default constants, OpenFE's check_angle_not_flat) and is
@@ -268,14 +273,20 @@ def test_the_prepared_pose_is_held_to_openfes_rule_of_every_frame(tmp_path, monk
     assert anchor_geometry_problem(probe, frames, margin) is None
     frames[3] = _pose_with_theta_a(21.0)                                                        # one frame within 22
     assert "H1-H0-G0 (theta_A) comes within 22 degrees" in anchor_geometry_problem(probe, frames, margin)
-    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
-                                 "restraints": {"selection": "manual", "host_atoms": list(HOST), "guest_atoms": list(GUEST)}})
-    monkeypatch.setattr(workflow, "check_manual_anchors", lambda *args: None)     # atoms of protein and ligand: elsewhere
+    cfg = Config.model_validate(
+        {
+            "system": {"protein": "p.pdb", "ligand": "l.sdf"},
+            "restraints": {"selection": "manual", "host_atoms": list(HOST), "guest_atoms": list(GUEST)},
+        }
+    )
+    monkeypatch.setattr(workflow, "check_manual_anchors", lambda *args: None)  # atoms of protein and ligand: elsewhere
     pose = {"positions": _pose_with_theta_a(27.0), "ligand": list(LIGAND), "box": CUBE}
     monkeypatch.setattr(workflow, "load_prepared", lambda prep_dir, name: pose)
     workflow.check_before_jobs(cfg, tmp_path, {(0, "complex")})                  # accepted
-    pose["positions"] = _pose_with_theta_a(10.0)                                  # within 22 degrees of a straight line
-    with pytest.raises(WorkflowError, match="in the prepared pose: the anchor angle H1-H0-G0 .* comes within 22 degrees"):
+    pose["positions"] = _pose_with_theta_a(10.0)  # within 22 degrees of a straight line
+    with pytest.raises(
+        WorkflowError, match="in the prepared pose: the anchor angle H1-H0-G0 .* comes within 22 degrees"
+    ):
         workflow.check_before_jobs(cfg, tmp_path, {(0, "complex")})
 
     # review of 7b49066 (P2): theta_A of 25 degrees in the prepared pose (on a line by is_collinear, a rule of a
@@ -299,8 +310,12 @@ def test_anchors_whose_dihedrals_are_not_defined_in_the_last_frame_are_refused()
     in the last, from which the reference values come; the force of the restraint was NaN on OpenMM's Reference
     platform. Such anchors are refused, by whether the plane of the dihedral exists (the cross product of the two bond
     vectors is zero), not by a level; the search goes on with other anchors."""
-    from cufep.alchemy.restraints import (RestraintSearchSettings, anchor_geometry_problem, anchor_margins,
-                                          undefined_dihedral_planes)
+    from cufep.alchemy.restraints import (
+        RestraintSearchSettings,
+        anchor_geometry_problem,
+        anchor_margins,
+        undefined_dihedral_planes,
+    )
 
     frames = []
     for bend in (90.0, 70.0, 50.0, 30.0, 0.0):                  # the angle of G1-G2 away from the line G0-G1
@@ -311,7 +326,10 @@ def test_anchors_whose_dihedrals_are_not_defined_in_the_last_frame_are_refused()
         frames.append(x)
     frames = np.array(frames)
     probe = BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0)
-    assert undefined_dihedral_planes(probe, frames[-1]) == ["G0-G1-G2"] and undefined_dihedral_planes(probe, frames[0]) == []
+    assert (
+        undefined_dihedral_planes(probe, frames[-1]) == ["G0-G1-G2"]
+        and undefined_dihedral_planes(probe, frames[0]) == []
+    )
     margin = anchor_margins(RestraintSearchSettings(k_r=K_R, k_angle=K_A), 298.15)
     problem = anchor_geometry_problem(probe, frames, margin)
     assert problem.startswith("the anchors G0-G1-G2 are exactly on a line in the last frame")
@@ -326,7 +344,9 @@ def test_anchors_whose_dihedrals_are_not_defined_in_the_last_frame_are_refused()
     system.addForce(straight.create_force())
     context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
     context.setPositions(frames[-1] * unit.nanometer)
-    forces = context.getState(getForces=True).getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
+    forces = (
+        context.getState(getForces=True).getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
+    )
     assert not np.all(np.isfinite(forces))
     eq = {"frame_atoms": np.arange(6), "frames": frames, "frame_boxes": np.repeat(CUBE[None], len(frames), axis=0)}
     with pytest.raises(WorkflowError, match="exactly on a line in the last frame"):
@@ -349,8 +369,13 @@ def test_anchors_whose_dihedrals_are_not_defined_in_the_last_frame_are_refused()
     assert "exactly on a line" in anchor_geometry_problem(probe, aligned, margin, reference_copies=[turned[-1]])
     # manual anchors: the frames are copies in single precision of the positions the run starts from
     bent = frames[:-1].tolist() + [frames[-1] + [0.0, 0.0, 1e-6] * (np.arange(6) == 5)[:, None]]
-    eq = {"frame_atoms": np.arange(6), "frames": np.array(bent), "frame_boxes": np.repeat(CUBE[None], len(bent), axis=0),
-          "positions": frames[-1], "box": CUBE}
+    eq = {
+        "frame_atoms": np.arange(6),
+        "frames": np.array(bent),
+        "frame_boxes": np.repeat(CUBE[None], len(bent), axis=0),
+        "positions": frames[-1],
+        "box": CUBE,
+    }
     with pytest.raises(WorkflowError, match="exactly on a line in the last frame"):
         manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A)
     del eq["positions"]
@@ -361,8 +386,13 @@ def test_anchors_on_a_straight_line_are_refused_only_if_they_are_in_every_frame(
     """OpenFE's EvaluateBoreschAtoms: ``not all(collinear)``. Anchors with three in a row whose bond vectors have |cos|
     above 0.9 (OpenFE's is_collinear, from Yank) in every frame are refused; one frame off the line is enough to keep
     them. The angles H2-H1-H0 and G0-G1-G2 are not held to the flat margin any more (a rule of cuFEP's own)."""
-    from cufep.alchemy.restraints import (COLLINEAR_THRESHOLD, RestraintSearchSettings, anchor_geometry_problem,
-                                          anchor_margins, collinear_frames)
+    from cufep.alchemy.restraints import (
+        COLLINEAR_THRESHOLD,
+        RestraintSearchSettings,
+        anchor_geometry_problem,
+        anchor_margins,
+        collinear_frames,
+    )
 
     assert COLLINEAR_THRESHOLD == 0.9
     margin = anchor_margins(RestraintSearchSettings(), 298.15)

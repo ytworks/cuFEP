@@ -40,8 +40,18 @@ import numpy as np
 import openmm as mm
 import openmm.unit as unit
 
-from cufep.alchemy.factory import (LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS, MAIN_GROUP, REST2_DQ,
-                                   REST2_DS, REST2_GROUP, RESTRAINT_GROUP, SOFTCORE_FORCE_NAME, SOFTCORE_GROUP)
+from cufep.alchemy.factory import (
+    LAMBDA_ELECTROSTATICS,
+    LAMBDA_RESTRAINTS,
+    LAMBDA_STERICS,
+    MAIN_GROUP,
+    REST2_DQ,
+    REST2_DS,
+    REST2_GROUP,
+    RESTRAINT_GROUP,
+    SOFTCORE_FORCE_NAME,
+    SOFTCORE_GROUP,
+)
 
 R_GAS = 8.31446261815324e-3            # kJ/mol/K
 BAR_NM3_TO_KJ_MOL = 0.0602214076       # 1 bar nm^3 in kJ/mol
@@ -75,8 +85,8 @@ class AlchemicalState:
         return asdict(self)
 
 
-#: Stages of a leg, in the order in which they are passed. The names are those of Cresset Flare
-#: and A3FE: restrain (restraint off -> on), discharge (charges on -> off), vanish (LJ on -> off).
+#: Stages of a leg, in the order in which they are passed. The names are those of
+#: A3FE: restrain (restraint off -> on), discharge (charges on -> off), vanish (LJ on -> off).
 STAGES_COMPLEX = ("restrain", "discharge", "vanish")
 STAGES_SOLVENT = ("discharge", "vanish")
 #: names used by earlier versions (still accepted when reading files)

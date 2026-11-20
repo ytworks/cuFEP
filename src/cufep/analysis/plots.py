@@ -71,19 +71,25 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
                     label="consecutive blocks" if k == 0 else None)
         # the range of the values, the whole and its band: an error bar that reaches further is cut by the
         # axes (review of PR 1: a part with an error of thousands of kcal/mol flattened every other value)
-        shown = [final - error, final + error] + [p[1] / KCAL for name in ("forward", "reverse") for p in a.get(name, [])]
-        shown += [h[0] / KCAL for h in (a.get("first_half"), a.get("second_half")) if h is not None and h[0] is not None]
+        shown = [final - error, final + error] + [
+            p[1] / KCAL for name in ("forward", "reverse") for p in a.get(name, [])
+        ]
+        shown += [
+            h[0] / KCAL for h in (a.get("first_half"), a.get("second_half")) if h is not None and h[0] is not None
+        ]
         shown += [b[2] / KCAL for b in blocks]
         shown = [v for v in shown if v is not None and np.isfinite(v)]
         low, high = min(shown), max(shown)
         margin = max(0.5, 0.15 * (high - low))
         ax.set_ylim(low - margin, high + margin)
         # the forward and reverse estimates, the halves and the blocks are shown as numbers, without a verdict
-        # (as FEP+ and OpenFE show them); the verdicts are the two checks of quality_checks
+        # (OpenFE shows its forward and reverse series without one); the verdicts are the two checks of quality_checks
         verdict = ""
         samples = quality.get("samples") or {}
         if samples.get("fewest") is not None:
-            verdict += (", " if verdict else "") + f"fewest independent samples {samples['fewest']:.0f} (window {samples['window']})"
+            verdict += (
+                ", " if verdict else ""
+            ) + f"fewest independent samples {samples['fewest']:.0f} (window {samples['window']})"
         what = "" if corrected else f" (MBAR without the tail correction, analysis version {version or 'not recorded'})"
         ax.set_title(f"{leg} leg: {final:.2f} ± {error:.2f} kcal/mol{what}" + (f"\n{verdict}" if verdict else ""),
                      fontsize=9)
@@ -105,7 +111,8 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
                             color="#c0392b" if low else "black")
             ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
             ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
-            ax.set_xlabel("lambda window"); ax.set_ylabel("lambda window")
+            ax.set_xlabel("lambda window")
+            ax.set_ylabel("lambda window")
         used = a.get("min_overlap_used")
         ax.set_title(f"overlap matrix, lowest overlap of neighbours {a['min_overlap']:.3f}"
                      + ("" if used is None else f"\n(among the samples of the estimate {used:.3f})"), fontsize=9)

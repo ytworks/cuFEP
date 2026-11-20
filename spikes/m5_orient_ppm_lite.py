@@ -23,7 +23,11 @@ LAMBDA = 0.09          # nm, width of the interface
 
 
 def atom_table(topology, pos):
-    atoms = [a for a in topology.atoms() if a.residue.name in AMINO_ACIDS and a.element is not None and a.element.symbol != "H"]
+    atoms = [
+        a
+        for a in topology.atoms()
+        if a.residue.name in AMINO_ACIDS and a.element is not None and a.element.symbol != "H"
+    ]
     idx = np.array([a.index for a in atoms])
     sub = md.Topology.from_openmm(topology).subset(idx)
     asa = md.shrake_rupley(md.Trajectory(pos[idx][None], sub), mode="atom")[0] * 100.0     # A^2
@@ -74,13 +78,19 @@ def main():
         t0 = time.perf_counter()
         e, n, c, d = orient(pdb.topology, pos)
         tilt = np.degrees(np.arccos(min(1.0, abs(n[2]))))
-        print(f"{path.split('/')[-1]:10s} E={e:8.1f} kcal/mol  tilt vs OPM {tilt:5.1f} deg  centre z {10*c[2]:+5.1f} A  "
-              f"thickness {10*d:.0f} A (OPM {2*half[0]:.0f})  [{time.perf_counter()-t0:.0f} s]")
+        print(
+            f"{path.split('/')[-1]:10s} E={e:8.1f} kcal/mol  tilt vs OPM {tilt:5.1f} deg  centre z {10 * c[2]:+5.1f} A "
+            f" "
+            f"thickness {10 * d:.0f} A (OPM {2 * half[0]:.0f})  [{time.perf_counter() - t0:.0f} s]"
+        )
     from cufep.prep.protein import prepare_protein
     for path in ("benchmarks/tyk2/inputs/tyk2_protein.pdb", "benchmarks/a2a/inputs/a2a_hip278_protein.pdb"):
         p = prepare_protein(path)
         e, n, c, d = orient(p.topology, p.positions_nm())
-        print(f"{path.split('/')[-1]:28s} E={e:8.1f} kcal/mol normal {np.round(n, 3)} centre {np.round(c, 3)} thickness {10*d:.0f} A")
+        print(
+            f"{path.split('/')[-1]:28s} E={e:8.1f} kcal/mol normal {np.round(n, 3)} centre {np.round(c, 3)} thickness "
+            f"{10 * d:.0f} A"
+        )
 
 
 if __name__ == "__main__":

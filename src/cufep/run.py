@@ -6,17 +6,31 @@ import json
 import time
 from pathlib import Path
 
-from cufep import jsonio
-from cufep.files import publish_text, publish_with
-from cufep.config.auto import AutoReport, resolve
-from cufep.config.schema import Config, check_configuration, dump_config, read_settings
-from cufep import mps
+from cufep import jsonio, mps
 from cufep.analysis.plots import plot_repeat
 from cufep.benchmarks.runner import LEG_FLAGS, flags_of
+from cufep.config.auto import AutoReport, resolve
+from cufep.config.schema import Config, check_configuration, dump_config, read_settings
+from cufep.files import publish_text, publish_with
 from cufep.scheduler import GpuMonitor, run_jobs
-from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_before_jobs, check_leg_reuse, check_partner_legs,
-                            check_prepared, combine_ligand, ligand_directories, ligands_of_run, prepare_ligand,
-                            refresh_leg_result, select_names, settings_differences, stored_ligand_result)
+from cufep.workflow import (
+    KCAL,
+    LegJob,
+    WorkflowError,
+    _Log,
+    check_before_jobs,
+    check_leg_reuse,
+    check_partner_legs,
+    check_prepared,
+    combine_ligand,
+    ligand_directories,
+    ligands_of_run,
+    prepare_ligand,
+    refresh_leg_result,
+    select_names,
+    settings_differences,
+    stored_ligand_result,
+)
 
 
 def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, object, list]:
@@ -246,7 +260,9 @@ def result_line(s: dict) -> str:
     if s.get("not_reliable") and lowest:
         flags = [f"{flag} (neighbouring lambda windows overlap by only {min(lowest):.3f})"
                  if flag.startswith("NOT RELIABLE") else flag for flag in flags]
-    return f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}" + "".join(f"; {flag}" for flag in flags) + warnings
+    return (
+        f"RESULT {s['ligand']}: dG_bind = {s['dg_bind']:.2f}{err}" + "".join(f"; {flag}" for flag in flags) + warnings
+    )
 
 
 def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print) -> None:
@@ -360,8 +376,12 @@ def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, 
             "gpu_utilization_percent": {"whole_run": monitor.mean(), "while_sampling": monitor.mean_over(intervals)},
             "phase_seconds_summed_over_jobs": phases, "jobs": legs}
     publish_text(out_dir / file_name, json.dumps(data, indent=1))
-    log(f"timing: {data['wall_seconds'] / 60:.1f} min in total; preparation {data['preparation_seconds'] / 60:.1f} min; "
-        + "; ".join(f"{name} {seconds / 60:.1f} min" for name, seconds in phases.items()) + " (summed over jobs)")
+    log(
+        f"timing: {data['wall_seconds'] / 60:.1f} min in total; "
+        f"preparation {data['preparation_seconds'] / 60:.1f} min; "
+        + "; ".join(f"{name} {seconds / 60:.1f} min" for name, seconds in phases.items())
+        + " (summed over jobs)"
+    )
     util = data["gpu_utilization_percent"]["while_sampling"]
     if util and all(v is not None for v in util.values()):
         log("timing: GPU utilization while sampling: " + ", ".join(f"GPU {g} {v:.0f}%" for g, v in util.items()))

@@ -73,7 +73,9 @@ class TailEnergy:
             _q, sig, eps = nb.getParticleParameters(i)
             e = eps.value_in_unit(unit.kilojoule_per_mole)
             if e > 0.0:
-                env.append(i); es.append(sig.value_in_unit(unit.nanometer)); ee.append(e)
+                env.append(i)
+                es.append(sig.value_in_unit(unit.nanometer))
+                ee.append(e)
         return cls(np.array(ligand), np.array([p[1] for p in ligand_parameters]),
                    np.array([p[2] for p in ligand_parameters]), np.array(env), np.array(es), np.array(ee),
                    cutoff_nm, long_cutoff_nm)
