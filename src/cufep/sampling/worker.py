@@ -164,6 +164,41 @@ def remove_orphaned_arrays(base: str) -> list[str]:
     return removed
 
 
+#: the name a directory of replica arrays has until its owner holds its lock: never removed by
+#: remove_orphaned_arrays, which looks at ARRAYS_PREFIX only
+STAGING_PREFIX = "cufep-staging-"
+
+
+def owned_directory(base: str, _before_lock=None) -> tuple[str, int]:
+    """A new directory for replica arrays under ``base`` and the descriptor of its lock, held.
+
+    The directory is made under a name that :func:`remove_orphaned_arrays` does not look at, its
+    lock is taken there, and only then is it renamed to its public name in the same directory: a
+    directory under the public name always has a lock that is held while its owner lives (review
+    of PR 1: between the creation of the lock file and the lock, another job's removal of
+    orphaned arrays found the lock free and removed the directory being made). A directory that
+    already has the public name makes the rename fail (it holds a lock file, so it is not empty)
+    and a new name is tried. An owner killed in between leaves an empty staging directory.
+    ``_before_lock`` is called just before the lock is taken (tests).
+    """
+    import fcntl
+
+    while True:
+        staging = tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=base)
+        fd = os.open(os.path.join(staging, OWNER_LOCK), os.O_RDWR | os.O_CREAT, 0o644)
+        if _before_lock is not None:
+            _before_lock()
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        public = os.path.join(base, ARRAYS_PREFIX + os.path.basename(staging)[len(STAGING_PREFIX):])
+        try:
+            os.rename(staging, public)
+        except OSError:
+            os.close(fd)
+            shutil.rmtree(staging, ignore_errors=True)
+            continue
+        return public, fd
+
+
 class SharedArrays:
     """Replica state and energies in memory-mapped files shared with the workers."""
 
@@ -180,13 +215,7 @@ class SharedArrays:
             base = _shared_directory(total, fallback_dir)
             os.makedirs(base, exist_ok=True)
             remove_orphaned_arrays(base)
-            self.directory = tempfile.mkdtemp(prefix=ARRAYS_PREFIX, dir=base)
-            # held for as long as the owner lives: the arrays of an owner that ended without close()
-            # are recognised by this lock being free (remove_orphaned_arrays)
-            import fcntl
-
-            self._owner_lock = os.open(os.path.join(self.directory, OWNER_LOCK), os.O_RDWR | os.O_CREAT, 0o644)
-            fcntl.flock(self._owner_lock, fcntl.LOCK_EX)
+            self.directory, self._owner_lock = owned_directory(base)
             self._paths = {k: os.path.join(self.directory, f"{k}.f8") for k in self.FIELDS}
             mode = "w+"
         else:

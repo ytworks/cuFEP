@@ -374,6 +374,41 @@ def test_arrays_whose_owner_ended_are_removed(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir()) == [earlier.name]
 
 
+def test_arrays_are_not_removed_while_their_owner_makes_them(tmp_path, monkeypatch):
+    """Review of 037bdf1 (P2): between the creation of owner.lock and the lock, another job's removal of orphaned
+    arrays found the lock free and removed the directory being made. With real files and flock, the removal runs just
+    before the lock is taken: nothing is removed while the owner holds the lock, its directory once it is released."""
+    import os
+
+    from cufep.sampling import worker
+
+    swept = []
+
+    def sweep():
+        swept.extend(worker.remove_orphaned_arrays(str(tmp_path)))
+
+    directory, fd = worker.owned_directory(str(tmp_path), _before_lock=sweep)
+    assert swept == [] and Path(directory).is_dir() and Path(directory).name.startswith(worker.ARRAYS_PREFIX)
+    assert worker.remove_orphaned_arrays(str(tmp_path)) == []            # owned: 0 removed
+    os.close(fd)
+    assert worker.remove_orphaned_arrays(str(tmp_path)) == [directory]   # released: 1 removed
+    # the order before the fix: the lock file under the public name, the lock taken after it; in between it went
+    made = tmp_path / f"{worker.ARRAYS_PREFIX}being_made"
+    made.mkdir()
+    (made / worker.OWNER_LOCK).write_text("")
+    assert worker.remove_orphaned_arrays(str(tmp_path)) == [str(made)]
+    # and the arrays themselves, made with the removal just before their lock
+    original = worker.owned_directory
+    monkeypatch.setattr(worker, "owned_directory", lambda base: original(base, _before_lock=sweep))
+    monkeypatch.setenv("CUFEP_SHM_DIR", str(tmp_path))
+    arrays = worker.SharedArrays(2, 5, 2)
+    arrays.pos[:] = 1.0
+    assert swept == [] and Path(arrays.directory).is_dir() and float(arrays.pos.sum()) == 2 * 2 * 5 * 3
+    assert worker.remove_orphaned_arrays(str(tmp_path)) == []
+    arrays.close()
+    assert list(tmp_path.iterdir()) == []                                 # no staging directory is left either
+
+
 def test_a_cpu_context_has_the_threads_of_the_configuration(monkeypatch):
     """P2: the inline workers of CPU runs took OPENMM_CPU_THREADS (3) instead of resources.cpu_threads_per_worker
     (1). OpenCL got no precision at all."""
