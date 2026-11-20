@@ -10,6 +10,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  harness:
+    # The checks of the development harness (.claude/rules/progress-log.md): standard library only,
+    # so they need neither the conda environment nor the image.
+    name: harness (checks of the development harness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: PROGRESS.md size budget and layout
+        run: python scripts/check_progress_size.py
+      - name: README.md and README.ja.md have the same headings, commands and links
+        run: python scripts/check_readme_pair.py
+
   unit:
     name: unit tests (CPU, stock OpenMM)
     runs-on: ubuntu-latest
