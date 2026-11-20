@@ -27,8 +27,10 @@ def test_metrics_on_known_numbers():
     assert m["mean_signed_error"] == pytest.approx(2.0) and m["rmse"] == pytest.approx(2.0)
     assert m["centred_rmse"] == pytest.approx(0.0, abs=1e-12) and m["pairwise_rmse"] == pytest.approx(0.0, abs=1e-12)
     assert m["kendall_tau"] == pytest.approx(1.0) and m["spearman"] == pytest.approx(1.0)
+    assert m["pearson_r"] == pytest.approx(1.0) and m["pearson_r2"] == pytest.approx(1.0)
     m = metrics(exp[::-1], exp)
-    assert m["kendall_tau"] == pytest.approx(-1.0)
+    assert m["kendall_tau"] == pytest.approx(-1.0) and m["pearson_r"] == pytest.approx(-1.0)
+    assert m["pearson_r2"] == pytest.approx(1.0)
     # pairwise RMSE equals sqrt(2 N / (N - 1)) times the centred RMSE
     rng = np.random.default_rng(0)
     pred = exp + rng.normal(size=4)
@@ -220,6 +222,17 @@ def test_not_reliable_ligands_are_compared_with_experiment_and_fepplus_like_the_
     assert "NOT RELIABLE (overlap below 0.05, Klimovich" in text and "below 0.03" not in text
     # a summary of an earlier version names the legs only
     assert overlap_places({"not_reliable": ["complex leg"]}) == "complex leg (the windows are not in this summary.json)"
+    # the figures carry the correlation coefficients and the errors of both methods over all their ligands
+    from cufep.benchmarks.runner import figure_statistics
+
+    lines = figure_statistics([{"ligand": n, "exp": ref[n]["exp"], "cufep": v, "fepplus": ref[n]["fepplus"]}
+                               for n, v in dg.items()])
+    r = np.corrcoef(list(dg.values()), [ref[n]["exp"] for n in dg])[0, 1]
+    assert lines[0].startswith(f"cuFEP, 4 ligands: Pearson r {r:.2f}, Kendall")
+    assert lines[1].startswith("FEP+, 4 ligands")
+    assert figure_statistics([{"ligand": "x", "exp": -9.0, "cufep": -10.0, "fepplus": -9.5}])[0] == (
+        "cuFEP, 1 ligands: Pearson r N/A, Kendall \u03c4 N/A, RMSE 1.00, RMSE after removing the mean error N/A "
+        "kcal/mol")
 
 
 def test_ligands_an_earlier_version_analysed_are_not_said_to_meet_the_level(tmp_path):

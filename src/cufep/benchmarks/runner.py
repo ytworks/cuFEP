@@ -157,7 +157,7 @@ def overlap_places(ligand_summary: dict) -> str:
 STATISTICS = (("mean_signed_error", "mean signed error (kcal/mol)"), ("rmse", "RMSE, raw (kcal/mol)"),
               ("mue", "MUE, raw (kcal/mol)"), ("centred_rmse", "RMSE after removing the mean error (kcal/mol)"),
               ("pairwise_rmse", "pairwise ddG RMSE (kcal/mol)"), ("kendall_tau", "Kendall tau"),
-              ("spearman", "Spearman rho"), ("pearson_r2", "Pearson R^2"))
+              ("spearman", "Spearman rho"), ("pearson_r", "Pearson r"), ("pearson_r2", "Pearson R^2"))
 #: those of them shown for each group of the breakdown by the check of overlap
 BREAKDOWN_STATISTICS = ("mean_signed_error", "rmse", "mue", "centred_rmse")
 
@@ -427,9 +427,37 @@ def _pyplot():
 def _save_figure(fig, path: Path) -> None:
     from cufep.files import publish_with
 
-    fig.tight_layout()
+    # the canvas grows to take the legend and its statistics; the axes keep their size
     publish_with(path, lambda fh: fig.savefig(fh, format=Path(path).suffix.lstrip(".") or "png", bbox_inches="tight"),
                  mode="wb")
+
+
+def figure_statistics(rows: list[dict]) -> list[str]:
+    """The lines of statistics a figure shows under its legend: for cuFEP and for FEP+ over all the
+    ligands of the figure (NOT RELIABLE ones included), the correlation coefficients and the errors,
+    as the tables of the report give them (N/A where not defined)."""
+    exp = [r["exp"] for r in rows]
+
+    def value(m: dict, key: str) -> str:
+        return "N/A" if m[key] is None else f"{m[key]:.2f}"
+
+    lines = []
+    for method, column in (("cuFEP", "cufep"), ("FEP+", "fepplus")):
+        m = metrics([r[column] for r in rows], exp)
+        lines.append(f"{method}, {len(rows)} ligands: Pearson r {value(m, 'pearson_r')}, Kendall \u03c4 "
+                     f"{value(m, 'kendall_tau')}, RMSE {value(m, 'rmse')}, RMSE after removing the mean error "
+                     f"{value(m, 'centred_rmse')} kcal/mol")
+    return lines
+
+
+def _legend(ax, rows: list[dict], **kwargs) -> None:
+    """The legend of a figure with the lines of :func:`figure_statistics` below its series."""
+    from matplotlib.lines import Line2D
+
+    handles, labels = ax.get_legend_handles_labels()
+    extra = figure_statistics(rows)
+    handles += [Line2D([], [], linestyle="none", marker="") for _ in extra]
+    ax.legend(handles, labels + extra, frameon=False, fontsize=8, **kwargs)
 
 
 def _cufep_series(ax, xs: dict, ys: dict, rows: list[dict], unreliable: set[str], level: str,
@@ -463,7 +491,7 @@ def _plot(rows: list[dict], path: Path, name: str, unreliable: set[str], level: 
     ax.set_xlabel("experiment (kcal/mol)")
     ax.set_ylabel("calculated (kcal/mol)")
     ax.set_title(f"{name}: binding free energies")
-    ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(0.0, -0.12))
+    _legend(ax, rows, loc="upper left", bbox_to_anchor=(0.0, -0.12))
     _save_figure(fig, path)
     plt.close(fig)
 
@@ -488,8 +516,8 @@ def _plot_ligands(rows: list[dict], path: Path, name: str, unreliable: set[str],
     top.plot(right, [r["fepplus"] for r in ordered], "s", ms=6, mfc="none", color=FEPPLUS_COLOUR,
              label="FEP+ (relative, shifted)", zorder=2)
     top.set_ylabel("binding free energy (kcal/mol)")
-    top.set_title(f"{name}: binding free energy of each ligand", pad=34)
-    top.legend(frameon=False, fontsize=8, ncol=2, loc="lower left", bbox_to_anchor=(0.0, 1.0))
+    top.set_title(f"{name}: binding free energy of each ligand", pad=96)
+    _legend(top, rows, loc="lower left", bbox_to_anchor=(0.0, 1.0))
     width = len(ordered) - 0.5
     bottom.fill_between([-0.5, width], [-1, -1], [1, 1], color="0.92", zorder=0)
     bottom.axhline(0.0, color=GUIDE_COLOUR, lw=1)

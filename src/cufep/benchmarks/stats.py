@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 #: statistics of the agreement between two series that need two different values in each
-CORRELATIONS = ("kendall_tau", "spearman", "pearson_r2")
+CORRELATIONS = ("kendall_tau", "spearman", "pearson_r", "pearson_r2")
 
 
 def _defined(a: np.ndarray, b: np.ndarray) -> bool:
@@ -43,12 +43,17 @@ def spearman(a: np.ndarray, b: np.ndarray) -> float | None:
     return float(r) if np.isfinite(r) else None
 
 
-def pearson_r2(a: np.ndarray, b: np.ndarray) -> float | None:
+def pearson_r(a: np.ndarray, b: np.ndarray) -> float | None:
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     if not _defined(a, b):
         return None
     r = np.corrcoef(a, b)[0, 1]
-    return float(r * r) if np.isfinite(r) else None
+    return float(r) if np.isfinite(r) else None
+
+
+def pearson_r2(a: np.ndarray, b: np.ndarray) -> float | None:
+    r = pearson_r(a, b)
+    return None if r is None else r * r
 
 
 def metrics(pred, exp) -> dict[str, float | None]:
@@ -61,7 +66,8 @@ def metrics(pred, exp) -> dict[str, float | None]:
             "mue": float(np.mean(np.abs(err))),
             "centred_rmse": float(np.sqrt(np.mean(centred ** 2))) if len(pred) >= 2 else None,
             "pairwise_rmse": float(np.sqrt(np.mean(pair ** 2))) if len(pair) else None,
-            "kendall_tau": kendall_tau(pred, exp), "spearman": spearman(pred, exp), "pearson_r2": pearson_r2(pred, exp)}
+            "kendall_tau": kendall_tau(pred, exp), "spearman": spearman(pred, exp), "pearson_r": pearson_r(pred, exp),
+            "pearson_r2": pearson_r2(pred, exp)}
 
 
 def bootstrap(pred, exp, n_boot: int = 2000, seed: int = 0, level: float = 0.95) -> dict[str, tuple[float, float]]:
