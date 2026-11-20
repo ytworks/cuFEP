@@ -34,6 +34,37 @@ def validation_system(cfg, system, prep: dict, box_nm, leg: str):
     return built, fixed_schedule(list(STAGES_SOLVENT), {"discharge": 4, "vanish": 6}, scale)
 
 
+#: differences between states (kT) beyond which a pair of state and configuration is not compared:
+#: such states have no weight in the free energy
+COMPARED_BELOW_KT = 60.0
+
+
+def between_state_differences(reference_rows, rows, own_states, level_kT: float = COMPARED_BELOW_KT) -> dict:
+    """How far the reduced potentials ``rows`` (configuration x state) of a backend are from
+    ``reference_rows`` in what matters for the free energy: the differences between the states, each
+    taken from the state the configuration was sampled in (``own_states``).
+
+    A pair of configuration and state is compared when the difference between the states is below
+    ``level_kT`` on either side, or finite on one side only: a state that one backend finds favourable
+    is not left out because the other one does not (review of PR 1: +80 kT in the reference and
+    -5 kT in cuPotential were left out, and the validation said OK). Returns ``worst`` (kT), the
+    largest relative difference of the energies themselves (``relative``) and the number of pairs
+    compared; a pair with a non-finite difference makes ``worst`` infinite."""
+    ref, x = np.asarray(reference_rows, dtype=float), np.asarray(rows, dtype=float)
+    n = np.arange(ref.shape[0])
+    own = np.asarray(own_states, dtype=int)
+    ref_d, d = ref - ref[n, own][:, None], x - x[n, own][:, None]
+    compared = (np.abs(ref_d) < level_kT) | (np.abs(d) < level_kT) | (np.isfinite(ref_d) != np.isfinite(d))
+    if not compared.any():
+        return {"worst": 0.0, "relative": 0.0, "compared": 0}
+    gap = np.abs(d - ref_d)[compared]
+    worst = float(gap.max()) if np.all(np.isfinite(gap)) else float("inf")
+    scale = np.abs(ref[compared])
+    rel_gap = np.abs(x - ref)[compared]
+    relative = float(rel_gap.max() / scale.max()) if np.all(np.isfinite(rel_gap)) and scale.max() > 0 else float("inf")
+    return {"worst": worst, "relative": relative, "compared": int(compared.sum())}
+
+
 def verdict(results: dict[str, bool | None]) -> bool:
     """Whether a validation passed: every leg it was asked for was compared (None: not compared) and
     agreed. A validation that compared nothing has not passed."""
@@ -132,16 +163,11 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
                 c.setPeriodicBoxVectors(*b); c.setPositions(p)
                 rows[name].append(ev.reduced_potentials()[0])
         own = [schedule.states.index(f[0]) for f in frames]
-        ref = np.array(rows["stock double"])
-        ref_d = ref - ref[np.arange(len(frames)), own][:, None]
-        mask = np.abs(ref_d) < 60.0
-        worst = {}
-        for name in ("stock mixed", "cuPotential"):
-            x = np.array(rows[name])
-            d = x - x[np.arange(len(frames)), own][:, None]
-            worst[name] = float(np.abs(d - ref_d)[mask].max())
-        rel = float(np.abs(np.array(rows["cuPotential"]) - ref)[mask].max() / np.abs(ref[mask]).max())
-        good = worst["cuPotential"] < 0.15 and rel < 1e-4
+        compared = {name: between_state_differences(rows["stock double"], rows[name], own)
+                    for name in ("stock mixed", "cuPotential")}
+        worst = {name: c["worst"] for name, c in compared.items()}
+        rel = compared["cuPotential"]["relative"]
+        good = compared["cuPotential"]["compared"] > 0 and worst["cuPotential"] < 0.15 and rel < 1e-4
         results[leg] = bool(good)
         region = (f"REST2 scale {schedule.rest2_scale:g}, {len(built.hot_atoms)} protein atoms hot"
                   if built.rest2_on else "no REST2")

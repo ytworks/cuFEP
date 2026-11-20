@@ -182,3 +182,75 @@ def test_manual_anchors_take_their_force_constants_from_their_fluctuations():
     assert auto.k_r == pytest.approx(expected.k_r) and auto.k_phi_c == pytest.approx(expected.k_phi_c)
     assert auto.k_r != K_R
     assert fluct == pytest.approx(coordinate_fluctuations(BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0).values(frames)))
+
+
+def _site_and_ligand(n_frames=10, seed=5):
+    """A topology of eight alanines given by their backbone and a ligand of three carbons, with frames of a still
+    protein; returns (topology, input positions, frames of the input pose, ligand atoms)."""
+    import openmm.app as app
+
+    top = app.Topology()
+    chain = top.addChain()
+    rng = np.random.default_rng(seed)
+    positions = []
+    for k in range(8):
+        res = top.addResidue("ALA", chain, id=str(k + 1))
+        for name, element in (("N", "N"), ("CA", "C"), ("C", "C")):
+            top.addAtom(name, app.element.get_by_symbol(element), res)
+            positions.append(rng.normal(scale=0.5, size=3) + 2.5)
+    lig_res = top.addResidue("LIG", top.addChain())
+    for name in ("C1", "C2", "C3"):
+        top.addAtom(name, app.element.carbon, lig_res)
+    positions += [[2.5, 2.5, 3.1], [2.65, 2.5, 3.15], [2.7, 2.62, 3.3]]
+    positions = np.asarray(positions)
+    ligand = np.arange(24, 27)
+    frames = np.array([positions + rng.normal(scale=0.002, size=positions.shape) for _ in range(n_frames)])
+    return top, positions, frames, ligand
+
+
+@pytest.mark.needs("rdkit")
+@pytest.mark.parametrize("box", [CUBE, DODECAHEDRON], ids=["cube", "dodecahedron"])
+def test_manual_anchors_measure_how_far_the_ligand_moved_from_its_input_pose(box):
+    """Review of 037bdf1 (P2): with manual anchors only the fluctuations of the restraint were stored, so a ligand that
+    left the binding site gave no pose_rmsd_warning_nm warning. The measure of the restraint search (periodic image,
+    superposition on the site, symmetry) is used for them: one cell (5 nm) away is RMSD 0 and no warning; 0.6 nm away
+    from the site is 0.6 nm, a warning at the level of 0.3 nm."""
+    from rdkit import Chem
+
+    from cufep.alchemy.restraints import ligand_pose_rmsd, pose_note
+
+    top, given, frames, ligand = _site_and_ligand()
+    rdmol = Chem.MolFromSmiles("CCC")
+    boxes = np.repeat(box[None], len(frames), axis=0)
+
+    def rmsd(moved_frames):
+        return ligand_pose_rmsd(top, moved_frames, ligand, rdmol, given, frame_boxes_nm=boxes, input_box_nm=box)
+
+    for name, shift in lattice_shifts(box).items():
+        moved = frames.copy()
+        moved[:, ligand] += shift
+        assert rmsd(moved) == pytest.approx(0.0, abs=0.01), name
+        assert pose_note(rmsd(moved), 0.3) is None
+    away = frames.copy()
+    away[:, ligand] += np.array([0.6, 0.0, 0.0]) + box[0]          # 0.6 nm from the site, one cell away
+    assert rmsd(away) == pytest.approx(0.6, abs=0.01)
+    assert pose_note(rmsd(away), 0.3).startswith("the ligand moved away from its input pose")
+
+
+def test_the_pose_note_of_manual_anchors_is_made_with_the_level_of_the_run():
+    """A stored restraint of manual anchors holds the distance from the input pose; its note is made with
+    restraints.pose_rmsd_warning_nm of the run, as for anchors the search chose. One of an earlier version holds no
+    distance and says so."""
+    from cufep.config.schema import Config
+    from cufep.workflow import restraint_notes
+
+    def cfg(level):
+        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                      "restraints": {"pose_rmsd_warning_nm": level}})
+
+    stored = {"info": {"selection": "manual", "ligand_rmsd_A": 6.0, "ligand_rmsd_reference": "input pose",
+                       "notes": []}}
+    assert restraint_notes(stored, cfg(1.0)) == []
+    assert restraint_notes(stored, cfg(0.3))[0].startswith("the ligand moved away from its input pose")
+    earlier = {"info": {"selection": "manual", "fluctuations": {}}}
+    assert "could not be compared with restraints.pose_rmsd_warning_nm" in restraint_notes(earlier, cfg(0.3))[0]

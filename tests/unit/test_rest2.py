@@ -275,3 +275,44 @@ def test_the_validation_compares_the_system_a_run_samples(dipeptides_in_water):
     assert verdict({"complex": True, "solvent": True}) is True
     assert verdict({"complex": None, "solvent": None}) is False and verdict({"complex": True, "solvent": None}) is False
     assert verdict({}) is False and verdict({"complex": False, "solvent": True}) is False
+
+
+@pytest.mark.parametrize("compared_kT,worst,ok", [(-5.0, 85.0, False), (80.0, 0.0, True)])
+def test_validate_compares_a_state_that_either_backend_finds_favourable(compared_kT, worst, ok):
+    """Review of 037bdf1 (P2): the pairs that validate compares were chosen by the reference alone (|difference| < 60
+    kT), so a state 80 kT above the sampled one in the reference and 5 kT below it in the backend compared was left out
+    and the result was OK. Rows of a two-state system evaluated on OpenMM's Reference and CPU platforms: the 85 kT are
+    seen (MISMATCH); with the same Hamiltonian on both the largest difference is 0 (OK)."""
+    import openmm as mm
+    import openmm.unit as unit
+
+    from cufep.validate import between_state_differences
+
+    kT = (unit.MOLAR_GAS_CONSTANT_R * 298.15 * unit.kelvin).value_in_unit(unit.kilojoule_per_mole)
+
+    def rows(platform, offset_kT):
+        system = mm.System()
+        system.addParticle(1.0)
+        force = mm.CustomExternalForce("lam * c")
+        force.addGlobalParameter("lam", 0.0)
+        force.addGlobalParameter("c", offset_kT * kT)
+        force.addParticle(0, [])
+        system.addForce(force)
+        context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName(platform))
+        context.setPositions([mm.Vec3(0, 0, 0)])
+        out = []
+        for lam in (0.0, 1.0):
+            context.setParameter("lam", lam)
+            out.append(context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole) / kT)
+        return [out]                                      # one configuration, sampled in state 0
+
+    reference, other = rows("Reference", 80.0), rows("CPU", compared_kT)
+    found = between_state_differences(reference, other, [0])
+    assert found["worst"] == pytest.approx(worst, abs=1e-4)
+    assert (found["worst"] < 0.15) is ok and found["compared"] == (2 if not ok else 1)
+    # the rule before the fix, which looked at the reference only, saw nothing
+    ref = np.asarray(reference)
+    mask = np.abs(ref - ref[:, [0]]) < 60.0
+    assert float(np.abs((np.asarray(other) - np.asarray(other)[:, [0]]) - (ref - ref[:, [0]]))[mask].max()) == 0.0
+    # a state that is not finite in one backend only is compared and fails
+    assert between_state_differences([[0.0, 1.0]], [[0.0, float("nan")]], [0])["worst"] == float("inf")

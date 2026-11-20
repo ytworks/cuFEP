@@ -801,8 +801,8 @@ def restraint_notes(stored: dict, cfg: Config) -> list[str]:
 
     info = stored.get("info") or {}
     notes = list(info.get("notes", []))
-    if info.get("selection") == "manual":
-        return notes
+    # manual anchors too (review of PR 1: their pose was not measured); a file of manual anchors of an
+    # earlier version holds no distance and says so
     if info.get("ligand_rmsd_reference") == "input pose" and info.get("ligand_rmsd_A") is not None:
         notes = [n for n in notes if not n.startswith(POSE_NOTE)]
         note = pose_note(float(info["ligand_rmsd_A"]) / 10.0, cfg.restraints.pose_rmsd_warning_nm)
@@ -1463,7 +1463,20 @@ def run_leg(job: LegJob) -> dict:
                 restraint, fluctuations = manual_boresch_restraint(
                     rc.host_atoms, rc.guest_atoms, prep["ligand"], eq, system.getNumParticles(), k_r, k_a, equil_file,
                     force_constants=rc.force_constants, temperature_K=T)
-                info = {"selection": "manual", "force_constants": rc.force_constants, "fluctuations": fluctuations}
+                # how far the ligand moved from the pose it was given, measured as for anchors the search
+                # chooses (review of PR 1: with manual anchors a ligand that left the site gave no warning)
+                from cufep.alchemy.restraints import ligand_pose_rmsd, pose_note
+
+                full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))
+                full[:, eq["frame_atoms"], :] = eq["frames"]
+                rmsd = ligand_pose_rmsd(prep["topology"], full, prep["ligand"], rdmol, prep["positions"],
+                                        frame_boxes_nm=eq["frame_boxes"], input_box_nm=prep["box"],
+                                        host_max_distance_nm=rc.host_max_distance_nm)
+                note = pose_note(rmsd, rc.pose_rmsd_warning_nm)
+                info = {"selection": "manual", "force_constants": rc.force_constants, "fluctuations": fluctuations,
+                        "ligand_rmsd_A": 10 * rmsd, "ligand_rmsd_reference": "input pose",
+                        "notes": [note] if note else []}
+                log(f"restraint (manual anchors): r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * rmsd:.2f} A")
             else:
                 full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))
                 full[:, eq["frame_atoms"], :] = eq["frames"]

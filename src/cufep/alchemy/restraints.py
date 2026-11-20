@@ -379,6 +379,71 @@ def nearest_image_of_ligand(positions_nm: np.ndarray, ligand: np.ndarray, anchor
     return pos[0] if single else pos
 
 
+def _c_alpha_atoms(topology) -> np.ndarray:
+    from cufep.prep.protein import AMINO_ACIDS
+
+    return np.array([a.index for a in topology.atoms() if a.residue.name in AMINO_ACIDS and a.name == "CA"], dtype=int)
+
+
+def binding_site_frames(topology, frames_nm: np.ndarray, ligand: np.ndarray, ligand_heavy: np.ndarray,
+                        host_max_distance_nm: float, frame_boxes_nm: np.ndarray | None = None):
+    """The frames in the frame of the binding site: ``(frames, aligned, site)``.
+
+    With the box vectors of the frames, the ligand is first brought to the periodic image nearest
+    to the protein (``frames``). Then every frame is superposed on the backbone atoms around the
+    ligand (``site``, the C-alpha atoms if there are fewer than 12), so that domain motions elsewhere
+    do not count as flexibility of the site (OpenFE's "local" RMSF): ``aligned``."""
+    from cufep.prep.protein import AMINO_ACIDS
+
+    ca = _c_alpha_atoms(topology)
+    if frame_boxes_nm is not None:
+        # the ligand in the periodic image nearest to the protein, whatever image it was written in
+        frames_nm = nearest_image_of_ligand(frames_nm, ligand, frames_nm[:, ca, :].mean(axis=1), frame_boxes_nm)
+    backbone_all = np.array([a.index for a in topology.atoms() if a.residue.name in AMINO_ACIDS
+                             and a.name in ("N", "CA", "C")], dtype=int)
+    centroid = frames_nm[0, ligand_heavy, :].mean(axis=0)
+    near = backbone_all[np.linalg.norm(frames_nm[0, backbone_all, :] - centroid, axis=1) < host_max_distance_nm + 0.5]
+    site = near if len(near) >= 12 else ca
+    aligned = kabsch_align(frames_nm, frames_nm[0], site)
+    aligned = kabsch_align(aligned, aligned.mean(axis=0), site)
+    return frames_nm, aligned, site
+
+
+def pose_rmsd_in_site(topology, aligned: np.ndarray, site: np.ndarray, ligand: np.ndarray, ligand_heavy: np.ndarray,
+                      rdmol, input_pose_nm: np.ndarray | None = None, input_box_nm: np.ndarray | None = None) -> float:
+    """The heavy-atom RMSD of the ligand from its input pose (from the first frame if none is given)
+    over the second half of the frames ``aligned`` on the binding site (:func:`binding_site_frames`).
+
+    The input is brought to the periodic image of its ligand nearest to its protein and superposed
+    on the mean of the frames by the same atoms. Atoms that the symmetry of the molecule
+    interchanges may swap places (OpenFE reports the same symmetry-corrected RMSD)."""
+    mean = aligned.mean(axis=0)
+    if input_pose_nm is None:
+        reference = aligned[0, ligand_heavy, :]
+    else:
+        given = np.array(input_pose_nm, dtype=float)
+        if input_box_nm is not None:
+            given = nearest_image_of_ligand(given, ligand, given[_c_alpha_atoms(topology)].mean(axis=0), input_box_nm)
+        reference = kabsch_align(given[None], mean, site)[0][ligand_heavy, :]
+    rmsd = None
+    for perm in heavy_atom_symmetries(rdmol):
+        d = np.sqrt(((aligned[:, ligand_heavy[perm], :] - reference) ** 2).sum(axis=2).mean(axis=1))
+        rmsd = d if rmsd is None else np.minimum(rmsd, d)
+    return float(rmsd[len(rmsd) // 2:].mean())
+
+
+def ligand_pose_rmsd(topology, frames_nm: np.ndarray, ligand_atoms, rdmol, input_pose_nm: np.ndarray,
+                     frame_boxes_nm: np.ndarray | None = None, input_box_nm: np.ndarray | None = None,
+                     host_max_distance_nm: float = RestraintSearchSettings.host_max_distance_nm) -> float:
+    """How far the ligand of the frames is from its input pose (nm): the measure of the restraint
+    search (:func:`binding_site_frames`, :func:`pose_rmsd_in_site`), for anchors that were not
+    chosen by it (review of PR 1: with manual anchors a ligand that left the site gave no warning)."""
+    lig = np.asarray(ligand_atoms, dtype=int)
+    heavy = lig[[i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]]
+    _frames, aligned, site = binding_site_frames(topology, frames_nm, lig, heavy, host_max_distance_nm, frame_boxes_nm)
+    return pose_rmsd_in_site(topology, aligned, site, lig, heavy, rdmol, input_pose_nm, input_box_nm)
+
+
 def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[int], rdmol,
                            temperature_K: float = 298.15,
                            settings: RestraintSearchSettings | None = None,
@@ -408,19 +473,8 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
 
     heavy_local = [i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]
     lig_heavy = lig[heavy_local]
-    if frame_boxes_nm is not None:
-        # the ligand in the periodic image nearest to the protein, whatever image it was written in
-        frames_nm = nearest_image_of_ligand(frames_nm, lig, frames_nm[:, ca, :].mean(axis=1), frame_boxes_nm)
-
-    # Frame of the binding site: superpose on the backbone atoms around the ligand, so that
-    # domain motions elsewhere do not count as flexibility of the site (OpenFE's "local" RMSF).
-    backbone_all = np.array([a.index for a in atoms if a.residue.name in AMINO_ACIDS and a.name in ("N", "CA", "C")],
-                            dtype=int)
-    centroid = frames_nm[0, lig_heavy, :].mean(axis=0)
-    near = backbone_all[np.linalg.norm(frames_nm[0, backbone_all, :] - centroid, axis=1) < s.host_max_distance_nm + 0.5]
-    site = near if len(near) >= 12 else ca
-    aligned = kabsch_align(frames_nm, frames_nm[0], site)
-    aligned = kabsch_align(aligned, aligned.mean(axis=0), site)
+    frames_nm, aligned, site = binding_site_frames(topology, frames_nm, lig, lig_heavy, s.host_max_distance_nm,
+                                                   frame_boxes_nm)
     mean = aligned.mean(axis=0)
     rmsf = np.sqrt(((aligned - mean) ** 2).sum(axis=2).mean(axis=0))
 
@@ -432,22 +486,9 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     lig_self = kabsch_align(lig_self, lig_self.mean(axis=0), np.array(heavy_local))
     lig_rmsf = np.sqrt(((lig_self - lig_self.mean(axis=0)) ** 2).sum(axis=2).mean(axis=0))
 
-    # How far the ligand moved from the input pose, in the frame of the binding site. Atoms that
-    # the symmetry of the molecule interchanges may swap places (OpenFE reports the same
-    # symmetry-corrected RMSD). The run goes on in any case, as in OpenFE; a large value is
-    # reported with the result.
-    if input_pose_nm is None:
-        reference = aligned[0, lig_heavy, :]         # no input structure given: the first frame
-    else:
-        given = np.array(input_pose_nm, dtype=float)
-        if input_box_nm is not None:
-            given = nearest_image_of_ligand(given, lig, given[ca].mean(axis=0), input_box_nm)
-        reference = kabsch_align(given[None], mean, site)[0][lig_heavy, :]
-    rmsd = None
-    for perm in heavy_atom_symmetries(rdmol):
-        d = np.sqrt(((aligned[:, lig_heavy[perm], :] - reference) ** 2).sum(axis=2).mean(axis=1))
-        rmsd = d if rmsd is None else np.minimum(rmsd, d)
-    tail = float(rmsd[len(rmsd) // 2:].mean())
+    # How far the ligand moved from the input pose, in the frame of the binding site. The run goes
+    # on in any case, as in OpenFE; a large value is reported with the result.
+    tail = pose_rmsd_in_site(topology, aligned, site, lig, lig_heavy, rdmol, input_pose_nm, input_box_nm)
     note = pose_note(tail, s.pose_rmsd_warning_nm, "input" if input_pose_nm is not None else "starting")
     if note:
         notes.append(note)
