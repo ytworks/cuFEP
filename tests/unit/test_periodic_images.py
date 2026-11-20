@@ -254,3 +254,48 @@ def test_the_pose_note_of_manual_anchors_is_made_with_the_level_of_the_run():
     assert restraint_notes(stored, cfg(0.3))[0].startswith("the ligand moved away from its input pose")
     earlier = {"info": {"selection": "manual", "fluctuations": {}}}
     assert "could not be compared with restraints.pose_rmsd_warning_nm" in restraint_notes(earlier, cfg(0.3))[0]
+
+
+def _pose_with_theta_a(degrees):
+    """POSITIONS with the guest moved so that the anchor angle H1-H0-G0 (theta_A) is ``degrees``; the other angles
+    stay far from a straight line."""
+    pose = POSITIONS.copy()
+    a = np.radians(degrees)
+    pose[3] = pose[0] + 0.4 * np.array([-np.sin(a), np.cos(a), 0.0])
+    pose[4] = pose[3] + [-0.15, 0.0, 0.0]
+    pose[5] = pose[4] + [0.0, 0.0, 0.15]
+    return pose
+
+
+def test_the_prepared_pose_is_held_to_the_rule_of_every_frame_only(tmp_path, monkeypatch):
+    """Independent review of c691e37 (P2): before any job the prepared pose was held to both margins of the anchor
+    geometry, also the one of the frame the reference values come from (30 degrees), which the run applies to the last
+    frame of the pre-equilibration only. theta_A of 25 degrees in the prepared pose was refused although frames of
+    38 to 45 degrees pass the rule of the run; and a run whose complex legs all have their restraint was refused too.
+    The prepared pose is held to the rule of every frame (22 degrees with the default constants)."""
+    from cufep import workflow
+    from cufep.alchemy.restraints import RestraintSearchSettings, anchor_geometry_problem, anchor_margins
+    from cufep.config.schema import Config
+
+    margins = anchor_margins(RestraintSearchSettings(k_r=K_R, k_angle=K_A), 298.15)
+    assert np.degrees(margins) == pytest.approx([22.05, 30.0], abs=0.01)
+    probe = BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0)
+    assert "in the frame the reference values come from" in anchor_geometry_problem(probe, _pose_with_theta_a(25.0)[None],
+                                                                                   *margins)   # the rule before
+    frames = np.array([_pose_with_theta_a(t) for t in np.linspace(38.0, 45.0, 8)])
+    assert anchor_geometry_problem(probe, frames, *margins) is None               # what the run accepts
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                 "restraints": {"selection": "manual", "host_atoms": list(HOST), "guest_atoms": list(GUEST)}})
+    monkeypatch.setattr(workflow, "check_manual_anchors", lambda *args: None)     # atoms of protein and ligand: elsewhere
+    pose = {"positions": _pose_with_theta_a(25.0), "ligand": list(LIGAND), "box": CUBE}
+    monkeypatch.setattr(workflow, "load_prepared", lambda prep_dir, name: pose)
+    workflow.check_before_jobs(cfg, tmp_path, {(0, "complex")})                  # accepted now
+    pose["positions"] = _pose_with_theta_a(10.0)                                  # within 22 degrees of a straight line
+    with pytest.raises(WorkflowError, match="in the prepared pose: the anchor angle H1-H0-G0 .* comes within 22 degrees"):
+        workflow.check_before_jobs(cfg, tmp_path, {(0, "complex")})
+    leg = tmp_path / "repeat_0" / "complex"
+    leg.mkdir(parents=True)
+    (leg / "restraint.json").write_text("{}")                                     # the leg has its restraint
+    workflow.check_before_jobs(cfg, tmp_path, {(0, "complex")})
+    with pytest.raises(WorkflowError, match="in the prepared pose"):              # another repeat has none yet
+        workflow.check_before_jobs(cfg, tmp_path, {(0, "complex"), (1, "complex")})

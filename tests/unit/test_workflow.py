@@ -755,6 +755,28 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         "selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6],
         "k_angle_kcal_per_rad2": 20.0})) == [
         "restraints.k_angle_kcal_per_rad2: k_theta_a 80, k_theta_b 80, k_phi_a 80, k_phi_b 80, k_phi_c 80 -> 20"]
+    # independent review of c691e37 (P2): such a file of 64751ca had a record of its origin (with auto), so the
+    # contradiction above, which counts for files without one, was never asked and the 10/80 restraint was used under
+    # a run that records auto. It is refused whatever its record says, by the check of the pre-flight and of the leg
+    from cufep.workflow import check_restraint_file
+
+    manual_auto = config(restraints={"selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6],
+                                     "force_constants": "auto"})
+    of_64751ca = dict(manual, made_with=restraint_made_with(manual_auto))
+    assert check_made_from("the restraint of this leg", tmp_path / "restraint.json", of_64751ca["made_with"],
+                           restraint_made_with(manual_auto))                     # the record alone lets it through
+    with pytest.raises(WorkflowError, match="manual restraint of a version that used the configured force constants"):
+        check_restraint_file(of_64751ca, tmp_path / "restraint.json", manual_auto)
+    with pytest.raises(WorkflowError, match="did not record what it was made from"):
+        check_restraint_file(manual, tmp_path / "restraint.json", manual_auto)   # without a record: as before
+    # a file of today records its constants: used, and no contradiction is made up for it
+    today = {"restraint": dict(old_restraint["restraint"]), "made_with": restraint_made_with(manual_auto),
+             "info": {"selection": "manual", "force_constants": "auto"}}
+    assert check_restraint_file(today, tmp_path / "restraint.json", manual_auto) is True
+    assert restraint_contradictions(today, manual_auto) == []
+    manual_openfe = config(restraints={"selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6]})
+    assert check_restraint_file(dict(manual, made_with=restraint_made_with(manual_openfe)), tmp_path / "restraint.json",
+                                manual_openfe) is True                            # the configured constants were asked
 
     # pre-equilibration and restraint of a leg
     eq = equil_made_with(cfg, "complex", False, 7)

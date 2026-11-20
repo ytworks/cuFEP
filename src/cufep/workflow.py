@@ -146,9 +146,14 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
     if not complex_repeats:
         return
     check_manual_anchors(cfg, lig_dir)
-    if cfg.restraints.selection == "manual":
-        # anchors that cannot define the restraint already in the prepared pose are refused before the
-        # pre-equilibration (the frames of the pre-equilibration are checked again when it is made)
+    stored = all((Path(lig_dir) / f"repeat_{r}" / "complex" / "restraint.json").exists() for r in complex_repeats)
+    if cfg.restraints.selection == "manual" and not stored:
+        # anchors that cannot define the restraint already in the prepared pose, from which the
+        # pre-equilibration starts, are refused before it. Only the rule of every frame (an angle near a
+        # straight line) applies here; the margin of the reference values belongs to the last frame of
+        # the pre-equilibration, which is checked when the restraint is made (review of PR 1: the
+        # prepared pose was held to both, and anchors the run accepts were refused; so was a run whose
+        # legs all have their restraint already)
         from cufep.alchemy.restraints import (BoreschRestraint, RestraintSearchSettings, anchor_geometry_problem,
                                               anchor_margins, nearest_image_of_ligand)
 
@@ -159,8 +164,8 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
                                        np.asarray(prep["positions"], dtype=float)[list(host)].mean(axis=0),
                                        np.asarray(prep["box"], dtype=float))
         settings = RestraintSearchSettings(k_r=rc.k_r_kcal_per_A2 * KCAL * 100.0, k_angle=rc.k_angle_kcal_per_rad2 * KCAL)
-        problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None],
-                                          *anchor_margins(settings, cfg.thermodynamics.temperature_K))
+        flat_margin, _reference_margin = anchor_margins(settings, cfg.thermodynamics.temperature_K)
+        problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None], flat_margin, 0.0)
         if problem:
             raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)} in the prepared pose: "
                                 f"{problem}. Choose other anchors; nothing was changed")
@@ -432,6 +437,34 @@ def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[s
     return out
 
 
+def manual_constants_of_an_earlier_version(stored: dict, cfg: Config) -> bool:
+    """Whether a stored restraint is one of manual anchors made by a version that ignored
+    ``restraints.force_constants: auto`` for them, while this run asks for auto: it holds the
+    configured constants, not constants from the fluctuations. Such a file records no
+    ``force_constants`` in its info (versions before revision 14); its record of origin, if it has
+    one, says auto all the same."""
+    rc, info = cfg.restraints, stored.get("info") or {}
+    return (rc.selection == "manual" and rc.force_constants == "auto" and info.get("selection") == "manual"
+            and "force_constants" not in info)
+
+
+def check_restraint_file(stored: dict, rfile: Path, cfg: Config, log=print) -> bool:
+    """Refuse a stored restraint this run cannot use (:func:`check_made_from` with its record or, for a
+    file without one, :func:`restraint_contradictions`), and a manual restraint of a version that
+    ignored ``force_constants: auto`` when auto is asked, whatever its record says
+    (:func:`manual_constants_of_an_earlier_version`; review of PR 1: such files had a record and were
+    used, with the configured constants under a run that records auto). One rule for the check
+    before any job and for the leg. Returns whether its origin is recorded."""
+    recorded = check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_made_with(cfg), log,
+                               contradictions=restraint_contradictions(stored, cfg))
+    if recorded and manual_constants_of_an_earlier_version(stored, cfg):
+        raise WorkflowError(
+            f"the restraint of this leg in {rfile} cannot be used again: it is a manual restraint of a version that used "
+            "the configured force constants where restraints.force_constants: auto asks for constants from the "
+            "fluctuations of the anchors. Nothing was changed; run the calculation in a new output.dir")
+    return recorded
+
+
 def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
     """Where a ``restraint.json`` without a record of its origin says something else than this run."""
     rc, info, restraint = cfg.restraints, stored.get("info") or {}, stored.get("restraint") or {}
@@ -440,7 +473,7 @@ def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
         out.append(f"restraints.selection: {info['selection']} -> {rc.selection}")
     if "force_constants" in info and info["force_constants"] != rc.force_constants:
         out.append(f"restraints.force_constants: {info['force_constants']} -> {rc.force_constants}")
-    elif rc.selection == "manual" and rc.force_constants == "auto" and info.get("selection") == "manual":
+    elif manual_constants_of_an_earlier_version(stored, cfg):
         # a manual restraint of a version that ignored force_constants: auto holds the configured constants
         out.append("restraints.force_constants: the configured constants (a manual restraint of an earlier version) "
                    "-> auto")
@@ -692,9 +725,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         check_equil_file(eq, equil_file, cfg, leg, in_membrane, leg_seed(cfg, repeat, leg), quiet)
     rfile = leg_dir / "restraint.json"
     if is_complex and rfile.exists():
-        stored = _read_json(rfile) or {}
-        check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_made_with(cfg), quiet,
-                        contradictions=restraint_contradictions(stored, cfg))
+        check_restraint_file(_read_json(rfile) or {}, rfile, cfg, quiet)
     if reschedule:
         return                           # the windows and samples the leg has are set aside; it starts anew
     rest2_scale = cfg.sampling.rest2.scale if cfg.sampling.rest2.scale > 1.0 else 1.0
@@ -1447,8 +1478,7 @@ def run_leg(job: LegJob) -> dict:
         restraint_from = restraint_made_with(cfg)
         if rfile.exists():
             stored = json.loads(rfile.read_text())
-            if not check_made_from("the restraint of this leg", rfile, stored.get("made_with"), restraint_from, log,
-                                   contradictions=restraint_contradictions(stored, cfg)):
+            if not check_restraint_file(stored, rfile, cfg, log):
                 origin_not_recorded.append("the restraint")
             restraint = BoreschRestraint.from_dict(stored["restraint"])
             problems = restraint_anchor_problems(restraint.host_atoms, restraint.guest_atoms, prep)
