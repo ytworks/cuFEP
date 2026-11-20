@@ -41,11 +41,11 @@ def test_files_of_earlier_versions_are_read(tmp_path, capsys):
     old = copy.deepcopy(full)
     old["analysis"]["convergence_tolerance_sigma"] = 2.0                    # the default of that version
     cfg, notices = load_config_with_notices(write(tmp_path, old))
-    assert cfg.analysis.halves_tolerance_kT == 1.0 and "convergence_tolerance_sigma" not in cfg.analysis.model_dump()
+    assert cfg.analysis.min_effective_samples == 50.0 and "convergence_tolerance_sigma" not in cfg.analysis.model_dump()
     assert len(notices) == 1 and notices[0].startswith(
         "analysis.convergence_tolerance_sigma: 2.0 is a setting of an earlier version and is not used")
-    new_settings = ("analysis.min_effective_samples", "analysis.halves_tolerance_kT",
-                    "analysis.estimators_tolerance_kcal_mol")
+    # the only levels now are the literature's two
+    new_settings = ("analysis.min_overlap", "analysis.min_effective_samples")
     assert all(name in notices[0] for name in new_settings)
     assert load_config(write(tmp_path, old)).analysis.min_overlap == 0.03   # the plain loader reads it as well
     cli._load(str(write(tmp_path, old)))                                    # the commands print the notice
@@ -53,9 +53,22 @@ def test_files_of_earlier_versions_are_read(tmp_path, capsys):
 
     # a value the user had chosen cannot be carried over: stop and say what the settings are now
     old["analysis"]["convergence_tolerance_sigma"] = 3.0
-    with pytest.raises(ValueError, match="cannot be turned into kT or kcal/mol") as stopped:
+    with pytest.raises(ValueError, match="no level of the literature") as stopped:
         load_config(write(tmp_path, old))
     assert all(name in str(stopped.value) for name in new_settings)
+
+    # the owner, 2026-11-20: the halves and BAR against MBAR are no longer checks. Their settings are read with a
+    # notice at their old default and refused with any other value
+    for key in ("halves_tolerance_kT", "estimators_tolerance_kcal_mol"):
+        assert key not in full["analysis"]
+        removed = copy.deepcopy(full)
+        removed["analysis"][key] = 1.0
+        cfg, notices = load_config_with_notices(write(tmp_path, removed))
+        assert len(notices) == 1 and notices[0].startswith(f"analysis.{key}: 1.0 is a setting of an earlier version")
+        assert "levels of the literature" in notices[0]
+        removed["analysis"][key] = 2.0
+        with pytest.raises(ValueError, match="Remove the line"):
+            load_config(write(tmp_path, removed))
 
     # the other setting that an earlier version wrote and this one does not have
     older = copy.deepcopy(full)

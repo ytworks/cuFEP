@@ -36,7 +36,11 @@ KCAL = 4.184
 #:      state, not C / <V>; the acceptance of exchange between neighbouring windows is accepted /
 #:      proposed swaps where the samples record them (the measure reported before is kept as
 #:      neighbour_transition_fraction)
-ANALYSIS_VERSION = 8
+#:   9  the verdicts on a leg are the two checks with the literature's levels only (overlap, uncorrelated
+#:      samples); the comparison of the two halves and of BAR with MBAR, and the reduction of the
+#:      samples by the ratio of two standard errors, are no longer checks (owner, 2026-11-20). The
+#:      free energies and errors are those of version 8
+ANALYSIS_VERSION = 9
 #: numbers of time blocks the standard error of a leg is computed with; the largest of the errors
 #: they give is the one reported (:meth:`TimeRangeEstimator.part`). The numbers are cuFEP's choice:
 #: the literature asks for blocks longer than the correlation time and for a standard error that
@@ -976,67 +980,35 @@ def _number(value) -> float | None:
     return value if np.isfinite(value) else None
 
 
-def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samples: float = 50.0,
-                   halves_tolerance_kT: float = 1.0, estimators_tolerance_kcal: float = 1.0) -> dict:
+def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samples: float = 50.0) -> dict:
     """What the analysis of a leg says about its reliability. ``analysis`` holds energies in kJ/mol.
 
-    Every level is one that the literature gives; none of them is cuFEP's own.
+    Two checks, each with the number the literature gives and nothing of cuFEP's own (the owner,
+    2026-11-20: no criteria of cuFEP's own; a comparison of the two halves of the production and one
+    of BAR with MBAR were removed, together with a reduction of the number of samples by the ratio
+    of two standard errors):
 
-    overlap      every pair of neighbouring lambda windows overlaps by at least ``min_overlap``.
-                 This is the first condition: the variance of the estimate is a function of the
-                 overlap matrix and the number of samples, and "values as low as 0.03 [seem] to be
-                 tolerable to yield a reliable free energy estimate"; below it "the free energy
-                 estimate itself will likely be substantially incorrect" (Klimovich, Shirts and
-                 Mobley 2015, sections 3.4 and 3.5; also the warning level of Flare). Two matrices
-                 are examined, both in the normalisation of equal numbers of samples per window:
-                 that of all iterations, and that of the samples the free energy is estimated
-                 from (``used``, :func:`overlap_with_equal_weights`). ``below`` names the one
-                 that is under the level.
-    samples      the window with the fewest independent samples has at least
-                 ``min_effective_samples`` ("it is recommended that the effective number of
-                 uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators are used", Mey et
-                 al. 2020, section 8.2). Both the estimate (iterations / statistical inefficiency,
-                 ``fewest``) and the number of samples MBAR really gets from that window
-                 (``kept``) must reach it, and so must what the standard error leaves of them
-                 (``independent``): where the standard error of the MBAR part from time blocks
-                 (the largest that could be used) is ``error_ratio`` times the one MBAR gives for
-                 the kept samples, the samples carry the
-                 information of 1 / error_ratio^2 as many independent ones (the variance of an
-                 estimate falls as one over their number). The windows are decorrelated one by
-                 one; this is the correlation that is left between them. A ratio below 1 counts
-                 as 1.
-    halves       the free energies from the first and from the second half of the production
-                 differ by at most ``halves_tolerance_kT`` ("differences over 1 kBT indicating
-                 poor convergence", Mey et al. 2020, figure 9, where it is applied to each step of
-                 a relative perturbation; here to the leg). A difference is an indication, not a
-                 proof, and a converged estimate still fluctuates: the difference is also given
-                 in units of its own standard error.
-    estimators   BAR between neighbouring windows and MBAR (both on the same samples and without
-                 the tail correction) differ by at most
-                 ``estimators_tolerance_kcal`` (differences "larger than 1 kcal/mol ... would
-                 indicate poor convergence", Mey et al. 2020, section 8.4; the literature compares
-                 TI with BAR-type estimators, cuFEP records no dU/dlambda).
+    overlap      every pair of neighbouring lambda windows overlaps by at least ``min_overlap``:
+                 "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy
+                 estimate"; below it "the free energy estimate itself will likely be substantially
+                 incorrect" (Klimovich, Shirts and Mobley 2015, section 3.5; also the warning level
+                 of Flare). Two matrices are examined, both in the normalisation of equal numbers of
+                 samples per window: that of all iterations, and that of the samples the free
+                 energy is estimated from (``used``, :func:`overlap_with_equal_weights`).
+                 ``below`` names the one that is under the level.
+    samples      the window with the fewest uncorrelated samples has at least
+                 ``min_effective_samples``: "it is recommended that the effective number of
+                 uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators are used" (Mey et
+                 al. 2020, section 8.2). The number of a window is its production divided by the
+                 statistical inefficiency of its energy difference to the neighbouring window
+                 (``fewest``), and not more than the samples MBAR really gets from it (``kept``).
 
-    ``ok`` is None where the analysis does not hold the numbers for a check; for the halves that
-    includes a production too short to give each half an estimate, with the reason in ``reason``.
-    A number that has no value is None, in ``analysis`` and in what is returned.
+    ``ok`` is None where the analysis does not hold the numbers for a check. The forward and
+    reverse estimates, the two halves and BAR stay in the analysis as numbers (as FEP+ and OpenFE
+    show them), without a verdict.
     """
-    kt = R_GAS * float(analysis.get("temperature_K", 298.15))
-    final, error = _number(analysis.get("delta_g")), _number(analysis.get("delta_g_error"))
-    # the MBAR part alone: before version 5 delta_g was that
-    mbar_value = _number(analysis.get("delta_g_mbar", analysis.get("delta_g")))
+    error = _number(analysis.get("delta_g_error"))
     kept = analysis.get("window_kept_samples") or []
-    # the correlation left between the windows: standard error of the MBAR part from time blocks /
-    # standard error MBAR gives for it (None: no number of blocks could be used)
-    if "delta_g_mbar_error_blocks" in analysis:
-        blocks = [_number(x) for x in (analysis.get("delta_g_mbar_error_blocks") or {}).values()]
-        blocks = [x for x in blocks if x is not None]
-        mbar_error = _number(analysis.get("delta_g_mbar_error"))
-        ratio = max(blocks) / mbar_error if blocks and mbar_error else None
-    else:                                        # version 4
-        mbar_error = _number(analysis.get("delta_g_error_mbar"))
-        ratio = error / mbar_error if analysis.get("delta_g_error_n_blocks") and error is not None and mbar_error else None
-
     neighbour = [_number(x) for x in analysis.get("overlap_neighbour", [])]
     lowest = _number(analysis["min_overlap"]) if "min_overlap" in analysis else 1.0
     all_ok = bool(lowest is not None and lowest >= min_overlap)
@@ -1060,56 +1032,21 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
         counts = [min(float(e), float(kept[j])) if len(kept) == len(per_window) else float(e)
                   for j, e in enumerate(per_window)]
         j = int(np.argmin(counts))
-        independent = counts[j] / max(1.0, ratio ** 2) if ratio is not None else counts[j]
-        samples.update(ok=bool(independent >= min_effective_samples), fewest=float(per_window[j]), window=j,
+        samples.update(ok=bool(counts[j] >= min_effective_samples), fewest=float(per_window[j]), window=j,
                        statistical_inefficiency=float(analysis["window_statistical_inefficiency"][j]),
-                       error_ratio=ratio, independent=float(independent))
+                       counted=float(counts[j]))
         if len(kept) == len(per_window):
             samples["kept"] = int(kept[j])
         towards = analysis.get("window_inefficiency_neighbour") or []
         if len(towards) == len(per_window):
             samples["neighbour"] = int(towards[j])
     out["samples"] = samples
-
-    halves = [analysis.get("first_half"), analysis.get("second_half")]
-    tolerance = halves_tolerance_kT * kt
-    conv = {"ok": None, "tolerance": tolerance, "tolerance_kT": float(halves_tolerance_kT), "final": final}
-    if analysis.get("convergence_note"):
-        conv["reason"] = str(analysis["convergence_note"])
-    elif per_window and all(h is not None for h in halves):
-        if analysis.get("halves_warning"):
-            conv["warning"] = str(analysis["halves_warning"])
-        first, second = _number(halves[0][0]), _number(halves[1][0])
-        conv.update(first_half=first, second_half=second)
-        if first is not None and second is not None:
-            difference = abs(first - second)
-            errors = [_number(halves[0][1]), _number(halves[1][1])]
-            sigma = None if None in errors else float(np.hypot(*errors))
-            if sigma:
-                in_sigma = difference / sigma
-            elif sigma == 0.0 and difference == 0.0:
-                in_sigma = 0.0                               # identical halves
-            else:
-                in_sigma = None
-                conv["difference_sigma_note"] = ("the standard error of the difference is zero" if sigma == 0.0
-                                                 else "a half has no standard error")
-            conv.update(difference=difference, difference_kT=difference / kt, ok=bool(difference <= tolerance),
-                        difference_sigma=in_sigma)
-        elif final is not None:
-            conv["ok"] = False       # half of the data does not determine the free energy
-    out["halves"] = conv
-
-    # BAR and MBAR on the same samples, both without the tail correction
-    bar = _number(analysis.get("bar_delta_g"))
-    tolerance = estimators_tolerance_kcal * KCAL
-    est = {"ok": None, "tolerance": tolerance, "mbar": mbar_value}
-    if per_window and bar is not None and mbar_value is not None:
-        est.update(bar=bar, ok=bool(abs(bar - mbar_value) <= tolerance))
-    elif analysis.get("bar_note"):
-        est["reason"] = str(analysis["bar_note"])
-    out["estimators"] = est
     out["uncertainty"] = error
     return out
+
+
+#: the checks of :func:`quality_checks`: the only verdicts on a leg, each with the level the literature gives
+QUALITY_CHECKS = ("overlap", "samples")
 
 
 def statistical_inefficiency(u: np.ndarray, states: np.ndarray) -> float:

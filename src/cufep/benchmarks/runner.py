@@ -62,20 +62,14 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
 
 #: what a ligand's result can say about its legs: key in the summary and how the report names it.
 #: The same list is behind the flags of the report, the columns of summary.csv and the result line.
+#: The verdicts on the analysis are the two checks with the literature's levels
+#: (:data:`cufep.analysis.mbar.QUALITY_CHECKS`: overlap, uncorrelated samples); checks of cuFEP's own
+#: that earlier versions made (halves, BAR against MBAR, NOT CONVERGED) are not shown, also not from
+#: results those versions wrote (owner, 2026-11-20).
 LEG_FLAGS = (("failed_legs", "FAILED"), ("inconsistent_legs", "LEGS MADE UNDER DIFFERENT CONDITIONS"),
              ("not_reliable", "NOT RELIABLE (overlap)"), ("old_analysis", "old analysis"),
-             ("few_samples", "few independent samples"), ("halves_differ", "halves differ"),
-             ("halves_not_compared", "halves not compared"),
-             ("halves_below_level", "halves compared below the level of overlap"),
-             ("estimators_disagree", "BAR and MBAR differ"),
+             ("few_samples", "few independent samples"),
              ("origin_not_recorded", "origin of files not recorded"))
-
-
-#: what a ligand's result of an earlier version of cuFEP says with keys that this version no longer
-#: writes: the verdicts of checks that were replaced. They are shown as what that version said;
-#: they are not columns of summary.csv, which only this version writes.
-EARLIER_FLAGS = (("not_converged", "NOT CONVERGED by the check of an earlier version"),
-                 ("convergence_not_assessed", "convergence not assessed by an earlier version"))
 #: the flag of a binding free energy whose legs were not all analysed by this version of the
 #: analysis: the summary names the versions of its legs (analysis_versions) since version 5; one
 #: that does not was made before
@@ -101,11 +95,10 @@ def flags_of(ligand_summary: dict) -> list[str]:
     """The flags of one ligand, in the order of :data:`LEG_FLAGS`.
 
     A result that an earlier version of cuFEP analysed is not shown as if it had passed the
-    checks of this one: it carries the verdicts of that version (:data:`EARLIER_FLAGS`) and the
-    flag that the checks of this version were not made.
+    checks of this one: it carries the flag that the checks of this version were not made.
     """
     out = []
-    for key, name in LEG_FLAGS + EARLIER_FLAGS:
+    for key, name in LEG_FLAGS:
         items = ligand_summary.get(key) or []
         if items:
             out.append(f"{name}: " + ", ".join(str(item).split(":")[0] if key in ("old_analysis", "origin_not_recorded")
@@ -206,10 +199,11 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
               "Windows per leg, how many of them adaptive lambda scheduling added to its start, the lowest overlap "
               "of neighbouring windows in the production (from all iterations with equal numbers of samples per "
               "window, and among the samples the free energy is estimated from), and the legs that do not meet a "
-              "level of the checks (first repeat). NOT RELIABLE (overlap below 0.03) is the one that makes a result "
-              "unusable; the others say that more sampling is advisable. A result that an earlier version of cuFEP "
-              "analysed carries the verdicts of that version and the flag that the checks of this version were not "
-              "made; they are made when its legs are analysed again.", "",
+              "level of the checks (first repeat). The checks are the two of the literature: NOT RELIABLE (overlap "
+              "below 0.03, Klimovich et al. 2015) makes a result unusable; few independent samples (fewer than 50 "
+              "in a window, Mey et al. 2020) says that more sampling is advisable. A result that an earlier version "
+              "of cuFEP analysed carries the flag that the checks of this version were not made; they are made when "
+              "its legs are analysed again.", "",
               "| ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags |",
               "|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: r["exp"]):

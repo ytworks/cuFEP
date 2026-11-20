@@ -250,7 +250,7 @@ its own equilibration before the production.
 | initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state. For absolute FEP, Flare states only that the schedule is adaptive "for each stage of the calculation" | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
-| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the analysis checks the overlap, the number of independent samples and the two halves of the production ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
+| after the production | Flare shows the overlap matrix (warning below 0.03) and a convergence analysis; the user runs a further instance of the link with more lambda windows or a longer simulation | the analysis checks the overlap and the number of independent samples, the levels of the literature, and shows the forward and reverse series and the halves without a verdict ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
 | Fast / Normal / Accurate | an option of Flare; its values are not published | `overlap_threshold` is set as a number (the paper tested 0.03, 0.04 and 0.05) |
 
 ### What was measured on TYK2
@@ -466,14 +466,13 @@ The whole production and every part of it are used only if their free energy is 
   largest weight, so that a correction resting on a few configurations shows; no level is
   applied to them.
 
-A part that is not determined is left out with the reason: such halves are "not compared",
-points and blocks are listed in `parts_not_determined`, and the other blocks keep their places.
+A part that is not determined is left out with the reason: points and blocks are listed in
+`parts_not_determined`, a half has no value, and the other blocks keep their places.
 A determined part whose neighbouring windows overlap among its samples by less than
 `analysis.min_overlap` (0.03, the level of Klimovich et al. below which the estimate "will
 likely be substantially incorrect") is used, and shown with its error and a warning: it is
-listed in `parts_below_level`, and for the halves the warning (`halves_warning`) stands next to
-their comparison and the ligand's summary names the leg (`halves_below_level`, "halves compared
-below the level of overlap" in the report, `summary.csv` and the result line). The overlap of the whole production is a check of its own (`NOT RELIABLE`);
+listed in `parts_below_level` (for the halves in `halves_warning`); these are notes on the
+figure, not verdicts on the leg. The overlap of the whole production is a check of its own (`NOT RELIABLE`);
 since every split of a chain of windows into two groups crosses a pair of neighbours, a leg
 whose windows are not connected always fails it. A production without the four observations of
 the correction gives the leg no free energy.
@@ -592,9 +591,7 @@ and MBAR.
 | check | level | message | source |
 |---|---|---|---|
 | overlap | every pair of neighbouring lambda windows overlaps by at least `analysis.min_overlap` (0.03) in the production, in both matrices above; the message says which one is below | `NOT RELIABLE` | Klimovich et al., section 3.5: "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy estimate (as long as the resulting error is sufficiently low)". "Anything below that number should serve as a caution sign ...; in this case, not only will the estimated variance increase but the free energy estimate itself will likely be substantially incorrect" |
-| independent samples | the lambda window with the fewest has at least `analysis.min_effective_samples` (50): as estimated (iterations of the production divided by g of the window), as the number of samples MBAR gets from it (every ceil(g)-th iteration), and as what the standard error leaves of those (see below) | few independent samples | Mey et al., section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used" |
-| halves | the free energies from the first and from the second half of the production differ by at most `analysis.halves_tolerance_kT` (1 kT, 0.59 kcal/mol at 298 K) | the two halves of the production differ | Mey et al., figure 9: the difference between the forward and the reverse free energy "at the midpoint of the simulation time gives an indication of the overall convergence of the simulation, with differences over 1 kBT indicating poor convergence". The figure applies it to each step of a relative perturbation, cuFEP to a leg |
-| estimators | BAR between neighbouring windows and MBAR (on the same samples, both without the tail correction) differ by at most `analysis.estimators_tolerance_kcal_mol` (1 kcal/mol) | BAR and MBAR differ | Mey et al.: "differences between methods that are larger than 1 kcal/mol ... would indicate poor convergence". The guides compare TI with BAR-type estimators; cuFEP records no dU/dlambda, and BAR against MBAR is a weaker comparison |
+| independent samples | the lambda window with the fewest has at least `analysis.min_effective_samples` (50): as estimated (iterations of the production divided by g of the window) and as the number of samples MBAR gets from it (every ceil(g)-th iteration) | few independent samples | Mey et al., section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used" |
 
 The overlap comes first. The overlap matrix is "a quantitative estimator of the phase-space
 overlap" (Klimovich et al., section 3.4), "trustworthy results should in general have at
@@ -602,31 +599,18 @@ least a tridiagonal overlap matrix" (section 3.5), and the other checks presuppo
 without overlap the estimate and its standard error mean nothing. `NOT RELIABLE` is
 therefore the only message that says a result cannot be used.
 
-The other messages say that more sampling is advisable, with the number and the level. They
-do not say that a result is wrong:
+The message about the samples says that more sampling is advisable, with the number and the
+level; it does not say that a result is wrong.
 
-- A free energy that is converged still fluctuates: estimates from parts of the production
-  differ by their statistical error. The message about the halves gives the difference in kT
-  and in standard errors of the difference. A difference above 1 kT that is no more than
-  about twice its standard error is what that number of samples allows; it says that the leg
-  is not yet determined to 1 kT, not that it drifts.
-- With few independent samples the comparison of the halves is itself uncertain; the message
-  about the samples then matters more than the one about the halves.
-- What the standard error leaves of the samples. The variance of an estimate falls as one
-  over the number of independent samples. Where the standard error from time blocks is r
-  times the one MBAR gives for the kept samples, those samples carry the information of
-  1 / r^2 as many independent ones, and that number is compared with the level
-  (`quality.samples.independent`, with r as `error_ratio`). A ratio below 1 counts as 1. This
-  rule is cuFEP's; it is how the correlation between the windows, which the thinning window
-  by window does not remove, enters the check. r is taken for the MBAR part alone (the largest
-  error from blocks that can be used), so that the variance of the correction does not count
-  as a correlation of the samples. In the first run of the model above the
-  slowest window kept 67 samples, which is above the level; they count as 8, and none of the
-  48 runs passes.
-- The two halves are the first and the second half of the production in time and share no
-  iteration. A part of the production gets an estimate only if every lambda window holds at
-  least four kept samples in it. If a half does not, the result says that the halves could
-  not be compared and why.
+These two are the only checks. cuFEP has no criteria of its own (the owner, 2026-11-20). The
+forward and reverse series, the two halves of the production, the consecutive blocks and BAR
+between neighbouring windows are computed and shown (`analysis.png`, `result.json`) as numbers
+without a verdict, as FEP+ and OpenFE show their convergence plots. Earlier versions also
+judged the two halves of a leg against 1 kT, BAR against MBAR against 1 kcal/mol, and the
+samples after a reduction by the ratio of two standard errors: the 1 kT of Mey et al. is the
+caption of a figure about one step of a relative perturbation, and for a whole leg the
+difference of its halves is already about 2 kT from statistical noise alone when its standard
+error is 0.6 kcal/mol; the comparison with BAR and the reduction were cuFEP's own.
 
 A value that cannot be estimated (a half of a production that is too short, a BAR estimate
 for windows without overlap) is `null` in the result files, with the reason in a text field
@@ -763,8 +747,7 @@ together again.
   when all iterations are taken, but not in the samples that are left after every window was
   thinned by its correlation. A longer production gives the slow window more samples; more
   lambda windows in that stage raise the overlap.
-- Few independent samples, halves that differ, or halves that could not be compared: a
-  longer production. `cufep run CONFIG --ligand NAME --leg complex --production-ns 20` (or a
+- Few independent samples: a longer production. `cufep run CONFIG --ligand NAME --leg complex --production-ns 20` (or a
   larger `sampling.production_ns`) continues the replica-exchange run of that leg from its
   last iteration; the analysis then covers the whole production. The number is the length of
   the production in total, not what is added: a leg that has 10 ns runs 10 ns more.
@@ -916,7 +899,7 @@ version wrote without a record of what they were made from are treated as follow
 | prepared systems, pre-equilibration, restraint without a record | refused where what the file does hold contradicts the run (bilayer or not, barostat, box shape, ligand; length of the MD, a larger time step than configured; restraint selection and force constants). Otherwise used, and the leg and the ligand result name them (`origin_not_recorded`) |
 | prepared systems, pre-equilibration, restraint of an earlier version, with a record | refused, whatever the record says, where the file holds less than it was made for: a box lower than OpenMM's rule for the cutoff, a pre-equilibration of whole 20 ps frame intervals shorter than asked, a manual restraint with the configured force constants under `force_constants: auto` |
 | a result without the version of its analysis | made again from the samples, see above |
-| `summary.json` of an earlier version, read by `cufep benchmark report` | the verdicts of that version are shown as such ("NOT CONVERGED by the check of an earlier version"), with the flag that the checks of this version were not made; they are made when the legs are analysed again |
+| `summary.json` of an earlier version, read by `cufep benchmark report` | the verdicts of checks that are no longer made (halves, BAR against MBAR, NOT CONVERGED) are not shown; the result has the flag that the checks of this version were not made, which are made when the legs are analysed again |
 | an interrupted run that did not record where its production begins | `cufep analyze` asks for the boundary: `--equilibration-ns` (a length of 0 or more) or `--equilibration-iterations` (exactly), not both |
 
 ## Long-range dispersion
@@ -987,7 +970,7 @@ source code and papers (see "Sources").
 | time per lambda window | 5 ns | set by the preset | 1 ns equilibration + 10 ns | 1 ns equilibration + 10 ns |
 | runs per calculation | 1, no repeat setting | 1, no repeat setting | 3 repeats | 1; `sampling.repeats` for more |
 | reported uncertainty | Bennett error | predicted activity error; overlap warning below 0.03 | standard deviation over repeats | standard error from blocks of time common to all lambda windows (delete-one-block jackknife of MBAR minus the tail correction, on samples decorrelated window by window), not below the analytical one; standard deviation over repeats if more than one |
-| checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03, independent samples per window, the two halves of the production, BAR against MBAR; messages in the result |
+| checks after the run | convergence plots and sliding window, exchange between replicas (FEP+ checklist) | overlap matrix with a warning below 0.03, convergence analysis, TI against MBAR | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03 and fewer than 50 independent samples per window, the levels of the literature; the series, halves and BAR shown without a verdict; messages in the result |
 | a calculation that is not good enough | the user: "Try increasing the length of the simulations (i.e., 10 ns)", "try increasing the number of lambda windows and/or increasing the sampling" | the user runs a further instance of the link "with longer simulation time/more Lambda windows" | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
 | replica exchange | FEP/REST (REST2), exchange every 1.2 ps | none in absolute FEP (REST2 in relative FEP since V12) | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 with `sampling.rest2` |
 | MD before the alchemical run | 1 ns and a short equilibration | minimisation, equilibration, MD for the restraint search | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |

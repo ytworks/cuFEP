@@ -1,5 +1,5 @@
 {
- "version": 8,
+ "version": 9,
  "numbers": {
   "long": {
    "delta_g": 5.281209545080566,
@@ -169,27 +169,13 @@
    "quality": {
     "overlap": {
      "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": 0.20181207062647927,
+     "counted": null
     },
     "samples": {
      "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
-    },
-    "halves": {
-     "ok": true,
-     "difference": 0.22944741629185827,
-     "warning": null,
-     "reason": null
-    },
-    "estimators": {
-     "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": null,
+     "counted": 200.0
     }
    }
   },
@@ -289,27 +275,13 @@
    "quality": {
     "overlap": {
      "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": 0.29205295784361524,
+     "counted": null
     },
     "samples": {
      "ok": false,
-     "difference": null,
-     "warning": null,
-     "reason": null
-    },
-    "halves": {
-     "ok": null,
-     "difference": null,
-     "warning": null,
-     "reason": "the first half (iterations 0-12 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction; the second half (iterations 12-24 of the production): 3 tail energies were recorded in these iterations; 4 are needed for the tail correction"
-    },
-    "estimators": {
-     "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": null,
+     "counted": 12.0
     }
    }
   },
@@ -495,27 +467,13 @@
    "quality": {
     "overlap": {
      "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": 0.08144268847714592,
+     "counted": null
     },
     "samples": {
      "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
-    },
-    "halves": {
-     "ok": true,
-     "difference": 0.5123411229145649,
-     "warning": "the first half (iterations 0-300 of the production): lambda windows 0 and 1 overlap by 0.079 among these samples, below analysis.min_overlap (0.0813), the level of a reliable estimate",
-     "reason": null
-    },
-    "estimators": {
-     "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": null,
+     "counted": 600.0
     }
    }
   },
@@ -636,27 +594,13 @@
    "quality": {
     "overlap": {
      "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": 0.07923834220100547,
+     "counted": null
     },
     "samples": {
      "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
-    },
-    "halves": {
-     "ok": null,
-     "difference": null,
-     "warning": null,
-     "reason": "the second half (iterations 300-600 of the production): the samples do not connect the lambda windows (windows 0-0; windows 1-1): the samples these groups share do not fix the difference of their free energies, so it is not determined"
-    },
-    "estimators": {
-     "ok": true,
-     "difference": null,
-     "warning": null,
-     "reason": null
+     "lowest": null,
+     "counted": 600.0
     }
    }
   }

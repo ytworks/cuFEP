@@ -19,30 +19,33 @@ KT = 0.0083144626 * 298.15            # kJ/mol
 
 
 def leg_line(name: str, res: dict) -> str:
-    a, q = res["analysis"], res["quality"]
+    """One leg: the two checks of the literature (made again with the code of the tree and the default levels:
+    overlap >= 0.03, Mey's 50 uncorrelated samples) and, as numbers without a verdict, the halves and BAR - MBAR."""
+    from cufep.analysis.mbar import quality_checks
+
+    a = res["analysis"]
+    q = quality_checks(a)
     s = q["samples"]
-    first, second = a["first_half"], a["second_half"]
+    first, second = a.get("first_half"), a.get("second_half")
     try:
         halves = abs(first[0] - second[0])
         sigma = float(np.hypot(first[1], second[1]))
         compared = bool(np.isfinite(halves))
     except (TypeError, IndexError):
         compared = False
-    halves_cell = (f"{halves / KT:.2f} kT ({halves / sigma:.1f} σ)" if compared
-                   else "not compared: " + str(q["halves"].get("reason", ""))[:80])
+    halves_cell = f"{halves / KT:.2f} kT ({halves / sigma:.1f} σ)" if compared else "-"
     added = res.get("lambda_windows_added") or 0
     added = sum(added.values()) if isinstance(added, dict) else added
     windows = res.get("n_states") or a.get("n_states")
     used = a.get("min_overlap_used")
     bar, mbar = a.get("bar_delta_g"), a.get("delta_g_mbar")
-    bar_error = a.get("bar_delta_g_error")
+    bar_cell = "-" if bar is None or mbar is None else f"{abs(bar - mbar) / KCAL:.2f}"
     g = s.get("statistical_inefficiency")
     return (f"| {name} | {windows} (+{added}) | {res['delta_g_decouple'] / KCAL:.2f} ± {res['delta_g_error'] / KCAL:.2f} "
             f"| {a['min_overlap']:.3f} / {'-' if used is None else f'{used:.3f}'} "
             f"| {s.get('fewest', float('nan')):.0f} / {s.get('kept')} (window {s.get('window')}, g {'-' if g is None else f'{g:.0f}'}) "
-            f"| {halves_cell} "
-            f"| {abs(bar - mbar) / KCAL:.2f} (BAR error {'-' if bar_error is None else f'{bar_error / KCAL:.2f}'}) "
-            f"| {'; '.join(k for k in ('overlap', 'samples', 'halves', 'estimators') if q[k].get('ok') is False) or 'none'} |")
+            f"| {'; '.join(k for k in ('overlap', 'samples') if q[k].get('ok') is False) or 'none'} "
+            f"| {halves_cell} | {bar_cell} |")
 
 
 def main() -> None:
@@ -60,7 +63,7 @@ def main() -> None:
               f"MBAR alone ± {lig.get('dg_bind_mbar_error', float('nan')):.2f}); experiment {experiment:.2f}; signed error "
               f"{dg - experiment:+.2f}\n")
         print("| leg | windows (added) | dG of the leg, kcal/mol | lowest overlap: all / used | fewest samples: estimated / kept "
-              "| halves | BAR - MBAR, kcal/mol | checks not met |")
+              "| checks not met (overlap 0.03, 50 samples) | halves (no verdict) | BAR - MBAR, kcal/mol (no verdict) |")
         print("|---|---|---|---|---|---|---|---|")
         for leg in ("complex", "solvent"):
             res = json.loads((run / ligand / "repeat_0" / leg / "result.json").read_text())

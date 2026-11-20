@@ -230,10 +230,9 @@ def test_checks_of_a_leg_use_the_levels_of_the_literature():
     assert steady.overlap_neighbour[2] == pytest.approx(steady.overlap_matrix[2][3], abs=1e-4)
     assert steady.forward_reverse_gap == pytest.approx(abs(steady.first_half[0] - steady.second_half[0]))
     q = quality_checks(steady.to_dict())
-    assert q["overlap"]["ok"] and q["samples"]["ok"] and q["halves"]["ok"] and q["estimators"]["ok"]
-    assert q["halves"]["tolerance"] == pytest.approx(kt) and q["halves"]["tolerance_kT"] == 1.0
-    assert q["halves"]["difference_kT"] == pytest.approx(steady.forward_reverse_gap / kt)
-    assert q["estimators"]["tolerance"] == pytest.approx(4.184) and q["uncertainty"] == steady.delta_g_error
+    # the verdicts are the literature's two checks; the halves are numbers of the analysis, without a verdict
+    assert q["overlap"]["ok"] and q["samples"]["ok"] and set(q) == {"overlap", "samples", "uncertainty"}
+    assert q["uncertainty"] == steady.delta_g_error
     assert abs(steady.bar_delta_g - steady.delta_g) < 0.1 * kt
 
     # the last state becomes stiffer half way through the production, as when a slow degree of
@@ -248,12 +247,12 @@ def test_checks_of_a_leg_use_the_levels_of_the_literature():
     assert (np.mean([b[2] for b in changed.blocks[3:]]) - np.mean([b[2] for b in changed.blocks[:2]])) / kt \
         == pytest.approx(0.52, abs=0.15)
     assert len(steady.blocks) == 5 and max(abs(b[2] - steady.delta_g) for b in steady.blocks) < 0.3 * kt
-    # 0.52 kT is below the level of 1 kT although it is many standard errors: the level is that of
-    # the literature, in kT, and the difference in standard errors is reported next to it
+    # the change shows in the halves and the blocks as numbers; they are no check (the owner, 2026-11-20), and
+    # quality_checks takes no level for them
     q = quality_checks(changed.to_dict())
-    assert q["overlap"]["ok"] and q["halves"]["ok"] and q["halves"]["difference_sigma"] > 5.0
-    assert q["halves"]["difference_kT"] == pytest.approx(0.52, abs=0.1)
-    assert quality_checks(changed.to_dict(), halves_tolerance_kT=0.3)["halves"]["ok"] is False
+    assert q["overlap"]["ok"] and "halves" not in q
+    with pytest.raises(TypeError):
+        quality_checks(changed.to_dict(), halves_tolerance_kT=0.3)
 
     # overlap below the threshold, and an analysis that lacks the numbers of a check
     assert quality_checks(steady.to_dict(), min_overlap=0.9)["overlap"]["ok"] is False
@@ -261,17 +260,14 @@ def test_checks_of_a_leg_use_the_levels_of_the_literature():
     q = quality_checks(old)
     assert q["overlap"] == {"ok": True, "lowest": 0.2, "windows": [0, 1], "threshold": 0.03, "all_ok": True,
                             "used": None, "below": []}
-    assert q["samples"]["ok"] is None and q["halves"]["ok"] is None and q["estimators"]["ok"] is None
-    # an analysis made before every window was decorrelated on its own: its halves carry no verdict
-    assert quality_checks(dict(old, first_half=[12.0, 0.1], second_half=[8.0, 0.1], bar_delta_g=20.0))["halves"]["ok"] is None
+    assert q["samples"]["ok"] is None and set(q) == {"overlap", "samples", "uncertainty"}
+    # halves far apart and BAR far from MBAR give no verdict: they are no check (the owner, 2026-11-20)
     new = dict(old, window_effective_samples=[100.0, 30.0, 80.0], window_statistical_inefficiency=[1.0, 3.4, 1.2])
     q = quality_checks(dict(new, first_half=[float("nan"), float("nan")], second_half=[10.1, 0.7], bar_delta_g=15.0))
-    assert q["halves"]["ok"] is False and "difference" not in q["halves"]      # half of the data gives no estimate
-    assert q["estimators"]["ok"] is False and q["samples"]["ok"] is False and q["samples"]["window"] == 1
-    q = quality_checks(dict(new, first_half=[10.5, 0.4], second_half=[8.5, 0.3], bar_delta_g=12.0))
-    assert q["halves"]["ok"] and q["halves"]["difference_kT"] == pytest.approx(2.0 / kt)   # 0.81 kT
-    assert q["halves"]["difference_sigma"] == pytest.approx(4.0) and q["estimators"]["ok"]
-    assert quality_checks(dict(new, first_half=[10.5, 0.4], second_half=[7.5, 0.3]))["halves"]["ok"] is False
+    assert set(q) == {"overlap", "samples", "uncertainty"} and q["samples"]["ok"] is False and q["samples"]["window"] == 1
+    q = quality_checks(dict(new, window_effective_samples=[100.0, 60.0, 80.0], first_half=[10.5, 0.4],
+                            second_half=[7.5, 0.3], bar_delta_g=20.0))
+    assert q["overlap"]["ok"] and q["samples"]["ok"] and set(q) == {"overlap", "samples", "uncertainty"}
 
 
 def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_not_assessed(monkeypatch):
@@ -300,8 +296,7 @@ def test_halves_of_the_production_share_no_iteration_and_a_short_production_is_n
     assert [point[0] for point in short.reverse] == [1.0]
     assert sum(text.startswith("reverse point") for text in short.parts_not_determined) == 9
     assert short.blocks == []
-    verdict = quality_checks(short.to_dict())["halves"]
-    assert verdict["ok"] is None and verdict["reason"] == short.convergence_note
+    assert short.convergence_note and "halves" not in quality_checks(short.to_dict())
 
     # independent samples: each half is estimated from its own six iterations
     monkeypatch.setattr(mbar, "neighbour_inefficiencies", lambda u, states: np.ones((u.shape[2], 2)))
@@ -426,16 +421,16 @@ def test_the_standard_error_of_a_leg_is_that_of_time_blocks_common_to_all_window
     assert first.delta_g_error_note == "" and first.delta_g_error_blocks_note == {} and first.halves_error_blocks == [5, 5]
     # without a tail correction the value is the MBAR part, and so are its errors
     assert first.delta_g == first.delta_g_mbar and first.delta_g_mbar_error_blocks == first.delta_g_error_blocks
-    # this leg passed all four checks; the samples check now counts what the standard error leaves
+    # the correlation that travels between the windows shows in the standard error from time blocks, which is
+    # what is reported; the samples check is the literature's (Mey et al.: production / g of each window, and
+    # what MBAR gets), without a reduction of cuFEP's own by the ratio of the two errors (the owner, 2026-11-20)
     checks = quality_checks(first.to_dict())
-    assert checks["overlap"]["ok"] and checks["halves"]["ok"] and checks["estimators"]["ok"]
-    assert first.round_trips > 100 and checks["uncertainty"] == first.delta_g_error
+    assert checks["overlap"]["ok"] and first.round_trips > 100 and checks["uncertainty"] == first.delta_g_error
     samples = checks["samples"]
-    assert samples["kept"] >= 50 and samples["fewest"] >= 50 and samples["ok"] is False
-    assert samples["error_ratio"] == pytest.approx(max(first.delta_g_mbar_error_blocks.values()) / first.delta_g_mbar_error)
-    assert samples["error_ratio"] > 2.0
-    assert samples["independent"] == pytest.approx(min(samples["kept"], samples["fewest"]) / samples["error_ratio"] ** 2)
-    assert not any(quality_checks(leg.to_dict())["samples"]["ok"] for leg in legs)
+    assert samples["kept"] >= 50 and samples["fewest"] >= 50 and samples["ok"] is True
+    assert samples["counted"] == min(samples["kept"], samples["fewest"])
+    assert "error_ratio" not in samples and "independent" not in samples
+    assert max(first.delta_g_mbar_error_blocks.values()) / first.delta_g_mbar_error > 2.0
 
     # without correlation the blocks give what MBAR gives, and the samples count as they are
     control = [analyze_leg(travelling_samples(seed, rho=0.0), 298.15) for seed in range(48)]
@@ -520,11 +515,10 @@ def test_the_standard_error_and_the_halves_are_those_of_the_value_with_its_tail_
     assert complex_leg.delta_g_mbar_error_blocks["10"] == pytest.approx(0.0, abs=1e-9)      # the MBAR part has none
     # the halves are of the corrected value: 0 and 8 kJ/mol
     assert complex_leg.first_half[0] == pytest.approx(0.0, abs=1e-9) and complex_leg.second_half[0] == pytest.approx(8.0)
-    checks = quality_checks(complex_leg.to_dict())
-    assert checks["halves"]["ok"] is False and checks["halves"]["difference_kT"] == pytest.approx(8.0 / kt)
-    assert round(checks["halves"]["difference_kT"], 2) == 3.23
-    # BAR and MBAR are compared without the correction, on the same samples: they agree
-    assert checks["estimators"]["ok"] and checks["estimators"]["mbar"] == complex_leg.delta_g_mbar
+    assert round((complex_leg.second_half[0] - complex_leg.first_half[0]) / kt, 2) == 3.23
+    # BAR is computed without the correction, on the same samples as the MBAR part: they agree (a number, no verdict)
+    assert complex_leg.bar_delta_g == pytest.approx(complex_leg.delta_g_mbar, abs=0.01)
+    assert set(quality_checks(complex_leg.to_dict())) == {"overlap", "samples", "uncertainty"}
     # the forward and reverse series and the consecutive blocks are of the corrected value too
     assert complex_leg.forward[-1][1] == complex_leg.delta_g and complex_leg.blocks[0][2] == pytest.approx(0.0, abs=1e-9)
     assert complex_leg.blocks[-1][2] == pytest.approx(8.0)
@@ -568,8 +562,7 @@ def test_a_part_of_the_production_whose_windows_do_not_overlap_has_no_estimate(m
     # the halves are not compared, and say why
     assert np.isnan(res.first_half[0]) and np.isnan(res.second_half[0])
     assert "the second half (iterations 300-600 of the production): the samples do not connect" in res.convergence_note
-    halves = quality_checks(res.to_dict())["halves"]
-    assert halves["ok"] is None and halves["reason"] == res.convergence_note
+    assert "halves" not in quality_checks(res.to_dict())
     # a number of blocks without whose first block nothing connects the windows is not used
     assert res.delta_g_error_blocks["5"] is None
     assert res.delta_g_error_blocks_note["5"].startswith("without block 1: the samples do not connect")
@@ -615,12 +608,11 @@ def test_connected_windows_are_determined_whatever_the_level_and_unconnected_one
     assert res.halves_warning.startswith("the first half (iterations 0-100 of the production): lambda windows")
     assert len(res.parts_below_level) == 2 + 9 + 9 + 5            # halves, points short of the whole, blocks
     assert all(value is not None for value in res.delta_g_error_blocks.values())
-    halves = quality_checks(res.to_dict())["halves"]
-    assert halves["ok"] is True and halves["warning"] == res.halves_warning and "reason" not in halves
+    assert np.isfinite(res.first_half[0]) and np.isfinite(res.second_half[0]) and not res.convergence_note
     lenient = analyze_leg(same, 298.15, min_overlap=0.02)
     assert lenient.convergence_note == "" and lenient.halves_warning == "" and lenient.parts_below_level == []
     assert lenient.first_half[0] == pytest.approx(0.0, abs=1e-9)
-    assert "warning" not in quality_checks(lenient.to_dict())["halves"]
+    assert "halves" not in quality_checks(lenient.to_dict())
 
 
 def test_the_samples_determine_the_windows_they_connect_however_weakly():
@@ -678,8 +670,6 @@ def test_halves_that_the_solver_would_leave_at_its_start_are_not_compared(monkey
         res = analyze_leg(samples, 298.15, n_equilibration=0)
         assert np.isnan(res.first_half[0]) and np.isnan(res.second_half[0])
         assert "the samples do not connect the lambda windows (windows 0-0; windows 1-1)" in res.convergence_note
-        halves = quality_checks(dataclasses.asdict(res))["halves"]
-        assert halves["ok"] is None and halves["reason"] == res.convergence_note and "difference" not in halves
         assert quality_checks(dataclasses.asdict(res))["overlap"]["ok"] is False      # and the leg is NOT RELIABLE
     # the bound itself: the slack of the solver of the whole of these samples is far above the resolution
     u_kn = np.concatenate([samples["u"][:, 0, :], samples["u"][:, 1, :]]).T
@@ -687,10 +677,11 @@ def test_halves_that_the_solver_would_leave_at_its_start_are_not_compared(monkey
     assert not fixed.determined and fixed.numerical > RESOLUTION_KT
 
 
-def test_halves_below_the_level_reach_every_summary(tmp_path, monkeypatch):
+def test_halves_below_the_level_are_a_note_of_the_analysis_not_a_verdict(tmp_path, monkeypatch):
     """Review of PR 1: a leg whose whole production passed the overlap check (0.0814 at a level of 0.0813)
-    but whose first half overlapped by 0.079 was compared with a warning that reached no summary: not
-    the ligand's flags, not summary.csv, not the report. It is a flag of its own now."""
+    but whose first half overlapped by 0.079 was compared with a warning. The halves are no check since the
+    owner's order of 2026-11-20 (only the literature's two): the analysis says it in halves_warning, and no
+    flag of the ligand does."""
     import dataclasses
 
     import cufep.analysis.mbar as mbar
@@ -703,7 +694,7 @@ def test_halves_below_the_level_reach_every_summary(tmp_path, monkeypatch):
     samples = _two_harmonic_windows(0, 600, 3.2)
     res = analyze_leg(samples, 298.15, n_equilibration=0, min_overlap=0.0813)
     quality = quality_checks(dataclasses.asdict(res), min_overlap=0.0813)
-    assert quality["overlap"]["ok"] and quality["halves"]["ok"] and quality["halves"]["warning"] == res.halves_warning
+    assert quality["overlap"]["ok"] and np.isfinite(res.first_half[0]) and np.isfinite(res.second_half[0])
     assert res.halves_warning.startswith("the first half (iterations 0-300 of the production): lambda windows 0 and 1 "
                                          "overlap by 0.079")
     # through the result of a leg to the ligand's summary and its flags
@@ -715,8 +706,7 @@ def test_halves_below_the_level_reach_every_summary(tmp_path, monkeypatch):
         run = {"ligand": "lig", "leg": leg, "repeat": 0, "backend": "openmm", "notes": [], "pressure_bar": 1.0}
         write_leg_result(lig / "repeat_0" / leg, leg_result_from_samples(lig / "repeat_0" / leg, settings, run))
     out = combine_ligand(lig, "lig", 1, settings)
-    assert out["halves_below_level"] == ["complex leg", "solvent leg"]
-    assert "halves compared below the level of overlap: complex leg, solvent leg" in flags_of(out)
+    assert "halves_below_level" not in out and not any("halves" in flag for flag in flags_of(out))
 
 
 GOLDEN = pathlib.Path(__file__).parent / "data" / "analysis_golden.json"
@@ -774,8 +764,8 @@ def golden_analysis():
                      "bar_delta_g": res.bar_delta_g, "bar_delta_g_error": res.bar_delta_g_error,
                      "bar_delta_g_error_n_blocks": res.bar_delta_g_error_n_blocks,
                      "not_determined": res.not_determined,
-                     "quality": {check: {key: quality[check].get(key) for key in ("ok", "difference", "warning", "reason")}
-                                 for check in ("overlap", "samples", "halves", "estimators")}}
+                     "quality": {check: {key: quality[check].get(key) for key in ("ok", "lowest", "counted")}
+                                 for check in mbar.QUALITY_CHECKS}}
     return out
 
 
@@ -939,7 +929,10 @@ def test_the_reread_of_stored_legs_gives_what_cufep_analyze_gives(tmp_path):
     row = json.loads(out.read_text())[0]
     assert row["delta_g"] * 4.184 == pytest.approx(shown["delta_g_decouple"]) and shown["lrc"] == pytest.approx(-4.0)
     assert row["error"] * 4.184 == pytest.approx(shown["delta_g_error"])
-    assert row["halves_kT"] == pytest.approx(shown["quality"]["halves"].get("difference_kT"), nan_ok=True)
+    # the halves are a number of the reread, without a verdict
+    assert row["halves_kT"] == pytest.approx(abs(row["first_half"] - row["second_half"]) * 4.184 / (0.0083144626 * 298.15),
+                                             rel=1e-6)
+    assert "halves_ok" not in row and "estimators_ok" not in row
 
 
 def _reread(run_dir, tmp_path, capsys=None):
@@ -1143,7 +1136,7 @@ def test_a_leg_too_short_for_time_blocks_reports_the_error_of_mbar(monkeypatch):
     assert "; 5 blocks: a block of 0 iteration(s)" in four.delta_g_error_note
     stored = json.loads(json.dumps(four.to_dict()))
     samples = quality_checks(stored)["samples"]
-    assert samples["error_ratio"] is None and samples["independent"] == 4.0 and samples["ok"] is False
+    assert samples["counted"] == 4.0 and samples["ok"] is False
     notes = quality_warnings({"analysis": stored, "leg": "solvent"}, AnalysisConfig())
     assert sum(note.startswith("the standard error of this leg is the analytical one of MBAR and the tail correction, "
                                "which takes the samples as independent of each other (no number of time blocks could "
@@ -1253,21 +1246,16 @@ def test_results_are_json_that_every_parser_reads():
         raise ValueError(f"{token} is not JSON")
 
     back = json.loads(jsonio.dumps({"analysis": stored, "quality": quality_checks(stored)}), parse_constant=not_json)
-    assert back["quality"]["halves"]["ok"] is None and back["quality"]["halves"]["reason"] == stored["convergence_note"]
+    assert "halves" not in back["quality"] and back["analysis"]["convergence_note"] == stored["convergence_note"]
     assert jsonio.clean({"a": float("inf"), "b": np.float64("nan"), "c": np.int64(3), "d": (1.0, np.array([2.0, np.nan])),
                          "e": np.bool_(True)}) == {"a": None, "b": None, "c": 3, "d": [1.0, [2.0, None]], "e": True}
 
     base = {"delta_g": 10.0, "delta_g_error": 0.0, "min_overlap": 0.2, "overlap_neighbour": [0.2],
             "window_effective_samples": [100.0, 100.0], "window_statistical_inefficiency": [1.0, 1.0]}
-    same = quality_checks(dict(base, first_half=[10.0, 0.0], second_half=[10.0, 0.0]))["halves"]
-    assert same["ok"] is True and same["difference_sigma"] == 0.0                   # was Infinity
-    apart = quality_checks(dict(base, first_half=[10.5, 0.0], second_half=[10.0, 0.0]))["halves"]
-    assert apart["difference_sigma"] is None and "is zero" in apart["difference_sigma_note"]
     # values that a result file holds as null
     missing = quality_checks(dict(base, first_half=[None, None], second_half=[10.0, 0.1], bar_delta_g=None,
                                   bar_note="no estimate"))
-    assert missing["halves"]["ok"] is False and "difference" not in missing["halves"]
-    assert missing["estimators"]["ok"] is None and missing["estimators"]["reason"] == "no estimate"
+    assert set(missing) == {"overlap", "samples", "uncertainty"} and missing["samples"]["ok"] is True
     json.loads(jsonio.dumps(missing), parse_constant=not_json)
     no_energy = quality_checks(dict(base, delta_g=None, delta_g_error=None, min_overlap=None, overlap_neighbour=[None]))
     assert no_energy["overlap"]["ok"] is False and no_energy["uncertainty"] is None
@@ -2618,7 +2606,7 @@ def test_analyze_says_what_the_run_said(tmp_path):
     assert not any(text.startswith("block ") for text in result["analysis"]["parts_not_determined"])
     assert sum(text.startswith("block ") and " of 2 " in text and "below analysis.min_overlap (0.5)" in text
                for text in result["analysis"]["parts_below_level"]) == 2
-    assert result["quality"]["halves"]["warning"] == result["analysis"]["halves_warning"] != ""
+    assert result["analysis"]["halves_warning"] != "" and "halves" not in result["quality"]
     assert result["notes"][0] == "a note of the run" and result["notes"][1].startswith("NOT RELIABLE")
     assert result["run"] == run and result["ligand"] == "lig" and result["lrc"] == 0.0
     write_leg_result(leg, result)
@@ -2777,8 +2765,9 @@ def test_a_result_of_another_analysis_is_made_again_before_the_legs_are_combined
                    quality={"overlap": {"ok": True}, "convergence": {"ok": False}},
                    notes=["a note of the run", "NOT CONVERGED: the first half of the production gives ..."])
     (solvent / "result.json").write_text(jsonio.dumps(earlier))
+    # its checks are made again from its numbers: they hold those of the samples, so nothing is left unchecked
     named = (f"solvent leg: made before the version of the analysis was recorded; this run uses version "
-             f"{ANALYSIS_VERSION}; not checked: independent samples, halves of the production, BAR against MBAR")
+             f"{ANALYSIS_VERSION}")
     mixed = combine_ligand(lig, "lig", 1, settings)
     assert mixed["dg_bind"] == pytest.approx(current + 2.0) and mixed["old_analysis"] == [named]
 

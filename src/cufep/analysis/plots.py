@@ -52,7 +52,6 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         version = (result.get("analysis_record") or {}).get("version")
         corrected = version is not None and version >= 5
         ax = axes[row][0]
-        conv = quality.get("halves") or {}
         ax.axhspan(final - error, final + error, color="0.88", zorder=0,
                    label=f"all of the production ± {error:.2f} (standard error)")
         ax.axhline(final, color="0.4", lw=1)
@@ -79,14 +78,9 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
         low, high = min(shown), max(shown)
         margin = max(0.5, 0.15 * (high - low))
         ax.set_ylim(low - margin, high + margin)
+        # the forward and reverse estimates, the halves and the blocks are shown as numbers, without a verdict
+        # (as FEP+ and OpenFE show them); the verdicts are the two checks of quality_checks
         verdict = ""
-        if conv.get("difference_kT") is not None:
-            verdict = f"halves differ by {conv['difference_kT']:.1f} kT"
-            if conv.get("warning"):
-                verdict += " (compared below the level of overlap)"
-        if conv.get("reason"):
-            verdict = "halves not compared"
-            ax.text(0.5, 0.04, conv["reason"], transform=ax.transAxes, ha="center", va="bottom", fontsize=6, wrap=True)
         samples = quality.get("samples") or {}
         if samples.get("fewest") is not None:
             verdict += (", " if verdict else "") + f"fewest independent samples {samples['fewest']:.0f} (window {samples['window']})"

@@ -1964,8 +1964,7 @@ def leg_quality(analysis: dict, cfg) -> dict:
     from cufep.analysis.mbar import quality_checks
 
     a = getattr(cfg, "analysis", cfg)
-    return quality_checks(analysis, a.min_overlap, a.min_effective_samples, a.halves_tolerance_kT,
-                          a.estimators_tolerance_kcal_mol)
+    return quality_checks(analysis, a.min_overlap, a.min_effective_samples)
 
 
 def analysis_settings(source):
@@ -1994,8 +1993,7 @@ def analysis_record(cfg) -> dict:
     a = settings.analysis
     return {"version": ANALYSIS_VERSION, "lrc": a.lrc, "lrc_cutoff_nm": float(a.lrc_cutoff_nm),
             "min_overlap": float(a.min_overlap),
-            "min_effective_samples": float(a.min_effective_samples), "halves_tolerance_kT": float(a.halves_tolerance_kT),
-            "estimators_tolerance_kcal_mol": float(a.estimators_tolerance_kcal_mol),
+            "min_effective_samples": float(a.min_effective_samples),
             "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
             "error_blocks": [int(count) for count in a.error_blocks], "part_error_blocks": int(a.part_error_blocks),
             "membrane_area_tolerance": float(settings.membrane.area_tolerance),
@@ -2177,9 +2175,10 @@ def notes_of_leg_files(leg_dir: Path, settings, conditions: dict) -> tuple[list[
 
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
 #: samples gets them anew
-_ANALYSIS_NOTES = ("NOT RELIABLE", "NOT CONVERGED", "convergence not assessed", "few independent samples",
+_ANALYSIS_NOTES = ("NOT RELIABLE", "NO FREE ENERGY", "NOT CONVERGED", "convergence not assessed", "few independent samples",
                    "the standard error of this leg is the one MBAR gives", "the standard error of this leg is the "
                    "analytical one", "parts of the production without an estimate",
+                   "parts of the production whose lambda windows overlap below", "the comparison of the two halves",
                    "the two halves of the production", "half of the production does not",
                    "BAR between neighbouring lambda windows", "written by an earlier version of cuFEP without a record")
 #: what the run of a leg knows and its samples do not hold
@@ -2387,15 +2386,15 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
 def quality_warnings(result: dict, cfg) -> list[str]:
     """Warnings about a finished leg, from its checks. None of them changes what is run.
 
-    The overlap of neighbouring lambda windows comes first: below the level, the free energy is
-    NOT RELIABLE. The other messages give a number and the level the literature names for it;
-    they say that more sampling is advisable, not that the result is wrong.
+    The verdicts are the two checks of :func:`cufep.analysis.mbar.quality_checks`, made again from
+    the numbers of the analysis with the levels of this run, whatever version wrote the result:
+    the overlap of neighbouring lambda windows comes first (below the level, the free energy is
+    NOT RELIABLE), then the number of uncorrelated samples. The other messages are notes on the
+    analysis, not verdicts.
     """
     cfg = getattr(cfg, "analysis", cfg)            # the whole configuration or its analysis section
     a = result["analysis"]
-    q = result.get("quality")
-    if not q or "halves" not in q:                 # none, or the checks of an older version
-        q = leg_quality(a, cfg)
+    q = leg_quality(a, cfg)
     leg = result.get("leg", "LEG")
     windows = result.get("lambda_windows") or {}
     longer = f"cufep run CONFIG --ligand NAME --leg {leg} --production-ns NS (or sampling.production_ns)"
@@ -2418,11 +2417,14 @@ def quality_warnings(result: dict, cfg) -> list[str]:
     more_windows = (f"lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) "
                     f"and run this leg again: cufep run CONFIG --ligand NAME --leg {leg} --reschedule")
     if not all_ok:
-        k = ov["windows"][0]
         lowest = "not defined" if ov["lowest"] is None else f"{ov['lowest']:.3f}"
-        out.append(f"NOT RELIABLE: the overlap between lambda windows {k} and {k + 1}{pair(k)} is "
-                   f"{lowest}, below {cfg.min_overlap:g}. Give that stage more lambda "
-                   f"windows ({more_windows}")
+        if ov.get("windows"):
+            k = ov["windows"][0]
+            between = f"between lambda windows {k} and {k + 1}{pair(k)}"
+        else:                                      # a result that records the lowest overlap only
+            between = "between two neighbouring lambda windows"
+        out.append(f"NOT RELIABLE: the overlap {between} is {lowest}, below {cfg.min_overlap:g}. Give that stage "
+                   f"more lambda windows ({more_windows}")
     used = ov.get("used")
     if used and used["ok"] is False and not (not all_ok and used["windows"] == ov["windows"]):
         k = used["windows"][0]
@@ -2436,18 +2438,11 @@ def quality_warnings(result: dict, cfg) -> list[str]:
     if smp["ok"] is False:
         towards = {-1: "previous", 1: "next"}.get(smp.get("neighbour"), "next")
         kept = "" if smp.get("kept") is None else f" and gives MBAR {smp['kept']} samples"
-        ratio = smp.get("error_ratio")
-        left = ""
-        if ratio is not None and ratio > 1.0:
-            # the windows are decorrelated one by one; what is left is the correlation between them
-            left = (f" The standard error from time blocks is {ratio:.1f} times the one MBAR gives for these samples: "
-                    f"they are correlated between the lambda windows and count as {smp['independent']:.0f} "
-                    f"independent ones.")
         out.append(f"few independent samples: lambda window {smp['window']}{place(smp['window'])} has "
                    f"{smp['fewest']:.0f}{kept} (its energy difference to the {towards} window is correlated over "
-                   f"{smp['statistical_inefficiency']:.0f} iterations); {smp['threshold']:g} are recommended for MBAR."
-                   f"{left} The free energy, its uncertainty and the comparison of the halves rest on these samples. "
-                   f"A longer production gives more: {longer}")
+                   f"{smp['statistical_inefficiency']:.0f} iterations); {smp['threshold']:g} are recommended for MBAR "
+                   f"(Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production "
+                   f"gives more: {longer}")
     if a.get("delta_g_error_note"):
         out.append("the standard error of this leg is the analytical one of MBAR and the tail correction, which takes "
                    f"the samples as independent of each other ({a['delta_g_error_note']}). A longer production allows "
@@ -2461,29 +2456,6 @@ def quality_warnings(result: dict, cfg) -> list[str]:
         out.append(f"parts of the production whose lambda windows overlap below the level of a reliable estimate "
                    f"({len(shown)}; their estimates are shown in analysis.png and rest on too little overlap): "
                    + "; ".join(shown[:3]) + ("; ..." if len(shown) > 3 else ""))
-    halves = q["halves"]
-    if halves.get("warning"):
-        out.append(f"the comparison of the two halves rests on too little overlap: {halves['warning']}")
-    if halves["ok"] is False:
-        if halves.get("difference") is not None:
-            in_sigma = halves.get("difference_sigma")
-            sigma = "" if in_sigma is None else f", {in_sigma:.1f} standard errors of the difference"
-            error = "" if q.get("uncertainty") is None else f" ± {q['uncertainty'] / KCAL:.2f}"
-            out.append(f"the two halves of the production differ by {halves['difference'] / KCAL:.2f} kcal/mol "
-                       f"({halves['difference_kT']:.1f} kT{sigma}; first half {halves['first_half'] / KCAL:.2f}, "
-                       f"second half {halves['second_half'] / KCAL:.2f}, all of it {halves['final'] / KCAL:.2f}"
-                       f"{error}). More than {halves['tolerance_kT']:g} kT indicates poor "
-                       f"convergence; a longer production shows whether it is: {longer}")
-        else:
-            out.append(f"half of the production does not determine the free energy of this leg; run it longer: {longer}")
-    elif halves["ok"] is None and halves.get("reason"):
-        out.append(f"the two halves of the production could not be compared: {halves['reason']}. A longer "
-                   f"production gives the halves enough samples: {longer}")
-    est = q["estimators"]
-    if est["ok"] is False:
-        out.append(f"BAR between neighbouring lambda windows gives {est['bar'] / KCAL:.2f} kcal/mol and MBAR "
-                   f"{est['mbar'] / KCAL:.2f}; a difference above {cfg.estimators_tolerance_kcal_mol:g} "
-                   f"kcal/mol indicates windows that are too far apart or too little sampled")
     return out
 
 
@@ -2718,11 +2690,13 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
     per_repeat = []
     complete: list[tuple[str, dict]] = []      # the legs of the complete repeats
     warnings: list[str] = []
-    # legs whose analysis does not meet a level of cufep.analysis.mbar.quality_checks
-    flagged: dict[str, list[str]] = {"overlap": [], "samples": [], "halves": [], "estimators": []}
-    not_assessed: list[str] = []           # legs too short to compare their halves
-    # legs whose halves were compared although the windows of a half overlap below analysis.min_overlap
-    below_level: list[str] = []
+    # legs whose analysis does not meet a level of cufep.analysis.mbar.quality_checks; the checks and their
+    # messages are made again from the numbers of every leg with the levels of the run that combines, so that
+    # a verdict of an earlier version (of a check that is no longer made) never reaches the result
+    from cufep.analysis.mbar import QUALITY_CHECKS
+
+    levels = analysis_settings_of(run_record) if run_record is not None else analysis_settings_of(None)
+    flagged: dict[str, list[str]] = {check: [] for check in QUALITY_CHECKS}
     failed_legs: list[str] = []
     failed_leg_ids: list[list] = []        # [repeat, leg] of every failed leg and every leg without a free energy
     for r in range(repeats):
@@ -2780,18 +2754,14 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
                                  "solvent": s["analysis"].get("min_overlap_used")},
             "production_ns": {"complex": c["production_ns"], "solvent": s["production_ns"]}})
         for leg_result in (c, s):
-            warnings += [f"repeat {r} {leg_result['leg']}: {n}" for n in leg_result.get("notes", [])]
+            notes = [n for n in leg_result.get("notes", []) if not str(n).startswith(_ANALYSIS_NOTES)]
+            notes += quality_warnings(leg_result, levels)
+            warnings += [f"repeat {r} {leg_result['leg']}: {n}" for n in notes]
             where = f"{leg_result['leg']} leg" + (f" of repeat {r}" if repeats > 1 else "")
-            quality = leg_result.get("quality") or {}
-            if "halves" not in quality:            # written before these checks: only the overlap is known
-                quality = {"overlap": quality.get("overlap")}
+            quality = leg_quality(leg_result["analysis"], levels)
             for check, legs in flagged.items():
                 if (quality.get(check) or {}).get("ok") is False:
                     legs.append(where)
-            if (quality.get("halves") or {}).get("reason"):
-                not_assessed.append(where)
-            if (quality.get("halves") or {}).get("warning"):
-                below_level.append(where)
     inconsistent, not_compared = cycle_differences(complete)
     if inconsistent:
         # these legs are not legs of one thermodynamic cycle: no number is made from them
@@ -2806,13 +2776,12 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
     # legs whose result is of another analysis than this run's and could not be made again
     old_analysis = []
     if run_record is not None:
-        checks = {"samples": "independent samples", "halves": "halves of the production", "estimators": "BAR against MBAR"}
         for where, result in complete:
             differs = record_differences(result.get("analysis_record"), run_record)
             if differs:
-                quality = result.get("quality") or {}
-                not_made = [name for key, name in checks.items()
-                            if "halves" not in quality or (quality.get(key) or {}).get("ok") is None]
+                # what the numbers of such a result cannot decide (it lacks those of the samples)
+                quality = leg_quality(result["analysis"], levels)
+                not_made = [] if quality["samples"]["ok"] is not None else ["independent samples"]
                 old_analysis.append(f"{where}: {differs}" + (f"; not checked: {', '.join(not_made)}" if not_made else ""))
         warnings += [f"the result of the {item}. Its free energy and uncertainty are combined as they are" for item in old_analysis]
     # the version of the analysis behind every leg that is combined (None: not recorded)
@@ -2823,9 +2792,6 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
                  "failed_legs": failed_legs, "failed_leg_ids": failed_leg_ids, "inconsistent_legs": inconsistent, "not_compared": not_compared,
                  "origin_not_recorded": unrecorded, "old_analysis": old_analysis,
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
-                 "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,
-                 "halves_below_level": below_level,
-                 "estimators_disagree": flagged["estimators"],
                  "repeats_planned": int(repeats), "analysis_record": run_record, "leg_digests": digests}
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL

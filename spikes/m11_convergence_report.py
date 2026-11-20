@@ -24,6 +24,22 @@ import yaml
 KCAL = 4.184
 
 
+def halves_info(a: dict):
+    """(difference of the two halves in kT, in standard errors of the difference), or (None, None): numbers only."""
+    import numpy as np
+
+    try:
+        first, second = a["first_half"], a["second_half"]
+        difference = abs(first[0] - second[0])
+        sigma = float(np.hypot(first[1], second[1]))
+    except (TypeError, IndexError, KeyError):
+        return None, None
+    if not np.isfinite(difference):
+        return None, None
+    kt = 0.0083144626 * float(a.get("temperature_K", 298.15))
+    return difference / kt, (difference / sigma if sigma else None)
+
+
 def one_leg(leg_dir: str) -> dict | None:
     # the one way to the result of a leg directory, with the settings and the equilibration that
     # cufep analyze uses (review of PR 1: this script analysed without the tail correction)
@@ -52,21 +68,18 @@ def one_leg(leg_dir: str) -> dict | None:
            # the settings the leg was analysed with, and where they came from (as cufep analyze)
            "analysis_record": result.get("analysis_record"), "settings_from": done["source"],
            "error_blocks": {count: kcal(value) for count, value in (a.get("delta_g_error_blocks") or {}).items()},
-           "error_ratio": q["samples"].get("error_ratio"), "independent": q["samples"].get("independent"),
            "first_half": kcal(a["first_half"][0]), "second_half": kcal(a["second_half"][0]),
-           "halves_kT": q["halves"].get("difference_kT"), "halves_sigma": q["halves"].get("difference_sigma"),
+           # the halves as numbers, without a verdict (no check of cuFEP's own, the owner 2026-11-20)
+           "halves_kT": halves_info(a)[0], "halves_sigma": halves_info(a)[1],
            "bar": kcal(a["bar_delta_g"]), "lowest_overlap": a["min_overlap"], "round_trips": a["round_trips"],
            "lowest_overlap_used": a["min_overlap_used"], "overlap_below": q["overlap"]["below"],
            "fewest_samples": q["samples"].get("fewest"), "slowest_window": q["samples"].get("window"),
            "kept_samples": q["samples"].get("kept"), "neighbour": q["samples"].get("neighbour"),
            "g_slowest": q["samples"].get("statistical_inefficiency"),
-           "overlap_ok": q["overlap"]["ok"], "samples_ok": q["samples"]["ok"], "halves_ok": q["halves"]["ok"],
-           "halves_reason": q["halves"].get("reason"), "halves_warning": q["halves"].get("warning"),
-           "estimators_ok": q["estimators"]["ok"],
-           # the levels this leg was judged by (its stored record of the analysis, or the defaults)
-           "levels": {"min_overlap": q["overlap"]["threshold"], "min_effective_samples": q["samples"]["threshold"],
-                      "halves_tolerance_kT": q["halves"]["tolerance_kT"],
-                      "estimators_tolerance_kcal": q["estimators"]["tolerance"] / KCAL},
+           "overlap_ok": q["overlap"]["ok"], "samples_ok": q["samples"]["ok"],
+           # the levels this leg was judged by (its stored record of the analysis, or the defaults): the
+           # literature's, the only checks
+           "levels": {"min_overlap": q["overlap"]["threshold"], "min_effective_samples": q["samples"]["threshold"]},
            "mode": None, "start": None, "added": None, "precalculation_lowest_overlap": None, "threshold": None,
            "rest2": 1.0}
     sched = d / "schedule.yaml"
@@ -111,7 +124,7 @@ def main() -> None:
 
     out.write_text(jsonio.dumps(rows, indent=1))
     print(f"{'run':30s} {'ligand':7s} {'leg':7s} win  overlap: all  used      dG     ±   | fewest samples: estimated kept "
-          f"(window, to, g) | halves: kT  sigma | overlap samples halves BAR/MBAR  trips")
+          f"(window, to, g) | halves (no verdict): kT  sigma | overlap samples  trips")
     for r in rows:
         if "leg" not in r:
             print(f"{r['leg_dir']}: {r['error']}")
@@ -128,25 +141,22 @@ def main() -> None:
         print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s} {r['windows']:3d}         {r['lowest_overlap']:.3f} {used}  "
               f"{energy}  |          {r['fewest_samples']:6.0f}   {r['kept_samples']:5d}  ({r['slowest_window']:2d}, {to:4s}, "
               f"{r['g_slowest']:5.0f})     | {halves}       | {flag(r['overlap_ok']):6s} {flag(r['samples_ok']):6s}  "
-              f"{flag(r['halves_ok']):6s} {flag(r['estimators_ok']):6s}  {r['round_trips']:4d}")
+              f"{r['round_trips']:4d}")
     done = [r for r in rows if "leg" in r]
     import numpy as np
 
     print()
-    print(f"{'run':30s} {'ligand':7s} {'leg':7s}  error: reported (blocks)  MBAR  ratio | error with blocks: number: error "
-          f"| samples: kept  count as  level  check before -> now")
+    print(f"{'run':30s} {'ligand':7s} {'leg':7s}  error: reported (blocks)  MBAR | error with blocks: number: error "
+          f"| samples: kept  level  check")
     for r in done:
         # the numbers of blocks this leg was evaluated with (review of PR 1: a leg with 7 blocks fell out
         # of fixed columns of 40, 20, 10 and 5)
         blocks = "  ".join(f"{c}: " + ("-" if v is None else f"{v:.2f}") for c, v in r["error_blocks"].items())
-        ratio = "    -" if r["error_ratio"] is None else f"{r['error_ratio']:5.2f}"
         level = r["levels"]["min_effective_samples"]
-        before = min(r["fewest_samples"], r["kept_samples"]) >= level      # the same level before and after
         source = str(r["error_n_blocks"]) if r["error_from"] == "time blocks" else "anal"
         mbar = "    -" if r["error_mbar"] is None else f"{r['error_mbar']:5.2f}"   # pymbar may give none
         print(f"{r['run'][:30]:30s} {r['ligand'][:7]:7s} {r['leg']:7s}          {r['error']:5.2f}  ({source:>4s})  "
-              f"{mbar} {ratio} | {blocks} |         {r['kept_samples']:5d}    {r['independent']:6.1f}  "
-              f"{level:5g}  {'ok   ' if before else 'below'} -> {'ok' if r['samples_ok'] else 'below'}")
+              f"{mbar} | {blocks} |         {r['kept_samples']:5d}  {level:5g}  {'ok' if r['samples_ok'] else 'below'}")
     for leg in ("complex", "solvent"):
         sub = [r for r in done if r["leg"] == leg]
         if sub:
@@ -159,14 +169,11 @@ def main() -> None:
             # only the legs whose standard error does come from time blocks are counted as such
             from_blocks = [r["error"] for r in sub if r["error_from"] == "time blocks"]
             analytical = [r["error"] for r in sub if r["error_from"] != "time blocks"]
-            ratios = [r["error_ratio"] for r in sub if r["error_ratio"] is not None]
-            before = sum(min(r["fewest_samples"], r["kept_samples"]) < r["levels"]["min_effective_samples"] for r in sub)
             reported = Counter(r["error_n_blocks"] for r in sub if r["error_from"] == "time blocks")
             print(f"{leg}: standard error from time blocks in {len(from_blocks)} legs: {spread(from_blocks)} kcal/mol; "
                   f"the analytical one in {len(analytical)}: {spread(analytical)}; of MBAR alone "
-                  f"{spread([r['error_mbar'] for r in sub])}; ratio of the MBAR part {spread(ratios)} ({len(ratios)} legs); "
-                  f"samples check below each leg's level in {before} legs before the discount and in "
-                  f"{sum(r['samples_ok'] is False for r in sub)} now; number of blocks reported: "
+                  f"{spread([r['error_mbar'] for r in sub])}; samples check below each leg's level in "
+                  f"{sum(r['samples_ok'] is False for r in sub)}; number of blocks reported: "
                   + (", ".join(f"{c}: {m}" for c, m in sorted(reported.items(), reverse=True)) or "none"))
     print()
     for leg in ("complex", "solvent"):
@@ -182,11 +189,7 @@ def main() -> None:
                   f"(all iterations: {sum('all iterations' in r['overlap_below'] for r in sub)}, the samples of the "
                   f"estimate: {sum('the samples of the estimate' in r['overlap_below'] for r in sub)}); "
                   f"fewer independent samples in a window than their level ({levels('min_effective_samples')}) in "
-                  f"{sum(r['samples_ok'] is False for r in sub)}; halves differ by more than their tolerance "
-                  f"({levels('halves_tolerance_kT')} kT) in {sum(r['halves_ok'] is False for r in sub)}, not compared in "
-                  f"{sum(r['halves_reason'] is not None for r in sub)}, compared below their level of overlap in "
-                  f"{sum(bool(r.get('halves_warning')) for r in sub)}; BAR and MBAR further apart than their tolerance "
-                  f"({levels('estimators_tolerance_kcal')} kcal/mol) in {sum(r['estimators_ok'] is False for r in sub)}")
+                  f"{sum(r['samples_ok'] is False for r in sub)}")
 
 
 if __name__ == "__main__":

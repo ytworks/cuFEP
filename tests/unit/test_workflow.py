@@ -174,9 +174,11 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
     assert out["repeats"][0]["dg_bind"] == pytest.approx((80.0 - 160.0 + 40.0) / 4.184)
     assert out["dg_bind"] == pytest.approx((-40.0 - 44.184) / 2 / 4.184)
     assert out["dg_bind_std"] == pytest.approx(np.std([-40.0, -44.184], ddof=1) / 4.184)
-    # legs written before the checks existed carry no verdict
-    assert out["not_reliable"] == [] and out["few_samples"] == [] and out["halves_differ"] == []
-    assert out["halves_not_compared"] == [] and out["estimators_disagree"] == []
+    # the checks are made again from the numbers of every leg, whatever version wrote it: a leg of before the
+    # checks with an overlap of 0.02 is below the literature's 0.03; one without numbers of samples is not judged
+    assert out["not_reliable"] == ["complex leg of repeat 1"] and out["few_samples"] == []
+    assert not any(key in out for key in ("halves_differ", "halves_not_compared", "halves_below_level",
+                                          "estimators_disagree"))
     # results of before the standard error from time blocks hold the one of MBAR alone: it is what is combined
     assert out["dg_bind_error"] == out["dg_bind_mbar_error"] == pytest.approx(np.hypot(0.4, 0.4) / 4.184)
     assert out["dg_bind_error_from_time_blocks"] is False and out["repeats"][0]["error"] == out["repeats"][0]["mbar_error"]
@@ -220,23 +222,22 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     assert quality_warnings({"analysis": steady}, cfg) == []
     assert leg_quality(steady, cfg) == quality_checks(steady)                  # the defaults are the same
     notes = quality_warnings({"analysis": poor}, cfg)
-    assert len(notes) == 4
+    # the owner, 2026-11-20: the only verdicts are the two checks with the literature's levels. Halves 2.9 kT apart
+    # and BAR 1.5 kcal/mol from MBAR give no message (they were checks of cuFEP's own)
+    assert len(notes) == 2
+    assert set(quality_checks(poor)) == {"overlap", "samples", "uncertainty"}
+    assert not any("halves" in note or "BAR between" in note or "CONVERGED" in note for note in notes)
     # the overlap comes first, and it alone says NOT RELIABLE
     assert notes[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 is 0.020, below 0.03")
     assert not any("NOT" in note for note in notes[1:])
     assert notes[1].startswith("few independent samples: lambda window 1 has 12 (its energy difference to the next "
-                               "window is correlated over 200 iterations); 50 are recommended for MBAR")
-    assert notes[2].startswith("the two halves of the production differ by 1.70 kcal/mol (2.9 kT, 4.0 standard errors "
-                               "of the difference; first half 100.90, second half 99.20, all of it 100.00 ± 0.20). "
-                               "More than 1 kT indicates poor convergence")
-    assert "sampling.production_ns" in notes[1] and "sampling.production_ns" in notes[2]
-    assert notes[3].startswith("BAR between neighbouring lambda windows gives 101.50 kcal/mol and MBAR 100.00; a "
-                               "difference above 1 kcal/mol")
+                               "window is correlated over 200 iterations); 50 are recommended for MBAR (Mey et al. 2020)")
+    assert "sampling.production_ns" in notes[1]
     staged = quality_warnings({"analysis": poor, "leg": "complex",
                                "lambda_windows": {"restrain": [0.0, 1.0], "vanish": [0.0, 0.5, 1.0]}}, cfg)
     assert staged[0].startswith("NOT RELIABLE: the overlap between lambda windows 1 and 2 (vanish stage, lambda 0 and 0.5) "
                                 "is 0.020")
-    assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[2]
+    assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[1]
     assert staged[1].startswith("few independent samples: lambda window 1 (vanish stage) has 12")
     # the overlap among the samples of the estimate, and what MBAR gets from the slowest window
     thinned = dict(steady, overlap_used_neighbour=[0.2, 0.012], window_kept_samples=[400, 12, 300],
@@ -250,76 +251,46 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     assert "--leg complex --production-ns" in notes_thinned[0] and "--reschedule" in notes_thinned[0]
     assert notes_thinned[1].startswith(
         "few independent samples: lambda window 1 has 12 and gives MBAR 12 samples (its energy difference to the "
-        "previous window is correlated over 200 iterations); 50 are recommended for MBAR. The free energy, its")
-    # review of PR 1: every window holds enough samples and they are correlated between the windows. The
-    # standard error from time blocks is 3 times the one of MBAR: 90 samples count as 10
+        "previous window is correlated over 200 iterations); 50 are recommended for MBAR (Mey et al. 2020)")
+    # the number of samples is the literature's: production / g of the window, and not more than MBAR gets. A
+    # standard error from time blocks 3 times the one of MBAR no longer reduces it (that reduction was cuFEP's own)
     travelling = dict(steady, window_kept_samples=[400, 90, 300], window_effective_samples=[400.0, 120.0, 300.0],
                       delta_g_error=0.6 * kcal, delta_g_error_mbar=0.2 * kcal, delta_g_error_n_blocks=5)
     verdict = quality_checks(travelling)["samples"]
-    assert verdict["ok"] is False and verdict["error_ratio"] == pytest.approx(3.0) and verdict["independent"] == pytest.approx(10.0)
-    assert verdict["kept"] == 90 and verdict["fewest"] == 120.0
-    notes_travelling = quality_warnings({"analysis": travelling}, cfg)
-    assert len(notes_travelling) == 1 and notes_travelling[0].startswith(
-        "few independent samples: lambda window 1 has 120 and gives MBAR 90 samples (its energy difference to the next "
-        "window is correlated over 20 iterations); 50 are recommended for MBAR. The standard error from time blocks is "
-        "3.0 times the one MBAR gives for these samples: they are correlated between the lambda windows and count as 10 "
-        "independent ones. The free energy, its")
-    # an error from blocks below the one of MBAR does not add samples, and without blocks nothing is discounted
-    assert quality_checks(dict(travelling, delta_g_error=0.1 * kcal))["samples"]["independent"] == 90.0
-    assert quality_checks(dict(travelling, delta_g_error_n_blocks=None))["samples"] == dict(
-        verdict, ok=True, error_ratio=None, independent=90.0)
+    assert verdict["ok"] is True and verdict["kept"] == 90 and verdict["fewest"] == 120.0 and verdict["counted"] == 90.0
+    assert "error_ratio" not in verdict and "independent" not in verdict
+    assert quality_warnings({"analysis": travelling}, cfg) == []
     # the levels are settings
     lenient = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
-                                     "analysis": {"min_overlap": 0.01, "min_effective_samples": 10,
-                                                  "halves_tolerance_kT": 3.0, "estimators_tolerance_kcal_mol": 2.0}})
+                                     "analysis": {"min_overlap": 0.01, "min_effective_samples": 10}})
     assert quality_warnings({"analysis": poor}, lenient) == []
-    # checks stored by an older version (no "halves") are made again from the analysis
-    assert len(quality_warnings({"analysis": poor, "quality": {"overlap": {"ok": True}, "convergence": {"ok": True}}}, cfg)) == 4
-
-    # a production too short to compare its halves: said so, and kept apart from halves that differ
+    # checks stored by an older version are not used: they are made again from the analysis
+    assert len(quality_warnings({"analysis": poor, "quality": {"overlap": {"ok": True}, "halves": {"ok": False},
+                                                              "estimators": {"ok": False}}}, cfg)) == 2
+    # a production too short to compare its halves has no message about them
     too_short = dict(steady, first_half=[float("nan")] * 2, second_half=[float("nan")] * 2,
                      convergence_note="lambda window 1 holds 2 independent sample(s) in a half of the production")
-    verdict = quality_checks(too_short)["halves"]
-    assert verdict["ok"] is None and "2 independent" in verdict["reason"]
-    note = quality_warnings({"analysis": too_short, "leg": "solvent"}, cfg)
-    assert len(note) == 1 and note[0].startswith("the two halves of the production could not be compared: lambda "
-                                                 "window 1 holds 2")
-    assert "--leg solvent --production-ns" in note[0]
-    short_dir = tmp_path / "short"
-    for name in ("complex", "solvent"):
-        d = short_dir / "repeat_0" / name
-        d.mkdir(parents=True)
-        (d / "result.json").write_text(json.dumps({
-            "leg": name, "delta_g_decouple": steady["delta_g"], "delta_g_mbar_error": 0.4, "restraint_release": 0.0,
-            "lrc": 0.0, "backend": "openmm", "analysis": too_short if name == "solvent" else steady, "n_states": 15,
-            "production_ns": 0.1, "notes": [], "quality": quality_checks(too_short if name == "solvent" else steady)}))
-    out = combine_ligand(short_dir, "lig", 1)
-    assert out["halves_not_compared"] == ["solvent leg"] and out["halves_differ"] == [] and out["few_samples"] == []
+    assert quality_warnings({"analysis": too_short, "leg": "solvent"}, cfg) == []
 
     for name, analysis in (("complex", poor), ("solvent", steady)):
         d = tmp_path / "repeat_0" / name
         d.mkdir(parents=True)
         (d / "result.json").write_text(json.dumps({
             "leg": name, "delta_g_decouple": analysis["delta_g"], "delta_g_mbar_error": 0.4, "restraint_release": 0.0,
-            "lrc": 0.0, "backend": "openmm", "analysis": analysis, "n_states": 15, "production_ns": 5.0, "notes": [],
-            "quality": quality_checks(analysis), "lambda_windows_added": {"vanish": 2} if name == "solvent" else None}))
+            "lrc": 0.0, "backend": "openmm", "analysis": analysis, "n_states": 15, "production_ns": 5.0,
+            # notes of an earlier version, with its own verdicts: made again, and those of removed checks are gone
+            "notes": ["a note about the pose", "the two halves of the production differ by 1.70 kcal/mol (2.9 kT)",
+                      "BAR between neighbouring lambda windows gives 101.50 kcal/mol and MBAR 100.00"],
+            "quality": {"overlap": {"ok": True}, "halves": {"ok": False}, "estimators": {"ok": False}},
+            "lambda_windows_added": {"vanish": 2} if name == "solvent" else None}))
     out = combine_ligand(tmp_path, "lig", 1)
-    assert out["not_reliable"] == ["complex leg"] and out["halves_differ"] == ["complex leg"]
-    assert out["few_samples"] == ["complex leg"] and out["estimators_disagree"] == ["complex leg"]
-    assert out["halves_not_compared"] == []
+    assert out["not_reliable"] == ["complex leg"] and out["few_samples"] == ["complex leg"]
+    assert not any(key in out for key in ("halves_differ", "halves_not_compared", "halves_below_level",
+                                          "estimators_disagree"))
     assert out["repeats"][0]["lambda_windows_added"] == {"complex": None, "solvent": {"vanish": 2}}
-
-    # a result written before these checks: its old verdict on convergence is not carried over
-    old_dir = tmp_path / "old"
-    for name in ("complex", "solvent"):
-        d = old_dir / "repeat_0" / name
-        d.mkdir(parents=True)
-        (d / "result.json").write_text(json.dumps({
-            "leg": name, "delta_g_decouple": 400.0, "delta_g_mbar_error": 0.4, "restraint_release": 0.0, "lrc": 0.0,
-            "backend": "openmm", "analysis": {"min_overlap": 0.02, "stage_delta_g": {}}, "n_states": 15, "production_ns": 5.0, "notes": [],
-            "quality": {"overlap": {"ok": name == "solvent"}, "convergence": {"ok": False}, "estimators": {"ok": False}}}))
-    out = combine_ligand(old_dir, "lig", 1)
-    assert out["not_reliable"] == ["complex leg"] and out["halves_differ"] == [] and out["estimators_disagree"] == []
+    assert "repeat 0 complex: a note about the pose" in out["warnings"]
+    assert not any("halves" in w or "BAR between" in w for w in out["warnings"])
+    assert any(w.startswith("repeat 0 complex: NOT RELIABLE") for w in out["warnings"])
 
 
 def test_a_leg_that_starts_anew_keeps_what_it_had(tmp_path):

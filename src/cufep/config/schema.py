@@ -386,14 +386,10 @@ class AnalysisConfig(_Section):
     #: number of consecutive blocks of the production that get a free energy estimate of their
     #: own, to show a free energy that keeps moving in one direction
     convergence_blocks: int = Field(default=5, ge=2)
-    #: the result carries a warning if the lambda window with the fewest independent samples has
-    #: fewer than this (recommended for MBAR by Mey et al. 2020)
+    #: the result carries a warning if the lambda window with the fewest uncorrelated samples has
+    #: fewer than this (recommended for MBAR by Mey et al. 2020). With min_overlap the only levels
+    #: of a verdict on the analysis: cuFEP has no criteria of its own (owner, 2026-11-20)
     min_effective_samples: float = Field(default=50.0, gt=0.0)
-    #: ... if the free energies from the first and the second half of the production differ by
-    #: more than this many kT ("differences over 1 kBT indicating poor convergence", Mey et al. 2020)
-    halves_tolerance_kT: float = Field(default=1.0, gt=0.0)
-    #: ... if BAR between neighbouring windows and MBAR differ by more than this (Mey et al. 2020)
-    estimators_tolerance_kcal_mol: float = Field(default=1.0, gt=0.0)
     #: numbers of time blocks, common to all lambda windows, with which the standard error of a
     #: leg is computed (delete-one-block jackknife); the largest of the errors they give is the
     #: one reported, unless the analytical one is larger
@@ -516,12 +512,21 @@ def configuration_problems(cfg: "Config") -> list[str]:
 REMOVED_SETTINGS = {
     ("analysis", "convergence_tolerance_sigma"): (
         2.0,
-        "The checks of the analysis no longer use a multiple of the standard error. Their levels are "
-        "analysis.min_effective_samples (50 independent samples in the lambda window with the fewest), "
-        "analysis.halves_tolerance_kT (the two halves of the production within 1 kT) and "
-        "analysis.estimators_tolerance_kcal_mol (BAR and MBAR within 1 kcal/mol)",
-        "A multiple of the standard error cannot be turned into kT or kcal/mol: remove the line and set those "
-        "three where their defaults do not suit (docs/configuration.md)"),
+        "The checks of the analysis no longer use a multiple of the standard error. Their levels are the "
+        "literature's: analysis.min_overlap (0.03) and analysis.min_effective_samples (50 uncorrelated samples "
+        "in the lambda window with the fewest)",
+        "A multiple of the standard error is no level of the literature: remove the line"),
+    ("analysis", "halves_tolerance_kT"): (
+        1.0,
+        "The two halves of the production are no longer a check: their difference is shown with the analysis, "
+        "without a verdict. The only checks are analysis.min_overlap and analysis.min_effective_samples, the "
+        "levels of the literature",
+        "Remove the line"),
+    ("analysis", "estimators_tolerance_kcal_mol"): (
+        1.0,
+        "BAR against MBAR is no longer a check: both values are shown with the analysis, without a verdict. "
+        "The only checks are analysis.min_overlap and analysis.min_effective_samples, the levels of the literature",
+        "Remove the line"),
     ("lambda_schedule", "adaptive", "equilibration_check_ps"): (
         250.0,
         "Adaptive lambda scheduling chooses the lambda windows in its precalculation only and no longer adds "
