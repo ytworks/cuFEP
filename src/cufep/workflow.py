@@ -723,6 +723,16 @@ def check_prepared(cfg: Config, ligand, lig_dir: Path, membrane: bool, box_shape
     check_made_from(f"the prepared systems of {ligand.name}", lig_dir / "prep", info.get("made_from"),
                     prep_made_from(cfg, ligand, membrane, box_shape), log,
                     contradictions=prep_contradictions(info, ligand.name, membrane, box_shape))
+    from cufep.prep.solvate import box_height_problem
+
+    # a box an earlier version made too small for the cutoff: refused before any MD
+    for leg in ("complex", "solvent"):
+        stored = lig_dir / "prep" / f"{leg}.npz"
+        if stored.exists():
+            problem = box_height_problem(np.load(stored)["box"], cfg.dynamics.cutoff_nm)
+            if problem:
+                raise WorkflowError(f"the prepared {leg} system of {ligand.name} ({stored}) cannot be used: {problem}. "
+                                    "Nothing was changed; prepare it again in a new output.dir with a larger padding")
     return info
 
 
@@ -866,12 +876,24 @@ def restraint_made_with(cfg: Config) -> dict:
     return data
 
 
+def _check_box(modeller, cutoff_nm: float, what: str) -> None:
+    """WorkflowError if no backend could run the system that ``modeller`` holds with this cutoff
+    (:func:`cufep.prep.solvate.box_height_problem`), before it is written."""
+    import openmm.unit as unit
+
+    from cufep.prep.solvate import box_height_problem
+
+    box = [[float(v) for v in vec.value_in_unit(unit.nanometer)] for vec in modeller.topology.getPeriodicBoxVectors()]
+    problem = box_height_problem(box, cutoff_nm)
+    if problem:
+        raise WorkflowError(f"{what}: {problem}. Give a larger padding or a smaller dynamics.cutoff_nm")
+
+
 def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, box_shape: str, log=print) -> dict:
     """Build and save the solvated complex and the solvated ligand for one ligand."""
-    from cufep.backends.cupotential import MIN_BOX_CUTOFF_RATIO
     from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
     from cufep.prep.ligand import assign_partial_charges
-    from cufep.prep.solvate import SolvationSpec, combine, ligand_atom_indices, solvate
+    from cufep.prep.solvate import SolvationSpec, combine, ligand_atom_indices, min_box_height_nm, solvate
 
     prep_dir = lig_dir / "prep"
     done = prep_dir / "prep.json"
@@ -889,10 +911,10 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     forcefield = make_forcefield(ffspec, [ligand], include_lipid=membrane)
     sysspec = SystemSpec(cutoff_nm=cfg.dynamics.cutoff_nm, hydrogen_mass_amu=cfg.dynamics.hmr_mass_amu,
                          constraints="hbonds" if cfg.dynamics.constraints in ("auto", "hbonds") else "none")
-    # The cuPotential plugin needs every box height >= 3 x cutoff, also after the box has
-    # relaxed under NPT; keep an 8 % margin. Stock OpenMM has no such rule.
+    # Every box height is at least 3 x cutoff for the cuPotential plugin and 2 x cutoff for stock
+    # OpenMM, also after the box has relaxed under NPT: an 8 % margin over either rule
     plugin = cfg.backend.name == "cupotential"
-    min_edge = 1.08 * MIN_BOX_CUTOFF_RATIO * cfg.dynamics.cutoff_nm if plugin else 0.0
+    min_edge = min_box_height_nm(cfg.dynamics.cutoff_nm, cfg.backend.name)
     # For the small ligand-only box that rule decides the size, and a cube is then the
     # smallest valid box (a dodecahedron's shortest height is only 71 % of its edge).
     solvent_shape = "cube" if plugin else box_shape
@@ -914,6 +936,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
                                                     water=cfg.forcefield.water,
                                                     ionic_strength_M=ionic, min_edge_nm=min_edge))
         barostat = "isotropic"
+    _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated complex")
     system = create_system(forcefield, modeller.topology, sysspec)
     lig_idx = ligand_atom_indices(modeller.topology)
     _write_system(prep_dir, "complex", modeller, system, lig_idx)
@@ -924,6 +947,7 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     solvate(modeller, forcefield, SolvationSpec(padding_nm=cfg.solvation.padding_solvent_nm, box_shape=solvent_shape,
                                                 water=cfg.forcefield.water,
                                                 ionic_strength_M=ionic, min_edge_nm=min_edge))
+    _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated ligand")
     system = create_system(forcefield, modeller.topology, sysspec)
     _write_system(prep_dir, "solvent", modeller, system, ligand_atom_indices(modeller.topology))
     publish_text(prep_dir / "ligand.json", ligand.offmol.to_json())

@@ -248,6 +248,36 @@ def test_crystal_waters_of_two_chains_with_one_number_stay_two(repo, tmp_path):
     assert "kept 2 waters" in " ".join(prepared.report.notes)
 
 
+@pytest.mark.parametrize("keep_water", [True, False])
+def test_crystal_waters_and_ions_of_alternating_chains(repo, tmp_path, keep_water):
+    """Review of 037bdf1 (P2): crystal waters and Na given in the order of the chains A, B, A, B stopped the
+    preparation: a residue was added to chain A after chain B had been made (OpenMM's addResidue requires the
+    residues of a chain to follow each other). Two waters of one number in different chains and both Na stay; without
+    waters the two Na stay."""
+    from cufep.prep.protein import residue_key
+
+    centre = _tyk2_atom(repo, "LYS", 898, "NZ")
+    extra = [_atom_line(9001, "O", "HOH", "A", 401, centre + [0.0, 0.0, 1.2], "O"), "TER",
+             _atom_line(9002, "O", "HOH", "B", 401, centre + [0.0, 1.2, 0.0], "O"), "TER",
+             _atom_line(9003, "NA", "NA", "A", 402, centre + [1.5, 0.0, 0.0], "NA"), "TER",
+             _atom_line(9004, "NA", "NA", "B", 402, centre + [-1.5, 0.0, 0.0], "NA")]
+    prepared = prepare_protein(_modified_tyk2(repo, tmp_path, extra=extra), keep_water=keep_water)
+    residues = list(prepared.topology.residues())
+    hoh = [r for r in residues if r.name == "HOH"]
+    na = [r for r in residues if r.name == "NA"]
+    assert len(na) == 2 and len({r.chain.index for r in na}) == 2
+    if keep_water:
+        assert len(hoh) == 2 and all(len(list(r.atoms())) == 3 for r in hoh)
+        assert len({residue_key(r) for r in hoh}) == 2 and {r.id for r in hoh} == {"401"}
+        assert "kept 2 waters and 2 ions" in " ".join(prepared.report.notes)
+    else:
+        assert hoh == [] and "kept 0 waters and 2 ions" in " ".join(prepared.report.notes)
+    # every chain holds residues that follow each other, so the written file reads back as it was
+    for chain in prepared.topology.chains():
+        indices = [r.index for r in chain.residues()]
+        assert indices == list(range(indices[0], indices[0] + len(indices)))
+
+
 @pytest.mark.parametrize("resname,number,carbon,oxygen,proton", [("ASP", 902, "CG", "OD1", "HD1"),
                                                                   ("GLU", 905, "CD", "OE1", "HE1")])
 def test_a_carboxyl_proton_stays_on_its_oxygen(repo, tmp_path, resname, number, carbon, oxygen, proton):

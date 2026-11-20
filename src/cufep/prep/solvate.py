@@ -10,13 +10,52 @@ import openmm.unit as unit
 from cufep.prep.ligand import LIGAND_RESNAME, Ligand
 
 
+#: OpenMM's rule for a periodic cutoff: the cutoff may be at most half of every height of the box
+#: (NonbondedForce: "The cutoff distance cannot be greater than half the periodic box size"); the
+#: cuPotential plugin needs three times the cutoff (:data:`cufep.backends.cupotential.MIN_BOX_CUTOFF_RATIO`)
+STOCK_MIN_BOX_CUTOFF_RATIO = 2.0
+#: a box is built with this margin over the rule of its backend, because it relaxes under NPT
+BOX_MARGIN = 1.08
+
+
+def min_box_height_nm(cutoff_nm: float, backend_name: str, margin: float = BOX_MARGIN) -> float:
+    """The shortest height a box of ``backend_name`` (``cupotential`` or stock ``openmm``) is built
+    with for the cutoff ``cutoff_nm``: the rule of the backend times ``margin``. Review of PR 1: stock
+    OpenMM had no rule, and a dodecahedron with 1.5 nm padding and a 1.2 nm cutoff was 2.121 nm high,
+    so no Context could be made."""
+    from cufep.backends.cupotential import MIN_BOX_CUTOFF_RATIO
+
+    ratio = MIN_BOX_CUTOFF_RATIO if backend_name == "cupotential" else STOCK_MIN_BOX_CUTOFF_RATIO
+    return float(margin) * ratio * float(cutoff_nm)
+
+
+def box_heights_nm(box_nm) -> np.ndarray:
+    """The three heights of a periodic box given by its vectors (rows, nm): the distances between
+    opposite faces (in the reduced form of OpenMM: a_x, b_y, c_z)."""
+    a, b, c = np.asarray(box_nm, dtype=float)
+    volume = abs(float(np.dot(a, np.cross(b, c))))
+    return np.array([volume / np.linalg.norm(np.cross(b, c)), volume / np.linalg.norm(np.cross(c, a)),
+                     volume / np.linalg.norm(np.cross(a, b))])
+
+
+def box_height_problem(box_nm, cutoff_nm: float) -> str | None:
+    """Why no backend can run a system in the box ``box_nm`` with the cutoff ``cutoff_nm`` (OpenMM's
+    rule, without the margin of :func:`min_box_height_nm`), None if one can."""
+    shortest = float(box_heights_nm(box_nm).min())
+    need = min_box_height_nm(cutoff_nm, "openmm", margin=1.0)
+    if shortest < need * (1.0 - 1e-9):
+        return (f"the shortest height of its box is {shortest:.3f} nm, less than {STOCK_MIN_BOX_CUTOFF_RATIO:g} times "
+                f"the cutoff of {float(cutoff_nm):g} nm, so OpenMM cannot make a Context of it")
+    return None
+
+
 @dataclass
 class SolvationSpec:
     padding_nm: float = 1.0
     box_shape: str = "dodecahedron"        # cube | dodecahedron | octahedron
     ionic_strength_M: float = 0.15
     water: str = "amber14/tip3p.xml"      # forcefield.water; the box is built from cufep.prep.water
-    min_edge_nm: float = 0.0               # e.g. 3 x cutoff for the cuPotential plugin
+    min_edge_nm: float = 0.0               # shortest box height, :func:`min_box_height_nm`
 
 
 def combine(protein: tuple[app.Topology, unit.Quantity] | None, ligand: Ligand | None) -> app.Modeller:

@@ -1524,6 +1524,50 @@ def test_solvation_box_meets_the_minimum_height(shape, ratio):
     assert width_free < width                                      # the rule, not the padding, set the size
 
 
+@pytest.mark.parametrize("cutoff,height", [(1.2, 2.592), (0.9, 2.121)])
+def test_a_stock_openmm_box_is_at_least_twice_the_cutoff_high(cutoff, height):
+    """Review of 037bdf1 (P2): for stock OpenMM a small solute in a dodecahedron with 1.5 nm padding and a 1.2 nm cutoff
+    got a box 2.121 nm high, and no Context could be made. With the rule of 2 x cutoff and the margin of 8 % the box
+    is 2.592 nm high and the PME energy is computed on the Reference platform; with a 0.9 nm cutoff it stays 2.121 nm."""
+    import openmm as mm
+    import openmm.app as app
+    import openmm.unit as u
+
+    from cufep.prep.solvate import (SolvationSpec, box_height_problem, box_heights_nm, min_box_height_nm,
+                                    solvate)
+
+    ff = app.ForceField("amber14/tip3p.xml")
+
+    def solvated(min_edge):
+        seed = app.Modeller(app.Topology(), [])
+        seed.addSolvent(ff, boxSize=(2.0, 2.0, 2.0) * u.nanometer)
+        keep = app.Modeller(seed.topology, seed.positions)
+        keep.delete(list(seed.topology.residues())[1:])            # one water molecule as the solute
+        solvate(keep, ff, SolvationSpec(padding_nm=1.5, box_shape="dodecahedron", ionic_strength_M=0.0,
+                                        min_edge_nm=min_edge))
+        box = np.array([[float(v) for v in vec.value_in_unit(u.nanometer)]
+                        for vec in keep.topology.getPeriodicBoxVectors()])
+        return keep, box
+
+    def pme_energy(modeller):
+        system = ff.createSystem(modeller.topology, nonbondedMethod=app.PME, nonbondedCutoff=cutoff * u.nanometer)
+        context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+        context.setPositions(modeller.positions)
+        return context.getState(getEnergy=True).getPotentialEnergy()
+
+    old, old_box = solvated(0.0)                                    # the rule before: none for stock OpenMM
+    assert box_heights_nm(old_box).min() == pytest.approx(2.121, abs=1e-3)
+    if cutoff > 0.5 * 2.121:
+        assert "cannot make a Context" in box_height_problem(old_box, cutoff)
+        with pytest.raises(Exception, match="cutoff"):
+            pme_energy(old)
+    new, new_box = solvated(min_box_height_nm(cutoff, "openmm"))
+    assert box_heights_nm(new_box).min() == pytest.approx(height, abs=1e-3)
+    assert box_height_problem(new_box, cutoff) is None
+    assert np.isfinite(pme_energy(new).value_in_unit(u.kilojoule_per_mole))
+    assert min_box_height_nm(cutoff, "cupotential") == pytest.approx(1.08 * 3.0 * cutoff)
+
+
 def test_a_second_run_in_the_same_output_directory_is_refused(tmp_path):
     from cufep.run import lock_output_directory
     from cufep.workflow import WorkflowError

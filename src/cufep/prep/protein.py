@@ -421,18 +421,23 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
             cap_plan[(s, n_in_chain)] = ["NME"]
             report.caps_added.append(f"NME after {_label(last)}")
     # waters and ions keep their numbers in a chain for each chain of the input they come from: in one
-    # chain two waters numbered 401 of chains A and B were read back as one (review of PR 1)
-    hetero_chains: dict[str, object] = {}
-    n_water = n_ion = 0
+    # chain two waters numbered 401 of chains A and B were read back as one (review of PR 1). Each such
+    # chain is built in one piece, in the order in which its chain first appears: the residues of an
+    # OpenMM chain must follow each other, and waters of chains A, B, A stopped the preparation (review
+    # of PR 1)
+    hetero: dict[str, list] = {}
     for res in top.residues():
         kind = kinds[res.index]
         if kind == "ion" or (kind == "water" and keep_water):
-            if res.chain.id not in hetero_chains:
-                k = len(segments) + len(hetero_chains)
-                if k >= len(_CHAIN_IDS):
-                    raise ProteinError("too many chains of protein segments, waters and ions for PDB chain identifiers")
-                hetero_chains[res.chain.id] = new_top.addChain(_CHAIN_IDS[k])
-            copy_res(res, hetero_chains[res.chain.id], "HOH" if kind == "water" else res.name)
+            hetero.setdefault(res.chain.id, []).append(res)
+    if len(segments) + len(hetero) > len(_CHAIN_IDS):
+        raise ProteinError("too many chains of protein segments, waters and ions for PDB chain identifiers")
+    n_water = n_ion = 0
+    for k, residues in enumerate(hetero.values()):
+        chain = new_top.addChain(_CHAIN_IDS[len(segments) + k])
+        for res in residues:
+            kind = kinds[res.index]
+            copy_res(res, chain, "HOH" if kind == "water" else res.name)
             n_water += kind == "water"; n_ion += kind == "ion"
     if report.caps_added:
         report.notes.append("caps added: " + ", ".join(report.caps_added))
