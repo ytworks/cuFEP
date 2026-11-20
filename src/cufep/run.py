@@ -16,7 +16,7 @@ from cufep.benchmarks.runner import LEG_FLAGS, flags_of
 from cufep.scheduler import GpuMonitor, run_jobs
 from cufep.workflow import (KCAL, LegJob, WorkflowError, _Log, check_before_jobs, check_leg_reuse, check_partner_legs,
                             check_prepared, combine_ligand, ligand_directories, ligands_of_run, prepare_ligand,
-                            refresh_leg_result, select_names, settings_differences)
+                            refresh_leg_result, select_names, settings_differences, stored_ligand_result)
 
 
 def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, object, list]:
@@ -203,7 +203,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         s["failed_in_this_run"] = failed_now.get(s["ligand"], [])
         # the legs this command ran, which decide how it ends (failed_legs)
         s["selected_legs"] = sorted([r, leg] for name, r, leg in selected if name == s["ligand"])
-        s["n_repeats_planned"] = repeats
+        # a ligand that is not part of this run keeps the repeats of the run that combined it
+        s["n_repeats_planned"] = repeats if s["ligand"] in to_run else int(s.get("repeats_planned") or 0)
     write_summary(out_dir, summary, ligands)
     for lig in ligands:
         if lig.name not in to_run:
@@ -218,16 +219,6 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         for w in s.get("warnings", []):
             log(f"  warning: {w}")
     return summary
-
-
-def stored_ligand_result(lig_dir: Path, name: str) -> dict:
-    """The result a ligand that is not part of this run has, as the run that made it combined it
-    (``result.json`` of the ligand), marked as such; a ligand without one says so."""
-    path = Path(lig_dir) / "result.json"
-    if path.exists():
-        return dict(json.loads(path.read_text()), not_part_of_this_run=True)
-    return {"ligand": name, "units": "kcal/mol", "n_repeats": 0, "not_part_of_this_run": True,
-            "warnings": ["not part of this run, and no result of an earlier run"]}
 
 
 def result_line(s: dict) -> str:

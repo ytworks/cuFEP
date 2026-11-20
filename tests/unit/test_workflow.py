@@ -1535,11 +1535,34 @@ def test_a_second_run_in_the_same_output_directory_is_refused(tmp_path):
     lock_output_directory(tmp_path).close()                # free again once the first run has ended
 
 
+#: what a ligand result records about what it was made of since revision 15 (a result of an earlier version lacks it)
+RECORD_OF_THE_COMBINATION = ("repeats_planned", "analysis_record", "leg_digests")
+
+
+def _write_ligand_legs(lig_dir, dg_per_repeat):
+    """Finished legs of a ligand whose repeats give the binding free energies ``dg_per_repeat`` (kcal/mol)."""
+    from cufep.workflow import KCAL, write_leg_result
+
+    for r, dg in enumerate(dg_per_repeat):
+        for leg, value in (("complex", -dg * KCAL), ("solvent", 0.0)):
+            d = lig_dir / f"repeat_{r}" / leg
+            d.mkdir(parents=True, exist_ok=True)
+            write_leg_result(d, _leg_result(value, leg=leg))
+
+
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
-def test_a_run_of_one_ligand_leaves_the_others_as_they_are(tmp_path, monkeypatch, ligands):
+@pytest.mark.parametrize("version", ["this", "earlier"])
+def test_a_run_of_one_ligand_shows_the_others_as_their_legs_give_them(tmp_path, monkeypatch, ligands, version):
     """Review of PR 1 (P1): ligand B had a result of three repeats (mean -2.0 kcal/mol); a run of ligand A alone with
-    one repeat recombined B as one repeat (-1.0) without touching its samples."""
+    one repeat recombined B as one repeat (-1.0). Review of 037bdf1 (P2): once the complex leg of B's last repeat had
+    been interrupted, a run of A alone showed B's old mean of three repeats and success again; B's own repeats give
+    -1.5 and a failed leg, and after that leg was run again -3.0. In a result of today and of an earlier version, and B's
+    files are never written."""
+    import csv
+    from pathlib import Path
+
     import cufep.run as driver
+    from cufep import workflow
     from cufep.config.auto import AutoReport
     from cufep.config.schema import Config
 
@@ -1553,7 +1576,6 @@ def test_a_run_of_one_ligand_leaves_the_others_as_they_are(tmp_path, monkeypatch
         def write_pdb(self, path):
             Path(path).write_text("ATOM")
 
-    from pathlib import Path
     monkeypatch.setattr(driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [a, b]))
     monkeypatch.setattr(driver, "prepare_ligand", lambda *args, **kwargs: None)
     monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: [])
@@ -1564,17 +1586,71 @@ def test_a_run_of_one_ligand_leaves_the_others_as_they_are(tmp_path, monkeypatch
     monkeypatch.setattr(driver, "plot_repeat", lambda repeat_dir, *args, **kwargs: plotted.append(repeat_dir))
     (out / a.name / "prep").mkdir(parents=True)
     (out / a.name / "prep" / "prep.json").write_text(json.dumps({"n_atoms_complex": 10, "n_atoms_solvent": 5}))
-    stored = {"ligand": b.name, "units": "kcal/mol", "n_repeats": 3, "dg_bind": -2.0, "dg_bind_std": 0.3,
-              "warnings": []}
-    (out / b.name).mkdir(parents=True)
-    (out / b.name / "result.json").write_text(json.dumps(stored))
-    before = (out / b.name / "result.json").read_bytes()
-    summary = driver._run(cfg, out, False, lambda m: None, only_ligands=[a.name])
-    entry = next(s for s in summary if s["ligand"] == b.name)
-    assert entry["dg_bind"] == -2.0 and entry["n_repeats"] == 3 and entry["not_part_of_this_run"] is True
-    assert (out / b.name / "result.json").read_bytes() == before
+    b_dir = out / b.name
+    _write_ligand_legs(b_dir, [-1.0, -2.0, -3.0])
+    stored = workflow.combine_ligand(b_dir, b.name, 3, cfg)            # B's own run, three repeats
+    assert stored["dg_bind"] == pytest.approx(-2.0) and stored["repeats_planned"] == 3
+    if version == "earlier":
+        (b_dir / "result.json").write_text(json.dumps({k: v for k, v in stored.items() if k not in RECORD_OF_THE_COMBINATION}))
+
+    def b_files():
+        return {p.relative_to(b_dir): (p.read_bytes(), p.stat().st_mtime_ns) for p in sorted(b_dir.rglob("*")) if p.is_file()}
+
+    def run_a():
+        before = b_files()
+        summary = driver._run(cfg, out, False, lambda m: None, only_ligands=[a.name])
+        assert b_files() == before                                   # nothing of B is written
+        entry = next(s for s in summary if s["ligand"] == b.name)
+        assert entry["not_part_of_this_run"] is True and entry["n_repeats_planned"] == 3 and entry["selected_legs"] == []
+        assert json.loads((out / "summary.json").read_text())[1].get("dg_bind") == pytest.approx(entry.get("dg_bind"))
+        row = next(r for r in csv.DictReader((out / "summary.csv").open()) if r["ligand"] == b.name)
+        return entry, row
+
+    entry, row = run_a()
+    assert entry["dg_bind"] == pytest.approx(-2.0) and entry["n_repeats"] == 3 and not entry.get("combined_again_from_legs")
+    assert row["dg_bind_kcal_mol"] == "-2.000" and row["n_repeats"] == "3"
+
+    workflow.begin_leg(b_dir / "repeat_2" / "complex")             # B's last complex leg starts again and is interrupted
+    entry, row = run_a()
+    assert entry["dg_bind"] == pytest.approx(-1.5) and entry["n_repeats"] == 2 and entry["combined_again_from_legs"]
+    assert entry["failed_leg_ids"] == [[2, "complex"]] and entry["warnings"][0].startswith("not part of this run")
+    assert row["dg_bind_kcal_mol"] == "-1.500" and row["n_repeats"] == "2"
+    assert driver.failed_legs(json.loads((out / "summary.json").read_text())) == []   # A's run did not fail
+
+    from cufep.workflow import KCAL
+    workflow.write_leg_result(b_dir / "repeat_2" / "complex", _leg_result(6.0 * KCAL))   # run again: -6.0
+    entry, row = run_a()
+    assert entry["dg_bind"] == pytest.approx(-3.0) and entry["n_repeats"] == 3 and entry["failed_leg_ids"] == []
+    assert row["dg_bind_kcal_mol"] == "-3.000"
     assert all(b.name not in str(d) for d in refreshed + plotted)
-    assert json.loads((out / "summary.json").read_text())[1]["dg_bind"] == -2.0
+
+
+def test_a_ligand_not_part_of_a_run_keeps_its_own_repeats_and_analysis_settings(tmp_path):
+    """The read-only combination of a ligand that a run does not include uses the repeats and the analysis record
+    of the run that combined it, not those of the run in progress; one without a result of its own is combined over
+    the repeats it has."""
+    from cufep import workflow
+    from cufep.config.schema import Config
+
+    lig = tmp_path / "b"
+    _write_ligand_legs(lig, [-1.0, -2.0, -3.0, -4.0])
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "analysis": {"min_overlap": 0.05}})
+    stored = workflow.combine_ligand(lig, "b", 3, cfg)                 # repeat 3 is not part of B's result
+    assert stored["dg_bind"] == pytest.approx(-2.0)
+    assert workflow.stored_ligand_result(lig, "b")["dg_bind"] == pytest.approx(-2.0)
+    workflow.write_leg_result(lig / "repeat_0" / "solvent", _leg_result(0.0, leg="solvent"))   # the same result again
+    assert not workflow.stored_ligand_result(lig, "b").get("combined_again_from_legs")
+    workflow.write_leg_result(lig / "repeat_0" / "solvent", dict(_leg_result(0.0, leg="solvent"), analysis_record={"version": 1}))
+    again = workflow.stored_ligand_result(lig, "b")
+    assert again["combined_again_from_legs"] and again["n_repeats"] == 3 and again["repeats_planned"] == 3
+    assert again["analysis_record"]["min_overlap"] == 0.05             # B's settings, not the defaults
+    assert any("version 1 of the analysis" in item for item in again["old_analysis"])
+    (lig / "result.json").unlink()
+    alone = workflow.stored_ligand_result(lig, "b")
+    assert alone["n_repeats"] == 4 and alone["dg_bind"] == pytest.approx(-2.5)
+    assert "did not combine them" in alone["warnings"][0]
+    assert workflow.stored_ligand_result(tmp_path / "none", "x")["warnings"] == [
+        "not part of this run, and no result of an earlier run"]
 
 
 def test_a_new_result_replaces_the_old_one_only_when_it_is_complete(tmp_path, monkeypatch):

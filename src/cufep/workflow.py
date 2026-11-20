@@ -2387,14 +2387,17 @@ def refresh_leg_result(leg_dir: Path, analysis, log=print) -> str:
 
 def analysis_differences(result: dict, analysis) -> str:
     """How the analysis behind a leg's result differs from the one of this run, in words ("" if not)."""
-    from cufep.analysis.mbar import ANALYSIS_VERSION
+    return record_differences(result.get("analysis_record"), analysis_record(analysis))
 
-    stored, current = result.get("analysis_record"), analysis_record(analysis)
+
+def record_differences(stored: dict | None, current: dict) -> str:
+    """How the analysis record ``stored`` of a leg's result differs from ``current``, the record of
+    the run that combines it, in words ("" if not)."""
     if stored == current:
         return ""
     if not stored:
-        return f"made before the version of the analysis was recorded; this run uses version {ANALYSIS_VERSION}"
-    if stored.get("version") != current["version"]:
+        return f"made before the version of the analysis was recorded; this run uses version {current.get('version')}"
+    if stored.get("version") != current.get("version"):
         return f"version {stored.get('version')} of the analysis; this run uses version {current['version']}"
     return "; ".join(settings_differences({k: v for k, v in stored.items() if k != "version"},
                                           {k: v for k, v in current.items() if k != "version"}))
@@ -2514,15 +2517,34 @@ def cycle_differences(legs: list[tuple[str, dict]]) -> tuple[list[str], list[str
     return differing, not_compared
 
 
-def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None) -> dict:
+def leg_digest(leg_dir: Path) -> str | None:
+    """A digest of what a leg directory holds for the combination (:func:`leg_state`): the state of
+    the leg and its result or error. Two digests differ whenever the leg would be combined otherwise."""
+    state, data = leg_state(Path(leg_dir))
+    return record_digest({"state": state, "data": data})
+
+
+def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None, publish: bool = True,
+                   record: dict | None = None) -> dict:
     """Binding free energy from the finished legs of one ligand.
 
     The legs of all complete repeats must have been made under the same conditions
     (:data:`CYCLE_CONDITIONS`); if they were not, the ligand gets no binding free energy and the
     result says what differs. ``analysis`` is the ``analysis`` section of the run: a leg whose
     result is of another analysis (:func:`refresh_leg_result` could not make it again) is combined
-    as it is and named under ``old_analysis`` with the checks its result does not hold.
+    as it is and named under ``old_analysis`` with the checks its result does not hold. ``record``
+    is an analysis record (:func:`analysis_record`) in place of ``analysis``: the one of the run
+    that combined a ligand before (:func:`stored_ligand_result`).
+
+    The result records what it was made of: the repeats it covers (``repeats_planned``), the
+    analysis record of the run that combined it, and a digest of every leg (:func:`leg_digest`),
+    so that a later run can see whether the legs are still the ones it was combined from. It is
+    written to ``<ligand>/result.json`` unless ``publish`` is False (a ligand that is not part of
+    a run is combined again without being written to).
     """
+    run_record = record if record is not None else (analysis_record(analysis) if analysis is not None else None)
+    digests = {f"{r}/{leg}": leg_digest(lig_dir / f"repeat_{r}" / leg)
+               for r in range(repeats) for leg in ("complex", "solvent")}
     per_repeat = []
     complete: list[tuple[str, dict]] = []      # the legs of the complete repeats
     warnings: list[str] = []
@@ -2613,10 +2635,10 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                   if result.get("origin_not_recorded")]
     # legs whose result is of another analysis than this run's and could not be made again
     old_analysis = []
-    if analysis is not None:
+    if run_record is not None:
         checks = {"samples": "independent samples", "halves": "halves of the production", "estimators": "BAR against MBAR"}
         for where, result in complete:
-            differs = analysis_differences(result, analysis)
+            differs = record_differences(result.get("analysis_record"), run_record)
             if differs:
                 quality = result.get("quality") or {}
                 not_made = [name for key, name in checks.items()
@@ -2633,7 +2655,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                  "not_reliable": flagged["overlap"], "few_samples": flagged["samples"],
                  "halves_differ": flagged["halves"], "halves_not_compared": not_assessed,
                  "halves_below_level": below_level,
-                 "estimators_disagree": flagged["estimators"]}
+                 "estimators_disagree": flagged["estimators"],
+                 "repeats_planned": int(repeats), "analysis_record": run_record, "leg_digests": digests}
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL
         out["dg_bind"] = float(vals.mean())
@@ -2658,5 +2681,99 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None)
                 q[k] = {name: value / KCAL for name, value in p[k].items()}
             converted.append(q)
         out["repeats"] = converted
-    publish_text(lig_dir / "result.json", jsonio.dumps(out, indent=1))
+    if publish:
+        publish_text(lig_dir / "result.json", jsonio.dumps(out, indent=1))
     return out
+
+
+def stored_ligand_result(lig_dir: Path, name: str) -> dict:
+    """The result of a ligand that is not part of this run (``--ligand``), as its own legs give it.
+
+    The ligand keeps the repeats and the analysis settings of the run that combined it: a run of
+    one ligand with one repeat must not combine another ligand of three repeats as one (review of
+    PR 1). Its ``result.json`` is used as it is while the legs it was made from are unchanged. A
+    leg can change afterwards (interrupted, run again, analysed again) without the ligand being
+    combined again; then the ligand is combined again here, read-only, over its own repeats and
+    with the analysis record of the run that combined it, and the result says so (review of PR 1:
+    the mean of three repeats and success were shown after the last complex leg had been
+    interrupted). Nothing in the ligand's directory is written. A result of an earlier version
+    records neither its repeats nor its legs: the repeats are those it names, and it is combined
+    again and kept if that gives the same numbers.
+    """
+    lig_dir = Path(lig_dir)
+    path = lig_dir / "result.json"
+    stored = _read_json(path) if path.exists() else None
+    present = 0
+    while (lig_dir / f"repeat_{present}").is_dir():
+        present += 1
+    if stored is None:
+        if present == 0:
+            return {"ligand": name, "units": "kcal/mol", "n_repeats": 0, "not_part_of_this_run": True,
+                    "repeats_planned": 0,
+                    "warnings": ["not part of this run, and no result of an earlier run"]}
+        why = ("its result.json cannot be read" if path.exists() else
+               "the run that made its legs did not combine them (no result.json of the ligand)")
+        out = combine_ligand(lig_dir, name, present, publish=False)
+        out["warnings"].insert(0, f"not part of this run; {why}: shown as its legs give it now, over the "
+                                  f"{present} repeat(s) it has")
+        return dict(out, not_part_of_this_run=True, combined_again_from_legs=True)
+    if isinstance(stored.get("repeats_planned"), int) and isinstance(stored.get("leg_digests"), dict):
+        repeats, recorded = int(stored["repeats_planned"]), stored["leg_digests"]
+        changed = [(r, leg) for r in range(repeats) for leg in ("complex", "solvent")
+                   if recorded.get(f"{r}/{leg}") != leg_digest(lig_dir / f"repeat_{r}" / leg)]
+        if not changed:
+            return dict(stored, not_part_of_this_run=True)
+        out = combine_ligand(lig_dir, name, repeats, publish=False, record=stored.get("analysis_record"))
+        legs = ", ".join(f"the {leg} leg of repeat {r}" for r, leg in changed)
+        out["warnings"].insert(0, f"not part of this run; its legs changed after its result was combined ({legs}): "
+                                  "shown as its legs give it now, with the repeats and the analysis settings of the "
+                                  "run that combined it; its result.json is unchanged")
+        return dict(out, not_part_of_this_run=True, combined_again_from_legs=True)
+    # a result of an earlier version: its repeats are those it names
+    repeats = _repeats_named(stored)
+    repeats = present if repeats is None else repeats
+    out = combine_ligand(lig_dir, name, repeats, publish=False)
+    if _same_combination(stored, out):
+        return dict(stored, not_part_of_this_run=True, repeats_planned=repeats)
+    out["warnings"].insert(0, f"not part of this run; its legs no longer give the result it has (made by an earlier "
+                              f"version of cuFEP): shown as its legs give it now, over the {repeats} repeat(s) its "
+                              "result names; its result.json is unchanged")
+    return dict(out, not_part_of_this_run=True, combined_again_from_legs=True)
+
+
+def _repeats_named(stored: dict) -> int | None:
+    """How many repeats a ligand result of an earlier version covers: one more than the highest
+    repeat it names (in its repeats, its failed legs or its warnings), None if it names none."""
+    import re
+
+    named = [int(p["repeat"]) for p in stored.get("repeats") or [] if isinstance(p, dict) and "repeat" in p]
+    named += [int(item[0]) for item in stored.get("failed_leg_ids") or [] if isinstance(item, (list, tuple)) and item]
+    for warning in stored.get("warnings") or []:
+        match = re.match(r"repeat (\d+) ", str(warning))
+        if match:
+            named.append(int(match.group(1)))
+    return max(named) + 1 if named else None
+
+
+def _same_combination(stored: dict, again: dict) -> bool:
+    """Whether a ligand result of an earlier version says what its legs give now: the number of
+    complete repeats, the binding free energy, the free energies of every repeat, and the failed
+    and inconsistent legs where it records them."""
+    def rounded(x):
+        if isinstance(x, float):
+            return None if not np.isfinite(x) else float(f"{x:.9g}")
+        return x
+
+    def core(result: dict, keys) -> dict:
+        out = {"n_repeats": result.get("n_repeats"), "dg_bind": rounded(result.get("dg_bind")),
+               "repeats": [tuple(rounded(p.get(k)) for k in ("repeat", "dg_bind", "dg_complex", "dg_solvent",
+                                                             "restraint_release"))
+                           for p in result.get("repeats") or []]}
+        if "failed_leg_ids" in keys:
+            out["failed_leg_ids"] = sorted([int(r), str(leg)] for r, leg in result.get("failed_leg_ids") or [])
+        if "inconsistent_legs" in keys:
+            out["inconsistent_legs"] = list(result.get("inconsistent_legs") or [])
+        return out
+
+    keys = set(stored)
+    return core(stored, keys) == core(again, keys)
