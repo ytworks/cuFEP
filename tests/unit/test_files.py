@@ -86,3 +86,39 @@ def test_written_files_are_complete(tmp_path):
     publish_npz(tmp_path / "b.npz", y=np.arange(3))
     assert np.load(tmp_path / "b.npz")["y"].tolist() == [0, 1, 2]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "b.npz"]
+
+
+def test_two_writers_of_one_file_each_publish_a_whole_file(tmp_path):
+    """Review of PR 1 (P2): two writers of one file shared the temporary name; the first published the other's half
+    file and the second failed with FileNotFoundError."""
+    import threading
+
+    target = tmp_path / "benchmark_report.md"
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def writer(text):
+        def write(tmp):
+            with open(tmp, "w") as fh:
+                fh.write(text[: len(text) // 2])
+                barrier.wait(timeout=10)                   # both are half way
+                fh.write(text[len(text) // 2:])
+        try:
+            publish(target, write)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(c * 1000,)) for c in "AB"]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert target.read_text() in ("A" * 1000, "B" * 1000)
+    assert [p.name for p in tmp_path.iterdir()] == ["benchmark_report.md"]
+    # the usual permissions of the process, not those of a private temporary file
+    import os
+
+    mask = os.umask(0)
+    os.umask(mask)
+    assert target.stat().st_mode & 0o777 == 0o666 & ~mask

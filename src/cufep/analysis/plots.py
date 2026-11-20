@@ -19,12 +19,16 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
     None if no leg has a result or matplotlib is missing.
     """
     repeat_dir = Path(repeat_dir)
+    out = Path(path) if path is not None else repeat_dir / "analysis.png"
     legs = []
     for leg in ("complex", "solvent"):
         f = repeat_dir / leg / "result.json"
         if f.exists():
             legs.append((leg, json.loads(f.read_text())))
     if not legs:
+        # no leg of this repeat has a result now: a figure of an earlier state would be read as the
+        # current one (review of PR 1)
+        out.unlink(missing_ok=True)
         return None
     try:
         import matplotlib

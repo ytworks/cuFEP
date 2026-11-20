@@ -41,14 +41,9 @@ def verdict(results: dict[str, bool | None]) -> bool:
 
 
 def validate(cfg, ligand_name: str | None = None, device: int = 0, echo=print) -> bool:
-    import openmm as mm
-    import openmm.unit as u
-
     from cufep import run as driver
-    from cufep.backends import get_backend
     from cufep.backends.cupotential import CuPotentialBackend
-    from cufep.sampling.states import StateEnergyEvaluator
-    from cufep.workflow import ligand_directories, ligands_of_run, load_prepared, prepare_ligand, select_ligands
+    from cufep.workflow import ligand_directories, ligands_of_run, select_ligands
 
     ok_plugin, why = CuPotentialBackend.available()
     if not ok_plugin:
@@ -60,6 +55,25 @@ def validate(cfg, ligand_name: str | None = None, device: int = 0, echo=print) -
     ligand = select_ligands(ligands, [ligand_name], "--ligand")[0] if ligand_name else ligands[0]
     out_dir = Path(resolved.output.dir)
     lig_dir = ligand_directories(out_dir, [ligand.name])[ligand.name]
+    # the prepared systems are those of `cufep run` in the same directory: the lock of the directory
+    # keeps the two from making them at the same time (review of PR 1)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lock = driver.lock_output_directory(out_dir)
+    try:
+        return _compare(resolved, ligand, protein, lig_dir, device, echo)
+    finally:
+        lock.close()
+
+
+def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
+    import openmm as mm
+    import openmm.unit as u
+
+    from cufep.backends import get_backend
+    from cufep.backends.cupotential import CuPotentialBackend
+    from cufep.sampling.states import StateEnergyEvaluator
+    from cufep.workflow import load_prepared, prepare_ligand
+
     prepare_ligand(resolved, ligand, protein, lig_dir, bool(resolved.membrane.enabled), resolved.solvation.box_shape, echo)
     info = json.loads((lig_dir / "prep" / "prep.json").read_text())
     T = resolved.thermodynamics.temperature_K

@@ -53,10 +53,16 @@ def fsync_path(path: Path | str) -> None:
 
 def publish(path: Path | str, write: Callable[[Path], None]) -> Path:
     """Write ``path`` in one step: ``write(tmp)`` writes the whole file to ``tmp``, a name next to
-    ``path``; then it is made durable and renamed over ``path``. If anything fails or the process
-    is interrupted before the rename, ``path`` is as it was and ``tmp`` is removed."""
+    ``path`` of this call alone; then it is made durable and renamed over ``path``. If anything fails
+    or the process is interrupted before the rename, ``path`` is as it was and ``tmp`` is removed.
+    Two writers of one file each publish a whole file of their own; the last rename wins (review of
+    PR 1: with one temporary name for all, a writer published the half file of the other)."""
+    import uuid
+
     path = Path(path)
-    tmp = path.with_name(path.name + WRITING)
+    # a name of this call alone, not created here: the writer creates the file with the usual
+    # permissions of the process (mkstemp would make every published file readable by its owner only)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}{WRITING}")
     try:
         write(tmp)
         fsync_path(tmp)

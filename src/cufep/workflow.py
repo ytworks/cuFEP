@@ -405,6 +405,10 @@ def restraint_contradictions(stored: dict, cfg: Config) -> list[str]:
         out.append(f"restraints.selection: {info['selection']} -> {rc.selection}")
     if "force_constants" in info and info["force_constants"] != rc.force_constants:
         out.append(f"restraints.force_constants: {info['force_constants']} -> {rc.force_constants}")
+    elif rc.selection == "manual" and rc.force_constants == "auto" and info.get("selection") == "manual":
+        # a manual restraint of a version that ignored force_constants: auto holds the configured constants
+        out.append("restraints.force_constants: the configured constants (a manual restraint of an earlier version) "
+                   "-> auto")
     if rc.selection == "manual":
         for key, asked in (("host_atoms", rc.host_atoms), ("guest_atoms", rc.guest_atoms)):
             if asked and key in restraint and list(restraint[key]) != list(asked):
@@ -2366,7 +2370,10 @@ def refresh_leg_result(leg_dir: Path, analysis, log=print) -> str:
         log(f"{where}: the result of this leg is of another analysis ({analysis_differences(data, analysis)}) and "
             f"could not be made again from its samples: {type(exc).__name__}: {exc}")
         return "stale"
-    (leg_dir / "result.json").replace(leg_dir / "result.replaced.json")
+    # the result in place stays valid until the new one is complete: it is copied aside, and the new
+    # one replaces it in one step (review of PR 1: moved aside first, a failed write left the leg with
+    # no result, and the next run read it as not finished)
+    publish(leg_dir / "result.replaced.json", lambda tmp: shutil.copy2(leg_dir / "result.json", tmp))
     _write_json(leg_dir / "result.json", result)
     log(f"{where}: the result of this leg was of another analysis ({analysis_differences(data, analysis)}); it has "
         "been made again from the samples, and the one it replaces is kept as result.replaced.json")

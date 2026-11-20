@@ -724,10 +724,15 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert restraint_contradictions(old_restraint, config(restraints={
         "selection": "manual", "host_atoms": [1, 2, 9], "guest_atoms": [4, 5, 6]})) \
         == ["restraints.selection: auto -> manual", "restraints.host_atoms: [1, 2, 3] -> [1, 2, 9]"]
-    # with manual selection the constants are the configured ones whatever force_constants says
+    # manual anchors take their constants from their fluctuations under auto (review of PR 1); a manual restraint
+    # of an earlier version, which ignored auto, holds the configured constants and is refused under auto
     manual = {"restraint": dict(old_restraint["restraint"]), "info": {"selection": "manual"}}
     assert restraint_contradictions(manual, config(restraints={
         "selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "force_constants": "auto",
+        "k_angle_kcal_per_rad2": 20.0})) == [
+        "restraints.force_constants: the configured constants (a manual restraint of an earlier version) -> auto"]
+    assert restraint_contradictions(manual, config(restraints={
+        "selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6],
         "k_angle_kcal_per_rad2": 20.0})) == [
         "restraints.k_angle_kcal_per_rad2: k_theta_a 80, k_theta_b 80, k_phi_a 80, k_phi_b 80, k_phi_c 80 -> 20"]
 
@@ -1528,3 +1533,108 @@ def test_a_second_run_in_the_same_output_directory_is_refused(tmp_path):
         lock_output_directory(tmp_path)
     first.close()
     lock_output_directory(tmp_path).close()                # free again once the first run has ended
+
+
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
+def test_a_run_of_one_ligand_leaves_the_others_as_they_are(tmp_path, monkeypatch, ligands):
+    """Review of PR 1 (P1): ligand B had a result of three repeats (mean -2.0 kcal/mol); a run of ligand A alone with
+    one repeat recombined B as one repeat (-1.0) without touching its samples."""
+    import cufep.run as driver
+    from cufep.config.auto import AutoReport
+    from cufep.config.schema import Config
+
+    a, b = ligands[0], ligands[1]
+    out = tmp_path / "out"
+    cfg = Config.model_validate({"system": {"protein": str(tmp_path / "p.pdb"), "ligand": "l.sdf"},
+                                 "output": {"dir": str(out)}, "resources": {"gpus": []},
+                                 "solvation": {"box_shape": "dodecahedron"}})
+
+    class Protein:
+        def write_pdb(self, path):
+            Path(path).write_text("ATOM")
+
+    from pathlib import Path
+    monkeypatch.setattr(driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [a, b]))
+    monkeypatch.setattr(driver, "prepare_ligand", lambda *args, **kwargs: None)
+    monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: [])
+    monkeypatch.setattr(driver, "write_timing", lambda *args, **kwargs: None)
+    refreshed = []
+    monkeypatch.setattr(driver, "refresh_leg_result", lambda leg_dir, *args, **kwargs: refreshed.append(leg_dir) or "current")
+    plotted = []
+    monkeypatch.setattr(driver, "plot_repeat", lambda repeat_dir, *args, **kwargs: plotted.append(repeat_dir))
+    (out / a.name / "prep").mkdir(parents=True)
+    (out / a.name / "prep" / "prep.json").write_text(json.dumps({"n_atoms_complex": 10, "n_atoms_solvent": 5}))
+    stored = {"ligand": b.name, "units": "kcal/mol", "n_repeats": 3, "dg_bind": -2.0, "dg_bind_std": 0.3,
+              "warnings": []}
+    (out / b.name).mkdir(parents=True)
+    (out / b.name / "result.json").write_text(json.dumps(stored))
+    before = (out / b.name / "result.json").read_bytes()
+    summary = driver._run(cfg, out, False, lambda m: None, only_ligands=[a.name])
+    entry = next(s for s in summary if s["ligand"] == b.name)
+    assert entry["dg_bind"] == -2.0 and entry["n_repeats"] == 3 and entry["not_part_of_this_run"] is True
+    assert (out / b.name / "result.json").read_bytes() == before
+    assert all(b.name not in str(d) for d in refreshed + plotted)
+    assert json.loads((out / "summary.json").read_text())[1]["dg_bind"] == -2.0
+
+
+def test_a_new_result_replaces_the_old_one_only_when_it_is_complete(tmp_path, monkeypatch):
+    """Review of PR 1 (P2): the result was moved aside before the new one was written; a failed write left the leg
+    with none, and later runs read it as not finished."""
+    from cufep import workflow
+    from cufep.config.schema import AnalysisConfig
+
+    leg = tmp_path / "lig" / "repeat_0" / "solvent"
+    (leg / "hrex").mkdir(parents=True)
+    (leg / "hrex" / "samples.h5").write_text("")
+    old = {"analysis_record": {"version": 0}, "delta_g_decouple": 1.0}
+    (leg / "result.json").write_text(json.dumps(old))
+    monkeypatch.setattr(workflow, "leg_result_from_samples", lambda *args, **kwargs: {"delta_g_decouple": 2.0})
+    monkeypatch.setattr(workflow, "run_record_of", lambda *args, **kwargs: {})
+    real = workflow._write_json
+
+    def full_disk(path, data):
+        if path.name == "result.json":
+            raise OSError(28, "No space left on device")
+        real(path, data)
+
+    monkeypatch.setattr(workflow, "_write_json", full_disk)
+    with pytest.raises(OSError, match="No space"):
+        workflow.refresh_leg_result(leg, AnalysisConfig(), lambda m: None)
+    assert json.loads((leg / "result.json").read_text()) == old              # still the leg's result
+    monkeypatch.setattr(workflow, "_write_json", real)
+    assert workflow.refresh_leg_result(leg, AnalysisConfig(), lambda m: None) == "reanalysed"
+    assert json.loads((leg / "result.json").read_text()) == {"delta_g_decouple": 2.0}
+    assert json.loads((leg / "result.replaced.json").read_text()) == old
+
+
+def test_a_repeat_without_a_current_leg_keeps_no_old_figure(tmp_path):
+    """Review of PR 1 (P2): after both legs of a repeat failed, analysis.png of the earlier success stayed."""
+    from cufep.analysis.plots import plot_repeat
+
+    (tmp_path / "analysis.png").write_bytes(b"\x89PNG old")
+    assert plot_repeat(tmp_path) is None and not (tmp_path / "analysis.png").exists()
+
+
+def test_validate_takes_the_lock_of_the_output_directory(tmp_path, monkeypatch):
+    """Review of PR 1 (P1): `cufep validate` made the prepared systems of a directory while `cufep run` was making
+    them there."""
+    from cufep import run as driver
+    from cufep import validate as validation
+    from cufep import workflow
+    from cufep.backends.cupotential import CuPotentialBackend
+    from cufep.config.schema import Config
+
+    class Ligand:
+        name = "lig"
+
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, "output": {"dir": str(tmp_path / "out")}})
+    monkeypatch.setattr(CuPotentialBackend, "available", staticmethod(lambda: (True, "")))
+    monkeypatch.setattr(workflow, "ligands_of_run", lambda cfg, names=(): [Ligand()])
+    monkeypatch.setattr(driver, "plan", lambda cfg, echo=print, ligands=None: (cfg, None, None, ligands))
+    (tmp_path / "out").mkdir()
+    held = driver.lock_output_directory(tmp_path / "out")
+    try:
+        with pytest.raises(workflow.WorkflowError, match="another cufep run is using the output directory"):
+            validation.validate(cfg, None, 0, lambda m: None)
+    finally:
+        held.close()

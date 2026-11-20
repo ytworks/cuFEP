@@ -185,15 +185,19 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, daemon is not None, log,
                  file_name="timing_rerun.json" if partial else "timing.json")
 
-    # legs that this run did not sample keep the result of an earlier run: where that is of
-    # another analysis (version of the method, settings), it is made again from the samples
+    # legs of the ligands of this run that this run did not sample keep the result of an earlier run:
+    # where that is of another analysis (version of the method, settings), it is made again from the
+    # samples. Ligands that are not part of this run (--ligand) are not touched at all: they keep the
+    # result they have, combined with the repeats and the settings of the run that made it (review of
+    # PR 1: a run of one ligand with one repeat recombined another ligand of three repeats as one)
     for lig in ligands:
+        if lig.name not in to_run:
+            continue
         for r in range(repeats):
             for leg in ("complex", "solvent"):
                 refresh_leg_result(lig_dirs[lig.name] / f"repeat_{r}" / leg, resolved, log)
-    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats, resolved) if lig_dirs[lig.name].exists()
-               else {"ligand": lig.name, "units": "kcal/mol", "n_repeats": 0, "warnings": ["not run"]}
-               for lig in ligands]
+    summary = [combine_ligand(lig_dirs[lig.name], lig.name, repeats, resolved) if lig.name in to_run
+               else stored_ligand_result(lig_dirs[lig.name], lig.name) for lig in ligands]
     for s in summary:
         # legs that this run was to do and that failed; the command ends with an error because of them
         s["failed_in_this_run"] = failed_now.get(s["ligand"], [])
@@ -202,6 +206,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         s["n_repeats_planned"] = repeats
     write_summary(out_dir, summary, ligands)
     for lig in ligands:
+        if lig.name not in to_run:
+            continue
         for r in range(repeats):
             try:
                 plot_repeat(lig_dirs[lig.name] / f"repeat_{r}")
@@ -212,6 +218,16 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         for w in s.get("warnings", []):
             log(f"  warning: {w}")
     return summary
+
+
+def stored_ligand_result(lig_dir: Path, name: str) -> dict:
+    """The result a ligand that is not part of this run has, as the run that made it combined it
+    (``result.json`` of the ligand), marked as such; a ligand without one says so."""
+    path = Path(lig_dir) / "result.json"
+    if path.exists():
+        return dict(json.loads(path.read_text()), not_part_of_this_run=True)
+    return {"ligand": name, "units": "kcal/mol", "n_repeats": 0, "not_part_of_this_run": True,
+            "warnings": ["not part of this run, and no result of an earlier run"]}
 
 
 def result_line(s: dict) -> str:
