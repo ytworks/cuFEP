@@ -875,7 +875,13 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
                                    np.asarray(eq["frame_boxes"], dtype=float))
     probe = BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0)
     settings = RestraintSearchSettings(k_r=k_r, k_angle=k_angle)
-    problem = anchor_geometry_problem(probe, full, anchor_margins(settings, temperature_K))
+    # the positions the alchemical run starts from, of which the last frame is a copy in single precision
+    copies = []
+    if "positions" in eq and "box" in eq:
+        start = np.asarray(eq["positions"], dtype=float)
+        copies.append(nearest_image_of_ligand(start, np.asarray(ligand_atoms, dtype=int), start[list(host)].mean(axis=0),
+                                              np.asarray(eq["box"], dtype=float)))
+    problem = anchor_geometry_problem(probe, full, anchor_margins(settings, temperature_K), reference_copies=copies)
     if problem:
         raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}: {problem}. Choose other "
                             "anchors; nothing was sampled")
@@ -1471,7 +1477,7 @@ def run_leg(job: LegJob) -> dict:
                 # only after the first part of the pre-equilibration
                 found = find_boresch_restraint(prep["topology"], full, prep["ligand"], rdmol, T, settings,
                                                input_pose_nm=prep["positions"], frame_boxes_nm=eq["frame_boxes"],
-                                               input_box_nm=prep["box"])
+                                               input_box_nm=prep["box"], start_nm=eq["positions"], start_box_nm=eq["box"])
                 restraint = found.restraint
                 if rc.force_constants == "auto":
                     restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)

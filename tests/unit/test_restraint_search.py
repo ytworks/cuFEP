@@ -63,6 +63,22 @@ def test_search_picks_rigid_ring_atoms_and_nearby_backbone(tyk2_complex):
     assert all(rdmol.GetAtomWithIdx(lig.index(i)).GetIsAromatic() for i in again.restraint.guest_atoms)
 
 
+def test_the_search_skips_anchors_without_a_dihedral_plane_where_the_run_starts(tyk2_complex):
+    """Review of 10589a6 (P2): the plane of the dihedral angles was checked in the frames superposed on the binding
+    site, where rounding turned three anchors exactly on a line into a bent row, and the force of the run was NaN. The
+    rule applies to the configuration the run starts from as well: with the chosen guest anchors put exactly on a line
+    in the start positions, the search takes other anchors."""
+    top, pos, lig, rdmol = tyk2_complex
+    frames = _trajectory(pos, lig, np.random.default_rng(0))
+    first = find_boresch_restraint(top, frames, lig, rdmol, 298.15, start_nm=frames[-1])
+    start = frames[-1].copy()
+    g0, g1, g2 = first.restraint.guest_atoms
+    start[g1] = start[g0] + [0.14, 0.0, 0.0]                     # exactly on a line along x
+    start[g2] = start[g0] + [0.28, 0.0, 0.0]
+    again = find_boresch_restraint(top, frames, lig, rdmol, 298.15, start_nm=start)
+    assert again.restraint.guest_atoms != first.restraint.guest_atoms
+
+
 def test_a_ligand_that_moves_is_measured_and_the_search_goes_on(tyk2_complex):
     """OpenFE has no stop for a pose that changes and reports the ligand RMSD without a limit; so does cuFEP (the
     owner, 2026-11-20: the warning above restraints.pose_rmsd_warning_nm, a level of cuFEP's own, is gone)."""

@@ -332,6 +332,30 @@ def test_anchors_whose_dihedrals_are_not_defined_in_the_last_frame_are_refused()
     with pytest.raises(WorkflowError, match="exactly on a line in the last frame"):
         manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A)
 
+    # review of 10589a6 (P2): the earlier frames turned as a rigid body and all of them superposed on the host, as the
+    # search does: rounding leaves the straight row bent in the superposed last frame. The copies of that configuration
+    # (the frame before the superposition, the positions the run starts from) are held to the rule too
+    from cufep.alchemy.restraints import kabsch_align
+
+    axis = np.array([1.0, 2.0, 3.0]) / np.sqrt(14.0)
+    k = np.array([[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]])
+    turn = np.eye(3) + np.sin(0.7) * k + (1.0 - np.cos(0.7)) * k @ k
+    turned = frames.copy()
+    turned[:-1] = (turned[:-1] - 1.0) @ turn.T + 1.0
+    aligned = kabsch_align(turned, turned[0], np.array(HOST))
+    aligned = kabsch_align(aligned, aligned.mean(axis=0), np.array(HOST))
+    assert undefined_dihedral_planes(probe, aligned[-1]) == []                   # what the check saw
+    assert anchor_geometry_problem(probe, aligned, margin) is None
+    assert "exactly on a line" in anchor_geometry_problem(probe, aligned, margin, reference_copies=[turned[-1]])
+    # manual anchors: the frames are copies in single precision of the positions the run starts from
+    bent = frames[:-1].tolist() + [frames[-1] + [0.0, 0.0, 1e-6] * (np.arange(6) == 5)[:, None]]
+    eq = {"frame_atoms": np.arange(6), "frames": np.array(bent), "frame_boxes": np.repeat(CUBE[None], len(bent), axis=0),
+          "positions": frames[-1], "box": CUBE}
+    with pytest.raises(WorkflowError, match="exactly on a line in the last frame"):
+        manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A)
+    del eq["positions"]
+    manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 6, K_R, K_A)               # without them: the frames alone
+
 
 def test_anchors_on_a_straight_line_are_refused_only_if_they_are_in_every_frame():
     """OpenFE's EvaluateBoreschAtoms: ``not all(collinear)``. Anchors with three in a row whose bond vectors have |cos|

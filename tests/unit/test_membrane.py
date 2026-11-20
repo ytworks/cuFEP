@@ -294,4 +294,15 @@ def test_trimming_keeps_the_contacts_of_the_built_system():
     gone = {atoms[i].residue.index for i in boundary_water_overlaps(pos, kinds, heavy, molecules, set(),
                                                                       (3.0, 3.0, 6.0), (6.0, 6.0, 6.0))}
     assert 0 not in gone and len(gone & {1, 2}) == 1 and len(gone) == 1
-    assert not contact_is_new(pos, 0, mg.index, (6.0, 6.0, 6.0)) and contact_is_new(pos, 3, 6, (6.0, 6.0, 6.0))
+    built, trimmed = (6.0, 6.0, 6.0), (3.0, 3.0, 6.0)
+    assert not contact_is_new(pos, 0, mg.index, built, trimmed) and contact_is_new(pos, 3, 6, built, trimmed)
+    # review of 10589a6 (P3): a water exactly 0.240 nm from the ion (CLASH_NM, which the search of the trimmed box
+    # includes) was taken for a new contact and removed; the same image gives the same distance in both boxes
+    from cufep.prep.membrane import CLASH_NM
+
+    at_level = pos.copy()
+    at_level[[0, 1, 2]] += [0.0, CLASH_NM - 0.194, 0.0]
+    assert np.linalg.norm(at_level[0] - at_level[mg.index]) == pytest.approx(CLASH_NM, abs=1e-12)
+    gone = {atoms[i].residue.index for i in boundary_water_overlaps(at_level, kinds, heavy, molecules, set(), trimmed,
+                                                                      built)}
+    assert 0 not in gone and len(gone) == 1 and not contact_is_new(at_level, 0, mg.index, built, trimmed)

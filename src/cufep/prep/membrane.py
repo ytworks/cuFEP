@@ -193,15 +193,21 @@ def _kind(residue) -> str:
 CLASH_NM = 0.24
 
 
-def contact_is_new(pos, i: int, j: int, built_box_nm) -> bool:
-    """Whether heavy atoms ``i`` and ``j``, within :data:`CLASH_NM` of each other in the trimmed box,
-    were not in the box the bilayer was built in (rectangular, minimum image): only such contacts are
-    made by the new periodic boundary, and only they are resolved by trimming (review of 7b49066: a
-    water coordinating a Mg ion at 0.19 nm, a contact of the built system, was removed)."""
-    built = np.asarray(built_box_nm, dtype=float)
+def contact_is_new(pos, i: int, j: int, built_box_nm, box_nm) -> bool:
+    """Whether the new periodic boundary brought heavy atoms ``i`` and ``j`` together: their nearest
+    image in the trimmed box ``box_nm`` is nearer than in the box the bilayer was built in,
+    ``built_box_nm`` (rectangular boxes). Only such contacts are resolved by trimming (review of
+    7b49066: a water coordinating a Mg ion at 0.19 nm, a contact of the built system, was removed).
+    A pair whose nearest image is the same in both boxes has the same distance in both, computed
+    the same way, so a contact of the built system is never taken for a new one, also at exactly
+    :data:`CLASH_NM` (review of 10589a6: a water 0.240 nm from an ion was removed)."""
     d = np.asarray(pos[i], dtype=float) - np.asarray(pos[j], dtype=float)
-    d -= built * np.round(d / built)
-    return float(np.linalg.norm(d)) >= CLASH_NM
+
+    def nearest(box) -> float:
+        box = np.asarray(box, dtype=float)
+        return float(np.linalg.norm(d - box * np.round(d / box)))
+
+    return nearest(box_nm) < nearest(built_box_nm)
 
 
 def trim_membrane(modeller, padding_nm: float, log=print) -> dict:
@@ -309,7 +315,7 @@ def boundary_water_overlaps(pos, kinds, heavy, molecules, doomed, box_nm, built_
     for a, b in tree.query_pairs(CLASH_NM):
         i, j = kept[a], kept[b]
         mi, mj = mol_of[i], mol_of[j]
-        if mi == mj or not contact_is_new(pos, i, j, built_box_nm):
+        if mi == mj or not contact_is_new(pos, i, j, built_box_nm, box):
             continue
         wi, wj = kinds[i] == "water", kinds[j] == "water"
         if wi and wj:
@@ -366,7 +372,7 @@ def _select_for_box(edge, old, rel, pos, atoms, kinds, heavy, molecules) -> dict
         clashes: dict[int, dict[int, int]] = {}
         for a, b in tree.query_pairs(CLASH_NM):
             ma, mb = mol_of[lip_heavy[a]], mol_of[lip_heavy[b]]
-            if ma != mb and contact_is_new(pos, lip_heavy[a], lip_heavy[b], old):
+            if ma != mb and contact_is_new(pos, lip_heavy[a], lip_heavy[b], old, (edge, edge, old[2])):
                 clashes.setdefault(ma, {}).setdefault(mb, 0)
                 clashes.setdefault(mb, {}).setdefault(ma, 0)
                 clashes[ma][mb] += 1
@@ -398,7 +404,7 @@ def _select_for_box(edge, old, rel, pos, atoms, kinds, heavy, molecules) -> dict
     if len(lip_heavy) and len(water_o):
         tree = cKDTree(wrapped[lip_heavy], boxsize=[edge, edge, old[2]])
         for o, near in zip(water_o, tree.query_ball_point(wrapped[water_o], CLASH_NM)):
-            if any(contact_is_new(pos, o, lip_heavy[k], old) for k in near):
+            if any(contact_is_new(pos, o, lip_heavy[k], old, (edge, edge, old[2])) for k in near):
                 doomed.update(a.index for a in atoms[o].residue.atoms())
                 removed_waters += 1
     return {"doomed": doomed, "upper": upper, "lower": lower, "removed_lipids": removed_lipids,

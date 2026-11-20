@@ -269,7 +269,7 @@ def undefined_dihedral_planes(restraint: "BoreschRestraint", positions: np.ndarr
 
 
 def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin: float,
-                            trajectory: bool = True) -> str | None:
+                            trajectory: bool = True, reference_copies=()) -> str | None:
     """Why the anchors of ``restraint`` are refused over ``frames`` (positions with the ligand in the
     periodic image nearest the host), or None. The rules are two of OpenFE's (EvaluateBoreschAtoms in
     openfe.protocols.restraint_utils.geometry.boresch.host) and nothing of cuFEP's own (the owner,
@@ -287,7 +287,12 @@ def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, f
     prepared pose with theta_A of 25 degrees, on a line by is_collinear, was refused although the
     frames of the pre-equilibration, 25 to 40 degrees, give the restraint). For a trajectory the
     dihedral angles must also be defined in its last frame, from which the reference values come
-    (:func:`undefined_dihedral_planes`).
+    (:func:`undefined_dihedral_planes`), and in every one of ``reference_copies``: other copies of
+    that configuration, such as the frame before it was superposed on the binding site and the
+    positions the alchemical run starts from. A copy can differ from ``frames[-1]`` by rounding,
+    which can make three anchors exactly on a line in one and not in the other (review of 10589a6:
+    after the superposition a nitrile that was exactly straight was taken for bent, and the force of
+    the run was NaN).
 
     OpenFE's other conditions there (each dihedral within +-150 degrees, limits on the circular
     variance of the angles and dihedrals) were never part of cuFEP and are not applied."""
@@ -308,10 +313,11 @@ def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, f
         return ("the six anchors H2-H1-H0-G0-G1-G2 are on a straight line in every frame (three in a row with "
                 f"|cos| above {COLLINEAR_THRESHOLD:g}, OpenFE's is_collinear): the dihedral angles of the restraint "
                 "are not defined there")
-    flat = undefined_dihedral_planes(restraint, frames[-1])
-    if flat:
-        return (f"the anchors {', '.join(flat)} are exactly on a line in the last frame, from which the reference values "
-                "come: the dihedral angles of the restraint are not defined there")
+    for copy in (frames[-1], *reference_copies):
+        flat = undefined_dihedral_planes(restraint, copy)
+        if flat:
+            return (f"the anchors {', '.join(flat)} are exactly on a line in the last frame, from which the reference "
+                    "values come: the dihedral angles of the restraint are not defined there")
     return None
 
 
@@ -504,7 +510,8 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
                            temperature_K: float = 298.15,
                            settings: RestraintSearchSettings | None = None,
                            input_pose_nm: np.ndarray | None = None, frame_boxes_nm: np.ndarray | None = None,
-                           input_box_nm: np.ndarray | None = None) -> RestraintSearchResult:
+                           input_box_nm: np.ndarray | None = None, start_nm: np.ndarray | None = None,
+                           start_box_nm: np.ndarray | None = None) -> RestraintSearchResult:
     """Choose Boresch restraint atoms from an MD trajectory of the bound complex.
 
     ``frames_nm`` has shape (n_frames, n_atoms, 3) with whole (unwrapped) molecules;
@@ -515,6 +522,10 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     the first frame of a trajectory that may begin after the ligand has moved. With the box
     vectors of the frames and of the input, the ligand is first brought to the periodic image
     nearest to the protein.
+
+    ``start_nm`` (with its box ``start_box_nm``) are the positions the alchemical run starts from,
+    of which the last frame is a copy: the dihedral angles of the chosen anchors must be defined
+    there too (:func:`anchor_geometry_problem`).
     """
     s = settings or RestraintSearchSettings()
     kt = R_GAS * temperature_K
@@ -573,6 +584,14 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     sig_r = math.sqrt(kt / s.k_r)
     sig_a = math.sqrt(kt / s.k_angle)
     flat_margin = anchor_margins(s, temperature_K)
+    # the configuration the reference values come from, as the run has it: the last frame before it was
+    # superposed on the binding site, and the positions the run starts from
+    copies = [frames_nm[-1]]
+    if start_nm is not None:
+        start = np.asarray(start_nm, dtype=float)
+        if start_box_nm is not None:
+            start = nearest_image_of_ligand(start, lig, start[ca].mean(axis=0), np.asarray(start_box_nm, dtype=float))
+        copies.append(start)
     best = None
     n_tested = 0
     for g_local in guests:
@@ -588,8 +607,9 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
                         continue
                     n_tested += 1
                     r = BoreschRestraint((h0, h1, h2), (g0, g1, g2), 0, 0, 0, 0, 0, 0)
-                    # OpenFE's rules: theta_A and theta_B away from 0 and pi, the anchors not on a line
-                    if anchor_geometry_problem(r, aligned, flat_margin) is not None:
+                    # OpenFE's rules: theta_A and theta_B away from 0 and pi, the anchors not on a line; and
+                    # the dihedral angles defined where the run starts
+                    if anchor_geometry_problem(r, aligned, flat_margin, reference_copies=copies) is not None:
                         continue
                     v = r.values(aligned)                                           # (frames, 6)
                     # Reference values: those of the final frame, from which the alchemical run
