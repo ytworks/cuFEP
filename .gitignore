@@ -6,3 +6,7 @@ spikes/out/
 .pytest_cache/
 core
 core.*
+
+# Claude Code: working copies of parallel sessions, personal settings
+.claude/worktrees/
+.claude/settings.local.json

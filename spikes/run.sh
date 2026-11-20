@@ -1,14 +1,8 @@
 #!/bin/bash
 # Run a script inside the cufep:dev image with the working tree mounted.
 #   spikes/run.sh spikes/m0_01_plugin_waterbox.py [args...]
-# Environment: GPUS (docker --gpus value, default "all"), IMAGE (default cufep:dev)
+# Environment: GPUS (host GPU numbers, `all` or a docker --gpus value, default "all"),
+# IMAGE (default cufep:dev). The container is set up by scripts/in_docker.sh.
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-exec docker run --rm -i --gpus "${GPUS:-all}" --shm-size="${SHM_SIZE:-16g}" --ulimit core=0 \
-  -u "$(id -u):$(id -g)" \
-  -v "$repo":/work -w /work \
-  -e PYTHONPATH=/work/src \
-  -e CUFEP_DATA=/work \
-  -e CUDA_MPS_PIPE_DIRECTORY=/tmp/cufep-no-mps \
-  -e OPENMM_CPU_THREADS="${OPENMM_CPU_THREADS:-4}" \
-  --entrypoint python "${IMAGE:-cufep:dev}" "$@"
+exec "$repo/scripts/in_docker.sh" --gpus "${GPUS:-all}" --image "${IMAGE:-cufep:dev}" python "$@"
