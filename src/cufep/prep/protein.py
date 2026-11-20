@@ -39,6 +39,15 @@ TITRATABLE = {"HIS", "ASP", "GLU", "LYS", "CYS", "TYR", "ARG"}
 #: residues whose state infer_variant reads from the hydrogens of the file
 INFERRED = {"HIS", "ASP", "GLU", "LYS", "CYS"}
 MAX_PEPTIDE_BOND_NM = 0.16
+#: neighbouring residues whose C-alpha atoms are this close are consecutive in the chain (3.8 A in a
+#: peptide); used where the C or the N of the peptide bond is missing and PDBFixer is to rebuild it
+MAX_CA_CA_NM = 0.42
+#: protonated carboxyl groups: the two oxygens, the oxygen and the hydrogen names of the protonated
+#: form in the force field (Amber: ASH carries HD2 on OD2, GLH HE2 on OE2), and the hydrogen names a
+#: file may use
+CARBOXYLS = {"ASP": (("OD1", "OD2"), "OD2", "HD2", ("HD1", "HD2")), "ASH": (("OD1", "OD2"), "OD2", "HD2", ("HD1", "HD2")),
+             "GLU": (("OE1", "OE2"), "OE2", "HE2", ("HE1", "HE2")), "GLH": (("OE1", "OE2"), "OE2", "HE2", ("HE1", "HE2"))}
+MAX_OH_BOND_NM = 0.13
 _CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
@@ -159,6 +168,35 @@ def _rename_cap(kind: str, atoms, nbrs) -> dict[int, str]:
 BACKBONE_HYDROGENS = {"H", "H1", "H2", "H3", "HN", "HA", "HA2", "HA3"}
 
 
+def carboxyl_renames(res, positions_nm) -> dict[int, str]:
+    """New names for the atoms of a protonated carboxyl group, so that the proton keeps the oxygen it
+    is bonded to in the file. The force field puts it on one named oxygen (OD2 of ASH, OE2 of GLH):
+    a proton given as HD1 on OD1 was otherwise rebuilt on OD2, 2.9 A away from where it was, and the
+    donor of a hydrogen bond in the pocket changed sides (review of PR 1). The two oxygens of a
+    carboxyl group are equivalent, so the one with the proton takes the name of the force field and
+    the other takes the other name. Empty if the residue has no single carboxyl proton bonded to one
+    of its oxygens."""
+    spec = CARBOXYLS.get(res.name)
+    if spec is None:
+        return {}
+    oxygens, target_o, target_h, h_names = spec
+    atoms = {a.name: a for a in res.atoms()}
+    protons = [atoms[name] for name in h_names if name in atoms]
+    if len(protons) != 1 or not all(name in atoms for name in oxygens):
+        return {}
+    h = protons[0]
+    pos = np.asarray(positions_nm)
+    distance = {name: float(np.linalg.norm(pos[atoms[name].index] - pos[h.index])) for name in oxygens}
+    bonded = min(distance, key=distance.get)
+    if distance[bonded] > MAX_OH_BOND_NM:
+        return {}
+    out = {h.index: target_h}
+    if bonded != target_o:
+        out[atoms[bonded].index] = target_o
+        out[atoms[target_o].index] = bonded
+    return out
+
+
 def infer_variant(res) -> str | None:
     """Protonation variant implied by the hydrogens already on a residue, or None where they do
     not decide it; ``Modeller.addHydrogens`` then assigns the state at the pH of the run.
@@ -258,8 +296,18 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
                 continue
             if current:
                 c_prev, n_cur = atom(current[-1], "C"), atom(res, "N")
-                connected = (c_prev is not None and n_cur is not None
-                             and np.linalg.norm(pos[c_prev.index] - pos[n_cur.index]) <= MAX_PEPTIDE_BOND_NM)
+                if c_prev is not None and n_cur is not None:
+                    connected = np.linalg.norm(pos[c_prev.index] - pos[n_cur.index]) <= MAX_PEPTIDE_BOND_NM
+                else:
+                    # the C or the N of the bond is missing: PDBFixer rebuilds it (step 6) if the
+                    # residues are neighbours, which their C-alpha atoms tell (review of PR 1: a
+                    # missing N stopped the preparation as if the chain were broken there)
+                    ca_prev, ca_cur = atom(current[-1], "CA"), atom(res, "CA")
+                    connected = (ca_prev is not None and ca_cur is not None
+                                 and np.linalg.norm(pos[ca_prev.index] - pos[ca_cur.index]) <= MAX_CA_CA_NM)
+                    if connected:
+                        report.notes.append(f"backbone atom missing between {_label(current[-1])} and {_label(res)}: "
+                                            "rebuilt, the chain is not broken there")
                 if not connected:
                     report.chain_breaks.append(f"{_label(current[-1])} | {_label(res)}")
                     segments.append(current)
@@ -364,7 +412,7 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
             cap_plan[(s, 0)] = ["ACE"]
             report.caps_added.append(f"ACE before {_label(first)}")
         for res in seg:
-            copy_res(res, chain)
+            copy_res(res, chain, rename=carboxyl_renames(res, pos))
             n_in_chain += 1
         if last.index in nme_for:
             cap = nme_for[last.index]
@@ -372,14 +420,19 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
         elif last.index in add_nme:
             cap_plan[(s, n_in_chain)] = ["NME"]
             report.caps_added.append(f"NME after {_label(last)}")
-    hetero_chain = None
+    # waters and ions keep their numbers in a chain for each chain of the input they come from: in one
+    # chain two waters numbered 401 of chains A and B were read back as one (review of PR 1)
+    hetero_chains: dict[str, object] = {}
     n_water = n_ion = 0
     for res in top.residues():
         kind = kinds[res.index]
         if kind == "ion" or (kind == "water" and keep_water):
-            if hetero_chain is None:
-                hetero_chain = new_top.addChain(_CHAIN_IDS[len(segments)])
-            copy_res(res, hetero_chain, "HOH" if kind == "water" else res.name)
+            if res.chain.id not in hetero_chains:
+                k = len(segments) + len(hetero_chains)
+                if k >= len(_CHAIN_IDS):
+                    raise ProteinError("too many chains of protein segments, waters and ions for PDB chain identifiers")
+                hetero_chains[res.chain.id] = new_top.addChain(_CHAIN_IDS[k])
+            copy_res(res, hetero_chains[res.chain.id], "HOH" if kind == "water" else res.name)
             n_water += kind == "water"; n_ion += kind == "ion"
     if report.caps_added:
         report.notes.append("caps added: " + ", ".join(report.caps_added))
@@ -409,7 +462,19 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
                  and any(a.element == elem.hydrogen for a in r.atoms())}
     before = {(*residue_key(r), r.name): sum(1 for a in r.atoms() if a.element == elem.hydrogen)
               for r in fixer.topology.residues()}
+    # Crystal waters get their hydrogens apart from the protein, from OpenMM's TIP3P template (the
+    # geometry of every water model of cufep.prep.water): addHydrogens builds a System of what it is
+    # given, and a water of a 4-site model given by its oxygen has no template before its hydrogens
+    # and its extra site are there (review of PR 1). Their extra sites follow below.
     modeller = app.Modeller(fixer.topology, fixer.positions)
+    waters = [r for r in modeller.topology.residues() if r.name == "HOH"]
+    water_part = None
+    if waters:
+        water_part = app.Modeller(fixer.topology, fixer.positions)
+        water_part.delete([r for r in water_part.topology.residues() if r.name != "HOH"])
+        water_part.addHydrogens(app.ForceField("amber14/tip3p.xml"))
+        modeller.delete(waters)
+        variants = [v for r, v in zip(fixer.topology.residues(), variants) if r.name != "HOH"]
     actual = modeller.addHydrogens(forcefield, pH=ph, variants=variants)
     for res, variant, given in zip(modeller.topology.residues(), actual, variants):
         base = _CANONICAL.get(res.name, res.name)
@@ -420,6 +485,13 @@ def prepare_protein(pdb_path: str | Path, forcefield: app.ForceField | None = No
         his = [p for p in report.protonation_assigned if p.startswith("HIS")]
         report.notes.append(f"protonation assigned at pH {ph} for {len(report.protonation_assigned)} titratable "
                             f"residues (histidines: {', '.join(his) if his else 'none'})")
+
+    if water_part is not None:
+        modeller.add(water_part.topology, water_part.positions)
+        # waters of a 4-site model need their extra site before their template can match (review of
+        # PR 1: a crystal water stopped the preparation with amber14/tip4pew.xml); nothing is added
+        # for a 3-site model
+        modeller.addExtraParticles(forcefield)
 
     # ---- 8. check that every residue has a force-field template ----------------------------------
     unmatched = forcefield.getUnmatchedResidues(modeller.topology)

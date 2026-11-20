@@ -108,8 +108,8 @@ def test_hydrogen_free_input_gets_hydrogens(tmp_path, repo):
 
 # ---- review of PR 1 on a3462a5: the identity of a residue is its chain, number and insertion code --------
 
-def _modified_tyk2(repo, tmp_path, *, chain="A", insertion=False, drop=()):
-    """The TYK2 input with its chain renamed, LYS 899 renumbered 898A, and some hydrogens removed."""
+def _modified_tyk2(repo, tmp_path, *, chain="A", insertion=False, drop=(), extra=(), name="tyk2_modified.pdb"):
+    """The TYK2 input with its chain renamed, LYS 899 renumbered 898A, some atoms removed and some lines added."""
     lines = []
     for line in (repo / "benchmarks/tyk2/inputs/tyk2_protein.pdb").read_text().splitlines():
         if line.startswith(("ATOM", "HETATM")):
@@ -120,9 +120,32 @@ def _modified_tyk2(repo, tmp_path, *, chain="A", insertion=False, drop=()):
             if insertion and number == "899":
                 line = line[:22] + " 898" + "A" + line[27:]
         lines.append(line)
-    path = tmp_path / "tyk2_modified.pdb"
+    for line in extra:
+        if line.startswith("ATOM"):                     # an atom of a residue goes right after that residue
+            key = (line[17:20], line[21], line[22:26])
+            last = max(i for i, other in enumerate(lines)
+                       if other.startswith("ATOM") and (other[17:20], other[21], other[22:26]) == key)
+            lines.insert(last + 1, line)
+        else:                                           # waters at the end, before END
+            end = next((i for i, other in enumerate(lines) if other.startswith("END")), len(lines))
+            lines.insert(end, line)
+    path = tmp_path / name
     path.write_text("\n".join(lines) + "\n")
     return path
+
+
+def _atom_line(serial, name, resname, chain, number, xyz_nm, element):
+    x, y, z = (10.0 * v for v in xyz_nm)
+    return (f"HETATM{serial:5d} {name:<4s} {resname:>3s} {chain}{number:>4d}    {x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00"
+            f"          {element:>2s}")
+
+
+def _tyk2_atom(repo, resname, number, name):
+    for line in (repo / "benchmarks/tyk2/inputs/tyk2_protein.pdb").read_text().splitlines():
+        if line.startswith("ATOM") and line[17:20] == resname and line[22:26].strip() == str(number) \
+                and line[12:16].strip() == name:
+            return np.array([float(line[30:38]), float(line[38:46]), float(line[46:54])]) / 10.0
+    raise KeyError((resname, number, name))
 
 
 def test_residues_with_an_insertion_code_stay_residues_of_their_own(repo, tmp_path):
@@ -209,3 +232,60 @@ def test_variants_are_read_only_from_hydrogens_that_decide_them():
     assert infer_variant(residue("LYS", ["H", "HA", "HB2", "HZ1", "HZ2"])) == "LYN"
     assert infer_variant(residue("CYS", ["H", "HA", "HB2", "HB3"])) is None
     assert infer_variant(residue("CYS", ["H", "HA", "HB2", "HG"])) == "CYS"
+
+
+
+# ---- review of PR 1 on 64751ca: the preparation keeps what the input says -------------------------------
+
+def test_crystal_waters_of_two_chains_with_one_number_stay_two(repo, tmp_path):
+    """P1: HOH A401 and HOH B401 went into one chain under their own numbers and were read back as one water."""
+    centre = _tyk2_atom(repo, "LYS", 898, "NZ")
+    waters = [_atom_line(9001, "O", "HOH", "A", 401, centre + [0.0, 0.0, 1.2], "O"),
+              "TER", _atom_line(9002, "O", "HOH", "B", 401, centre + [0.0, 1.2, 0.0], "O")]
+    prepared = prepare_protein(_modified_tyk2(repo, tmp_path, extra=waters))
+    hoh = [r for r in prepared.topology.residues() if r.name == "HOH"]
+    assert len(hoh) == 2 and all(len(list(r.atoms())) == 3 for r in hoh)
+    assert "kept 2 waters" in " ".join(prepared.report.notes)
+
+
+@pytest.mark.parametrize("resname,number,carbon,oxygen,proton", [("ASP", 902, "CG", "OD1", "HD1"),
+                                                                  ("GLU", 905, "CD", "OE1", "HE1")])
+def test_a_carboxyl_proton_stays_on_its_oxygen(repo, tmp_path, resname, number, carbon, oxygen, proton):
+    """P1: ASP 902 with HD1 on OD1 came out with the proton on OD2, 3.0 A from where it was; GLU with HE1 likewise.
+    The oxygen the proton is bonded to takes the name the force field puts the proton on."""
+    try:
+        o = _tyk2_atom(repo, resname, number, oxygen)
+    except KeyError:
+        pytest.skip(f"{resname} {number} is not in the TYK2 input")
+    c = _tyk2_atom(repo, resname, number, carbon)
+    h = o + 0.095 * (o - c) / np.linalg.norm(o - c)
+    line = f"ATOM   9100 {proton:<4s} {resname} A{number:>4d}    {10 * h[0]:8.3f}{10 * h[1]:8.3f}{10 * h[2]:8.3f}  1.00  0.00           H"
+    prepared = prepare_protein(_modified_tyk2(repo, tmp_path, extra=[line]))
+    pos = prepared.positions_nm()
+    residue = next(r for r in prepared.topology.residues() if r.id == str(number) and r.chain.id == "A")
+    atoms = {a.name: a for a in residue.atoms()}
+    hydrogen = next(a for a in residue.atoms() if a.name in ("HD2", "HE2"))
+    bonded = min((a for a in residue.atoms() if a.element.symbol == "O" and a.name != "O"),
+                 key=lambda a: np.linalg.norm(pos[a.index] - pos[hydrogen.index]))
+    assert np.linalg.norm(pos[bonded.index] - o) < 1e-3                  # the oxygen the proton was on
+    assert np.linalg.norm(pos[hydrogen.index] - pos[bonded.index]) < 0.11
+    assert residue.name in ("ASH", "GLH", "ASP", "GLU") and len([a for a in atoms if a.startswith("H")]) > 2
+
+
+def test_a_crystal_water_with_a_four_site_model(repo, tmp_path):
+    """P2: with amber14/tip4pew.xml a crystal water given by its oxygen stopped the preparation (one site short)."""
+    centre = _tyk2_atom(repo, "LYS", 898, "NZ")
+    water = [_atom_line(9001, "O", "HOH", "A", 401, centre + [0.0, 0.0, 1.2], "O")]
+    ff = app.ForceField("amber14/protein.ff14SB.xml", "amber14/tip4pew.xml")
+    prepared = prepare_protein(_modified_tyk2(repo, tmp_path, extra=water), forcefield=ff)
+    hoh = [r for r in prepared.topology.residues() if r.name == "HOH"]
+    assert len(hoh) == 1 and len(list(hoh[0].atoms())) == 4
+
+
+def test_a_missing_backbone_atom_is_rebuilt_and_does_not_break_the_chain(repo, tmp_path):
+    """P2: residues 890-895 with the N of PHE 892 missing stopped with "PHE892/A has no backbone N"."""
+    prepared = prepare_protein(_modified_tyk2(repo, tmp_path, drop={("PHE", "892", "N"), ("PHE", "892", "H")}))
+    assert prepared.report.chain_breaks == []
+    residue = next(r for r in prepared.topology.residues() if r.id == "892" and r.chain.id == "A")
+    assert "N" in {a.name for a in residue.atoms()}
+    assert any("backbone atom missing" in n for n in prepared.report.notes)
