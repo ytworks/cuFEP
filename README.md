@@ -258,8 +258,9 @@ cufep run examples/membrane_a2a/config.yaml
 cufep benchmark run tyk2 --tier smoke
 ```
 
-One calculation of each example on an earlier commit of version 0.1, with the ALS threshold 0.18,
-REST2 on the pocket and 5 ns of production per lambda window (the default is 10 ns), gave
+Both examples set 5 ns of production per lambda window (the default is 10 ns); every other
+setting is the default. One calculation of each example on an earlier commit of version 0.1, with
+the ALS threshold 0.18, REST2 on the pocket and 5 ns of production per lambda window, gave
 -8.94 ± 0.77 kcal/mol for TYK2 ejm_31 and -11.95 ± 0.73 kcal/mol for A2A 4e (standard errors of
 the one calculation;
 [docs/configuration.md](docs/configuration.md), `sampling.rest2.region`). These are single
@@ -281,7 +282,10 @@ cufep benchmark report tyk2 runs/benchmark_tyk2_subset
 | `tyk2` | TYK2 kinase (PDB 4GIH) | 16 |
 | `a2a` | adenosine A2A receptor (PDB 5OLZ), in a bilayer | 17 compounds (29 states) |
 
-One calculation per ligand is run; `--repeats` runs more. The inputs come from the
+A set runs with the settings of its example (`examples/kinase_tyk2/config.yaml`,
+`examples/membrane_a2a/config.yaml`: 5 ns of production per lambda window, every other setting
+the default); only the input files and the output directory differ, and the example's ligand is
+one of the set's. One calculation per ligand is run; `--repeats` runs more. The inputs come from the
 [Schrödinger public binding free energy benchmark](https://github.com/schrodinger/public_binding_free_energy_benchmark)
 (Ross et al. 2023, MIT licence; [benchmarks/README.md](benchmarks/README.md)). The report
 compares cuFEP with experiment and with the FEP+ predictions published with the set. The FEP+

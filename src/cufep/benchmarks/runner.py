@@ -1,6 +1,7 @@
 """Run and report the built-in benchmarks."""
 from __future__ import annotations
 
+import copy
 import csv
 import json
 import os
@@ -39,22 +40,39 @@ def read_reference(name: str) -> dict[str, dict]:
                 for r in csv.DictReader(fh)}
 
 
+def _merge(into: dict, values: dict) -> None:
+    """Set ``values`` in the nested settings ``into``, key by key (a section is not replaced as a whole)."""
+    for key, value in values.items():
+        if isinstance(value, dict) and isinstance(into.get(key), dict):
+            _merge(into[key], value)
+        else:
+            into[key] = copy.deepcopy(value)
+
+
 def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) -> Config:
-    """Configuration of a benchmark tier: only the inputs and, for ``smoke``, shortened sampling."""
+    """Configuration of a benchmark tier.
+
+    The settings are those of the set's example (``example`` in the registry): everything in its
+    configuration but the input files, which are the set's, and the output directory. So a set
+    runs as its example runs, and the example's ligand is one of the set's. ``subset`` selects
+    five ligands; ``smoke`` selects one and shortens the sampling.
+    """
+    from cufep.config.schema import load_config
+
     registry = load_registry()
     if name not in registry:
         raise KeyError(f"unknown benchmark '{name}' (available: {', '.join(registry)})")
     if tier not in TIERS:
         raise KeyError(f"unknown tier '{tier}' (available: {', '.join(TIERS)})")
     entry, root = registry[name], data_root()
-    data: dict = {"system": {"protein": str(root / entry["protein"]), "ligand": str(root / entry["ligands"])},
-                  "membrane": {"enabled": bool(entry.get("membrane", False))},
-                  "output": {"dir": str(out_dir or Path("runs") / f"benchmark_{name}_{tier}")}}
+    data = load_config(root / entry["example"]).model_dump(mode="json")
+    data["system"].update(protein=str(root / entry["protein"]), ligand=str(root / entry["ligands"]))
+    data["output"]["dir"] = str(out_dir or Path("runs") / f"benchmark_{name}_{tier}")
     if tier == "smoke":
         data["system"]["ligand_names"] = entry["subset"][:1]
-        data["sampling"] = dict(SMOKE_SAMPLING)
-        data["lambda_schedule"] = {"adaptive": {"window_ps": 10, "equilibration_ps": 0}}
-        data["membrane"].update(equilibration_ns=0.5)
+        _merge(data, {"sampling": SMOKE_SAMPLING,
+                      "lambda_schedule": {"adaptive": {"window_ps": 10, "equilibration_ps": 0}},
+                      "membrane": {"equilibration_ns": 0.5}})
     elif tier == "subset":
         data["system"]["ligand_names"] = list(entry["subset"])
     return Config.model_validate(data)

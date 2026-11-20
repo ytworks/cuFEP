@@ -9,6 +9,7 @@ from cufep.analysis.structure import structural_analysis
 from cufep.benchmarks.curate import compound_id, evenly_spaced_subset
 from cufep.benchmarks.runner import benchmark_config, data_root, load_registry, read_reference, report
 from cufep.benchmarks.stats import bootstrap, metrics
+from cufep.config.schema import load_config
 from cufep.prep.ligand import load_ligands
 
 
@@ -64,17 +65,42 @@ def test_benchmark_tiers(tmp_path):
     assert smoke.system.ligand_names == ["jmc_23"] and smoke.sampling.repeats == 1
     assert smoke.sampling.production_ns == 0.1 and smoke.lambda_schedule.adaptive.window_ps == 10
     assert smoke.lambda_schedule.adaptive.equilibration("complex") == 0.0
-    subset = benchmark_config("a2a", "subset", tmp_path / "x")
-    assert subset.system.ligand_names == load_registry()["a2a"]["subset"]
-    assert subset.sampling.repeats == 1 and subset.membrane.enabled is True     # one run per ligand
-    full = benchmark_config("tyk2", "full")
-    assert full.system.ligand_names is None and full.sampling.production_ns == 10.0
-    assert full.membrane.enabled is False and smoke.membrane.enabled is False
-    assert benchmark_config("a2a", "smoke").membrane.enabled is True
+    a2a_smoke = benchmark_config("a2a", "smoke", tmp_path / "m")
+    assert a2a_smoke.membrane.enabled is True and a2a_smoke.membrane.equilibration_ns == 0.5
+    assert benchmark_config("a2a", "subset", tmp_path / "x").system.ligand_names == load_registry()["a2a"]["subset"]
+    assert benchmark_config("tyk2", "full").system.ligand_names is None
     with pytest.raises(KeyError):
         benchmark_config("nope", "full")
     with pytest.raises(KeyError):
         benchmark_config("tyk2", "huge")
+
+
+def _sdf_records(path) -> dict[str, str]:
+    return {r.split("\n")[0].strip(): r for r in path.read_text().split("$$$$\n") if r.strip()}
+
+
+@pytest.mark.parametrize("name", ["tyk2", "a2a"])
+def test_a_benchmark_set_runs_with_the_settings_of_its_example(name, tmp_path):
+    """A set runs as its example runs: the same settings, only the input files and the output
+    directory differ; and the example is a member of the set (the same protein file, its ligand's
+    record in the set), so the set's result for that ligand is the example's calculation."""
+    entry, root = load_registry()[name], data_root()
+    example = load_config(root / entry["example"])
+
+    def settings(cfg) -> dict:
+        data = cfg.model_dump(mode="json")
+        data["system"].pop("protein"), data["system"].pop("ligand"), data["system"].pop("ligand_names")
+        data.pop("output")
+        return data
+
+    for tier, names in (("subset", entry["subset"]), ("full", None)):
+        cfg = benchmark_config(name, tier, tmp_path / tier)
+        assert settings(cfg) == settings(example)
+        assert cfg.system.ligand_names == names
+        assert cfg.system.protein == root / entry["protein"] and cfg.system.ligand == root / entry["ligands"]
+    assert example.system.protein.read_bytes() == (root / entry["protein"]).read_bytes()
+    (ligand, record), = _sdf_records(example.system.ligand).items()
+    assert _sdf_records(root / entry["ligands"])[ligand] == record
 
 
 def test_report_from_a_synthetic_run(tmp_path):

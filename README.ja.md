@@ -254,8 +254,9 @@ cufep run examples/membrane_a2a/config.yaml
 cufep benchmark run tyk2 --tier smoke
 ```
 
-バージョン 0.1 の以前のコミットで、ALS の基準 0.18、ポケットの REST2、lambda window あたり 5 ns の
-production (既定は 10 ns) で各 example を 1 回ずつ計算した結果は、TYK2 ejm_31 が
+2 つの example は lambda window あたり 5 ns の production を設定しています (既定は 10 ns)。それ以外の
+設定は既定値です。バージョン 0.1 の以前のコミットで、ALS の基準 0.18、ポケットの REST2、lambda window
+あたり 5 ns の production で各 example を 1 回ずつ計算した結果は、TYK2 ejm_31 が
 -8.94 ± 0.77 kcal/mol、A2A 4e が -11.95 ± 0.73 kcal/mol でした (1 回の計算の標準誤差。[docs/configuration.md](docs/configuration.md)
 の `sampling.rest2.region`)。どちらも 1 回だけの計算で、complex leg を繰り返し計算したときの値の
 ばらつきはこれらの誤差より大きくなっています ([protocol: REST2](docs/protocol.md#rest2))。
@@ -275,7 +276,9 @@ cufep benchmark report tyk2 runs/benchmark_tyk2_subset
 | `tyk2` | TYK2 キナーゼ (PDB 4GIH) | 16 |
 | `a2a` | アデノシン A2A 受容体 (PDB 5OLZ)、二重膜中 | 17 化合物 (29 状態) |
 
-リガンドごとに 1 回計算します。`--repeats` で回数を増やせます。入力は
+セットは、その example の設定 (`examples/kinase_tyk2/config.yaml`、`examples/membrane_a2a/config.yaml`:
+lambda window あたり 5 ns の production、それ以外は既定値) で動きます。違うのは入力ファイルと出力先
+だけで、example のリガンドはセットのリガンドの 1 つです。リガンドごとに 1 回計算します。`--repeats` で回数を増やせます。入力は
 [Schrödinger の公開結合自由エネルギーベンチマーク](https://github.com/schrodinger/public_binding_free_energy_benchmark)
 (Ross ら 2023、MIT ライセンス。[benchmarks/README.md](benchmarks/README.md)) のものです。レポートは
 cuFEP を、実験値と、セットとともに公開されている FEP+ の予測値と比較します。FEP+ の値は相対計算を
