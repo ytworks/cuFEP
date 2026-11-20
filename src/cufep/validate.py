@@ -34,8 +34,8 @@ def validation_system(cfg, system, prep: dict, box_nm, leg: str):
     return built, fixed_schedule(list(STAGES_SOLVENT), {"discharge": 4, "vanish": 6}, scale)
 
 
-#: differences between states (kT) beyond which a pair of state and configuration is not compared:
-#: such states have no weight in the free energy
+#: a pair of state and configuration is not compared when the state lies this much (kT) or more above
+#: the sampled one on both backends: such states have no weight in the free energy
 COMPARED_BELOW_KT = 60.0
 
 
@@ -44,17 +44,20 @@ def between_state_differences(reference_rows, rows, own_states, level_kT: float 
     ``reference_rows`` in what matters for the free energy: the differences between the states, each
     taken from the state the configuration was sampled in (``own_states``).
 
-    A pair of configuration and state is compared when the difference between the states is below
-    ``level_kT`` on either side, or finite on one side only: a state that one backend finds favourable
-    is not left out because the other one does not (review of PR 1: +80 kT in the reference and
-    -5 kT in cuPotential were left out, and the validation said OK). Returns ``worst`` (kT), the
+    A pair of configuration and state is compared when the signed difference between the states is
+    below ``level_kT`` on either side, or finite on one side only. Only a state that is unfavourable
+    by ``level_kT`` or more on both sides has no weight in the free energy; a state that one backend
+    finds favourable, however much, is not left out because the other one does not (review of PR 1:
+    +80 kT in the reference and -5 kT in cuPotential were left out, and the validation said OK; then,
+    with the absolute value of the difference, +80 kT against -80 kT). Returns ``worst`` (kT), the
     largest relative difference of the energies themselves (``relative``) and the number of pairs
     compared; a pair with a non-finite difference makes ``worst`` infinite."""
     ref, x = np.asarray(reference_rows, dtype=float), np.asarray(rows, dtype=float)
     n = np.arange(ref.shape[0])
     own = np.asarray(own_states, dtype=int)
     ref_d, d = ref - ref[n, own][:, None], x - x[n, own][:, None]
-    compared = (np.abs(ref_d) < level_kT) | (np.abs(d) < level_kT) | (np.isfinite(ref_d) != np.isfinite(d))
+    with np.errstate(invalid="ignore"):
+        compared = (ref_d < level_kT) | (d < level_kT) | (np.isfinite(ref_d) != np.isfinite(d))
     if not compared.any():
         return {"worst": 0.0, "relative": 0.0, "compared": 0}
     gap = np.abs(d - ref_d)[compared]

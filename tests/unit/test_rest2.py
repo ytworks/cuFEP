@@ -277,12 +277,16 @@ def test_the_validation_compares_the_system_a_run_samples(dipeptides_in_water):
     assert verdict({}) is False and verdict({"complex": False, "solvent": True}) is False
 
 
-@pytest.mark.parametrize("compared_kT,worst,ok", [(-5.0, 85.0, False), (80.0, 0.0, True)])
-def test_validate_compares_a_state_that_either_backend_finds_favourable(compared_kT, worst, ok):
+@pytest.mark.parametrize("compared_kT,worst,ok,n_compared", [(-5.0, 85.0, False, 2), (-80.0, 160.0, False, 2),
+                                                             (80.0, 0.0, True, 1), (180.0, 0.0, True, 1)])
+def test_validate_compares_a_state_that_either_backend_finds_favourable(compared_kT, worst, ok, n_compared):
     """Review of 037bdf1 (P2): the pairs that validate compares were chosen by the reference alone (|difference| < 60
     kT), so a state 80 kT above the sampled one in the reference and 5 kT below it in the backend compared was left out
-    and the result was OK. Rows of a two-state system evaluated on OpenMM's Reference and CPU platforms: the 85 kT are
-    seen (MISMATCH); with the same Hamiltonian on both the largest difference is 0 (OK)."""
+    and the result was OK. Review of c691e37 (P2): chosen by |difference| < 60 kT on either side, a state 80 kT below in
+    the backend compared was left out too (160 kT, OK). A state is compared when its signed difference is below 60 kT on
+    either side. Rows of a two-state system evaluated on OpenMM's Reference and CPU platforms: 85 and 160 kT are seen
+    (MISMATCH); with the same Hamiltonian on both the largest difference is 0 (OK), and a state unfavourable on both
+    sides (+80 and +180 kT) is left out (OK)."""
     import openmm as mm
     import openmm.unit as unit
 
@@ -309,7 +313,7 @@ def test_validate_compares_a_state_that_either_backend_finds_favourable(compared
     reference, other = rows("Reference", 80.0), rows("CPU", compared_kT)
     found = between_state_differences(reference, other, [0])
     assert found["worst"] == pytest.approx(worst, abs=1e-4)
-    assert (found["worst"] < 0.15) is ok and found["compared"] == (2 if not ok else 1)
+    assert (found["worst"] < 0.15) is ok and found["compared"] == n_compared
     # the rule before the fix, which looked at the reference only, saw nothing
     ref = np.asarray(reference)
     mask = np.abs(ref - ref[:, [0]]) < 60.0

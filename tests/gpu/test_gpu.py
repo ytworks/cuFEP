@@ -116,7 +116,8 @@ def test_state_energies_are_right_straight_after_loading_a_configuration(big_wat
     ctx.setPeriodicBoxVectors(*early_box)
     ctx.setPositions(early_pos)
     loaded = ev.reduced_potentials()[0]
-    usable = np.abs(after_md - after_md[k]) < 60.0
+    # states unfavourable by 60 kT or more have no weight; favourable ones are compared however low (review of PR 1)
+    usable = (after_md - after_md[k]) < 60.0
     error = ((loaded - loaded[k]) - (after_md - after_md[k]))[usable]
     assert np.max(np.abs(error)) < 0.01, error         # kT
 
