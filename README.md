@@ -23,7 +23,7 @@ Every other setting has a recommended default and can be changed in YAML
   GPU through NVIDIA MPS.
 - Benchmarks against experiment and FEP+ for a kinase (TYK2) and a GPCR in a bilayer (A2A).
 
-**Status:** work in progress. The plan and its milestones are in [docs/PLAN.md](docs/PLAN.md),
+**Status:** work in progress. The plan and its milestones are in [docs/plans/2026-11-18-abfe-engine.md](docs/plans/2026-11-18-abfe-engine.md),
 the results of the first risk checks in [docs/M0_REPORT.md](docs/M0_REPORT.md).
 Version 0.1 handles neutral ligands only and has no cofactor support yet.
 

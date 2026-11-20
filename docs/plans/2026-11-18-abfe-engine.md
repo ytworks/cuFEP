@@ -1,4 +1,6 @@
 # cuFEP 実装計画 (改訂 15 の公開版)
+Status: Done (PR #1, merged as 31a720e)
+Refs: `docs/protocol.md`, `docs/configuration.md`
 
 オーナーが 2026-11-19 と 2026-11-20 に承認した計画の要約。改訂 8 は改訂 7 の続きで開発完了までの手順を定め、改訂 9 から改訂 15 は PR #1 のレビューへの修正と改善を定める。仕様の本文は
 [protocol.md](protocol.md) と [configuration.md](configuration.md) にある。

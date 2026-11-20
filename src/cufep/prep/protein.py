@@ -3,7 +3,7 @@
 Goal: accept "a protein PDB" as the only receptor input and return a Topology that the
 force field can parameterize, changing as little as possible and recording every change.
 
-Rules (see docs/PLAN.md, "入力契約"):
+Rules (see docs/protocol.md, "Inputs"):
 
 * Hydrogens present in the file are kept and define protonation/tautomer states.
   Missing hydrogens are added at the requested pH.
