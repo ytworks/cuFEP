@@ -23,6 +23,8 @@ jobs:
           python-version: "3.12"
       - name: PROGRESS.md size budget and layout
         run: python scripts/check_progress_size.py
+      - name: README.md and README.ja.md have the same headings, commands and links
+        run: python scripts/check_readme_pair.py
 
   unit:
     name: unit tests (CPU, stock OpenMM)
