@@ -48,6 +48,11 @@ wiki を英語と日本語で作る。
 6. wiki: `docs/wiki/Home.md`、`Accuracy.md` (英語)、`Accuracy-ja.md` (日本語)。両言語で同じ構成、
    同じ数値。`scripts/check_names.py` が `docs/wiki/` を精度比較のファイルとして認め、
    `scripts/check_readme_pair.py` が wiki の英日ペアと表の数値を照合する。
+   オーナーの追加の指示 (2026-11-21): 図表は必須、図には今回の計算の結果だけ、相関係数も入れる、
+   別の ABFE 手法 Felis (ByteDance Seed、arXiv:2603.22274 版 3) とも比較する。Felis はリガンド
+   ごとの値を公開していないので、標的ごとに論文の定義の統計量 (R²、ρ、τ、オフセット b、補正後
+   RMSE と MAE、順序正解率) で比べる。この定義を公開された FEP+ の予測値に当てはめると論文の
+   FEP+ の行と一致することを確かめた。
 7. 独立レビュー、push、CI。マージ後に GitHub Wiki へ公開する (最初のページはオーナーが Web UI で
    作る)。
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Check that README.md (English) and README.ja.md (Japanese) say the same thing.
+"""Check that the English and the Japanese version of a document say the same thing: README.md
+and README.ja.md, and the pages of the wiki (docs/wiki/, published on the GitHub Wiki).
 
 The two cannot be compared word for word, so what can be compared is: the outline (the levels of
 the headings from `##` down, in order), the commands and configuration in the code blocks (with
 their comments removed, since the comments are translated), the links to files of the repository,
-and that each names the other. Every relative link and every anchor of both must resolve, as
-GitHub resolves them. Run by the `harness` job of CI. Standard library only.
+the numbers in the tables, and that each names the other. Every relative link and every anchor of
+both must resolve, as GitHub resolves them. Run by the `harness` job of CI. Standard library only.
 """
 from __future__ import annotations
 
@@ -17,7 +18,16 @@ from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent.parent
-PAIR = ("README.md", "README.ja.md")
+#: the pages of the wiki as the GitHub Wiki serves them (the wiki pages link to each other so)
+WIKI = "https://github.com/ytworks/cuFEP/wiki/"
+#: the pairs of documents: the English file, the Japanese file, and how each is linked from the other
+PAIRS = (("README.md", "README.ja.md", "README.md", "README.ja.md"),
+         ("docs/wiki/Accuracy.md", "docs/wiki/Accuracy-ja.md", WIKI + "Accuracy", WIKI + "Accuracy-ja"))
+PAIR = PAIRS[0][:2]
+#: a number: sign, digits, decimals
+NUMBER = re.compile(r"[-+\u2212]?\d+(?:\.\d+)?")
+#: a cell of a table that holds numbers only (a value, a value with its error or interval)
+NUMERIC_CELL = re.compile(r"^[-+\u2212\u00b1\d.,\s\[\]()/%]*\d[-+\u2212\u00b1\d.,\s\[\]()/%]*$")
 
 FENCE_OPEN = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 ATX = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
@@ -206,9 +216,21 @@ def link_problems(name: str, text: str, root: Path) -> list[str]:
     return problems
 
 
-def pair_problems(english: str, japanese: str, root: Path = ROOT) -> list[str]:
-    """Differences between the two READMEs given as text (empty list: none)."""
-    en_name, ja_name = PAIR
+def table_numbers(text: str) -> list[str]:
+    """The numbers in the cells of the tables outside code blocks that hold numbers only, in order
+    (cells of prose are translated and may count in words; a minus sign written as U+2212 counts as
+    a hyphen-minus)."""
+    _, lines = blocks_and_text(text)
+    cells = [cell.strip() for line in lines if line.lstrip().startswith("|")
+             for cell in line.strip().strip("|").split("|")]
+    return [m.group(0).replace("\u2212", "-") for cell in cells if NUMERIC_CELL.match(cell)
+            for m in NUMBER.finditer(cell)]
+
+
+def pair_problems(english: str, japanese: str, root: Path = ROOT, pair: tuple = PAIRS[0]) -> list[str]:
+    """Differences between the two versions of a document given as text (empty list: none);
+    ``pair`` is one of :data:`PAIRS`."""
+    en_name, ja_name, en_ref, ja_ref = pair
     problems = []
     if outline(english) != outline(japanese):
         problems.append(f"the headings differ: {en_name} has levels {outline(english)}, "
@@ -223,31 +245,41 @@ def pair_problems(english: str, japanese: str, root: Path = ROOT) -> list[str]:
             problems.append(f"code block {i} differs apart from comments: {first[0]!r} / {first[1]!r}")
     files = [[unquote(t.partition("#")[0]) for t in links(x) if not is_external(t) and not t.startswith(("#", "["))]
              for x in (english, japanese)]
-    en_files, ja_files = (sorted(set(f) - set(PAIR)) for f in files)
+    en_files, ja_files = (sorted(set(f) - {en_ref, ja_ref}) for f in files)
     if en_files != ja_files:
         problems.append(f"links to files differ: only in {en_name} {sorted(set(en_files) - set(ja_files))}, "
                         f"only in {ja_name} {sorted(set(ja_files) - set(en_files))}")
-    if ja_name not in files[0]:
-        problems.append(f"{en_name} does not link to {ja_name}")
-    if en_name not in files[1]:
-        problems.append(f"{ja_name} does not link to {en_name}")
+    targets = [{unquote(t.partition("#")[0]) for t in links(x)} for x in (english, japanese)]
+    if ja_ref not in targets[0]:
+        problems.append(f"{en_name} does not link to {ja_ref}")
+    if en_ref not in targets[1]:
+        problems.append(f"{ja_name} does not link to {en_ref}")
+    en_numbers, ja_numbers = table_numbers(english), table_numbers(japanese)
+    if en_numbers != ja_numbers:
+        at = next((i for i, (a, b) in enumerate(zip(en_numbers, ja_numbers)) if a != b),
+                  min(len(en_numbers), len(ja_numbers)))
+        problems.append(f"the numbers in the tables differ: {en_name} has {len(en_numbers)}, {ja_name} "
+                        f"{len(ja_numbers)}; the first difference is number {at + 1}: "
+                        f"{(en_numbers + ['(none)'])[at]!r} / {(ja_numbers + ['(none)'])[at]!r}")
     problems += link_problems(en_name, english, root) + link_problems(ja_name, japanese, root)
     return problems
 
 
 def main() -> int:
-    texts = []
-    for name in PAIR:
-        path = ROOT / name
-        if not path.is_file():
-            print(f"check_readme_pair: {path} not found", file=sys.stderr)
-            return 1
-        texts.append(path.read_text(encoding="utf-8"))
-    problems = pair_problems(*texts)
-    if problems:
-        print("README.md and README.ja.md differ:\n- " + "\n- ".join(problems))
-        return 1
-    return 0
+    status = 0
+    for pair in PAIRS:
+        texts = []
+        for name in pair[:2]:
+            path = ROOT / name
+            if not path.is_file():
+                print(f"check_readme_pair: {path} not found", file=sys.stderr)
+                return 1
+            texts.append(path.read_text(encoding="utf-8"))
+        problems = pair_problems(*texts, ROOT, pair)
+        if problems:
+            print(f"{pair[0]} and {pair[1]} differ:\n- " + "\n- ".join(problems))
+            status = 1
+    return status
 
 
 if __name__ == "__main__":
