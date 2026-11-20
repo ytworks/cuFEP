@@ -128,7 +128,10 @@ def test_stored_verdicts_are_made_again_with_the_levels_of_this_run(tmp_path):
     older = {"info": {"selection": "auto", "ligand_rmsd_A": 0.8, "notes": ["a note of the search"]}}
     notes = restraint_notes(older, config(restraints={"pose_rmsd_warning_nm": 0.05}))
     assert notes[0] == "a note of the search" and "could not be compared with restraints.pose_rmsd_warning_nm" in notes[1]
-    assert restraint_notes({"info": {"selection": "manual"}}, config()) == []
+    # manual anchors are measured like the search's since the review of 037bdf1; a file of manual anchors of an
+    # earlier version holds no distance, and says so instead of saying nothing
+    manual = restraint_notes({"info": {"selection": "manual"}}, config())
+    assert len(manual) == 1 and "could not be compared with restraints.pose_rmsd_warning_nm" in manual[0]
 
 
 def test_the_notes_on_bilayer_and_pose_of_a_leg_that_is_not_run_follow_the_levels_of_the_run(tmp_path):
