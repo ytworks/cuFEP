@@ -408,7 +408,9 @@ otherwise the same settings -10.56) and -11.95 ± 0.73 for A2A 4e (experiment -1
 with the ligand alone). These are single runs: the complex legs of these examples differ from
 run to run by more than their standard errors (the discharge stage of TYK2 from 15.3 to 18.4
 kcal/mol over runs with thresholds of 0.10 to 0.18). The owner made the pocket the default on
-2026-11-20.
+2026-11-20. The full benchmark runs of 2026-11-20/21 (commit 3b45bfe, the same settings) gave
+-9.84 ± 0.33 for ejm_31 and -18.91 ± 0.52 for 4e, whose complex leg was 44.68 kcal/mol against
+37.61 in the earlier run (`benchmarks/results/`).
 
 Only the free energy of a whole leg is a physical quantity then. The scale is not 1 where one
 stage ends and the next begins, so the free energies of the single stages in the results

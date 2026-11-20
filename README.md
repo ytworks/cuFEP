@@ -259,13 +259,13 @@ cufep benchmark run tyk2 --tier smoke
 ```
 
 Both examples set 5 ns of production per lambda window (the default is 10 ns); every other
-setting is the default. One calculation of each example on an earlier commit of version 0.1, with
-the ALS threshold 0.18, REST2 on the pocket and 5 ns of production per lambda window, gave
--8.94 ± 0.77 kcal/mol for TYK2 ejm_31 and -11.95 ± 0.73 kcal/mol for A2A 4e (standard errors of
-the one calculation;
-[docs/configuration.md](docs/configuration.md), `sampling.rest2.region`). These are single
-calculations, and repeated runs of a complex leg differ among themselves by more than these
-errors ([protocol: REST2](docs/protocol.md#rest2)).
+setting is the default. The ligand of each example is in its benchmark set, and the full benchmark
+runs gave -9.84 ± 0.33 kcal/mol for TYK2 ejm_31 and -18.91 ± 0.52 kcal/mol for A2A 4e (standard
+errors of the one calculation; [benchmarks/results](benchmarks/results/README.md)). One calculation
+of each example with the same settings on an earlier commit gave -8.94 ± 0.77 and -11.95 ± 0.73
+([docs/configuration.md](docs/configuration.md), `sampling.rest2.region`): runs of a complex leg
+differ among themselves by more than the standard error of one run
+([protocol: REST2](docs/protocol.md#rest2)).
 
 ## Benchmarks
 
@@ -292,8 +292,15 @@ compares cuFEP with experiment and with the FEP+ predictions published with the 
 values come from relative calculations shifted to the experimental mean, so the report separates
 the raw errors (cuFEP only) from the like-for-like statistics. Every ligand with a result is
 compared, NOT RELIABLE ones included; the report also compares the NOT RELIABLE ligands and the
-others apart and says where each NOT RELIABLE leg is below the level of overlap. Results of the
-full sets are not published yet.
+others apart and says where each NOT RELIABLE leg is below the level of overlap.
+
+The full sets were run once, with the settings of the examples: TYK2 16 of 16 ligands, A2A 17 of
+17 compounds, no result NOT RELIABLE. The RMSE after removing the mean error is 1.74 kcal/mol for
+TYK2 and 2.26 for A2A (FEP+ 0.47 and 1.08), Kendall tau 0.12 and 0.38 (FEP+ 0.81 and 0.59), and
+the mean signed error -0.62 and -4.12. The results are in
+[benchmarks/results](benchmarks/results/README.md); the comparison with experiment, FEP+ and
+another ABFE method is on the accuracy page of the wiki
+([docs/wiki/Accuracy.md](docs/wiki/Accuracy.md), Japanese [docs/wiki/Accuracy-ja.md](docs/wiki/Accuracy-ja.md)).
 
 ## Limitations
 

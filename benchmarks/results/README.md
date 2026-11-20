@@ -7,6 +7,7 @@ How to read them, and the comparison with experiment, FEP+ and another ABFE meth
 | set | directory | ligands with a result | calculation | report |
 |---|---|---|---|---|
 | TYK2 (`tyk2`) | [tyk2](tyk2) | 16 of 16 | 2026-11-20, commit 3b45bfe | commit f6464ce |
+| A2A (`a2a`) | [a2a](a2a) | 17 of 17 | 2026-11-21, commit 3b45bfe | commit f6464ce |
 
 - Calculation: `cufep benchmark run <set> --tier full` in a Docker image built from the commit
   named (`docker/Dockerfile`, with NVIDIA's cuPotential plugin), on one machine with eight GPUs.

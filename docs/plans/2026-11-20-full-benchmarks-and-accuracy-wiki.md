@@ -1,5 +1,5 @@
 # ベンチマーク full の実行と、精度を説明する wiki (英語・日本語)
-Status: In progress
+Status: In progress (steps 1-6 done: benchmarks with the example settings, the report, the frozen image 3b45bfe, both full runs, the record in benchmarks/results, the wiki pages; step 7 left: review, merge and publication on the GitHub Wiki)
 Refs: this pull request; `docs/configuration.md` (`sampling.production_ns`); `benchmarks/README.md`
 
 ## Context

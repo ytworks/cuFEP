@@ -41,16 +41,17 @@ with the settings of the examples, the full sets, an accuracy wiki. Analysis ver
 | Unit tests (CPU) | 559 passed on PR #3 (2026-11-20, image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
 | GPU tests | 17 passed on PR #3 (2026-11-20, one GPU, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
-| TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). One calculation with these settings on an earlier commit: -8.94 ± 0.77 kcal/mol (`docs/configuration.md`, `sampling.rest2.region`) |
-| A2A example (4e, experiment -12.07 kcal/mol) | the same settings: -11.95 ± 0.73 kcal/mol |
-| Benchmarks | a set runs with the settings of its example (PR #4); the report compares every ligand with experiment and FEP+, NOT RELIABLE ones included. Smoke and subset tiers ran on earlier versions; the full sets (TYK2 16 ligands, A2A 17 compounds) not run yet (PR #4) |
+| TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). In the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation with the same settings: -8.94 ± 0.77 |
+| A2A example (4e, experiment -12.07 kcal/mol) | in the full A2A run: -18.91 ± 0.52 kcal/mol (complex leg 44.68); one earlier calculation with the same settings: -11.95 ± 0.73 (complex leg 37.61) |
+| Benchmarks | full sets run once with the settings of the examples, commit 3b45bfe (PR #4; `benchmarks/results/`, `docs/wiki/Accuracy.md`). TYK2 16/16: mean signed error -0.62, RMSE after removing the mean error 1.74, Kendall tau 0.12 (FEP+ 0.00, 0.47, 0.81). A2A 17/17: -4.12, 2.26, 0.38 (FEP+ -0.16, 1.08, 0.59). No result NOT RELIABLE; all legs ALS 0.18; a window with fewer than 50 independent samples in 12/16 and 16/17 ligands. Felis (arXiv:2603.22274 v3), same sets: TYK2 RMSE after offset 0.82, tau 0.68; A2A 1.16, 0.65 (issue #5) |
 | Accuracy cross-check against OpenFE | stopped (plan of 2026-11-18, step 11) |
 | Official image | built locally from `docker/Dockerfile`; not published |
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- The full benchmarks with the settings of the examples, their record and the accuracy wiki
-  (English, Japanese): PR #4.
+- PR #4: review and merge, then the wiki pages are published on the GitHub Wiki (the owner
+  creates its first page). Issue #5: the differences from Felis and the measurements that would
+  separate the causes of cuFEP's larger errors; nothing decided.
 - `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
   5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
   decision (`.claude/rules/fep-invariants.md`).
@@ -58,6 +59,14 @@ Open items:
   only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [progress] Full TYK2 and A2A benchmarks; accuracy wiki
+- What: TYK2 (16) and A2A (17) run once each with the example settings (5 ns per window, commit
+  3b45bfe); recorded in `benchmarks/results/`; wiki pages in English and Japanese compare them
+  with experiment, FEP+ and Felis. cuFEP: RMSE after removing the mean error 1.74 / 2.26
+  kcal/mol, Kendall tau 0.12 / 0.38, mean signed error -0.62 / -4.12; FEP+ 0.47 / 1.08, 0.81 /
+  0.59. The report gained Pearson r and a figure ligand by ligand.
+- Refs: PR #4, issue #5, `docs/wiki/Accuracy.md`
 
 ### 2026-11-20 — [progress] Benchmarks with the settings of the examples
 - What: a benchmark set reads its example's `config.yaml` and changes only the input files, the

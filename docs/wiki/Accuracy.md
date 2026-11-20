@@ -22,7 +22,29 @@ analysis are compared like all others, and marked. The page gives numbers, not v
 
 ## Summary
 
-<!-- summary -->
+One calculation per ligand, 5 ns of production per lambda window, on the full TYK2 (16 ligands)
+and A2A (17 compounds) sets. The statistics below are those of the Felis paper's definitions (see
+[Comparison with Felis](#comparison-with-felis-another-abfe-method)), so that all three methods
+stand on one basis (kcal/mol; offset b = <experiment - prediction>):
+
+| set | method | R^2 | Spearman rho | Kendall tau | offset b | RMSE after offset |
+|---|---|---|---|---|---|---|
+| TYK2 (16) | cuFEP, 5 ns x 1 | 0.19 | 0.21 | 0.12 | 0.62 | 1.74 |
+| TYK2 (16) | Felis, 5 ns x 3 | 0.69 | 0.82 | 0.68 | 0.04 | 0.82 |
+| TYK2 (16) | FEP+ | 0.86 | 0.93 | 0.81 | 0.00 | 0.47 |
+| A2A (17) | cuFEP, 5 ns x 1 | 0.15 | 0.48 | 0.38 | 4.12 | 2.26 |
+| A2A (17) | Felis, 5 ns x 3 | 0.55 | 0.81 | 0.65 | 2.74 | 1.16 |
+| A2A (17) | FEP+ | 0.50 | 0.73 | 0.59 | 0.16 | 1.08 |
+
+- On both sets cuFEP ranks the ligands less well than FEP+ and Felis, and its error after
+  removing the offset is larger.
+- cuFEP's predictions are more strongly bound than experiment by 0.62 kcal/mol on average for
+  TYK2 and by 4.12 for A2A; Felis's are by 0.04 and 2.74.
+- All 66 legs ran adaptive lambda scheduling with the threshold 0.18 and no result is NOT
+  RELIABLE. 12 of the 16 TYK2 ligands and 16 of the 17 A2A compounds have a leg with a lambda
+  window of fewer than 50 independent samples.
+- Two calculations of the A2A example ligand 4e with the same settings gave -11.95 and -18.91
+  kcal/mol (see [A2A](#a2a)): one calculation of cuFEP varies by more than its standard error.
 
 ## What was calculated
 
@@ -153,7 +175,65 @@ What the numbers show, without a verdict:
 
 ## A2A
 
-<!-- a2a -->
+17 of 17 compounds have a binding free energy. No compound is NOT RELIABLE: the lowest overlap of
+neighbouring lambda windows is 0.035 to 0.182, 4e's 0.035 being the closest to the level of 0.03.
+In 16 of the 17 the complex leg has a lambda window with fewer than 50 independent samples, as
+few as 4 to 13 in 4i, 4h, 4f, 4q and 4j. Adaptive lambda scheduling ran with the threshold 0.18 in
+all 34 legs and added 2 to 6 windows to each complex leg and 3 to 7 to each solvent leg.
+
+![A2A: calculated against experiment](images/a2a_scatter.png)
+
+![A2A: each compound, and the signed errors](images/a2a_ligands.png)
+
+Statistics over all 17 compounds (kcal/mol; 95 % bootstrap intervals in brackets):
+
+| statistic | cuFEP | FEP+ |
+|---|---|---|
+| mean signed error (kcal/mol) | -4.12 [-5.15, -3.01] | -0.16 [-0.68, 0.36] |
+| RMSE, raw (kcal/mol) | 4.70 [3.73, 5.53] | 1.09 [0.68, 1.43] |
+| MUE, raw (kcal/mol) | 4.26 [3.30, 5.19] | 0.84 [0.53, 1.18] |
+| RMSE after removing the mean error (kcal/mol) | 2.26 [1.47, 2.85] | 1.08 [0.58, 1.40] |
+| pairwise ddG RMSE (kcal/mol) | 3.30 [2.14, 4.15] | 1.58 [0.85, 2.05] |
+| Kendall tau | 0.38 [-0.04, 0.74] | 0.59 [0.28, 0.86] |
+| Spearman rho | 0.48 [-0.09, 0.85] | 0.73 [0.35, 0.95] |
+| Pearson r | 0.39 [-0.19, 0.74] | 0.71 [0.28, 0.90] |
+| Pearson R^2 | 0.15 [0.00, 0.55] | 0.50 [0.08, 0.81] |
+
+No compound is NOT RELIABLE, so there is no second group to compare apart.
+
+Every compound (kcal/mol; lambda windows of the complex and the solvent leg after adaptive
+scheduling; the flags of the checks):
+
+| ligand | experiment | cuFEP | standard error | cuFEP - experiment | FEP+ | FEP+ - experiment | windows complex / solvent | lowest overlap | flags |
+|---|---|---|---|---|---|---|---|---|---|
+| 4e | -12.07 | -18.91 | 0.52 | -6.83 | -11.01 | +1.06 | 18 / 17 | 0.035 | few independent samples: complex leg |
+| 4n | -11.55 | -18.50 | 0.65 | -6.95 | -13.93 | -2.38 | 20 / 19 | 0.155 | few independent samples: complex leg |
+| 4k | -11.54 | -15.54 | 0.34 | -4.00 | -12.00 | -0.46 | 20 / 18 | 0.171 |  |
+| 4r | -11.46 | -16.43 | 0.63 | -4.96 | -12.31 | -0.85 | 21 / 18 | 0.166 | few independent samples: complex leg |
+| 4c | -11.46 | -15.14 | 0.72 | -3.68 | -12.09 | -0.63 | 18 / 19 | 0.137 | few independent samples: complex leg |
+| 4f | -11.45 | -14.52 | 0.38 | -3.08 | -11.72 | -0.27 | 21 / 20 | 0.154 | few independent samples: complex leg |
+| 4l | -11.38 | -13.82 | 0.65 | -2.44 | -11.32 | +0.06 | 17 / 17 | 0.140 | few independent samples: complex leg |
+| 4o | -11.36 | -10.19 | 0.85 | +1.16 | -9.44 | +1.92 | 18 / 16 | 0.169 | few independent samples: complex leg |
+| 4g | -11.06 | -13.57 | 0.69 | -2.51 | -11.83 | -0.77 | 19 / 17 | 0.175 | few independent samples: complex leg |
+| 4j | -10.89 | -14.63 | 0.47 | -3.75 | -11.54 | -0.65 | 18 / 17 | 0.121 | few independent samples: complex leg |
+| 4h | -10.65 | -18.36 | 1.02 | -7.70 | -11.13 | -0.48 | 17 / 19 | 0.102 | few independent samples: complex leg |
+| 4m | -10.55 | -16.30 | 0.30 | -5.75 | -11.71 | -1.16 | 18 / 17 | 0.173 | few independent samples: complex leg |
+| 4d | -10.51 | -13.30 | 0.34 | -2.80 | -9.98 | +0.53 | 18 / 18 | 0.182 | few independent samples: complex leg |
+| 4i | -10.31 | -15.41 | 0.66 | -5.10 | -10.97 | -0.66 | 18 / 17 | 0.107 | few independent samples: complex leg |
+| 4b | -9.96 | -16.68 | 0.62 | -6.72 | -10.06 | -0.10 | 18 / 17 | 0.118 | few independent samples: complex leg |
+| 4a | -9.41 | -10.15 | 0.45 | -0.74 | -7.15 | +2.26 | 17 / 18 | 0.115 | few independent samples: complex leg |
+| 4q | -8.89 | -13.09 | 0.36 | -4.20 | -8.96 | -0.07 | 18 / 18 | 0.164 | few independent samples: complex leg |
+
+What the numbers show, without a verdict:
+
+- 16 of 17 compounds come out more strongly bound than experiment, by 4.12 kcal/mol on average.
+  The Felis paper reports an offset in the same direction for this target, of 2.74.
+- The example ligand 4e came out at -18.91 ± 0.52 kcal/mol here. One calculation with the same
+  settings on an earlier commit gave -11.95 ± 0.73. The difference is in the complex leg (44.68
+  here, 37.61 then); the solvent leg is the same (16.67, 16.52).
+- The bilayer was still changing at the end of its 10 ns of equilibration. Between the last two
+  quarters, its area changed by -2.3 to +0.1 % and the number of water molecules near the ligand
+  by -1.7 to +1.6, over the 17 complex legs.
 
 ## Comparison with Felis, another ABFE method
 
@@ -188,7 +268,14 @@ TYK2:
 
 A2A:
 
-<!-- felis-a2a -->
+| method | ligands | R^2 | Spearman rho | Kendall tau | offset b | RMSE after offset | MAE after offset | correct order ratio |
+|---|---|---|---|---|---|---|---|---|
+| cuFEP, this run (5 ns x 1) | 17 | 0.15 | 0.48 | 0.38 | 4.12 | 2.26 | 1.79 | 0.94 |
+| FEP+, computed here from the published predictions | 17 | 0.50 | 0.73 | 0.59 | 0.16 | 1.08 | 0.79 | 1.00 |
+| Felis, 5 ns x 3, ByteFF25 AM1-BCC |  | 0.55 | 0.81 | 0.65 | 2.74 | 1.16 | 0.88 | 1.00 |
+| Felis, 3 ns x 3, ByteFF25 AM1-BCC |  | 0.53 | 0.75 | 0.57 | 2.98 | 1.20 | 0.92 | 1.00 |
+| Felis, 5 ns x 3, ByteFF25 ABCG2 |  | 0.57 | 0.87 | 0.72 | 2.04 | 1.07 | 0.75 | 0.94 |
+| FEP+ as the paper gives it |  | 0.50 | 0.73 | 0.59 | 0.16 | 1.08 | 0.79 | 1.00 |
 
 ## What these results do not say
 

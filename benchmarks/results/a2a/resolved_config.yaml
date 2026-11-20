@@ -1,0 +1,162 @@
+version: 1
+system:
+  protein: /opt/cufep/benchmarks/a2a/inputs/a2a_hip278_protein.pdb
+  ligand: /opt/cufep/benchmarks/a2a/ligands.sdf
+  cofactors: []
+  ligand_names: null
+membrane:
+  enabled: true
+  orientation: auto
+  lipid: POPC
+  padding_nm: 1.5
+  equilibration_ns: 10.0
+forcefield:
+  protein: amber14/protein.ff14SB.xml
+  water: amber14/tip3p.xml
+  lipid: amber19/lipid21.xml
+  ligand: openff-2.2.1
+  ligand_charges: am1bcc
+backend:
+  name: cupotential
+  fallback: openmm
+  precision: mixed
+  platform: CUDA
+thermodynamics:
+  temperature_K: 298.15
+  pressure_bar: 1.0
+  ionic_strength_M: 0.15
+  ph: 7.4
+dynamics:
+  timestep_fs: 4.0
+  constraints: hbonds
+  hmr_mass_amu: 3.0
+  friction_per_ps: 1.0
+  cutoff_nm: 0.9
+  barostat_frequency: 25
+solvation:
+  box_shape: cube
+  padding_complex_nm: 1.0
+  padding_solvent_nm: 1.5
+restraints:
+  type: boresch
+  selection: auto
+  force_constants: openfe
+  k_r_kcal_per_A2: 10.0
+  k_angle_kcal_per_rad2: 80.0
+  host_atoms: null
+  guest_atoms: null
+  rmsf_cutoff_nm: 0.1
+  host_min_distance_nm: 0.5
+  host_max_distance_nm: 1.5
+  dssp_filter: true
+alchemy:
+  softcore_alpha: 0.5
+lambda_schedule:
+  mode: adaptive
+  windows:
+    complex:
+      restrain: 6
+      discharge: 11
+      vanish:
+      - 0.0
+      - 0.1
+      - 0.2
+      - 0.3
+      - 0.4
+      - 0.5
+      - 0.6
+      - 0.65
+      - 0.7
+      - 0.75
+      - 0.8
+      - 0.85
+      - 0.9
+      - 0.95
+      - 1.0
+    solvent:
+      discharge: 5
+      vanish:
+      - 0.0
+      - 0.12
+      - 0.24
+      - 0.36
+      - 0.48
+      - 0.6
+      - 0.7
+      - 0.77
+      - 0.85
+      - 1.0
+  adaptive:
+    overlap_threshold: 0.18
+    candidates: 101
+    initial_windows:
+      complex:
+        restrain: 3
+        discharge: 5
+        vanish: 9
+      solvent:
+        discharge: 5
+        vanish: 9
+    window_ps:
+      complex: 500.0
+      solvent: 50.0
+    equilibration_ps:
+      complex: 500.0
+      solvent: 0.0
+    sample_interval_ps: 0.5
+    walk_ps: 5.0
+    max_windows:
+      complex: 48
+      solvent: 32
+  fixed_walk_ps: 50.0
+  file: null
+sampling:
+  pre_equilibration:
+    complex:
+      nvt_ns: 0.25
+      npt_ns: 0.5
+      md_ns: 5.0
+    solvent:
+      nvt_ns: 0.1
+      npt_ns: 0.2
+      md_ns: 0.5
+  rest2:
+    scale: 1.5
+    region: pocket
+    pocket_cutoff_nm: 0.4
+    residues: []
+  exchange: hrex
+  time_per_iteration_ps: 2.5
+  equilibration_ns: 1.0
+  production_ns: 5.0
+  repeats: 1
+  seed: 20261118
+  checkpoint_interval_ps: 250.0
+analysis:
+  estimator: mbar
+  lrc: reweight
+  lrc_cutoff_nm: 2.0
+  min_overlap: 0.03
+  convergence_points: 10
+  convergence_blocks: 5
+  min_effective_samples: 50.0
+  error_blocks:
+  - 40
+  - 20
+  - 10
+  - 5
+  part_error_blocks: 5
+resources:
+  gpus:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  oversubscription_factor: auto
+  cpu_threads_per_worker: 2
+output:
+  dir: runs/benchmark_a2a_full
