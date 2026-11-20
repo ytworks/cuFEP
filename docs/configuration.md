@@ -71,7 +71,7 @@ restraints:
   host_min_distance_nm: 0.5
   host_max_distance_nm: 1.5
   dssp_filter: true
-  pose_rmsd_warning_nm: 0.3       # warn when the ligand ends up further than this from the pose that was given
+  pose_rmsd_warning_nm: 0.3       # warn when the ligand ends up further than this from the pose that was given (auto and manual anchors)
 alchemy:
   softcore_alpha: 0.5
 lambda_schedule:

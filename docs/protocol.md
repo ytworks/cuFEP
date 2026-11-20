@@ -56,6 +56,13 @@ covalent contact, and a metal ion within 3 A of the ligand.
 | ensemble | 298.15 K, 1 bar (isotropic; semi-isotropic with zero surface tension for bilayers) |
 | solvent | 0.15 M NaCl; complex in a rhombic dodecahedron with 1.0 nm padding |
 
+Every height of a box (the distance between opposite faces) is at least 3 x cutoff for the
+cuPotential plugin and 2 x cutoff for stock OpenMM (OpenMM's rule: the cutoff may be at most
+half a height), with a margin of 8 % for the box relaxing under NPT; the padding is raised
+where the solute is small. With the defaults (cutoff 0.9 nm, solvent padding 1.5 nm) this
+changes no box of stock OpenMM. A prepared system, also one stored by an earlier version,
+whose box is lower than OpenMM's rule allows is refused before any MD.
+
 A lipid bilayer is built only when the configuration says `membrane: {enabled: true}`;
 the default is a system in water. cuFEP does not decide whether a protein is a membrane
 protein. With the membrane on, the membrane plane is taken from the structure if at least
@@ -106,7 +113,11 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
 ## Steps of one leg
 
 1. Pre-equilibration: minimise, 0.25 ns NVT and 0.5 ns NPT on stock OpenMM, then 5 ns NPT
-   on the backend of the leg (solvent leg: 0.1, 0.2 and 0.5 ns). A bilayer system is held
+   on the backend of the leg (solvent leg: 0.1, 0.2 and 0.5 ns), with a frame every 20 ps
+   and one at the end. The whole length asked for is integrated, also where it is not a
+   whole number of frame intervals, and the length integrated is recorded; versions before
+   revision 15 integrated whole intervals only (40 ps of 50 ps), and such a file holding less
+   than it was made for is not used again. A bilayer system is held
    by position restraints during NVT and NPT and then runs unrestrained for
    `membrane.equilibration_ns`. At the end of that run cuFEP checks whether the bilayer has
    settled: between the last two quarters the mean area in the membrane plane must not change
@@ -124,7 +135,8 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    the pose that was given (symmetry-corrected heavy-atom RMSD against the prepared input
    coordinates, in the frame of the binding site, above `restraints.pose_rmsd_warning_nm` over
    the second half of the trajectory), the run goes on, as in OpenFE, and the result carries
-   a warning: it is then the free energy of the pose the ligand moved to.
+   a warning: it is then the free energy of the pose the ligand moved to. The same measure is
+   made for anchors given with `restraints.selection: manual`.
 3. Lambda windows: adaptive lambda scheduling, or the windows given in the configuration.
 4. Hamiltonian replica exchange, one replica per lambda window, 2.5 ps per iteration: 1 ns
    equilibration and 10 ns production per window.
