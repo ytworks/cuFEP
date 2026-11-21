@@ -155,27 +155,25 @@ def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
         # are checked when the restraint is made from the frames of the pre-equilibration (review of
         # 7b49066). A run whose legs all have their restraint is not checked here (review of PR 1)
         from cufep.alchemy.restraints import (
+            K_ANGLE_DEFAULT,
             BoreschRestraint,
-            RestraintSearchSettings,
             anchor_geometry_problem,
-            anchor_margins,
-            nearest_image_of_ligand,
+            as_the_force_measures,
+            flat_margin_of,
         )
 
         prep = load_prepared(Path(lig_dir) / "prep", "complex")
         rc = cfg.restraints
         host, guest = tuple(int(i) for i in rc.host_atoms), tuple(int(i) for i in rc.guest_atoms)
-        pose = nearest_image_of_ligand(
-            np.asarray(prep["positions"], dtype=float),
-            np.asarray(prep["ligand"], dtype=int),
-            np.asarray(prep["positions"], dtype=float)[list(host)].mean(axis=0),
-            np.asarray(prep["box"], dtype=float),
-        )
-        settings = RestraintSearchSettings(
-            k_r=rc.k_r_kcal_per_A2 * KCAL * 100.0, k_angle=rc.k_angle_kcal_per_rad2 * KCAL
-        )
-        problem = anchor_geometry_problem(BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0), pose[None],
-                                          anchor_margins(settings, cfg.thermodynamics.temperature_K), trajectory=False)
+        # the six anchors as the force of the restraint sees them
+        pose = as_the_force_measures(np.asarray(prep["positions"], dtype=float)[[*reversed(host), *guest]][None],
+                                     np.asarray(prep["box"], dtype=float))
+        # with force constants from the fluctuations the constant is not known yet: a pose that breaks the rule
+        # with the strongest one it can get breaks it with every one; the leg asks again with the one it gets
+        k_angle = 4.0 * K_ANGLE_DEFAULT if rc.force_constants == "auto" else rc.k_angle_kcal_per_rad2 * KCAL
+        problem = anchor_geometry_problem(BoreschRestraint((2, 1, 0), (3, 4, 5), 0, 0, 0, 0, 0, 0), pose,
+                                          flat_margin_of(k_angle, cfg.thermodynamics.temperature_K),
+                                          trajectory=False)
         if problem:
             raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)} in the prepared pose: "
                                 f"{problem}. Choose other anchors; nothing was changed")
@@ -303,8 +301,6 @@ def load_prepared(prep_dir: Path, name: str) -> dict:
 
 def settings_differences(stored, current, prefix: str = "") -> list[str]:
     """Where two nested records of settings differ, as ``"a.b: old -> new"``."""
-    from cufep.sampling.storage import _same
-
     if isinstance(stored, dict) and isinstance(current, dict):
         out: list[str] = []
         for key in sorted(set(stored) | set(current)):
@@ -314,7 +310,22 @@ def settings_differences(stored, current, prefix: str = "") -> list[str]:
             else:
                 out += settings_differences(stored[key], current[key], name)
         return out
-    return [] if _same(stored, current) else [f"{prefix}: {stored} -> {current}"]
+    return [] if _the_same_setting(stored, current) else [f"{prefix}: {stored} -> {current}"]
+
+
+def _the_same_setting(a, b) -> bool:
+    """Whether two values of a record of settings are the same: numbers exactly. A setting is read
+    from the YAML and written to the record as it is, so the same setting is the same number; and
+    two settings that differ in the tenth digit can give another restraint (a threshold of 319 or
+    320 frames, a rank that turns over at ``stable_structure_fraction``, a frame every 2500 or
+    2501 steps; reviews of eb6f89f and 877ab88: with a tolerance of 1e-9 such records were one).
+    The conditions of stored samples, which are computed, keep their tolerance
+    (:func:`cufep.sampling.storage._same`)."""
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_the_same_setting(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_the_same_setting(a[k], b[k]) for k in a)
+    return a == b
 
 
 def check_made_from(what: str, where: Path, stored: dict | None, current: dict, log=print,
@@ -355,6 +366,26 @@ def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape:
     return [f"{key}: {info[key]} -> {value}" for key, value in expected.items() if key in info and info[key] != value]
 
 
+def pre_equilibration_parts(cfg: Config, leg: str, in_membrane: bool) -> tuple[float, bool]:
+    """``(the MD in ns that follows NVT and NPT in the pre-equilibration of a leg, whether the solute
+    is held by position restraints through all of it)``.
+
+    The MD is ``sampling.pre_equilibration.<leg>.md_ns``, and for a bilayer at least
+    ``membrane.equilibration_ns``; nothing is held in it. A complex leg whose restraint is chosen
+    from interactions (``restraints.selection: interactions``) is different: its trajectories
+    start from the pose that was given, as in the method of Ding et al., which starts them from
+    the minimised input. The heavy atoms of protein and ligand are held through NVT and NPT while
+    the solvent and the box settle, and no free MD follows: the four trajectories are that MD. A
+    bilayer that was just built still needs ``membrane.equilibration_ns`` to close around the
+    protein, and the solute is held through it (the owner's decision of 2026-11-21, after two runs
+    of the A2A example chose their restraints from two different states the ligand had reached in
+    10 ns of free MD)."""
+    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
+    if leg == "complex" and cfg.restraints.selection == "interactions":
+        return (float(cfg.membrane.equilibration_ns) if in_membrane else 0.0), True
+    return float(max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns), False
+
+
 def equil_lengths(eq, cfg: Config, leg: str, in_membrane: bool) -> tuple[float, float, float]:
     """(asked, integrated, tolerance) in ns of the unrestrained MD of a stored pre-equilibration:
     the length this run asks for, the MD the file holds, and half an MD step. A file of a version
@@ -363,8 +394,7 @@ def equil_lengths(eq, cfg: Config, leg: str, in_membrane: bool) -> tuple[float, 
     from cufep.sampling.equilibrate import EquilibrationSettings
     from cufep.steps import integrated_before_revision_15_ps
 
-    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
-    asked = max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns
+    asked = pre_equilibration_parts(cfg, leg, in_membrane)[0]
     files = set(eq.files)
     done = float(eq["simulated_ns"])
     dt = float(eq["timestep_fs"]) if "timestep_fs" in files else float(cfg.dynamics.timestep_fs)
@@ -377,9 +407,19 @@ def check_equil_file(eq, equil_file: Path, cfg: Config, leg: str, in_membrane: b
     """Refuse a stored pre-equilibration this run cannot use (:func:`check_made_from` with its record
     or, for a file without one, :func:`equil_contradictions`), and one that holds less MD than it was
     made for, whatever its record says (:func:`equil_lengths`). Returns whether its origin is recorded."""
-    recorded = check_made_from("the pre-equilibration of this leg", equil_file,
-                               json.loads(str(eq["made_with"])) if "made_with" in eq.files else None,
-                               equil_made_with(cfg, leg, in_membrane, seed), log,
+    stored = json.loads(str(eq["made_with"])) if "made_with" in eq.files else None
+    current = equil_made_with(cfg, leg, in_membrane, seed)
+    if stored is not None and "platform" not in stored:
+        current.pop("platform")                  # a file of a version that did not record its platform
+        log(f"the pre-equilibration in {equil_file} was written by a version that did not record its platform: "
+            f"whether it ran on {cfg.backend.platform} is not known, and it is used as it is")
+    if stored is not None and stored.get("solute_held") and current.get("solute_held"):
+        # the first two commits that held the solute (720cdb1, 48213b7) recorded md_ns, the free MD such a
+        # pre-equilibration does not have (equil_made_with): their files are of this pre-equilibration (the
+        # fifth pass of Codex: the two example runs of 720cdb1 were refused for "md_ns: 5.0 -> not given")
+        stored = {**stored, "pre_equilibration": {key: value for key, value in stored["pre_equilibration"].items()
+                                                  if key != "md_ns"}}
+    recorded = check_made_from("the pre-equilibration of this leg", equil_file, stored, current, log,
                                contradictions=equil_contradictions(eq, cfg, leg, in_membrane))
     if "simulated_ns" in eq.files:
         asked, done, tolerance = equil_lengths(eq, cfg, leg, in_membrane)
@@ -420,6 +460,10 @@ def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[s
     has_bilayer = equil_in_membrane(eq)
     if has_bilayer is not None and has_bilayer != bool(in_membrane):
         out.append(f"bilayer: {'yes' if has_bilayer else 'no'} -> {'yes' if in_membrane else 'no'}")
+    if pre_equilibration_parts(cfg, leg, in_membrane)[1]:
+        # a file without a record is of a version before the solute was ever held: its MD was free, also the
+        # 10 ns of a bilayer, whose length is the one that is asked for now (the fourth pass of Codex)
+        out.append("the solute during the pre-equilibration: free -> held (restraints.selection: interactions)")
     return out
 
 
@@ -432,6 +476,12 @@ def manual_constants_of_an_earlier_version(stored: dict, cfg: Config) -> bool:
     rc, info = cfg.restraints, stored.get("info") or {}
     return (rc.selection == "manual" and rc.force_constants == "auto" and info.get("selection") == "manual"
             and "force_constants" not in info)
+
+
+#: what the info of a restraint says of how its anchors were held to OpenFE's check_angle_not_flat: with the
+#: force constants the restraint has, of the frames, the start and its own reference angles. A restraint with
+#: constants from fluctuations that does not say so was held to the rule with the configured constants
+FLAT_ANGLE_RULE = "with the force constants of the restraint"
 
 
 def check_restraint_file(stored: dict, rfile: Path, cfg: Config, log=print) -> bool:
@@ -449,6 +499,13 @@ def check_restraint_file(stored: dict, rfile: Path, cfg: Config, log=print) -> b
         log,
         contradictions=restraint_contradictions(stored, cfg),
     )
+    info = stored.get("info") or {}
+    if info.get("force_constants") == "auto" and info.get("flat_angle_rule") != FLAT_ANGLE_RULE:
+        raise WorkflowError(
+            f"the restraint of this leg in {rfile} cannot be used again: its force constants come from the "
+            "fluctuations of the anchors (restraints.force_constants: auto) and it was made by a version that held "
+            "the anchors to OpenFE's rule of the flat angle with the configured constants, not with those. Nothing "
+            "was changed; run the calculation in a new output.dir")
     if recorded and manual_constants_of_an_earlier_version(stored, cfg):
         raise WorkflowError(
             f"the restraint of this leg in {rfile} cannot be used again: "
@@ -749,6 +806,28 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     rfile = leg_dir / "restraint.json"
     if is_complex and rfile.exists():
         check_restraint_file(_read_json(rfile) or {}, rfile, cfg, quiet)
+        if equil_file.exists():
+            check_restraint_start(_read_json(rfile) or {}, rfile, np.load(equil_file))
+        elif ((_read_json(rfile) or {}).get("info") or {}).get("start") is not None:
+            raise WorkflowError(
+                f"the restraint in {rfile} was chosen from MD that started from the pre-equilibration of this leg, "
+                f"and {equil_file} is not there: a pre-equilibration that is made again is another start. Nothing "
+                "was changed; run the calculation in a new output.dir")
+    elif is_complex and cfg.restraints.selection == "interactions":
+        # the trajectories from which the restraint is still to be chosen: those the leg has must be
+        # ones of this run (the same settings, and the pre-equilibration they started from)
+        from cufep.sampling.restraint_md import trajectory_file
+
+        stored = [k for k in range(int(cfg.restraints.interactions.trajectories))
+                  if trajectory_file(leg_dir, k).exists()]
+        if stored and not equil_file.exists():
+            raise WorkflowError(f"{trajectory_file(leg_dir, stored[0]).parent} holds MD for the restraint of this leg "
+                                f"but {equil_file}, which it started from, is not there. Nothing was changed; run the "
+                                "calculation in a new output.dir")
+        if stored:
+            made_with = restraint_md_made_with(cfg, leg_seed(cfg, repeat, leg), in_membrane, np.load(equil_file))
+            for k in stored:
+                check_restraint_md_file(trajectory_file(leg_dir, k), k, made_with, quiet)
     if reschedule:
         return                           # the windows and samples the leg has are set aside; it starts anew
     rest2_scale = cfg.sampling.rest2.scale if cfg.sampling.rest2.scale > 1.0 else 1.0
@@ -885,38 +964,63 @@ def equil_made_with(cfg: Config, leg: str, in_membrane: bool, seed: int) -> dict
     # a record without the key was made with 25, so only another value is recorded
     if int(cfg.dynamics.barostat_frequency) != BAROSTAT_FREQUENCY_BEFORE_THE_SETTING:
         out["barostat_frequency"] = int(cfg.dynamics.barostat_frequency)
+    # backend.fallback decides whether this MD may be repeated on stock OpenMM. Every version before that
+    # repeated it there whatever the setting said and recorded nothing: a record without the key was made
+    # with the fallback, so only another value is recorded (review of f5a77ce: a pre-equilibration made with
+    # the fallback was used again by a run with backend.fallback: none)
+    if cfg.backend.fallback != FALLBACK_BEFORE_IT_DECIDED_PLAIN_MD:
+        out["fallback"] = cfg.backend.fallback
+    # the precision the plain MD runs in, where earlier versions ran it in another one and recorded the one
+    # asked: "single" ran in mixed precision, and "double" asked of the plugin, which has none, ran on stock
+    # OpenMM in double precision (the plugin runs it in mixed precision now). A record of such a setting
+    # without this key is of an MD in the other precision, not of this run's
+    from cufep.backends.base import backend_precision
+
+    runs_in = backend_precision(cfg.backend.name, cfg.backend.precision)
+    if cfg.backend.precision == "single" or runs_in != cfg.backend.precision:
+        out["plain_md_precision"] = runs_in
+    # the platform, as the trajectories for a restraint record it. Earlier versions recorded none: of such a
+    # file the platform is not known, and it is used as it was before (check_equil_file)
+    out["platform"] = cfg.backend.platform
+    # a pre-equilibration that holds the solute in the pose that was given (pre_equilibration_parts) is another
+    # one than the free MD of the other selections and of every earlier version, whose records have no such key
+    if pre_equilibration_parts(cfg, leg, in_membrane)[1]:
+        out["solute_held"] = True
+        # md_ns is the free MD of the other selections, which this pre-equilibration does not have: a change of
+        # it is no other pre-equilibration (the fourth pass of Codex: the run was refused for it)
+        out["pre_equilibration"] = {key: value for key, value in out["pre_equilibration"].items() if key != "md_ns"}
     return out
 
 
 #: the barostat frequency of every version before ``dynamics.barostat_frequency``
 BAROSTAT_FREQUENCY_BEFORE_THE_SETTING = 25
+#: what every version did before ``backend.fallback`` decided the plain MD of a leg
+FALLBACK_BEFORE_IT_DECIDED_PLAIN_MD = "openmm"
 
 
 def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms: int, k_r: float, k_angle: float,
                              where: Path | str = "equil.npz", force_constants: str = "openfe",
-                             temperature_K: float = 298.15):
+                             temperature_K: float = 298.15, input_pose=None, input_box=None):
     """The Boresch restraint of ``restraints.selection: manual`` and the fluctuations of its six
     coordinates: the given anchors, with the reference values of the last frame of the
     pre-equilibration.
 
-    The force of the restraint measures across the periodic boundary, so every frame is taken with
-    the ligand in the periodic image nearest to the host anchors (the same rule as the restraint
-    search, :func:`cufep.alchemy.restraints.nearest_image_of_ligand`). From the raw coordinates a
-    ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, and the restraint held the reference
-    configuration with 52,300 kJ/mol (review of PR 1). The anchors must define the six coordinates
-    in every frame (:func:`cufep.alchemy.restraints.anchor_geometry_problem`, the rule of the
-    search); with ``force_constants: auto`` the constants come from the fluctuations of the six
-    coordinates over the frames, as for anchors the search chose (review of PR 1: they were ignored
-    for manual anchors). Returns (restraint, fluctuations).
+    The anchors are measured by :func:`cufep.alchemy.restraints.measure_anchors`, as anchors chosen
+    from interactions are: every frame with the ligand in the periodic image nearest to the host
+    anchors (from the raw coordinates a ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, and
+    the restraint held the reference configuration with 52,300 kJ/mol, review of PR 1), and the
+    anchors must define the six coordinates in every frame
+    (:func:`cufep.alchemy.restraints.anchor_geometry_problem`, the rule of the search). With
+    ``force_constants: auto`` the constants come from the fluctuations of the six coordinates over
+    the frames, as for anchors the search chose (review of PR 1: they were ignored for manual
+    anchors). ``n_atoms`` is not read any more. Returns (restraint, fluctuations).
     """
     from cufep.alchemy.restraints import (
         BoreschRestraint,
-        RestraintSearchSettings,
-        anchor_geometry_problem,
-        anchor_margins,
+        constants_from_fluctuations,
         coordinate_fluctuations,
-        nearest_image_of_ligand,
-        with_force_constants_from_fluctuations,
+        flat_rule_problem,
+        measure_anchors,
     )
 
     if "frame_boxes" not in eq:
@@ -930,43 +1034,483 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
             f"restraints.host_atoms / guest_atoms {missing} are not among the atoms whose positions the "
             f"pre-equilibration kept ({where}); the anchors must be atoms of the protein and the ligand"
         )
-    frames = np.asarray(eq["frames"], dtype=float)
-    full = np.zeros((frames.shape[0], int(n_atoms), 3))
-    full[:, frame_atoms, :] = frames
     host, guest = tuple(int(i) for i in host_atoms), tuple(int(i) for i in guest_atoms)
-    full = nearest_image_of_ligand(full, np.asarray(ligand_atoms, dtype=int), full[:, list(host), :].mean(axis=1),
-                                   np.asarray(eq["frame_boxes"], dtype=float))
-    probe = BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0)
-    settings = RestraintSearchSettings(k_r=k_r, k_angle=k_angle)
     # the positions the alchemical run starts from, of which the last frame is a copy in single precision
-    copies = []
-    if "positions" in eq and "box" in eq:
-        start = np.asarray(eq["positions"], dtype=float)
-        copies.append(
-            nearest_image_of_ligand(
-                start,
-                np.asarray(ligand_atoms, dtype=int),
-                start[list(host)].mean(axis=0),
-                np.asarray(eq["box"], dtype=float),
-            )
-        )
-    problem = anchor_geometry_problem(probe, full, anchor_margins(settings, temperature_K), reference_copies=copies)
-    if problem:
-        raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}: {problem}. Choose other "
-                            "anchors; nothing was sampled")
-    values = probe.values(full)
-    fluctuations = coordinate_fluctuations(values)
-    restraint = BoreschRestraint(host, guest, *[float(x) for x in values[-1]], k_r, k_angle, k_angle, k_angle,
-                                 k_angle, k_angle)
+    has_start = "positions" in eq and "box" in eq
+    measured = measure_anchors(host, guest, ligand_atoms, eq["frames"], frame_atoms, eq["frame_boxes"], None,
+                               start=eq["positions"] if has_start else None,
+                               start_box=eq["box"] if has_start else None)
+    fluctuations = coordinate_fluctuations(measured.values)
+    restraint = BoreschRestraint(host, guest, *[float(x) for x in measured.values[-1]], k_r, k_angle, k_angle,
+                                 k_angle, k_angle, k_angle)
+    how = ""
     if force_constants == "auto":
-        restraint = with_force_constants_from_fluctuations(restraint, fluctuations, temperature_K)
+        restraint, _flat = constants_from_fluctuations(restraint, measured.values, measured.held_theta, temperature_K)
+        how = " with the force constants of their fluctuations (restraints.force_constants: auto)"
+    # OpenFE's rule of the flat angle, asked once: with the force constants the restraint has, of every frame
+    # (the last one gives the reference values) and of the pose the pre-equilibration started from
+    theta = measured.held_theta
+    if input_pose is not None and input_box is not None:
+        pose = measure_anchors(host, guest, ligand_atoms, np.asarray(input_pose, dtype=float)[None],
+                               np.arange(len(input_pose)), np.asarray(input_box, dtype=float)[None], None)
+        theta = np.concatenate([theta, pose.held_theta])
+    problem = flat_rule_problem(restraint.k_theta_a, restraint.k_theta_b, theta, temperature_K) or measured.problem
+    if problem:
+        raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}{how}: {problem}. "
+                            "Choose other anchors; nothing was sampled")
     return restraint, fluctuations
 
 
 def restraint_made_with(cfg: Config) -> dict:
-    """The settings that the choice of the Boresch restraint depends on."""
+    """The settings that the choice of the Boresch restraint depends on: the section ``restraints``.
+    Its part ``interactions`` belongs to ``selection: interactions`` alone and is recorded only
+    then: a restraint of another selection was made without it, and the record of one made by a
+    version before that selection existed does not have it and stays usable."""
     data = cfg.restraints.model_dump(mode="json")
+    if cfg.restraints.selection != "interactions":
+        data.pop("interactions", None)
     return data
+
+
+def residue_names(topology, input_chains: dict | None = None) -> dict[int, str]:
+    """What the log and the results call every residue, by its index in the topology: name, number
+    and insertion code as the input has them (``VAL981``). Where two residues of the protein would
+    share that name (the two chains of a dimer with one numbering), each is followed by its chain
+    (``VAL981.B``, as ProLIF writes a residue): the chain of the input, which ``input_chains``
+    gives for a chain of the prepared topology (the preparation makes a chain of every piece
+    between chain breaks and names them anew: the two pieces of one chain of the A2A example were
+    named ``ALA59.A`` and ``HIS278.B``, review of eb6f89f); where that does not tell them apart
+    either, also the number of the prepared chain among those of the protein (``VAL981.X#2``)."""
+    from cufep.prep.protein import AMINO_ACIDS, CAPS
+
+    chains, plain = [], {}
+    for residue in topology.residues():
+        plain[residue.index] = f"{residue.name}{residue.id}{str(getattr(residue, 'insertionCode', '') or '').strip()}"
+        if (residue.name in AMINO_ACIDS or residue.name in CAPS) and residue.chain not in chains:
+            chains.append(residue.chain)
+    number = {chain.index: k + 1 for k, chain in enumerate(chains)}
+    given = {chain.index: str((input_chains or {}).get(chain.id, chain.id) or "").strip() for chain in chains}
+    names = dict(plain)
+    for behind in (given, number):
+        shared: dict[str, set[int]] = {}
+        for residue in topology.residues():
+            if residue.chain.index in number:
+                shared.setdefault(names[residue.index], set()).add(residue.index)
+        for residue in topology.residues():
+            index = residue.index
+            if residue.chain.index in number and len(shared[names[index]]) > 1 and behind[residue.chain.index]:
+                # the chain of the input behind a dot; the number of the piece behind a "#", which no chain id is
+                # read as (three pieces named X, X and 1 would otherwise be VAL981.1, VAL981.2 and VAL981.1)
+                chain = residue.chain.index
+                names[index] += f".{given[chain]}" if behind is given else f"#{number[chain]}"
+    return names
+
+
+def atom_label(atoms: list, index: int, residues: dict[int, str]) -> str:
+    """An atom of the System as the log and the results name it: its residue (:func:`residue_names`)
+    and its name."""
+    atom = atoms[int(index)]
+    return f"{residues[atom.residue.index]}:{atom.name}"
+
+
+def check_interaction_inputs(cfg: Config, ligands) -> None:
+    """Refuse, before anything is written, a run with ``restraints.selection: interactions`` that
+    cannot choose a restraint: ProLIF or MDAnalysis cannot be imported, or a ligand has no three
+    bonded heavy atoms that can be guest anchors (L1 with two heavy atoms bonded to it, L2 and L3
+    no chain ends), which neither the interactions nor the distance method can do without and
+    which the SDF tells before any MD is run. ``ligands`` are those whose complex leg is to run:
+    without one there is no restraint to choose and nothing is asked."""
+    if cfg.restraints.selection != "interactions" or not ligands:
+        return
+    from cufep.alchemy.interaction_anchors import LigandGraph
+    from cufep.analysis.interactions import packages_problem, with_rdkit_aromaticity
+
+    problem = packages_problem()
+    if problem:
+        raise WorkflowError(problem)
+    without = [lig.name for lig in ligands
+               if not LigandGraph.from_rdkit(with_rdkit_aromaticity(lig.to_rdkit())).has_guest_anchors()]
+    if without:
+        raise WorkflowError(
+            f"restraints.selection: interactions cannot give {', '.join(without)} a restraint: the ligand has no "
+            "atom with two heavy atoms bonded to it from which two more bonded heavy atoms that are no chain ends "
+            "lead on (L1-L2-L3). Give the anchors (restraints.selection: manual) or use restraints.selection: auto")
+
+
+def check_restraint_start(stored: dict, rfile: Path, eq) -> None:
+    """Refuse a restraint chosen from interactions that is not of this leg. Its record holds the
+    configuration its trajectories started from, the end of the pre-equilibration, as every
+    trajectory does (``start``). The settings alone do not tell the restraint of another repeat, or
+    of a pre-equilibration that was made again, from this leg's (review of eb6f89f). A restraint of
+    another selection has no such record."""
+    from cufep.sampling.restraint_md import start_digest
+
+    recorded = (stored.get("info") or {}).get("start")
+    if recorded is not None and recorded != start_digest(eq["positions"], eq["velocities"], eq["box"]):
+        raise WorkflowError(
+            f"the restraint in {rfile} cannot be used again: it was chosen from MD that started from another "
+            "configuration than the pre-equilibration of this leg ends in (equil.npz). Nothing was changed. A "
+            "calculation with other input or settings needs a new output.dir.")
+
+
+def restraint_md_made_with(cfg: Config, seed: int, in_membrane: bool, eq) -> dict:
+    """What a trajectory for the restraint of a leg is made from: its length and frame interval,
+    the settings of every plain MD of the leg, the seed of the leg and the configuration it starts
+    from (the end of the pre-equilibration ``eq``). Not the number of trajectories (more of them
+    use those that are there) and not ``restraints.interactions.discard_ns``, which only the
+    analysis reads."""
+    from cufep.sampling.restraint_md import start_digest
+
+    ri = cfg.restraints.interactions
+    return {"length_ns": float(ri.length_ns), "frame_interval_ps": float(ri.frame_interval_ps),
+            "temperature_K": float(cfg.thermodynamics.temperature_K),
+            "pressure_bar": float(cfg.thermodynamics.pressure_bar),
+            "friction_per_ps": float(cfg.dynamics.friction_per_ps),
+            "barostat_frequency": int(cfg.dynamics.barostat_frequency),
+            "barostat": "membrane" if in_membrane else "isotropic", "timestep_fs": float(eq["timestep_fs"]),
+            "backend": cfg.backend.name, "fallback": cfg.backend.fallback, "precision": cfg.backend.precision,
+            "platform": cfg.backend.platform, "seed": int(seed),
+            "start": start_digest(eq["positions"], eq["velocities"], eq["box"])}
+
+
+def check_restraint_md_file(path: Path, index: int, made_with: dict, log=print) -> None:
+    """Refuse a stored trajectory for the restraint that this run cannot use: one made from other
+    settings or another start (:func:`check_made_from`), and one that holds less MD than asked."""
+    with np.load(path) as data:
+        stored = json.loads(str(data["made_with"])) if "made_with" in data.files else None
+        done = float(data["simulated_ns"]) if "simulated_ns" in data.files else 0.0
+        timestep = float(data["timestep_fs"]) if "timestep_fs" in data.files else float(made_with["timestep_fs"])
+    check_made_from(f"MD {index} for the restraint of this leg", path, stored, dict(made_with, trajectory=int(index)),
+                    log, contradictions=["what it was made from: not recorded -> " + json.dumps(made_with)[:80]])
+    from cufep.steps import md_steps
+
+    # in whole steps, as the MD counts them: a length that is half a step more than a whole number of steps is
+    # rounded by one rule (0.400002 ns at 4 fs is 100000 steps, which a comparison of the two times refused)
+    if md_steps(done * 1000.0, timestep) < md_steps(float(made_with["length_ns"]) * 1000.0, timestep):
+        raise WorkflowError(f"MD {index} for the restraint of this leg in {path} cannot be used again: it holds "
+                            f"{done * 1000:g} ps where {float(made_with['length_ns']) * 1000:g} ps are asked for. "
+                            "Nothing was changed; run the calculation in a new output.dir")
+
+
+def restraint_trajectories(cfg: Config, job: "LegJob", leg_dir: Path, prep: dict, eq, in_membrane: bool, seed: int,
+                           log=print):
+    """The trajectories from which the restraint of a complex leg is chosen
+    (:mod:`cufep.sampling.restraint_md`): those the leg has are checked and kept, the others are
+    run, at the same time on the GPUs the scheduler grants. Returns them as the analysis reads them.
+
+    The job asks for GPUs only if a trajectory is missing. When they are done it goes on with the
+    first GPU of the grant, which is the one the scheduler leaves it when it says that it needs one
+    worker again: ``job.devices`` is set to it, and the caller must use it from then on.
+    """
+    from cufep.mps import thread_percentage
+    from cufep.sampling.restraint_md import TrajectoryTask, read_trajectories, run_trajectories, trajectory_file
+
+    ri = cfg.restraints.interactions
+    made_with = restraint_md_made_with(cfg, seed, in_membrane, eq)
+    missing = []
+    for k in range(int(ri.trajectories)):
+        if trajectory_file(leg_dir, k).exists():
+            check_restraint_md_file(trajectory_file(leg_dir, k), k, made_with, log)
+        else:
+            missing.append(k)
+    if missing:
+        settings = plain_md_settings(cfg, float(eq["timestep_fs"]), "membrane" if in_membrane else "isotropic", seed,
+                                     production_ns=float(ri.length_ns), frame_interval_ps=float(ri.frame_interval_ps),
+                                     bilayer_report=False)
+        devices = list(job.devices)
+        granted = None
+        if job.control is not None and not job.inline and len(missing) > 1:
+            work = md_work(ri.length_ns * 1000.0, len(prep["positions"]), cfg.sampling.time_per_iteration_ps)
+            granted = job.control.request_devices(
+                len(missing), len(missing) * work / max(1, job.oversubscription), pinned=True,
+                what=f"{len(missing)} trajectories for the restraint")
+            devices = granted or devices
+        tasks = [TrajectoryTask(index=k, path=str(trajectory_file(leg_dir, k)), system_xml=prep["system_xml"],
+                                positions=np.asarray(eq["positions"]), velocities=np.asarray(eq["velocities"]),
+                                box=np.asarray(eq["box"]), frame_atoms=[int(i) for i in prep["solute"]],
+                                settings=settings, timestep_fs=float(eq["timestep_fs"]),
+                                made_with=dict(made_with, trajectory=k),
+                                cpu_threads=int(cfg.resources.cpu_threads_per_worker),
+                                mps_thread_percentage=thread_percentage(job.oversubscription))
+                 for k in missing]
+        on_gpus = [str(d) for d in devices if d is not None]             # a run without GPUs has the device None
+        log(f"MD for the restraint: {len(missing)} of {ri.trajectories} trajectories of {ri.length_ns:g} ns to run "
+            f"on {len(devices)} worker(s)" + (f" (GPU {', '.join(on_gpus)})" if on_gpus else ""))
+        try:
+            for done in run_trajectories(tasks, devices, log, inline=job.inline):
+                log(f"MD {done['index']} for the restraint: {done['frames']} frames on {done['backend']} "
+                    f"(time step {done['timestep_fs']:g} fs)" + "".join(f"; {note}" for note in done["notes"]))
+        finally:
+            if granted:
+                # the job is serial again and stays on the first GPU of the grant, the one the scheduler keeps for it
+                job.devices = [granted[0]]
+                job.control.serial()
+    return read_trajectories(leg_dir, int(ri.trajectories))
+
+
+def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temperature_K: float):
+    """The Boresch restraint of ``restraints.selection: interactions`` from the trajectories of the
+    leg: ``(restraint, info, report)``. ``info`` is what ``restraint.json`` records of the choice,
+    ``report`` the numbers of the analysis for ``interactions.json``.
+
+    The frames later than ``discard_ns`` are analysed with the ligand in the periodic image
+    nearest to the protein. ProLIF gives the interactions of every frame
+    (:mod:`cufep.analysis.interactions`), the rule ranks the candidates
+    (:mod:`cufep.alchemy.interaction_anchors`), and the first of them that passes the rules every
+    restraint of cuFEP is held to is taken (:func:`cufep.alchemy.restraints.measure_anchors`, with
+    the configuration the alchemical run starts from among the frames). The reference values are
+    those of the histograms (:func:`cufep.alchemy.restraints.reference_values_from_histograms`).
+    """
+    from cufep.alchemy import interaction_anchors as rule
+    from cufep.alchemy.restraints import (
+        COORDINATES,
+        BoreschRestraint,
+        RestraintError,
+        backbone_hosts,
+        constants_from_fluctuations,
+        coordinate_fluctuations,
+        flat_rule_problem,
+        ligand_next_to_protein,
+        measure_anchors,
+        reference_values_from_histograms,
+        reference_values_problem,
+        stable_structure_fractions,
+    )
+    from cufep.analysis.interactions import (
+        interactions_of_frames,
+        occupancies,
+        protein_atoms_of,
+        versions,
+        with_rdkit_aromaticity,
+    )
+
+    rc, ri = cfg.restraints, cfg.restraints.interactions
+    analysed = trajectories.after(ri.discard_ns)
+    n = int(analysed.frames.shape[0])
+    if n == 0:
+        raise WorkflowError(f"no frame of the MD for the restraint is later than restraints.interactions.discard_ns = "
+                            f"{ri.discard_ns:g} ns: there is nothing to choose a restraint from")
+    topology = prep["topology"]
+    atoms = list(topology.atoms())
+    frame_atoms = np.asarray(analysed.frame_atoms, dtype=int)
+    row = {int(a): i for i, a in enumerate(frame_atoms)}
+    ligand = [int(i) for i in prep["ligand"]]
+    absent = [i for i in ligand if i not in row]
+    if absent:
+        raise WorkflowError(f"the MD for the restraint kept no positions of the ligand atoms {absent[:5]}")
+    # the residues that can hold host anchors, among the atoms of the frames
+    hosts = {r: trio for r, trio in backbone_hosts(topology).items() if all(a in row for a in trio)}
+    if not hosts:
+        raise WorkflowError("the frames of the MD for the restraint hold no protein backbone")
+    # a threshold of no frame is refused when the configuration is read; an MD that was repeated at 2 fs can keep
+    # fewer frames than were planned, and the same holds for the frames there are (review of 877ab88)
+    for name, fraction in (("min_frame_fraction", ri.min_frame_fraction),
+                           ("fallback_frame_fraction", ri.fallback_frame_fraction)):
+        if rule.frames_needed(n, fraction) < 1:
+            raise WorkflowError(f"restraints.interactions: {n} frame(s) are analysed and {name} = {fraction:g} of "
+                                "them is less than one frame: an interaction in no frame would be kept. Nothing was "
+                                "sampled; run longer trajectories or keep frames more often")
+    # whole molecules with the ligand in the image next to the protein: ProLIF and the angles of the rule know no
+    # box. Next to its nearest protein atom, whatever atom that is: with the C-alpha atoms alone, a ligand held by a
+    # side chain at the edge of a tight cell was nearer to a C-alpha of the image behind it (review of 877ab88)
+    protein_rows = np.array([row[int(i)] for i in protein_atoms_of(topology, among=row)], dtype=int)
+    xyz = ligand_next_to_protein(analysed.frames, np.array([row[i] for i in ligand], dtype=int), protein_rows,
+                                 np.asarray(analysed.boxes, dtype=float))
+    records = interactions_of_frames(topology, xyz, frame_atoms, ligand, rdmol)
+    stable = stable_structure_fractions(topology, xyz, frame_atoms)
+    # the backbone atoms of the protein residues that are no hosts (caps), which the distance method looks at too
+    from cufep.prep.protein import AMINO_ACIDS, CAPS
+
+    others: dict[int, tuple[int, ...]] = {}
+    for atom in atoms:
+        residue = atom.residue
+        if (residue.index not in hosts and (residue.name in AMINO_ACIDS or residue.name in CAPS)
+                and atom.name in ("N", "CA", "C") and atom.index in row):
+            others[residue.index] = (*others.get(residue.index, ()), atom.index)
+    frames = rule.Frames(xyz=xyz, atoms=frame_atoms, ligand=ligand, hosts=hosts, stable_fraction=stable,
+                         boxes=np.asarray(analysed.boxes, dtype=float), trajectory=analysed.trajectory,
+                         other_backbone=others)
+    graph = rule.LigandGraph.from_rdkit(with_rdkit_aromaticity(rdmol))
+    settings = rule.InteractionSettings(
+        min_frame_fraction=ri.min_frame_fraction, angle_range_deg=tuple(ri.angle_range_deg),
+        stable_structure_fraction=ri.stable_structure_fraction, second_interaction_ratio=ri.second_interaction_ratio,
+        fallback_frame_fraction=ri.fallback_frame_fraction, fallback_cutoff_nm=ri.fallback_cutoff_nm)
+    k_r, k_a = rc.k_r_kcal_per_A2 * KCAL * 100.0, rc.k_angle_kcal_per_rad2 * KCAL
+
+    def measured(host, guest):
+        return measure_anchors(host, guest, ligand, analysed.frames, frame_atoms, analysed.boxes, None,
+                               start=eq["positions"], start_box=eq["box"], start_among_frames=True)
+
+    def restraint_of(host, guest):
+        """``(restraint, measurement, why it cannot be used or None)`` for a candidate: the restraint it
+        would be, with reference values from the histograms and the force constants of the configuration
+        (or of its fluctuations), held to the rules every restraint of cuFEP is held to. OpenFE's rule of
+        the flat angle is asked once, with those force constants, of the frames, of the configuration the
+        run starts from and of the reference angles themselves (the centre of a bin is not an angle of a
+        frame)."""
+        m = measured(host, guest)
+        problem = m.problem or reference_values_problem(m.values, ri.angle_range_deg)
+        if problem:
+            return None, m, problem
+        reference = reference_values_from_histograms(m.values, ri.angle_range_deg)
+        made = BoreschRestraint(tuple(int(i) for i in host), tuple(int(i) for i in guest),
+                                *[float(x) for x in reference], k_r, k_a, k_a, k_a, k_a, k_a)
+        if rc.force_constants == "auto":
+            made, _flat = constants_from_fluctuations(made, m.values, m.held_theta, temperature_K)
+        theta = np.concatenate([m.held_theta, [[made.theta_a0, made.theta_b0]]])
+        return made, m, flat_rule_problem(made.k_theta_a, made.k_theta_b, theta, temperature_K)
+
+    try:
+        choice = rule.choose_anchors(frames, graph, records, settings,
+                                     lambda host, guest: restraint_of(host, guest)[2])
+        restraint, values, _none = restraint_of(choice.host, choice.guest)
+    except RestraintError as exc:
+        raise WorkflowError(f"{exc}. Nothing was sampled") from exc
+    reference = [restraint.r0, restraint.theta_a0, restraint.theta_b0, restraint.phi_a0, restraint.phi_b0,
+                 restraint.phi_c0]
+    fluctuations = coordinate_fluctuations(values.values)
+
+    names = residue_names(topology, prep.get("input_chains"))
+
+    def residue_label(index: int) -> str:
+        return names[int(index)]
+
+    def described(candidate) -> dict:
+        out = candidate.to_dict()
+        out.update(host=[atom_label(atoms, i, names) for i in candidate.host],
+                   guest=[atom_label(atoms, i, names) for i in candidate.guest],
+                   host_atoms=[int(i) for i in candidate.host], guest_atoms=[int(i) for i in candidate.guest],
+                   residue=residue_label(candidate.residue), residue_index=int(candidate.residue))
+        return out
+
+    chosen = choice.chosen
+    refused = [described(c) for ranked in choice.ranked.values() for c in ranked if c.refused]
+    # the interactions the chosen anchors rest on: every kept type of their ligand atom and residue. The
+    # candidate holds the frames with any of them and is named after the type of most weight, whose own
+    # frames can be fewer (review of eb6f89f: "Anionic in 400 of 500 frames" for an Anionic of 200)
+    # A contact of the distance method is no interaction of ProLIF: it has its frames and no types
+    l1 = ligand.index(int(choice.guest[0]))
+    by_interaction = choice.method == "interactions"
+    kept_types = {kind: int(len(choice.table.frames_of[(atom, residue, kind)]))
+                  for atom, residue, kind in choice.table.kept
+                  if atom == l1 and residue == chosen.residue} if by_interaction else None
+    of_type = kept_types.get(chosen.interaction, int(chosen.n_frames)) if by_interaction else int(chosen.n_frames)
+    in_degrees = lambda v: [float(v[0]), *[float(np.degrees(x)) for x in v[1:]]]             # noqa: E731
+    info = {
+        "selection": "interactions", "force_constants": rc.force_constants, "fluctuations": fluctuations,
+        "flat_angle_rule": FLAT_ANGLE_RULE,
+        "method": choice.method,
+        "anchors": {"host": [atom_label(atoms, i, names) for i in choice.host],
+                    "guest": [atom_label(atoms, i, names) for i in choice.guest]},
+        "interaction": {"residue": residue_label(chosen.residue), "type": chosen.interaction,
+                        "frames": of_type, "of_frames": n,
+                        "frames_with_any_kept_type": int(chosen.n_frames) if by_interaction else None,
+                        "kept_types": kept_types},
+        # tested: held to the rules, in the order of the ranking, until one passed; ranked: all there were
+        "score": chosen.score, "candidates_tested": len(refused) + 1,
+        "candidates_ranked": sum(len(v) for v in choice.ranked.values()), "candidates_refused": len(refused),
+        "start_values": dict(zip(COORDINATES, in_degrees(values.start_values))),
+        "start_values_units": {"r": "nm", "angles": "degrees"},          # the restraint itself is in nm and radians
+        "md": {"trajectories": int(ri.trajectories), "frames_analysed": n, "backends": list(trajectories.backends),
+               "timesteps_fs": [float(x) for x in trajectories.timesteps_fs]},
+        "versions": versions(), "notes": list(trajectories.notes)}
+    rows = choice.table.rows(frames)
+    for entry in rows:
+        entry.update(ligand_atom_name=atom_label(atoms, entry["ligand_atom"], names),
+                     residue_name=residue_label(entry["residue"]))
+    by_residue = occupancies(records)
+    for entry in by_residue:
+        entry["residue_name"] = residue_label(entry["residue"])
+    series = np.asarray(values.values, dtype=float)
+    report = {
+        "frames_analysed": n, "frames_needed": int(choice.table.needed),
+        "frames_needed_distance": rule.frames_needed(n, ri.fallback_frame_fraction),
+        "trajectory_of_frame": [int(k) for k in analysed.trajectory],
+        "interactions": rows, "residues": by_residue,
+        # by the index of the residue: two residues can have one name
+        "stable_structure_fraction": [{"residue": int(r), "residue_name": residue_label(r), "fraction": float(x)}
+                                      for r, x in sorted(stable.items())
+                                      if r in {c.residue for ranked in choice.ranked.values() for c in ranked}
+                                      | {int(entry["residue"]) for entry in (*rows, *by_residue)}],
+        "method": choice.method,
+        "candidates": {method: [described(c) for c in ranked[:200]] for method, ranked in choice.ranked.items()},
+        "candidates_in_all": {method: len(ranked) for method, ranked in choice.ranked.items()},
+        "refused_candidates": refused,           # every one that was ranked before the chosen one and passed over
+        "chosen": described(chosen),
+        "reference_values": dict(zip(COORDINATES, in_degrees(reference))),
+        "coordinates": {name: [float(x) for x in (series[:, i] if i == 0 else np.degrees(series[:, i]))]
+                        for i, name in enumerate(COORDINATES)},
+        "units": {"r": "nm", "angles": "degrees"},
+        "md": info["md"], "versions": info["versions"]}
+    return restraint, info, report
+
+
+def restraint_from_interactions(cfg: Config, job: "LegJob", leg_dir: Path, prep: dict, rdmol, eq, in_membrane: bool,
+                                seed: int, n_atoms: int, log=print):
+    """The restraint stage of a complex leg with ``restraints.selection: interactions``:
+    ``(restraint, info, seconds of the MD)``.
+
+    The trajectories the leg does not have are run (:func:`restraint_trajectories`), their
+    interactions are analysed and the restraint is chosen (:func:`interaction_restraint`), and
+    the numbers of the analysis are written to ``interactions.json`` and ``interactions.csv`` in
+    the directory of the leg. The caller writes ``restraint.json``, which is what says that the
+    stage is done: a leg that stopped before that runs the stage again, with the trajectories it
+    has, and gets the same restraint. ``n_atoms`` is the number of particles of the System.
+    """
+    from cufep.alchemy.restraints import ligand_pose_rmsd
+    from cufep.analysis.interactions import packages_problem
+
+    problem = packages_problem()
+    if problem:
+        raise WorkflowError(problem)
+    t_md = time.perf_counter()
+    trajectories = restraint_trajectories(cfg, job, leg_dir, prep, eq, in_membrane, seed, log)
+    md_seconds = time.perf_counter() - t_md
+    restraint, info, report = interaction_restraint(cfg, prep, rdmol, eq, trajectories,
+                                                    cfg.thermodynamics.temperature_K)
+    # how far the ligand moved from the pose it was given, measured as for every selection, over the free MD
+    # of this one: the analysed frames of the trajectories (at most 200 of them, evenly spaced, as whole systems)
+    analysed = trajectories.after(cfg.restraints.interactions.discard_ns)
+    some = np.unique(np.linspace(0, analysed.frames.shape[0] - 1, min(200, analysed.frames.shape[0])).astype(int))
+    full = np.zeros((len(some), int(n_atoms), 3), dtype=np.float32)
+    full[:, np.asarray(analysed.frame_atoms, dtype=int), :] = analysed.frames[some]
+    rmsd = ligand_pose_rmsd(prep["topology"], full, prep["ligand"], rdmol, prep["positions"],
+                            frame_boxes_nm=np.asarray(analysed.boxes)[some], input_box_nm=prep["box"],
+                            host_max_distance_nm=cfg.restraints.host_max_distance_nm, second_half=False)
+    del full
+    from cufep.sampling.restraint_md import start_digest
+
+    info.update(ligand_rmsd_A=10 * rmsd, ligand_rmsd_reference="input pose",
+                start=start_digest(eq["positions"], eq["velocities"], eq["box"]))
+    report["made_with"] = restraint_made_with(cfg)
+    report["start"] = info["start"]              # with the anchors, what ties this analysis to the restraint of the leg
+    publish_text(leg_dir / "interactions.json", json.dumps(report, indent=1))
+    publish_text(leg_dir / "interactions.csv", interactions_csv(report))
+    kept = sum(1 for row in report["interactions"] if row["kept"])
+    log(f"interactions over {report['frames_analysed']} frames: {len(report['interactions'])} of ligand atoms with "
+        f"residues, {kept} of them in {report['frames_needed']} frames or more")
+    several = info["interaction"]["frames_with_any_kept_type"] not in (None, info["interaction"]["frames"])
+    log(f"restraint ({info['method']}: {info['interaction']['type']} with {info['interaction']['residue']} in "
+        f"{info['interaction']['frames']} of {info['interaction']['of_frames']} frames"
+        + (f", {info['interaction']['frames_with_any_kept_type']} with the other kept interactions of that atom and "
+           "residue" if several else "") + "): host "
+        + ", ".join(info["anchors"]["host"]) + " | guest " + ", ".join(info["anchors"]["guest"])
+        + f" | r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * rmsd:.2f} A"
+        + (f"; {info['candidates_refused']} candidate(s) ranked before it were refused"
+           if info["candidates_refused"] else ""))
+    return restraint, info, md_seconds
+
+
+def interactions_csv(report: dict) -> str:
+    """The interactions of ``interactions.json`` as a table: one line per ligand atom, residue and type."""
+    trajectories = sorted({k for row in report["interactions"] for k in row.get("frames_of_trajectory", {})})
+    lines = [",".join(["ligand_atom", "residue", "interaction", "frames", "fraction", "kept",
+                       *[f"frames_of_trajectory_{k}" for k in trajectories]])]
+    for row in report["interactions"]:
+        lines.append(",".join([row["ligand_atom_name"], row["residue_name"], row["interaction"], str(row["frames"]),
+                               f"{row['fraction']:.4f}", "yes" if row["kept"] else "no",
+                               *[str(row.get("frames_of_trajectory", {}).get(k, 0)) for k in trajectories]]))
+    return "\n".join(lines) + "\n"
 
 
 def _check_box(modeller, cutoff_nm: float, what: str) -> None:
@@ -1071,12 +1615,16 @@ class JobControl:
         except (BrokenPipeError, OSError):
             pass
 
-    def request_devices(self, replicas: int, work: float, timeout: float = 300.0, pinned: bool = False) -> list | None:
+    def request_devices(self, replicas: int, work: float, timeout: float = 300.0, pinned: bool = False,
+                        what: str | None = None) -> list | None:
         """Tell the scheduler that sampling starts; returns the GPU of every worker to use. With
         ``pinned`` the job keeps these GPUs until it asks again or goes back to serial work: it cannot
-        move its workers (the precalculation of adaptive lambda scheduling), so the scheduler must not
-        count them as moved (review of PR 1)."""
-        self._send({"event": "sampling", "replicas": int(replicas), "work": float(work), "pinned": bool(pinned)})
+        move its workers (the precalculation of adaptive lambda scheduling, the trajectories for a
+        restraint), so the scheduler must not count them as moved (review of PR 1). ``work`` is what
+        the workers still have to do (:func:`md_work`); ``what`` is what the log of the scheduler
+        calls it, where it is not the replica exchange of ``replicas`` lambda windows."""
+        self._send({"event": "sampling", "replicas": int(replicas), "work": float(work), "pinned": bool(pinned),
+                    "what": what})
         try:
             if self.conn.poll(timeout):
                 return list(self.conn.recv()["devices"])
@@ -1098,7 +1646,7 @@ class JobControl:
         self._send({"event": "progress", "work": float(work)})
 
     def serial(self) -> None:
-        """Sampling is over: the job needs a single worker at most from now on."""
+        """The part that used several workers is over: the job needs a single worker at most from now on."""
         self._send({"event": "serial"})
 
 
@@ -1175,6 +1723,21 @@ def backend_fallback_refusal(exc: BaseException, backend_name: str, fallback: st
     if had_samples:
         return "the leg had samples from an earlier run"
     return None
+
+
+def leg_with_samples_stays_on_its_backend(exc: BaseException) -> str:
+    """What a leg says whose cuPotential run failed and which had samples from an earlier run
+    (:func:`backend_fallback_refusal`): it is not repeated on stock OpenMM from its start. What
+    keeps it on cuPotential is its samples, which were made there (a leg with samples goes on with
+    the backend they were made with). Its pre-equilibration can have run on stock OpenMM alone: that
+    of a soluble complex whose restraint is chosen from interactions ends with the NPT that holds
+    the solute (the sixth pass of Codex: the message said the pre-equilibration was made on
+    cuPotential, where ``equil.npz`` of the TYK2 example names stock OpenMM)."""
+    return (f"the cuPotential run of this leg failed ({str(exc)[:300]}). The leg had samples from an earlier "
+            "run, so it is not repeated on stock OpenMM from its start: its samples and checkpoint are left "
+            "in hrex/. Run the leg again to continue it on cuPotential, or run the calculation on stock "
+            "OpenMM (backend.name: openmm) in a new output.dir: the samples of this leg were made on "
+            "cuPotential, and samples of the two backends are never mixed")
 
 
 #: the files of a leg that its samples were made from and that a new set of lambda windows uses again
@@ -1382,10 +1945,53 @@ def _choose_backend(cfg: Config, system, log) -> tuple[str, list[str]]:
     return name, notes
 
 
+def plain_md_settings(cfg: Config, timestep_fs: float, barostat: str, seed: int, **parts):
+    """The settings of a plain MD of the fully interacting system as the configuration gives them:
+    temperature and pressure (``thermodynamics``), friction and the frequency of the barostat
+    (``dynamics``), the backend, its fallback, platform and precision (``backend``), the threads of a
+    Context of the CPU platform (``resources.cpu_threads_per_worker``). ``timestep_fs`` is the
+    time step to begin with, ``barostat`` that of the leg (isotropic | membrane); ``parts`` are the
+    lengths and the atoms that only one kind of MD has. The pre-equilibration and the MD from which
+    a restraint is chosen take their settings here, so that neither can differ from the YAML.
+
+    The precision is the one of the YAML, single too (the owner's decision of 2026-11-21). Earlier
+    versions ran plain MD in mixed precision where single was asked, a rule of their own without a
+    source that the log did not say (:func:`equil_made_with` tells their files apart)."""
+    from cufep.sampling.equilibrate import EquilibrationSettings
+
+    return EquilibrationSettings(
+        temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
+        friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs, barostat=barostat,
+        barostat_frequency=cfg.dynamics.barostat_frequency, platform=cfg.backend.platform,
+        precision=cfg.backend.precision, seed=seed,
+        md_backend=cfg.backend.name, fallback=cfg.backend.fallback,
+        cpu_threads=int(cfg.resources.cpu_threads_per_worker), **parts)
+
+
+def md_work(ps: float, n_atoms: int, iteration_ps: float) -> float:
+    """The work of ``ps`` of MD of a system of ``n_atoms`` on one worker, as a job tells it to the
+    scheduler: a guess of its seconds, the one replica exchange starts from before its iterations
+    (of ``iteration_ps`` each) are timed. Every part of a leg that asks for GPUs tells its work in
+    it, so that the shares of the jobs are in proportion to the MD they still have to run (review
+    of f5a77ce: the trajectories for a restraint and the precalculation of the lambda schedule told
+    picoseconds, replica exchange seconds). Only ratios matter, and no result depends on it."""
+    return float(ps) / float(iteration_ps) * 0.05 * (1.0 + int(n_atoms) / 50000.0)
+
+
 def _precision(cfg: Config, backend: str) -> str:
-    if backend == "cupotential" and cfg.backend.precision == "double":
-        return "mixed"
-    return cfg.backend.precision
+    from cufep.backends.base import backend_precision
+
+    return backend_precision(backend, cfg.backend.precision)
+
+
+def precision_that_ran(cfg: Config, backend: str) -> str:
+    """The precision a plain MD of a leg ran in on ``backend``, as ``equil.npz`` records it: the one of
+    :func:`_precision` where the platform takes a precision (CUDA, OpenCL). The Reference and the CPU
+    platform have their own whatever is asked, and the record says that instead (the fourth pass of
+    Codex: a run on the Reference platform, which is double, was recorded as mixed)."""
+    if cfg.backend.platform in ("CUDA", "OpenCL"):
+        return _precision(cfg, backend)
+    return f"that of the {cfg.backend.platform} platform"
 
 
 def run_leg(job: LegJob) -> dict:
@@ -1403,7 +2009,7 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
-    from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
+    from cufep.sampling.equilibrate import pre_equilibrate
     from cufep.sampling.hrex import ReplicaExchangeSampler, WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
     from cufep.sampling.storage import read_samples, stored_backend, stored_conditions
@@ -1444,8 +2050,11 @@ def run_leg(job: LegJob) -> dict:
     in_membrane = is_complex and barostat == "membrane"
     equil_from = equil_made_with(cfg, job.leg, in_membrane, seed)
     if not equil_file.exists():
-        production = pre.md_ns
+        production, held = pre_equilibration_parts(cfg, job.leg, in_membrane)
         restrained: list[int] = []
+        if held:
+            atoms = list(prep["topology"].atoms())
+            restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
         wall_atoms: list[int] = []
         wall_half = 0.0
         if in_membrane:
@@ -1462,19 +2071,16 @@ def run_leg(job: LegJob) -> dict:
                         xyz = prep["positions"][a_.index]
                         if abs(xyz[2]) > wall_half and tree.query(xyz)[0] > 0.6:
                             wall_atoms.append(a_.index)
-            # A freshly built bilayer needs longer: hold the protein and ligand heavy atoms while the
-            # lipids and water settle (NVT, NPT), then run unrestrained for membrane.equilibration_ns.
-            production = max(production, cfg.membrane.equilibration_ns)
+            # A freshly built bilayer needs longer: hold the protein and ligand heavy atoms while the lipids and
+            # water settle (NVT, NPT), then run for membrane.equilibration_ns (free, or with the solute still held:
+            # pre_equilibration_parts).
             atoms = list(prep["topology"].atoms())
             restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
-        settings = EquilibrationSettings(
-            temperature_K=T, pressure_bar=cfg.thermodynamics.pressure_bar, friction_per_ps=cfg.dynamics.friction_per_ps,
-            timestep_fs=timestep_cfg, nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns,
-            production_ns=production, barostat=barostat, barostat_frequency=cfg.dynamics.barostat_frequency,
-            platform=cfg.backend.platform,
-            precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
-            md_backend=cfg.backend.name,
-            restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half, wall_centre_nm=0.0,
+        settings = plain_md_settings(
+            cfg, timestep_cfg, barostat, seed,
+            nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns, production_ns=production,
+            hold_solute=held, restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half,
+            wall_centre_nm=0.0,
             ligand_atoms=prep["ligand"] if in_membrane else [],
             water_oxygens=[a.index for a in prep["topology"].atoms()
                            if a.residue.name == "HOH" and a.element is not None and a.element.symbol == "O"]
@@ -1491,6 +2097,8 @@ def run_leg(job: LegJob) -> dict:
                     frames=eq.frames[-n_keep:], frame_boxes=eq.frame_boxes[-n_keep:],
                     frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
                     simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
+                    backend=eq.backend,               # what ran the unrestrained MD (made_with: what was asked)
+                    backend_precision=precision_that_ran(cfg, eq.backend),
                     pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
                     made_with=json.dumps(equil_from), membrane_drift=json.dumps(eq.drift))
         timed("pre_equilibration", t0)
@@ -1500,12 +2108,15 @@ def run_leg(job: LegJob) -> dict:
     origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
     if not check_equil_file(eq, equil_file, cfg, job.leg, in_membrane, seed, log):
         origin_not_recorded.append("the pre-equilibration")
+    elif "platform" not in json.loads(str(eq["made_with"])):
+        origin_not_recorded.append("the platform of the pre-equilibration")
     timestep_fs = float(eq["timestep_fs"])
     # the notes of the pre-equilibration and of the restraint are made from their files when the
     # result is made (notes_of_leg_files), with the levels of the run that makes it
 
     # ---- 2. restraint (complex only) --------------------------------------------------------
     t_restraint = time.perf_counter()
+    md_seconds = 0.0                       # of the MD from which the restraint is chosen: a phase of its own
     restraint = None
     symmetry = 1
     if is_complex:
@@ -1518,6 +2129,7 @@ def run_leg(job: LegJob) -> dict:
             stored = json.loads(rfile.read_text())
             if not check_restraint_file(stored, rfile, cfg, log):
                 origin_not_recorded.append("the restraint")
+            check_restraint_start(stored, rfile, eq)
             restraint = BoreschRestraint.from_dict(stored["restraint"])
             problems = restraint_anchor_problems(restraint.host_atoms, restraint.guest_atoms, prep)
             if problems:
@@ -1530,7 +2142,8 @@ def run_leg(job: LegJob) -> dict:
                     raise WorkflowError("restraints.selection is 'manual' but host_atoms/guest_atoms are not given")
                 restraint, fluctuations = manual_boresch_restraint(
                     rc.host_atoms, rc.guest_atoms, prep["ligand"], eq, system.getNumParticles(), k_r, k_a, equil_file,
-                    force_constants=rc.force_constants, temperature_K=T)
+                    force_constants=rc.force_constants, temperature_K=T, input_pose=prep["positions"],
+                    input_box=prep["box"])
                 # how far the ligand moved from the pose it was given, measured as for anchors the search
                 # chooses (review of PR 1: with manual anchors a ligand that left the site gave no warning)
                 from cufep.alchemy.restraints import ligand_pose_rmsd
@@ -1541,15 +2154,22 @@ def run_leg(job: LegJob) -> dict:
                                         frame_boxes_nm=eq["frame_boxes"], input_box_nm=prep["box"],
                                         host_max_distance_nm=rc.host_max_distance_nm)
                 info = {"selection": "manual", "force_constants": rc.force_constants, "fluctuations": fluctuations,
+                        "flat_angle_rule": FLAT_ANGLE_RULE,
                         "ligand_rmsd_A": 10 * rmsd, "ligand_rmsd_reference": "input pose", "notes": []}
                 log(f"restraint (manual anchors): r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * rmsd:.2f} A")
-            else:
+            elif rc.selection == "interactions":
+                restraint, info, md_seconds = restraint_from_interactions(
+                    cfg, job, leg_dir, prep, rdmol, eq, in_membrane, seed, system.getNumParticles(), log)
+                device0 = job.devices[0] if job.devices else None       # the GPU the job goes on with
+                timing["phases"]["restraint_md"] = timing["phases"].get("restraint_md", 0.0) + md_seconds
+            elif rc.selection == "auto":
                 full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))
                 full[:, eq["frame_atoms"], :] = eq["frames"]
                 settings = RestraintSearchSettings(k_r=k_r, k_angle=k_a, rmsf_cutoff_nm=rc.rmsf_cutoff_nm,
                                                    host_min_distance_nm=rc.host_min_distance_nm,
                                                    host_max_distance_nm=rc.host_max_distance_nm,
-                                                   dssp_filter=rc.dssp_filter)
+                                                   dssp_filter=rc.dssp_filter,
+                                                   constants_from_fluctuations=rc.force_constants == "auto")
                 # the pose is compared with the prepared input: the frames kept for the search begin
                 # only after the first part of the pre-equilibration
                 found = find_boresch_restraint(
@@ -1569,6 +2189,7 @@ def run_leg(job: LegJob) -> dict:
                 if rc.force_constants == "auto":
                     restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)
                 info = {"selection": "auto", "force_constants": rc.force_constants, "score": found.score,
+                        "flat_angle_rule": FLAT_ANGLE_RULE,
                         "fluctuations": found.fluctuations,
                         "ligand_rmsd_A": 10 * found.ligand_rmsd_nm, "ligand_rmsd_reference": "input pose",
                         "candidates_tested": found.n_candidates, "notes": found.notes}
@@ -1577,12 +2198,16 @@ def run_leg(job: LegJob) -> dict:
                 log("restraint: host " + ", ".join(label(i) for i in restraint.host_atoms) + " | guest "
                     + ", ".join(label(i) for i in restraint.guest_atoms)
                     + f" | r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * found.ligand_rmsd_nm:.2f} A")
+            else:
+                raise WorkflowError(f"restraints.selection: {rc.selection} is not a selection this version knows")
             publish_text(rfile, json.dumps({"restraint": restraint.to_dict(), "info": info,
                                             "ligand_symmetry_number": symmetry, "made_with": restraint_from}, indent=1))
         if symmetry > 1:
             notes.append(f"the ligand has {symmetry} heavy-atom graph symmetries; no symmetry correction is applied")
 
-    timed("restraint", t_restraint)
+    # the restraint without the MD it was chosen from, which is the phase restraint_md
+    timing["phases"]["restraint"] = timing["phases"].get("restraint", 0.0) \
+        + (time.perf_counter() - t_restraint) - md_seconds
 
     # ---- 3. alchemical System ------------------------------------------------------------------
     built = alchemical_leg(cfg, system, prep, eq["box"], restraint, is_complex)
@@ -1678,9 +2303,11 @@ def run_leg(job: LegJob) -> dict:
                 n_first = sum(als.initial_windows[st] for st in stages) - (len(stages) - 1)
                 devices = list(job.devices)
                 if job.control is not None:
+                    work = md_work(als.window_ps + als.equilibration_ps, alch.system.getNumParticles(),
+                                   cfg.sampling.time_per_iteration_ps)
                     granted = job.control.request_devices(
-                        n_first, n_first * (als.window_ps + als.equilibration_ps) / max(1, job.oversubscription),
-                        pinned=True)
+                        n_first, n_first * work / max(1, job.oversubscription), pinned=True,
+                        what=f"the precalculation of the lambda schedule ({n_first} lambda windows)")
                     devices = granted or devices
                 if job.inline or len(devices) < 2:
                     schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log)
@@ -1732,7 +2359,8 @@ def run_leg(job: LegJob) -> dict:
         n_windows, total = len(schedule.states), n_equil + n_prod
         control = job.control
         # seconds one replica needs per iteration: a guess until the first iterations were timed
-        replica_seconds = [0.05 * (1.0 + alch.system.getNumParticles() / 50000.0)]
+        replica_seconds = [md_work(cfg.sampling.time_per_iteration_ps, alch.system.getNumParticles(),
+                                   cfg.sampling.time_per_iteration_ps)]
 
         def remaining_work(done: int) -> float:
             return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)
@@ -1813,12 +2441,7 @@ def run_leg(job: LegJob) -> dict:
         refusal = backend_fallback_refusal(exc, backend_name, cfg.backend.fallback, had_samples)
         if refusal is not None:
             if refusal == "the leg had samples from an earlier run":
-                raise WorkflowError(
-                    f"the cuPotential run of this leg failed ({str(exc)[:300]}). The leg had samples from an earlier "
-                    "run, so it is not repeated on stock OpenMM from its start: its samples and checkpoint are left "
-                    "in hrex/. Run the leg again to continue it on cuPotential, or run the calculation on stock "
-                    "OpenMM (backend.name: openmm) in a new output.dir: the pre-equilibration of this directory was "
-                    "made on cuPotential, and a leg keeps the backend of its files") from exc
+                raise WorkflowError(leg_with_samples_stays_on_its_backend(exc)) from exc
             raise
         kept = set_aside_failed_backend(leg_dir)
         log(f"cuPotential run failed ({str(exc)[:300]}); repeating this leg on stock OpenMM; what the failed run "
@@ -1977,6 +2600,14 @@ def analysis_settings(source):
     return settings
 
 
+#: the version of the structure numbers of a result (:func:`cufep.analysis.structure.structural_analysis`).
+#: 2: the ligand is taken in the image of its nearest protein atom; before (no version recorded) in the image
+#: nearest to the centre of the C-alpha atoms, which is another one for a ligand farther from that centre than
+#: half a cell. A result of an earlier version is made again from its samples (review of eb6f89f: its numbers
+#: stayed as "current"). The free energies are those of ANALYSIS_VERSION and do not change with it.
+STRUCTURE_VERSION = 2
+
+
 def analysis_record(cfg) -> dict:
     """The settings the result of a leg is made with (:func:`analysis_settings`) and the version of
     the method, as the result records them."""
@@ -1984,7 +2615,8 @@ def analysis_record(cfg) -> dict:
 
     settings = analysis_settings(cfg)
     a = settings.analysis
-    return {"version": ANALYSIS_VERSION, "lrc": a.lrc, "lrc_cutoff_nm": float(a.lrc_cutoff_nm),
+    return {"version": ANALYSIS_VERSION, "structure": STRUCTURE_VERSION, "lrc": a.lrc,
+            "lrc_cutoff_nm": float(a.lrc_cutoff_nm),
             "min_overlap": float(a.min_overlap),
             "min_effective_samples": float(a.min_effective_samples),
             "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
@@ -2130,12 +2762,13 @@ def analysis_settings_of(record: dict | None, attrs: dict | None = None):
 def notes_of_leg_files(leg_dir: Path) -> tuple[list[str], dict]:
     """The notes that the pre-equilibration and the restraint of a leg carry, from the files of the
     leg, without verdicts of cuFEP's own (:func:`equil_notes`, :func:`restraint_notes`), and what
-    those files say as numbers: how the bilayer changed at the end of its equilibration (``bilayer``)
-    and how far the ligand was from its input pose (``ligand_rmsd_from_input_A``). A file that is
-    not there gives no notes and no number.
+    those files say as numbers: how the bilayer changed at the end of its equilibration (``bilayer``),
+    how far the ligand was from its input pose (``ligand_rmsd_from_input_A``) and what a restraint
+    chosen from interactions rests on (``restraint_choice``, :func:`restraint_choice`). A file that
+    is not there gives no notes and no number.
     """
     notes: list[str] = []
-    numbers: dict = {"bilayer": None, "ligand_rmsd_from_input_A": None}
+    numbers: dict = {"bilayer": None, "ligand_rmsd_from_input_A": None, "restraint_choice": None}
     files = leg_files(leg_dir)
     equil_file, restraint_file = files["equil.npz"], files["restraint.json"]
     if equil_file is not None:
@@ -2148,7 +2781,20 @@ def notes_of_leg_files(leg_dir: Path) -> tuple[list[str], dict]:
         info = stored.get("info") or {}
         if info.get("ligand_rmsd_reference") == "input pose" and info.get("ligand_rmsd_A") is not None:
             numbers["ligand_rmsd_from_input_A"] = float(info["ligand_rmsd_A"])
+        numbers["restraint_choice"] = restraint_choice(info)
     return notes, numbers
+
+
+def restraint_choice(info: dict) -> dict | None:
+    """What a restraint chosen from interactions (``restraints.selection: interactions``) rests on,
+    as its file records it: the method (interactions, or the distance method), the anchors, the
+    interaction with its residue and in how many of the analysed frames it is there, and the MD
+    (trajectories, analysed frames, the backend that ran each). Numbers, without a verdict. None
+    for a restraint of another selection."""
+    if info.get("selection") != "interactions":
+        return None
+    return {key: info.get(key) for key in ("method", "anchors", "interaction", "score", "candidates_tested",
+                                           "candidates_refused", "md")}
 
 
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
@@ -2201,7 +2847,18 @@ def restraint_release_of(leg_dir: Path, attrs: dict, temperature_K: float) -> tu
         return 0.0, 0.0
     if not restrained and states:
         return 0.0, 0.0
-    restraint = BoreschRestraint.from_dict((_read_json(found) or {}).get("restraint") or {})
+    stored = _read_json(found) or {}
+    equil = leg_files(leg_dir)["equil.npz"]
+    if equil is None and (stored.get("info") or {}).get("start") is not None:
+        raise WorkflowError(f"the restraint in {found} was chosen from MD that started from the pre-equilibration of "
+                            "its leg, and equil.npz is not there: that the restraint is the one of these samples "
+                            "cannot be checked")
+    if equil is not None:
+        # a restraint chosen from interactions belongs to the pre-equilibration its MD started from: the run of
+        # a leg refuses another one, and so does every reading of its samples (review of 877ab88: cufep analyze
+        # gave the release of the restraint of another repeat)
+        check_restraint_start(stored, found, np.load(equil))
+    restraint = BoreschRestraint.from_dict(stored.get("restraint") or {})
     return (float(restraint.release_free_energy(temperature_K, "numerical")),
             float(restraint.release_free_energy(temperature_K, "analytical")))
 
@@ -2367,6 +3024,7 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.correction_error, "structure": structure,
         # numbers of the files of the leg, without a verdict
         "bilayer": file_numbers["bilayer"], "ligand_rmsd_from_input_A": file_numbers["ligand_rmsd_from_input_A"],
+        "restraint_choice": file_numbers["restraint_choice"],
         "restraint_release": release, "restraint_release_analytical": release_analytical,
         "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
         "analysis_record": analysis_record(settings), "run": run,
@@ -2785,6 +3443,9 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
                 "dg_complex": c["delta_g_decouple"],
                 "dg_solvent": s["delta_g_decouple"],
                 "restraint_release": c["restraint_release"],
+                # what a restraint chosen from interactions rests on (None for another selection, and
+                # for the result of a leg that an earlier version made)
+                "restraint_choice": c.get("restraint_choice"),
                 "lrc_complex": c["lrc"],
                 "lrc_solvent": s["lrc"],
                 "backend_complex": c["backend"],

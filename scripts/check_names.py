@@ -27,6 +27,9 @@ ACCURACY_AND_SOURCE_FILES = (
     "benchmarks/*", "src/cufep/benchmarks/*", "src/cufep/cli.py", "tests/unit/test_benchmarks.py",
     "examples/*", "README.md", "README.ja.md", "CLAUDE.md", "PROGRESS.md", "docs/plans/*",
     "docs/LICENSING.md", "docs/wiki/*", "spikes/wiki_tables.py", "spikes/benchmark_progress.py",
+    # entries of PROGRESS.md, moved there unchanged (docs/progress/archiving.md): results against the
+    # published predictions stay what they were
+    "docs/progress/archive/*",
 )
 THIS_CHECK = ("scripts/check_names.py", "tests/unit/test_harness.py")
 

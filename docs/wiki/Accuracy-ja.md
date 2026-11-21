@@ -60,7 +60,7 @@ cuPotential プラグインです。各セットは、その example の設定
 
 | 設定 | 値 |
 |---|---|
-| 手法 | double decoupling による絶対結合自由エネルギー。Boresch 拘束、アンカー原子は自動で選択 |
+| 手法 | double decoupling による絶対結合自由エネルギー。Boresch 拘束、アンカー原子は pre-equilibration から自動で選択 (`restraints.selection: auto`。この計算を行った時点の既定値で、現在の既定値は `interactions`) |
 | 力場 | ff14SB (タンパク質)、TIP3P (水)、OpenFF 2.2.1 と AM1-BCC 電荷 (リガンド)、Lipid21 の POPC (A2A の二重膜) |
 | 条件 | 298.15 K、1 bar、イオン強度 0.15 M。時間刻み 4 fs、水素質量再分配 (3 amu) |
 | アルケミカル計算の前 | complex leg は NVT 0.25 ns、NPT 0.5 ns、MD 5 ns。solvent leg は 0.1、0.2、0.5 ns。A2A は二重膜の平衡化 10 ns |

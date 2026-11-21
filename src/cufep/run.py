@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from cufep import jsonio, mps
-from cufep.analysis.plots import plot_repeat
+from cufep.analysis.plots import plot_interactions, plot_repeat
 from cufep.benchmarks.runner import LEG_FLAGS, flags_of
 from cufep.config.auto import AutoReport, resolve
 from cufep.config.schema import Config, check_configuration, dump_config, read_settings
@@ -19,6 +19,7 @@ from cufep.workflow import (
     WorkflowError,
     _Log,
     check_before_jobs,
+    check_interaction_inputs,
     check_leg_reuse,
     check_partner_legs,
     check_prepared,
@@ -39,8 +40,12 @@ def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, obje
     from cufep.prep.protein import prepare_protein
 
     check_configuration(cfg)
-    # the ligands first: what they are called decides where anything is written
-    ligands = ligands_of_run(cfg) if ligands is None else ligands
+    if ligands is None:
+        # the ligands first: what they are called decides where anything is written
+        ligands = ligands_of_run(cfg)
+        # what restraints.selection: interactions needs, before any MD: a plan is of every complex leg.
+        # A run gives its ligands and has checked those whose complex leg it runs (:func:`run`)
+        check_interaction_inputs(cfg, ligands)
     names = [lig.name for lig in ligands]
     if cfg.system.cofactors:
         raise WorkflowError("system.cofactors is not implemented yet in this version")
@@ -107,6 +112,11 @@ def run(cfg: Config, reschedule: bool = False, log=None, only_ligands=None, only
     """
     check_configuration(cfg)                     # before the output directory is made
     ligands = ligands_of_run(cfg, only_ligands)  # so are the names of the ligands
+    # and what restraints.selection: interactions needs, of the ligands whose complex leg this run runs:
+    # a ligand that is left out (--ligand), or of which only the solvent leg is run (--leg), needs no restraint
+    with_complex_leg = {name for name, _repeat, leg in select_jobs([lig.name for lig in ligands], 1, only_ligands,
+                                                                    only_legs) if leg == "complex"}
+    check_interaction_inputs(cfg, [lig for lig in ligands if lig.name in with_complex_leg])
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)
@@ -226,6 +236,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         for r in range(repeats):
             try:
                 plot_repeat(lig_dirs[lig.name] / f"repeat_{r}")
+                # what a restraint chosen from interactions rests on (no figure for another selection)
+                plot_interactions(lig_dirs[lig.name] / f"repeat_{r}" / "complex")
             except Exception as exc:  # noqa: BLE001  a figure never fails a run
                 log(f"WARNING: no analysis figure for {lig.name}, repeat {r}: {type(exc).__name__}: {exc}")
     for s in summary:

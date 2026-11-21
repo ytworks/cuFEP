@@ -2059,6 +2059,14 @@ def test_a_final_checkpoint_that_cannot_be_stored_is_no_failure_of_the_backend(t
         backend_fallback_refusal(WorkerError("died"), "cupotential", "openmm", True)
         == "the leg had samples from an earlier run"
     )
+    # what such a leg says: its samples keep it on cuPotential. It says nothing of its pre-equilibration, which
+    # for a soluble complex with the default selection of the restraint ran on stock OpenMM alone (the sixth pass
+    # of Codex: the message said that the pre-equilibration was made on cuPotential)
+    from cufep.workflow import leg_with_samples_stays_on_its_backend
+
+    said = leg_with_samples_stays_on_its_backend(WorkerError("worker 3 died"))
+    assert "worker 3 died" in said and "the samples of this leg were made on cuPotential" in said
+    assert "pre-equilibration" not in said
     assert (
         backend_fallback_refusal(WorkerError("died"), "openmm", "openmm", False)
         == "the leg runs on stock OpenMM already"

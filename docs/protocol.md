@@ -128,18 +128,39 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
 
 1. Pre-equilibration: minimise, 0.25 ns NVT and 0.5 ns NPT on stock OpenMM, then 5 ns NPT
    on the backend of the leg (solvent leg: 0.1, 0.2 and 0.5 ns), with a frame every 20 ps
-   and one at the end. The whole length asked for is integrated, also where it is not a
+   and one at the end. A complex leg whose restraint is chosen from interactions
+   (`restraints.selection: interactions`, the default) keeps the pose that was given
+   instead: the heavy atoms of protein and ligand are held by position restraints through
+   NVT and NPT while the solvent and the box settle, and no free MD follows, because the
+   trajectories of step 2 are that MD and start from the pose that was given, as in the
+   method they come from. A bilayer that was just built still runs
+   `membrane.equilibration_ns` to close around the protein, with the solute held (the
+   owner's decision of 2026-11-21: after 10 ns of free MD two runs of the A2A example had
+   the ligand in two states and chose two restraints). The alchemical run starts where the
+   pre-equilibration ends, in every case. If that backend cannot run the system, or the run fails on it, stock
+   OpenMM runs it from the same start and the log and the result say so; with
+   `backend.fallback: none` it does not, and the leg stops with the reason, as its alchemical
+   run does. This MD and the MD from which a restraint is chosen run in the precision of
+   the alchemical run (`backend.precision`), single too; where double is asked, the plugin,
+   which does not have it, runs in mixed precision. Versions before 2026-11-21 ran them in
+   mixed precision where single was asked, and a pre-equilibration they made with
+   `backend.precision: single` is not used again. The whole length asked for is integrated, also where it is not a
    whole number of frame intervals, and the length integrated is recorded; versions before
    revision 15 integrated whole intervals only (40 ps of 50 ps), and such a file holding less
    than it was made for is not used again. A bilayer system is held
-   by position restraints during NVT and NPT and then runs unrestrained for
-   `membrane.equilibration_ns`. How the bilayer changed at the end of that run is reported with
+   by position restraints during NVT and NPT, the NPT twice as long as for a soluble system
+   (1.0 ns), and then runs for `membrane.equilibration_ns`: unrestrained with
+   `restraints.selection: auto` and `manual`, with the heavy atoms of protein and ligand still
+   held with `interactions` (above). How the bilayer changed at the end of that run is reported with
    the result of the complex leg, as numbers without a verdict (`bilayer`): the relative change
    of the mean area in the membrane plane and the change of the mean number of water molecules
    within 0.6 nm of the ligand between the last two quarters. The run is never made longer for
    it. In the A2A example the area was still shrinking after 10 ns, by 1.5 % between the last
    two quarters.
-2. Complex leg only: choose the Boresch restraint from that trajectory. Ligand anchor:
+2. Complex leg only: choose the Boresch restraint (`restraints.selection`). By default
+   (`interactions`) the anchors come from the interactions between protein and ligand in
+   unrestrained MD of the complex, as described further down. With `auto` they come from
+   the trajectory of the pre-equilibration, as in OpenFE's protocol. Ligand anchor:
    three bonded atoms of an aromatic ring near the centre of the molecule. Protein anchor:
    three bonded backbone atoms in stable secondary structure, RMSF below 0.1 nm, 0.5-1.5 nm
    from the ligand anchor. Candidates are held to two rules of OpenFE's `EvaluateBoreschAtoms`
@@ -157,8 +178,56 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    trajectory) is reported with the result as a number without a level
    (`ligand_rmsd_from_input_A`), as OpenFE reports the ligand RMSD; the run goes on in any
    case, and the result is the free energy of the pose the ligand is in. The same is measured
-   for manual anchors. The RMSD and the drift of the centre of the ligand in the coupled state
+   for manual anchors and for a restraint chosen from interactions, over the free MD the
+   selection has: the second half of the frames of the pre-equilibration for `auto` and
+   `manual`; for `interactions`, whose pre-equilibration holds the pose, the analysed frames
+   of the four trajectories, of which at most 200 are taken, evenly spaced (800 analysed
+   frames give 200; fewer than 200 are all taken), and all of those counted. The frames are superposed on the backbone atoms (N, CA, C)
+   within `restraints.host_max_distance_nm` + 0.5 nm of the centre of the ligand's heavy
+   atoms in the first frame, or on all C-alpha atoms if those are fewer than 12. The RMSD and the drift of the centre of the ligand in the coupled state
    during the production are numbers of the result too (`structure`).
+
+   With `restraints.selection: interactions`, the default, the anchors come from the interactions
+   between protein and ligand in unrestrained MD of the complex, the method of Ding et al.
+   (arXiv:2603.22274 v3, sec. 2.1 and 2.4; `docs/configuration.md` quotes its rules and says
+   which numbers are those of its published source and what is cuFEP's own):
+   - Four NPT trajectories of 3 ns start from the end of the pre-equilibration, which for
+     this selection is the pose that was given in settled surroundings (step 1), and differ by
+     their random numbers only. Each is a plain MD of the leg: it runs by the settings of the
+     YAML and on the backend of the leg, with the recoveries of step 1 (stock OpenMM, 2 fs),
+     and the result names the backend that ran each. With several GPUs they run at the same
+     time. A frame is kept every 10 ps; those of the first 1 ns of each are not analysed, which
+     leaves 800 frames. A trajectory that is complete is kept and not run again.
+   - ProLIF gives, for every frame, the hydrogen bonds, ionic interactions, halogen bonds,
+     cation-pi and aromatic stacking interactions between the ligand and the residues within
+     6 A. Each interaction is given to one heavy atom of the ligand (the interacting atom, or
+     the first suitable one within three bonds) and is kept if it is there in at least 40% of
+     the frames (the number of frames rounded down).
+   - The host anchors are the backbone N, CA and C of the residue of a kept interaction, in
+     each of their six orders; the guest anchors are that ligand atom and two bonded heavy
+     atoms that are no chain ends. A set of anchors is a candidate if the angles L1-L2-L3 and
+     P1-L1-L2 lie within 45 to 135 degrees in at least 40% of the frames, counted among the
+     frames of the interaction. The candidates are ranked by how often P1-L1-L2 and L1-P1-P2
+     lie in that range, by how far those angles are from 90 degrees, by the secondary structure
+     of the residue (DSSP: helix, strand or bridge in more than half of the frames), by the
+     kind of interaction and by whether the residue has two interactions.
+   - If the interactions give no anchors, the residues whose backbone is the nearest to the
+     ligand (within 1.0 nm) in at least 15% of the frames are taken, with the same condition
+     on the angles at 15%. If that gives none either, the calculation stops before anything is
+     sampled. A ligand that has no three bonded heavy atoms for guest anchors is refused before
+     any MD.
+   - The best candidate that passes the two rules of OpenFE above is taken, over the analysed
+     frames and at the configuration the alchemical run starts from; a candidate that does not
+     pass is passed over and the result says how many were. The reference value of each of the
+     six coordinates is the centre of the fullest of 20 bins of its histogram over the frames
+     in which both anchor angles lie within 45 to 135 degrees. The force constants are those
+     of `restraints.force_constants`, as for every selection.
+   - The numbers of the analysis are written to `interactions.json` and `interactions.csv` in
+     the directory of the leg: how often every interaction is there (in all analysed frames and
+     in each trajectory), the secondary structure of the residues, the candidates with what
+     they were ranked by, and the six coordinates of the chosen anchors frame by frame. What
+     the restraint rests on is a number of the result of the leg and of the ligand
+     (`restraint_choice`), without a verdict.
 3. Lambda windows: adaptive lambda scheduling, or the windows given in the configuration.
 4. Hamiltonian replica exchange, one replica per lambda window, 2.5 ps per iteration: 1 ns
    equilibration and 10 ns production per window.
@@ -852,8 +921,10 @@ belong together:
 - The number of MD steps of an iteration and the numbers of iterations of the equilibration
   and the production follow one rule for the run and for every check of stored samples
   against a run: 2.5 ps at 3 fs are 833 steps (2.499 ps), and 10 ns are 4000 iterations.
-- The prepared systems, the pre-equilibration and the restraint are used again only if the
-  input files and the settings that went into them are the same. Only the lambda windows of a
+- The prepared systems, the pre-equilibration, the trajectories from which a restraint is
+  chosen and the restraint are used again only if the
+  input files and the settings that went into them are the same (a trajectory also only if the
+  pre-equilibration it started from is the one that is there). Only the lambda windows of a
   leg can be determined again in place, with `--reschedule`.
 - A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg: its
   stages and its two end states are checked. Give a directory as written by `cufep benchmark
@@ -951,7 +1022,9 @@ exchanged.
   chosen from the size of the system (small systems leave most of a GPU idle). Without MPS
   it is 1.
 - All GPUs form one pool. A job that is in pre-equilibration or in the restraint search
-  holds one worker. The rest is divided among the jobs that are in the lambda precalculation
+  holds one worker. The rest is divided among the jobs that run the trajectories from which a
+  restraint is chosen (`restraints.selection: interactions`, one worker per trajectory), that
+  are in the lambda precalculation
   (its new windows of an iteration run at the same time) or sampling, in proportion to the
   work they still have to do and never more than one worker per window or replica. When a job starts sampling or ends, the shares are recomputed, and jobs start
   or stop workers at their next iteration. With one ligand the solvent leg therefore uses
@@ -993,8 +1066,8 @@ The absolute binding protocol of OpenFE, from its documentation and source code 
 | checks after the run | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03 and fewer than 50 independent samples per window, the levels of the literature; the series, halves and BAR shown without a verdict; messages in the result |
 | a calculation that is not good enough | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
 | replica exchange | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
-| MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
-| restraint | Boresch, atoms chosen automatically, fixed force constants | as OpenFE |
+| MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns; a complex leg with the default `restraints.selection: interactions`: 0.25 + 0.5 ns with the heavy atoms of protein and ligand held and no free MD (a bilayer: 0.25 + 1.0 + 10 ns, held), from the end of which the alchemical run and the four trajectories of 3 ns for the restraint start |
+| restraint | Boresch, atoms chosen automatically, fixed force constants | from the interactions of unrestrained MD of the complex by default (`restraints.selection: interactions`); as OpenFE with `auto` |
 | water sampling | none | none |
 | GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
 | membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |

@@ -109,6 +109,15 @@ class Backend(abc.ABC):
         return context
 
 
+def backend_precision(name: str, precision: str) -> str:
+    """The precision in which the backend ``name`` runs when the configuration asks for
+    ``precision``: the cuPotential plugin has no double precision and runs in mixed precision then.
+    One rule for the alchemical run and for the plain MD of a leg."""
+    if name.lower() in ("cupotential", "cupo", "nv") and precision == "double":
+        return "mixed"
+    return precision
+
+
 def get_backend(name: str, **kwargs) -> Backend:
     """Instantiate a backend by name (``cupotential`` or ``openmm``)."""
     key = name.lower()

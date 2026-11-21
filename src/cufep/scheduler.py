@@ -14,6 +14,10 @@ Capacity
 Allocation (recomputed whenever a job starts, changes phase or ends)
     * A job that is in a part that cannot be spread out (plain MD before the alchemical
       run, restraint search, lambda schedule) holds one worker.
+    * A job whose workers cannot move asks for them and keeps them until it asks again or is
+      serial again: the windows of the lambda precalculation, and the trajectories from which
+      a restraint is chosen (``restraints.selection: interactions``), one worker each. When
+      it is serial again it goes on with the first GPU of what it was granted.
     * The rest of the capacity is divided among the jobs that are sampling, in proportion
       to the work they still have to do, and never more than one worker per replica.
     * A job learns about a change at its next iteration boundary and starts or stops
@@ -503,7 +507,8 @@ def _run_started_jobs(jobs: list[LegJob], gpus: list, log, oversubscription, mps
                         if msg.get("event") == "sampling":
                             r.update(phase="sampling", max_workers=int(msg["replicas"]), work=float(msg["work"]),
                                      waiting_for_devices=True)
-                            rebalance(f"{jobs[i].tag} starts sampling {msg['replicas']} lambda windows")
+                            rebalance(f"{jobs[i].tag} starts "
+                                      + (msg.get("what") or f"sampling {msg['replicas']} lambda windows"))
                             if msg.get("pinned"):
                                 # it cannot move them: they stay its own until it asks again (review of PR 1)
                                 r["phase"] = "pinned"
@@ -511,7 +516,7 @@ def _run_started_jobs(jobs: list[LegJob], gpus: list, log, oversubscription, mps
                             r["work"] = float(msg["work"])
                         elif msg.get("event") == "serial":
                             r.update(phase="serial", max_workers=1, devices=r["devices"][:1])
-                            rebalance(f"{jobs[i].tag} finished sampling")
+                            rebalance(f"{jobs[i].tag} goes on with one worker")
                 except (EOFError, OSError):
                     pass
             # finished jobs

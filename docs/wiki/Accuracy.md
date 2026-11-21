@@ -61,7 +61,7 @@ method is in [docs/protocol.md](https://github.com/ytworks/cuFEP/blob/main/docs/
 
 | setting | value |
 |---|---|
-| method | absolute binding free energy by double decoupling; Boresch restraints, anchor atoms chosen automatically |
+| method | absolute binding free energy by double decoupling; Boresch restraints, anchor atoms chosen automatically from the pre-equilibration (`restraints.selection: auto`, the default when these calculations were made; the default is now `interactions`) |
 | force fields | ff14SB (protein), TIP3P (water), OpenFF 2.2.1 with AM1-BCC charges (ligand), Lipid21 POPC (the A2A bilayer) |
 | conditions | 298.15 K, 1 bar, ionic strength 0.15 M; time step 4 fs with hydrogen mass repartitioning (3 amu) |
 | before the alchemical run | complex leg 0.25 ns NVT, 0.5 ns NPT and 5 ns of MD; solvent leg 0.1, 0.2 and 0.5 ns; A2A: 10 ns of equilibration of the bilayer |

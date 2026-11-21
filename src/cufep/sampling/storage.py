@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from numbers import Integral
 from pathlib import Path
 from typing import NamedTuple
 
@@ -33,6 +34,10 @@ def _same(a, b) -> bool:
         return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
     if isinstance(a, bool) or isinstance(b, bool) or a is None or b is None or isinstance(a, str) or isinstance(b, str):
         return a == b
+    if isinstance(a, Integral) and isinstance(b, Integral):
+        # a seed, a number of frames or of windows: no tolerance (review of eb6f89f: the seeds 1000000000
+        # and 1000000001 were the same seed, and trajectories of both were used together)
+        return int(a) == int(b)
     try:
         return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(a)), abs(float(b)))
     except (TypeError, ValueError):

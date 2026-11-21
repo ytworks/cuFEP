@@ -129,7 +129,17 @@ def test_the_tiers_choose_the_ligands_and_smoke_never_lengthens_a_setting_of_the
     assert smoke.system.ligand_names == ["4e"] and smoke.membrane.equilibration_ns == 0.2
     assert smoke.sampling.production_ns.complex == 0.05 and smoke.sampling.production_ns.solvent == 0.1
     assert smoke.sampling.rest2 == example.sampling.rest2 and smoke.membrane.enabled is True
-    assert smoke.restraints == example.restraints and smoke.analysis == example.analysis
+    assert smoke.analysis == example.analysis
+    # the MD from which the restraint is chosen is shortened too, and nothing else of the restraint
+    assert (smoke.restraints.interactions.length_ns, smoke.restraints.interactions.discard_ns) == (0.3, 0.1)
+    shortened = example.restraints.model_dump(mode="json")
+    shortened["interactions"].update(length_ns=0.3, discard_ns=0.1)
+    assert smoke.restraints.model_dump(mode="json") == shortened
+    (tmp_path / "examples" / "membrane_a2a" / "config.yaml").write_text(
+        "system: {protein: protein.pdb, ligand: ligand.sdf}\nmembrane: {enabled: true}\n"
+        "restraints: {interactions: {length_ns: 0.2, discard_ns: 0.05}}\n")
+    shorter = benchmark_config("a2a", "smoke", tmp_path / "s").restraints.interactions
+    assert (shorter.length_ns, shorter.discard_ns) == (0.2, 0.05)
 
 
 def test_report_from_a_synthetic_run(tmp_path):

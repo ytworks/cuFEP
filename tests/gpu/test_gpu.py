@@ -356,3 +356,118 @@ def test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends(
         del ctx
     diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
     assert np.max(np.abs(diff)) < 0.1, diff
+
+
+# ------------------------------------------------------------------- MD for the restraint
+@needs_cuda
+@pytest.mark.parametrize("precision", ["mixed", "single"])
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_the_trajectories_for_a_restraint_run_on_the_backend_of_the_leg(backend, precision, tmp_path):
+    """The unrestrained NPT trajectories from which ``restraints.selection: interactions`` chooses a
+    restraint run on the backend that is configured, two processes at a time on one GPU and in the
+    process of the job alike, and each file records that backend. No fallback is allowed here: a
+    plugin that is configured and not used fails the test instead of passing on stock OpenMM. In
+    mixed and in single precision: plain MD runs in the one of the YAML."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling import restraint_md
+    from cufep.sampling.equilibrate import EquilibrationSettings
+
+    system, _top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    solute = sorted(ligand + other)
+    settings = EquilibrationSettings(production_ns=0.002, frame_interval_ps=0.5, platform="CUDA", precision=precision,
+                                     timestep_fs=2.0, seed=5, md_backend=backend, fallback="none",
+                                     temperature_K=300.0, pressure_bar=1.0, barostat_frequency=25)
+
+    def tasks(directory, n):
+        xml = mm.XmlSerializer.serialize(system)
+        return [restraint_md.TrajectoryTask(
+            index=k, path=str(restraint_md.trajectory_file(directory, k)), system_xml=xml, positions=pos,
+            velocities=np.zeros_like(pos), box=box, frame_atoms=solute, settings=settings, timestep_fs=2.0,
+            made_with={"trajectory": k}) for k in range(n)]
+
+    lines = []
+    summaries = restraint_md.run_trajectories(tasks(tmp_path / "processes", 3), [0, 0], lines.append)
+    assert [(s["index"], s["backend"], s["frames"], s["notes"]) for s in summaries] == \
+        [(k, backend, 4, []) for k in range(3)]
+    assert not [line for line in lines if "stock OpenMM" in line]
+    read = restraint_md.read_trajectories(tmp_path / "processes", 3)
+    assert read.backends == [backend] * 3 and read.timesteps_fs == [2.0] * 3 and read.notes == []
+    assert read.frames.shape == (12, len(solute), 3) and np.all(np.isfinite(read.frames))
+    assert read.time_ps.tolist() == pytest.approx([0.5, 1.0, 1.5, 2.0] * 3)
+    firsts = [read.frames[read.trajectory == k][-1] for k in range(3)]
+    assert not np.allclose(firsts[0], firsts[1], atol=1e-4) and not np.allclose(firsts[1], firsts[2], atol=1e-4)
+    # NPT: the box moves, and the solute stays what it was (no atom flew off)
+    assert not np.allclose(read.boxes, read.boxes[0]) and np.abs(read.boxes - box).max() < 0.2
+    assert np.abs(read.frames - pos[solute]).max() < 1.5
+
+    inline = restraint_md.run_trajectories(tasks(tmp_path / "inline", 2), [0], lines.append, inline=True)
+    assert [s["backend"] for s in inline] == [backend] * 2
+    assert restraint_md.read_trajectories(tmp_path / "inline", 2).frames.shape == (8, len(solute), 3)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_the_pre_equilibration_of_a_leg_runs_in_single_precision_where_it_is_asked(backend, monkeypatch):
+    """``backend.precision: single`` is the precision of the plain MD of a leg too (the owner's decision of
+    2026-11-21; earlier versions made mixed of it where the settings of the YAML become those of the MD): the
+    minimisation, NVT and NPT on stock OpenMM and the unrestrained MD on the backend of the leg, without a
+    fallback and without a recovery. The settings are those the leg makes of the YAML, and the precision is
+    read from every Context that was made (review of eb6f89f: the test gave the MD its settings directly and
+    looked at no Context)."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.backends.base import Backend
+    from cufep.config.schema import Config
+    from cufep.sampling.equilibrate import pre_equilibrate
+    from cufep.workflow import plain_md_settings
+
+    system, _top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    solute = sorted(ligand + other)
+    cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+                                 "backend": {"name": backend, "precision": "single", "fallback": "none"}})
+    settings = plain_md_settings(cfg, 2.0, "isotropic", 3, nvt_ns=0.002, npt_ns=0.002, production_ns=0.004,
+                                 frame_interval_ps=1.0, minimize_iterations=200, restrained_atoms=solute)
+    assert (settings.precision, settings.md_backend, settings.fallback) == ("single", backend, "none")
+    precisions = []
+    make = Backend.make_context
+
+    def made(self, *args, **kwargs):
+        context = make(self, *args, **kwargs)
+        precisions.append(context.getPlatform().getPropertyValue(context, "Precision"))
+        return context
+
+    monkeypatch.setattr(Backend, "make_context", made)
+    lines = []
+    result = pre_equilibrate(system, pos, box, solute, settings, 0, lines.append)
+    assert precisions and set(precisions) == {"single"}
+    assert result.backend == backend and result.notes == [] and result.timestep_fs == 2.0
+    assert result.frames.shape == (4, len(solute), 3) and np.all(np.isfinite(result.positions))
+    assert np.all(np.isfinite(result.velocities)) and np.abs(result.box - box).max() < 0.2
+    assert not [line for line in lines if "stock OpenMM" in line or "2 fs" in line]
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_a_pre_equilibration_that_holds_the_solute_runs_on_the_backend_of_the_leg(backend):
+    """``restraints.selection: interactions`` holds the heavy atoms of the solute where they were given while
+    the surroundings settle; for a bilayer the MD after NVT and NPT runs with them held, on the backend of the
+    leg. Without a fallback: the plugin runs it with the position restraints, and the held atoms stay."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
+
+    system, top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    atoms = list(top.atoms())
+    heavy = [i for i in sorted(ligand + other) if atoms[i].element.symbol != "H"]
+    # 10,000 kJ/mol/nm^2: an atom then moves 0.016 nm along an axis at 300 K (the root of kT / k), and the
+    # 0.1 nm below is more than six times that. (With the 1,000 of a leg the same is 0.05 nm and one of twenty
+    # atoms was 0.102 nm away once: the level must not be one that the noise of an MD on a GPU can reach.)
+    settings = EquilibrationSettings(nvt_ns=0.002, npt_ns=0.002, production_ns=0.02, frame_interval_ps=5.0,
+                                     minimize_iterations=200, platform="CUDA", timestep_fs=2.0, seed=3,
+                                     md_backend=backend, fallback="none", restrained_atoms=heavy, hold_solute=True,
+                                     restraint_k=10000.0)
+    held = pre_equilibrate(system, pos, box, sorted(ligand + other), settings, 0, lambda line: None)
+    assert held.backend == backend and held.notes == [] and held.frames.shape[0] == 4
+    assert np.linalg.norm(held.positions[heavy] - pos[heavy], axis=1).max() < 0.1
+

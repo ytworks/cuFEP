@@ -1,5 +1,5 @@
 # 残っている記述の修正と lint (ruff) の導入
-Status: In progress
+Status: Done (PR #3, merged as d4dc9be)
 Refs: PR #2 (merged as 99b59fe) and its independent review; this work is a new pull request, separate from PR #2
 
 ## Context

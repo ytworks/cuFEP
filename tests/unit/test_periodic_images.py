@@ -410,3 +410,215 @@ def test_anchors_on_a_straight_line_are_refused_only_if_they_are_in_every_frame(
         bent[4] = bent[3] + [0.0, -0.15, 0.0]
         bent[5] = bent[4] + 0.15 * np.array([np.sin(a), -np.cos(a), 0.0])
         assert bool(collinear_frames(probe, bent)[0]) is on_line, angle
+
+
+# ---- review of f5a77ce: the image next to the protein is not the image nearest to its centre --------------
+
+def _lopsided_complex(n_frames=40, seed=3):
+    """A domain of 52 residues on one of 477, every residue its N, CA and C at the density of a protein (one
+    residue in 0.137 nm^3), and pentan-1-ol 0.45 nm outside the small domain; in the cell that cuFEP's solvation
+    gives this solute (a rhombic dodecahedron of width 2 x the radius of the solute + 1.0 nm). Returns
+    (topology, frames, boxes, ligand atoms, C-alpha atoms, the molecule)."""
+    import openmm.app as app
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    rng = np.random.default_rng(seed)
+
+    def ball(radius, centre):
+        n = int(4.19 * radius ** 3 / 0.137)
+        p = rng.normal(size=(4 * n, 3))
+        p = p / np.linalg.norm(p, axis=1)[:, None] * radius * rng.random(4 * n)[:, None] ** (1 / 3)
+        return p[:n] + np.asarray(centre, dtype=float)
+
+    ca = np.concatenate([ball(1.2, (0.0, 0.0, 0.0)), ball(2.5, (-3.7, 0.0, 0.0))])
+    backbone = np.stack([ca + [-0.10, 0.08, 0.0], ca, ca + [0.11, 0.07, 0.05]], axis=1).reshape(-1, 3)
+    mol = Chem.AddHs(Chem.MolFromSmiles("CCCCCO"))
+    AllChem.EmbedMolecule(mol, randomSeed=4)
+    conformer = mol.GetConformer().GetPositions() / 10.0
+    positions = np.concatenate([backbone, conformer - conformer.mean(axis=0) + [1.65, 0.0, 0.0]])
+    top = app.Topology()
+    chain = top.addChain("A")
+    for k in range(len(ca)):
+        residue = top.addResidue("GLY", chain, id=str(k + 1))
+        for name, element in (("N", "N"), ("CA", "C"), ("C", "C")):
+            top.addAtom(name, app.element.get_by_symbol(element), residue)
+    ligand_residue = top.addResidue("LIG", top.addChain("L"))
+    for atom in mol.GetAtoms():
+        top.addAtom(f"{atom.GetSymbol()}{atom.GetIdx() + 1}", app.element.get_by_symbol(atom.GetSymbol()),
+                    ligand_residue)
+    centre = 0.5 * (positions.min(axis=0) + positions.max(axis=0))
+    width = 2.0 * float(np.linalg.norm(positions - centre, axis=1).max()) + 1.0
+    box = np.array([[width, 0.0, 0.0], [0.0, width, 0.0], [width / 2, width / 2, width * np.sqrt(2) / 2]])
+    frames = positions[None] + rng.normal(scale=0.015, size=(n_frames, len(positions), 3))
+    ligand = np.arange(3 * len(ca), len(positions))
+    return top, frames, np.repeat(box[None], n_frames, axis=0), ligand, np.arange(1, 3 * len(ca), 3), mol
+
+
+def _nearest_backbone_atom(frames, ligand):
+    protein = np.setdiff1d(np.arange(frames.shape[1]), ligand)
+    return np.linalg.norm(frames[:, ligand, None, :] - frames[:, None, protein, :], axis=-1).min(axis=(1, 2))
+
+
+@pytest.mark.needs("rdkit")
+def test_a_ligand_far_from_the_centre_of_a_lopsided_complex_stays_in_its_pocket():
+    """Review of f5a77ce (P2): the ligand was brought to the image nearest to the centre of the C-alpha atoms. In
+    this complex it is 4.93 nm from that centre in a cell 9.05 nm wide, and that image is another one: 1.19 nm
+    or more from every backbone atom, where the MD wrote it 0.30 nm or less from one. The image next to the
+    protein is the one of the nearest protein atom, wherever the ligand was written."""
+    from cufep.alchemy.restraints import binding_site_frames
+
+    top, frames, boxes, ligand, ca, _mol = _lopsided_complex()
+    width = boxes[0, 0, 0]
+    from_centre = np.linalg.norm(frames[0, ligand].mean(axis=0) - frames[0, ca].mean(axis=0))
+    assert width == pytest.approx(9.05, abs=0.01) and from_centre == pytest.approx(4.93, abs=0.01)
+    assert from_centre > width / 2
+    written = _nearest_backbone_atom(frames, ligand)
+    assert 0.2 < written.min() and written.max() < 0.31
+    # the geometry of the finding: the image nearest to the centre of the protein is not the one in the pocket
+    by_centre = nearest_image_of_ligand(frames, ligand, frames[:, ca, :].mean(axis=1), boxes)
+    assert _nearest_backbone_atom(by_centre, ligand).min() > 1.19
+    assert np.allclose(by_centre[0, ligand].mean(axis=0) - frames[0, ligand].mean(axis=0), [-width, 0.0, 0.0])
+    # what the search of restraints.selection: auto and the RMSD of the pose look at
+    looked_at, _aligned, _site = binding_site_frames(top, frames, ligand, ligand[:6], 1.5, boxes)
+    assert np.allclose(looked_at, frames, atol=1e-9)
+    # the rule they share
+    from cufep.alchemy.restraints import ligand_next_to_protein
+
+    assert np.allclose(ligand_next_to_protein(frames, ligand, ca, boxes), frames, atol=1e-9)
+    for name, shift in lattice_shifts(boxes[0]).items():
+        moved = frames.copy()
+        moved[:, ligand] += shift + 2 * boxes[0, 1]
+        assert np.allclose(ligand_next_to_protein(moved, ligand, ca, boxes), frames, atol=1e-9), name
+    assert np.allclose(ligand_next_to_protein(frames[0], ligand, ca, boxes[0]), frames[0], atol=1e-9)
+
+
+@pytest.mark.needs("rdkit")
+def test_the_interactions_of_a_lopsided_complex_are_looked_for_in_the_pocket(monkeypatch):
+    """The same complex through the choice of ``restraints.selection: interactions``: ProLIF and the rule got the
+    ligand 1.21 to 1.28 nm from the nearest backbone atom, an image in which nothing interacts and no angle is
+    that of the restraint (the distance method ranked six candidates there). They get it where the MD wrote it.
+    Here no anchors can be chosen, and the calculation stops: pentan-1-ol outside a ball of backbone atoms."""
+    from cufep import workflow
+    from cufep.alchemy import restraints
+    from cufep.analysis import interactions
+    from cufep.config.schema import Config
+    from cufep.sampling.restraint_md import Trajectories
+
+    top, frames, boxes, ligand, _ca, mol = _lopsided_complex()
+    n, n_atoms = frames.shape[0], frames.shape[1]
+    seen = {}
+
+    def no_interactions(topology, xyz, frame_atoms, ligand_atoms, rdmol):
+        seen["nearest"] = _nearest_backbone_atom(np.asarray(xyz), ligand)
+        return [[] for _ in range(len(xyz))]
+
+    monkeypatch.setattr(interactions, "interactions_of_frames", no_interactions)
+    monkeypatch.setattr(restraints, "stable_structure_fractions", lambda topology, xyz, frame_atoms: {})
+    cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+                                 "restraints": {"interactions": {"discard_ns": 0.0}}})
+    trajectories = Trajectories(frames=frames, boxes=boxes, frame_atoms=np.arange(n_atoms),
+                                trajectory=np.zeros(n, dtype=int), time_ps=10.0 * (1 + np.arange(n)),
+                                backends=["openmm"], timesteps_fs=[4.0], notes=[])
+    prep = {"topology": top, "ligand": [int(i) for i in ligand]}
+    eq = {"positions": frames[-1], "box": boxes[-1]}
+    with pytest.raises(WorkflowError, match="Nothing was sampled"):
+        workflow.interaction_restraint(cfg, prep, mol, eq, trajectories, 298.15)
+    assert seen["nearest"].max() < 0.31
+
+
+# ---- review of eb6f89f (Codex): the image the force measures in, and the nearest image of a skewed cell ----
+
+def test_the_nearest_image_of_a_skewed_cell_is_found_whatever_the_length_of_the_displacement():
+    """OpenMM's formula for the minimum image is the nearest image up to half the smallest height of the cell
+    (1.41 nm in the rhombic dodecahedron of 4 nm): of (0, 0, 1.5) nm it makes an image 3.125 nm long. The
+    distance method measured with it and gave such a contact to a residue 1.6 nm away."""
+    from cufep.alchemy.lrc import minimum_image, nearest_image
+
+    box = np.array([[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [2.0, 2.0, 2.0 * np.sqrt(2.0)]])
+    delta = np.array([[0.0, 0.0, 1.5], [1.6, 0.0, 0.0], [0.0, 0.0, 1.3]])
+    assert np.linalg.norm(minimum_image(delta, box), axis=1).tolist() == pytest.approx([3.125, 1.6, 1.3], abs=1e-3)
+    assert np.linalg.norm(nearest_image(delta, box), axis=1).tolist() == pytest.approx([1.5, 1.6, 1.3])
+    # against every lattice vector within two cells, for displacements many cells long, in both cells
+    rng = np.random.default_rng(11)
+    cells = np.array([[i, j, k] for i in range(-2, 3) for j in range(-2, 3) for k in range(-2, 3)], dtype=float)
+    for cell in (box, CUBE, DODECAHEDRON):
+        far = rng.uniform(-12.0, 12.0, size=(200, 3))
+        reduced = minimum_image(far, cell)
+        shortest = np.linalg.norm(reduced[:, None, :] + (cells @ cell)[None], axis=2).min(axis=1)
+        assert np.allclose(np.linalg.norm(nearest_image(far, cell), axis=1), shortest)
+
+
+def test_the_reference_distance_of_a_restraint_is_the_one_its_force_measures():
+    """Review of eb6f89f (P1). H0 at the centre of the three host anchors, G0 2.1 nm from it and the centre of
+    the ligand 1.8 nm, in a cell of 4 nm: the ligand was taken in the image nearest to the centre of the host
+    anchors and r was 2.103 nm, where the force of the restraint measures 1.903 nm across the boundary; the
+    restraint had an energy of 83 kJ/mol at its own reference (k_r 10 kcal/mol/A^2). The ligand is taken in the
+    image in which G0 is nearest to H0."""
+    from cufep.alchemy.restraints import measure_anchors
+
+    box = np.eye(3) * 4.0
+    host = np.array([[0.0, -0.1, -0.05], [0.0, 0.05, -0.05], [0.0, 0.05, 0.10]])            # their centre is the origin
+    guest = np.array([[2.1, 0.0, 0.0], [2.1, 0.15, 0.0], [1.2, 0.15, 0.15]])                # their centre: x = 1.8
+    positions = np.concatenate([host, guest])
+    assert np.allclose(positions[:3].mean(axis=0), 0.0) and positions[3:].mean(axis=0)[0] == pytest.approx(1.8)
+    measured = measure_anchors((0, 1, 2), (3, 4, 5), [3, 4, 5], positions[None], np.arange(6), box[None], 0.3)
+    assert measured.values[0, 0] == pytest.approx(np.linalg.norm([1.9, 0.1, 0.05]), abs=1e-9)   # 1.903 nm
+    restraint = BoreschRestraint((0, 1, 2), (3, 4, 5), *[float(x) for x in measured.values[0]], K_R, K_A, K_A,
+                                 K_A, K_A, K_A)
+    assert restraint_energy(restraint, positions, box) == pytest.approx(0.0, abs=1e-6)
+    # in every image the ligand is written in
+    for name, shift in lattice_shifts(box).items():
+        moved = positions.copy()
+        moved[3:] += shift
+        again = measure_anchors((0, 1, 2), (3, 4, 5), [3, 4, 5], moved[None], np.arange(6), box[None], 0.3)
+        assert np.allclose(again.values, measured.values, atol=1e-9), name
+
+
+# ---- review of 877ab88 (Codex): the six coordinates as the force of the restraint measures them ------------
+
+def test_the_six_coordinates_of_a_restraint_are_those_its_force_measures_in_any_cell():
+    """Review of 877ab88 (P1). The force of the restraint is periodic: OpenMM takes every displacement between
+    two of its particles by its formula for the minimum image. (1) In the rhombic dodecahedron of 4 nm that is
+    2.935 nm for H0 to G0 of (0.1, 0.2, 1.5) nm, where the nearest image, which the reference was taken from,
+    is 1.517 nm: thousands of kJ/mol at its own reference. (2) Given host anchors need not be bonded: H0 to H1
+    of 2.5 nm in a cube of 4 nm is -1.5 nm for the force, and theta_A is 120 degrees where the written
+    coordinates give 60: 184 kJ/mol. The anchors are laid out as the force sees them, each from the one before."""
+    from cufep.alchemy.restraints import measure_anchors
+
+    skewed = np.array([[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [2.0, 2.0, 2.0 * np.sqrt(2.0)]])
+    h0 = np.array([1.0, 1.0, 0.2])
+    g0 = h0 + [0.1, 0.2, 1.5]             # no component on the edge of a cell, where the formula has a tie
+    far = np.array([h0, h0 + [0.15, 0.0, 0.0], h0 + [0.15, 0.15, 0.0], g0, g0 + [0.0, 0.15, 0.0],
+                    g0 + [0.15, 0.15, 0.15]])
+    s3 = 0.3 * np.sqrt(3.0)
+    apart = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [2.5, 0.0, 0.15], [0.3, s3, 0.0], [0.3, s3, 0.15],
+                      [0.45, s3, 0.15]])
+    as_the_force = float(np.linalg.norm([0.1 - 2.0, 0.2 - 2.0, 1.5 - 2.0 * np.sqrt(2.0)]))
+    assert as_the_force == pytest.approx(2.935, abs=1e-3) and np.linalg.norm([0.1, 0.2, 1.5]) < 1.52
+    for positions, box, r, theta_a in ((far, skewed, as_the_force, None), (apart, CUBE * 0.8, 0.6, 120.0)):
+        measured = measure_anchors((0, 1, 2), (3, 4, 5), [3, 4, 5], positions[None], np.arange(6), box[None], None)
+        assert measured.problem is None
+        assert measured.values[0, 0] == pytest.approx(r, abs=1e-6)
+        if theta_a is not None:
+            assert np.degrees(measured.values[0, 1]) == pytest.approx(theta_a, abs=1e-6)
+        restraint = BoreschRestraint((0, 1, 2), (3, 4, 5), *[float(x) for x in measured.values[0]], K_R, K_A, K_A,
+                                     K_A, K_A, K_A)
+        assert restraint_energy(restraint, positions, box) == pytest.approx(0.0, abs=1e-5)
+
+
+def test_the_ligand_is_next_to_its_nearest_protein_atom_whatever_atom_that_is():
+    """Review of 877ab88 (P1). A cell of 8 nm, one protein that is not wrapped: an acceptor of a side chain at
+    x = 7.82 nm whose C-alpha is at 7.35, a C-alpha of the far surface at 0.65, and the ligand at 8.10, in a
+    hydrogen bond of 0.28 nm with the acceptor. Among the C-alpha atoms alone the nearest is the one of the far
+    surface across the boundary (0.55 nm): the ligand was moved to 0.10 nm and ProLIF saw the acceptor 7.72 nm
+    away. The choice from interactions gives every atom of the protein."""
+    from cufep.alchemy.restraints import ligand_next_to_protein
+
+    box = np.eye(3) * 8.0
+    positions = np.array([[7.35, 0.0, 0.0], [7.82, 0.0, 0.0], [0.65, 0.0, 0.0], [8.10, 0.0, 0.0]])
+    ligand = np.array([3])
+    by_c_alpha = ligand_next_to_protein(positions, ligand, np.array([0, 2]), box)
+    assert by_c_alpha[3, 0] == pytest.approx(0.10) and abs(by_c_alpha[3, 0] - positions[1, 0]) == pytest.approx(7.72)
+    by_every_atom = ligand_next_to_protein(positions, ligand, np.array([0, 1, 2]), box)
+    assert np.allclose(by_every_atom, positions) and by_every_atom[3, 0] - positions[1, 0] == pytest.approx(0.28)

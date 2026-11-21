@@ -721,22 +721,35 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
              pocket_waters=np.zeros(0), notes="[]")
     old_eq = np.load(tmp_path / "old_equil.npz")
     assert equil_in_membrane(old_eq) is False
-    assert equil_contradictions(old_eq, cfg, "complex", False) == []                  # 2 fs used, 4 fs configured
-    assert equil_contradictions(old_eq, config(dynamics={"timestep_fs": 1.0}), "complex", False) \
+
+    def searched_then(**sections):
+        """The selection of those versions (the search), whose pre-equilibration ends with free MD."""
+        return config(restraints={"selection": "auto"}, **sections)
+
+    # under the default of today the pre-equilibration of a complex leg holds the pose that was given and has
+    # no free MD: a file of free MD is not one of it
+    held = "the solute during the pre-equilibration: free -> held (restraints.selection: interactions)"
+    assert equil_contradictions(old_eq, cfg, "complex", False) == ["length of the MD: 5 ns -> 0 ns", held]
+    assert equil_contradictions(old_eq, searched_then(), "complex", False) == []     # 2 fs used, 4 fs configured
+    assert equil_contradictions(old_eq, searched_then(dynamics={"timestep_fs": 1.0}), "complex", False) \
         == ["time step: 2 fs -> 1 fs"]
-    assert equil_contradictions(old_eq, config(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}}),
+    assert equil_contradictions(old_eq, searched_then(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}}),
                                 "complex", False) == ["length of the MD: 5 ns -> 1 ns"]
-    assert equil_contradictions(old_eq, config(membrane={"enabled": True}), "complex", True) \
+    assert equil_contradictions(old_eq, searched_then(membrane={"enabled": True}), "complex", True) \
         == ["length of the MD: 5 ns -> 10 ns", "bilayer: no -> yes"]
     np.savez(tmp_path / "old_membrane.npz", timestep_fs=4.0, simulated_ns=15.0, area_nm2=np.full(40, 66.0),
              pocket_waters=np.full(40, 6.0))
     old_membrane = np.load(tmp_path / "old_membrane.npz")
     assert equil_in_membrane(old_membrane) is True
-    assert equil_contradictions(old_membrane, config(membrane={"enabled": True}), "complex", True) == []   # extended
-    assert "bilayer: yes -> no" in equil_contradictions(old_membrane, cfg, "complex", False)
+    # the 10 ns of a bilayer are as long as those the default asks for, and were free: a file without a record
+    # is not the pre-equilibration that holds the solute (the fourth pass of Codex: it was used, and the MD for
+    # the restraint started from the end of 10 ns of free MD)
+    assert equil_contradictions(old_membrane, config(membrane={"enabled": True}), "complex", True) == [held]
+    assert equil_contradictions(old_membrane, searched_then(membrane={"enabled": True}), "complex", True) == []
+    assert "bilayer: yes -> no" in equil_contradictions(old_membrane, searched_then(), "complex", False)
     np.savez(tmp_path / "older.npz", timestep_fs=4.0, simulated_ns=5.0)          # a file that does not tell
     assert equil_in_membrane(np.load(tmp_path / "older.npz")) is None
-    assert equil_contradictions(np.load(tmp_path / "older.npz"), cfg, "complex", False) == []
+    assert equil_contradictions(np.load(tmp_path / "older.npz"), searched_then(), "complex", False) == []
     # review of 037bdf1 (P2): versions before revision 15 integrated whole frame intervals of 20 ps and recorded the
     # length asked for. A file of 50 ps holds 40 ps and is refused whatever its record says; one of today holds 50 ps
     from cufep.workflow import check_equil_file, leg_seed
@@ -757,23 +770,106 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     np.savez(tmp_path / "whole.npz", timestep_fs=4.0, simulated_ns=0.04,
              made_with=json.dumps(equil_made_with(whole, "solvent", False, seed)))
     assert check_equil_file(np.load(tmp_path / "whole.npz"), tmp_path / "whole.npz", whole, "solvent", False, seed)
+    # the platform is part of the record (review of eb6f89f: a pre-equilibration on the Reference platform was used
+    # by a run on the CPU platform). A file of a version that recorded none says nothing of its platform and is
+    # used as before, on whatever platform (review of 877ab88: it was taken for one of CUDA)
+    on_reference = config(sampling={"pre_equilibration": {"solvent": {"md_ns": 0.04}}},
+                          backend={"name": "openmm", "platform": "Reference"})
+    on_cpu = config(sampling={"pre_equilibration": {"solvent": {"md_ns": 0.04}}},
+                    backend={"name": "openmm", "platform": "CPU"})
+    record = equil_made_with(on_reference, "solvent", False, seed)
+    assert record["platform"] == "Reference"
+    np.savez(tmp_path / "reference.npz", timestep_fs=4.0, simulated_ns=0.04, made_with=json.dumps(record))
+    assert check_equil_file(np.load(tmp_path / "reference.npz"), tmp_path / "reference.npz", on_reference, "solvent",
+                            False, seed)
+    with pytest.raises(WorkflowError, match="platform: Reference -> CPU"):
+        check_equil_file(np.load(tmp_path / "reference.npz"), tmp_path / "reference.npz", on_cpu, "solvent", False,
+                         seed)
+    earlier = {key: value for key, value in record.items() if key != "platform"}
+    np.savez(tmp_path / "earlier.npz", timestep_fs=4.0, simulated_ns=0.04, made_with=json.dumps(earlier))
+    for cfg_now in (on_reference, on_cpu):
+        assert check_equil_file(np.load(tmp_path / "earlier.npz"), tmp_path / "earlier.npz", cfg_now, "solvent", False,
+                                seed)
+    # the fifth pass of Codex: the first two commits that held the solute (720cdb1, 48213b7) recorded md_ns, which
+    # such a pre-equilibration does not have and its record no longer holds. Their files are this pre-equilibration
+    # (the two example runs of 720cdb1 were refused: "pre_equilibration.md_ns: 5.0 -> not given"); a file of free
+    # MD is not, whatever its md_ns
+    holding = config()
+    seed = leg_seed(holding, 0, "complex")
+    record = equil_made_with(holding, "complex", False, seed)
+    assert record["solute_held"] is True and "md_ns" not in record["pre_equilibration"]
+    of_720cdb1 = {**record, "pre_equilibration": {**record["pre_equilibration"], "md_ns": 5.0}}
+    np.savez(tmp_path / "held.npz", timestep_fs=4.0, simulated_ns=0.0, simulated_ns_is_integrated=True,
+             made_with=json.dumps(of_720cdb1))
+    assert check_equil_file(np.load(tmp_path / "held.npz"), tmp_path / "held.npz", holding, "complex", False, seed)
+    free = {key: value for key, value in of_720cdb1.items() if key != "solute_held"}
+    np.savez(tmp_path / "free.npz", timestep_fs=4.0, simulated_ns=5.0, simulated_ns_is_integrated=True,
+             made_with=json.dumps(free))
+    with pytest.raises(WorkflowError, match="md_ns: 5.0 -> not given; solute_held: not recorded -> True"):
+        check_equil_file(np.load(tmp_path / "free.npz"), tmp_path / "free.npz", holding, "complex", False, seed)
+    # the precision the file says its MD ran in is the one of the platform where the platform has its own (the
+    # fourth pass of Codex: a run on the Reference platform, which is double, was recorded as mixed)
+    from cufep.workflow import precision_that_ran
+
+    assert precision_that_ran(on_reference, "openmm") == "that of the Reference platform"
+    assert precision_that_ran(config(backend={"precision": "double"}), "cupotential") == "mixed"
+    assert precision_that_ran(config(backend={"precision": "double"}), "openmm") == "double"
     # the restraint of such a version: all six force constants it holds (kJ/mol/nm^2 and kJ/mol/rad^2)
     angles = {key: 80.0 * 4.184 for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")}
     old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0,
                                    **angles},
                      "info": {"selection": "auto", "force_constants": "openfe"}}
-    assert restraint_contradictions(old_restraint, cfg) == []
-    assert restraint_contradictions(old_restraint, config(restraints={"force_constants": "auto"})) \
+
+    def searched(**settings):
+        """A configuration with the selection of those versions, the search (the default until 2026-11-21)."""
+        return config(restraints={"selection": "auto", **settings})
+
+    assert restraint_contradictions(old_restraint, searched()) == []
+    assert restraint_contradictions(old_restraint, searched(force_constants="auto")) \
         == ["restraints.force_constants: openfe -> auto"]
-    assert restraint_contradictions(old_restraint, config(restraints={"k_r_kcal_per_A2": 20.0})) \
+    # the selection "interactions" came later, with settings of its own. The record of a restraint of another
+    # selection is what it was before (commit cda6965), so that the restraints of earlier runs stay usable; a
+    # restraint of the search is not one of a run that chooses from interactions, recorded or not
+    from_md = config()
+    assert from_md.restraints.selection == "interactions"
+    assert restraint_made_with(searched()) == {
+        "type": "boresch", "selection": "auto", "force_constants": "openfe", "k_r_kcal_per_A2": 10.0,
+        "k_angle_kcal_per_rad2": 80.0, "host_atoms": None, "guest_atoms": None, "rmsf_cutoff_nm": 0.1,
+        "host_min_distance_nm": 0.5, "host_max_distance_nm": 1.5, "dssp_filter": True}
+    assert restraint_made_with(from_md)["interactions"] == {
+        "trajectories": 4, "length_ns": 3.0, "discard_ns": 1.0, "frame_interval_ps": 10.0, "min_frame_fraction": 0.4,
+        "angle_range_deg": [45.0, 135.0], "stable_structure_fraction": 0.5, "second_interaction_ratio": 0.6,
+        "fallback_frame_fraction": 0.15, "fallback_cutoff_nm": 1.0}
+    # the settings of a record are compared as they are (reviews of eb6f89f and 877ab88: with a tolerance of
+    # 1e-9, 0.3999999999 and 0.4 were one setting, which is 319 and 320 frames; a rank that turns over at
+    # stable_structure_fraction 0.5 and not at 0.4999999999; a frame every 2500 and every 2501 steps; and the
+    # seeds 1000000000 and 1000000001 were one seed, whose trajectories were used together)
+    for section, key, one, other in (("interactions", "min_frame_fraction", 0.3999999999, 0.4),
+                                     ("interactions", "stable_structure_fraction", 0.4999999999, 0.5),
+                                     ("interactions", "frame_interval_ps", 10.0019999999, 10.0020000001)):
+        records = [restraint_made_with(config(restraints={section: {key: value}})) for value in (one, other)]
+        assert settings_differences(*records) == [f"{section}.{key}: {one} -> {other}"]
+    assert settings_differences({"seed": 1000000000}, {"seed": 1000000001}) == ["seed: 1000000000 -> 1000000001"]
+    assert settings_differences({"k": 4, "range": [45.0, 135]}, {"k": 4.0, "range": (45, 135.0)}) == []
+    assert restraint_contradictions(old_restraint, from_md) == ["restraints.selection: auto -> interactions"]
+    with pytest.raises(WorkflowError, match="selection: auto -> interactions"):
+        check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(searched()),
+                        restraint_made_with(from_md))
+    assert check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(from_md),
+                           restraint_made_with(config(restraints={"selection": "interactions"})))
+    with pytest.raises(WorkflowError, match="interactions.length_ns: 3.0 -> 2.0"):
+        check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(from_md),
+                        restraint_made_with(config(restraints={"selection": "interactions",
+                                                               "interactions": {"length_ns": 2.0}})))
+    assert restraint_contradictions(old_restraint, searched(k_r_kcal_per_A2=20.0)) \
         == ["restraints.k_r_kcal_per_A2: 10 -> 20"]
     # review of PR 1: the distance constant kept and the angle constant changed from 80 to 20 went through
-    assert restraint_contradictions(old_restraint, config(restraints={"k_angle_kcal_per_rad2": 20.0})) == [
+    assert restraint_contradictions(old_restraint, searched(k_angle_kcal_per_rad2=20.0)) == [
         "restraints.k_angle_kcal_per_rad2: k_theta_a 80, k_theta_b 80, k_phi_a 80, k_phi_b 80, k_phi_c 80 -> 20"]
     one_differs = {"restraint": dict(old_restraint["restraint"], k_phi_b=40.0 * 4.184), "info": old_restraint["info"]}
-    assert restraint_contradictions(one_differs, cfg) == ["restraints.k_angle_kcal_per_rad2: k_phi_b 40 -> 80"]
+    assert restraint_contradictions(one_differs, searched()) == ["restraints.k_angle_kcal_per_rad2: k_phi_b 40 -> 80"]
     only_distance = {"restraint": {"k_r": 10.0 * 4.184 * 100.0}, "info": old_restraint["info"]}
-    assert restraint_contradictions(only_distance, config(restraints={"k_angle_kcal_per_rad2": 20.0})) == []
+    assert restraint_contradictions(only_distance, searched(k_angle_kcal_per_rad2=20.0)) == []
     assert restraint_contradictions(old_restraint, config(restraints={
         "selection": "manual", "host_atoms": [1, 2, 9], "guest_atoms": [4, 5, 6]})) \
         == ["restraints.selection: auto -> manual", "restraints.host_atoms: [1, 2, 3] -> [1, 2, 9]"]
@@ -802,11 +898,20 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         check_restraint_file(of_64751ca, tmp_path / "restraint.json", manual_auto)
     with pytest.raises(WorkflowError, match="did not record what it was made from"):
         check_restraint_file(manual, tmp_path / "restraint.json", manual_auto)   # without a record: as before
-    # a file of today records its constants: used, and no contradiction is made up for it
+    # a file of today records its constants and the rule its anchors were held to: used, and no contradiction is
+    # made up for it
+    from cufep.workflow import FLAT_ANGLE_RULE
+
     today = {"restraint": dict(old_restraint["restraint"]), "made_with": restraint_made_with(manual_auto),
-             "info": {"selection": "manual", "force_constants": "auto"}}
+             "info": {"selection": "manual", "force_constants": "auto", "flat_angle_rule": FLAT_ANGLE_RULE}}
     assert check_restraint_file(today, tmp_path / "restraint.json", manual_auto) is True
     assert restraint_contradictions(today, manual_auto) == []
+    # one with constants from fluctuations of a version that asked OpenFE's rule of the flat angle with the
+    # configured constants (review of 877ab88: theta_A at 30 degrees passed with 80 kcal/mol/rad^2, the restraint
+    # got 20, 4.6 kT from a straight line, and a later version went on to sample with it)
+    before = dict(today, info={"selection": "manual", "force_constants": "auto"})
+    with pytest.raises(WorkflowError, match="held the anchors to OpenFE's rule of the flat angle with the configured"):
+        check_restraint_file(before, tmp_path / "restraint.json", manual_auto)
     manual_openfe = config(restraints={"selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6]})
     assert check_restraint_file(dict(manual, made_with=restraint_made_with(manual_openfe)), tmp_path / "restraint.json",
                                 manual_openfe) is True                            # the configured constants were asked
@@ -814,12 +919,15 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     # pre-equilibration and restraint of a leg
     eq = equil_made_with(cfg, "complex", False, 7)
     longer = config(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}})
-    assert settings_differences(eq, equil_made_with(longer, "complex", False, 7)) == [
-        "pre_equilibration.md_ns: 5.0 -> 1.0"
-    ]
-    assert settings_differences(eq, equil_made_with(longer, "solvent", False, 7))[0].startswith(
-        "pre_equilibration.md_ns"
-    )
+    # the free MD of a pre-equilibration is a setting of the selections that have it (the search here)
+    searched_longer = config(restraints={"selection": "auto"},
+                             sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}})
+    assert settings_differences(equil_made_with(searched(), "complex", False, 7),
+                                equil_made_with(searched_longer, "complex", False, 7)) == [
+        "pre_equilibration.md_ns: 5.0 -> 1.0"]
+    assert settings_differences(eq, equil_made_with(longer, "complex", False, 7)) == []
+    assert "pre_equilibration.md_ns: not recorded -> 0.5" in settings_differences(
+        eq, equil_made_with(longer, "solvent", False, 7))
     assert settings_differences(
         eq, equil_made_with(config(thermodynamics={"temperature_K": 310.0}), "complex", False, 7)
     ) == ["temperature_K: 298.15 -> 310.0"]
@@ -828,6 +936,30 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         == ["membrane_equilibration_ns: 10.0 -> 20.0"]
     with pytest.raises(WorkflowError, match="the pre-equilibration of this leg in .*equil.npz cannot be used again"):
         check_made_from("the pre-equilibration of this leg", tmp_path / "equil.npz", eq, in_membrane)
+    # backend.fallback decides whether the pre-equilibration may be repeated on stock OpenMM: a file made with the
+    # fallback is not one of a run without it (review of f5a77ce: "no difference: the file is used"). The record
+    # of a run with it is the one every earlier version wrote, whose files stay usable
+    without_fallback = equil_made_with(config(backend={"fallback": "none"}), "complex", False, 7)
+    assert settings_differences(eq, without_fallback) == ["fallback: not recorded -> none"]
+    assert "fallback" not in eq
+    # plain MD runs in single precision where it is asked (the owner's decision of 2026-11-21). Earlier versions
+    # ran it in mixed precision then and recorded "single": such a file is not one of an MD in single precision
+    single = equil_made_with(config(backend={"precision": "single"}), "complex", False, 7)
+    earlier = {key: value for key, value in single.items() if key != "plain_md_precision"}
+    assert earlier == dict(eq, precision="single")                      # what an earlier version recorded
+    assert settings_differences(earlier, single) == ["plain_md_precision: not recorded -> single"]
+    assert "plain_md_precision" not in eq
+    # double asked of the plugin, which has none: earlier versions ran that MD on stock OpenMM in double
+    # precision and recorded cupotential and double; the plugin runs it in mixed precision now (review of eb6f89f)
+    double = equil_made_with(config(backend={"precision": "double"}), "complex", False, 7)
+    assert double["backend"] == "cupotential" and double["plain_md_precision"] == "mixed"
+    stock = equil_made_with(config(backend={"name": "openmm", "precision": "double"}), "complex", False, 7)
+    assert "plain_md_precision" not in stock
+    # the platform is part of the record, as it is of a trajectory for the restraint: a pre-equilibration on
+    # the Reference platform was used again by a run on the CPU platform. A record without it is one of CUDA
+    on_cpu = equil_made_with(config(backend={"name": "openmm", "platform": "CPU"}), "complex", False, 7)
+    reference = equil_made_with(config(backend={"name": "openmm", "platform": "Reference"}), "complex", False, 7)
+    assert settings_differences(reference, on_cpu) == ["platform: Reference -> CPU"] and eq["platform"] == "CUDA"
     stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0}))
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 

@@ -117,21 +117,67 @@ class SolvationConfig(_Section):
     padding_solvent_nm: float = 1.5
 
 
+class InteractionsConfig(_Section):
+    """``restraints.selection: interactions``: the MD from which the anchors are chosen and the
+    thresholds of the rule, with the numbers of Ding et al. (arXiv:2603.22274 v3, sec. 2.1 and
+    2.4; ``docs/configuration.md`` quotes them)."""
+
+    #: unrestrained NPT trajectories of the complex, each from the end of the pre-equilibration
+    trajectories: int = Field(default=4, ge=1)
+    length_ns: float = Field(default=3.0, gt=0)
+    #: the first part of every trajectory that is not analysed
+    discard_ns: float = Field(default=1.0, ge=0)
+    frame_interval_ps: float = Field(default=10.0, gt=0)
+    #: an interaction is kept if it is there in this fraction of the analysed frames; the angles
+    #: of a set of anchors must be in range in as many
+    min_frame_fraction: float = Field(default=0.40, gt=0, le=1)
+    #: the range of the angles L1-L2-L3 and P1-L1-L2 (and of the frames that give reference values)
+    angle_range_deg: tuple[float, float] = (45.0, 135.0)
+    #: a residue counts as of stable secondary structure if it is in more than this fraction of the frames
+    stable_structure_fraction: float = Field(default=0.5, ge=0, le=1)
+    #: a residue with two interactions: the second in more than this fraction of the frames of the first
+    second_interaction_ratio: float = Field(default=0.6, ge=0, le=1)
+    #: without anchors from interactions: the backbone nearest to the ligand, within this distance
+    #: in this fraction of the frames
+    fallback_frame_fraction: float = Field(default=0.15, gt=0, le=1)
+    fallback_cutoff_nm: float = Field(default=1.0, gt=0)
+
+    @model_validator(mode="after")
+    def _something_is_analysed(self):
+        if not self.discard_ns < self.length_ns:
+            raise ValueError(f"restraints.interactions.discard_ns = {self.discard_ns:g} ns leaves nothing of a "
+                             f"trajectory of length_ns = {self.length_ns:g} ns to analyse")
+        low, high = self.angle_range_deg
+        if not 0.0 <= low < high <= 180.0:
+            raise ValueError(f"restraints.interactions.angle_range_deg must be two angles between 0 and 180 degrees, "
+                             f"the lower first, not {list(self.angle_range_deg)}")
+        return self
+
+
 class RestraintConfig(_Section):
     type: Literal["boresch"] = "boresch"
-    selection: Literal["auto", "manual"] = "auto"
-    #: openfe or custom: the two values below; auto: kT / sigma^2 of each restrained coordinate in
-    #: the pre-equilibration, kept within 0.25-4 times the two values' defaults
+    #: interactions: anchors from the protein-ligand interactions of unrestrained MD of the complex
+    #: (the section ``interactions``); auto: anchors with the smallest fluctuations in the
+    #: pre-equilibration (the search of OpenFE); manual: host_atoms and guest_atoms
+    selection: Literal["interactions", "auto", "manual"] = "interactions"
+    #: openfe or custom: the two values below; auto: kT / sigma^2 of each restrained coordinate over
+    #: the frames the restraint is made from (the pre-equilibration; with selection interactions the
+    #: analysed frames of the MD for the restraint), kept within 0.25-4 times the two values' defaults
     force_constants: Literal["openfe", "auto", "custom"] = "openfe"
     k_r_kcal_per_A2: float = 10.0
     k_angle_kcal_per_rad2: float = 80.0
     #: manual selection: atom indices in the prepared complex (H0,H1,H2 / G0,G1,G2)
     host_atoms: list[int] | None = None
     guest_atoms: list[int] | None = None
+    #: the four settings of the search of selection auto
     rmsf_cutoff_nm: float = 0.1
     host_min_distance_nm: float = 0.5
+    #: also, for every selection: the backbone atoms within this distance + 0.5 nm of the ligand are
+    #: the binding site in which ``ligand_rmsd_from_input_A`` is measured
     host_max_distance_nm: float = 1.5
     dssp_filter: bool = True
+    #: selection interactions only
+    interactions: InteractionsConfig = Field(default_factory=InteractionsConfig)
 
     @model_validator(mode="after")
     def _manual_anchors(self):
@@ -501,7 +547,43 @@ def configuration_problems(cfg: "Config") -> list[str]:
     water = water_problem(cfg.forcefield.water, membrane=bool(cfg.membrane.enabled))
     if water:
         problems.append(water)
+    if cfg.restraints.selection == "interactions":
+        # the thresholds of the rule are numbers of frames, rounded down: none of them may be no frame
+        n = analysed_frames(cfg)
+        ri = cfg.restraints.interactions
+        for name, fraction in (("min_frame_fraction", ri.min_frame_fraction),
+                               ("fallback_frame_fraction", ri.fallback_frame_fraction)):
+            if frames_needed(n, fraction) < 1:
+                problems.append(
+                    f"restraints.interactions: {n} frame(s) are analysed ({ri.trajectories} trajectories of "
+                    f"{ri.length_ns:g} ns, the first {ri.discard_ns:g} ns left out, a frame every "
+                    f"{ri.frame_interval_ps:g} ps) and {name} = {fraction:g} of them is less than one frame: an "
+                    "interaction in no frame would be kept. Run longer trajectories or keep frames more often")
     return problems
+
+
+def frames_needed(n_frames: int, fraction: float) -> int:
+    """The number of frames that ``fraction`` of ``n_frames`` is, rounded down ("frame-count
+    thresholds are rounded down to integers in both selection methods"): of the fraction as it is
+    written. 0.29 of 800 frames is 232; the product of the two binary numbers is
+    231.99999999999997, and its integer part kept an interaction of 231 frames (review of
+    eb6f89f). One rounding for the rule, the check of the configuration and ``cufep plan``."""
+    from fractions import Fraction
+
+    return int(Fraction(repr(float(fraction))) * int(n_frames))
+
+
+def analysed_frames(cfg: "Config") -> int:
+    """The frames that ``restraints.selection: interactions`` analyses at the time step of the
+    configuration: those of every trajectory that are later than ``discard_ns`` (a frame after
+    every interval and one at the end, in whole MD steps)."""
+    from cufep.steps import md_steps
+
+    ri = cfg.restraints.interactions
+    dt = float(cfg.dynamics.timestep_fs)
+    steps, per_frame = md_steps(ri.length_ns * 1000.0, dt), md_steps(ri.frame_interval_ps, dt)
+    times = [min((i + 1) * per_frame, steps) * dt / 1000.0 for i in range(-(-steps // per_frame))]
+    return int(ri.trajectories) * sum(1 for t in times if t > ri.discard_ns * 1000.0 + 1e-9)
 
 
 #: Settings that earlier versions wrote (``cufep init --full``, ``resolved_config.yaml``) and

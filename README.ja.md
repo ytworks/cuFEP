@@ -42,7 +42,8 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
   で変えられます。
 - **水溶性タンパク質と膜タンパク質。** `membrane: {enabled: true}` で、複合体の向きを決めて POPC の
   脂質二重膜に埋め込みます。膜を付けるかどうかを cuFEP が自分で判断することはありません。
-- **確立したプロトコル。** 自動で選ぶ Boresch restraints による double decoupling、リガンドと
+- **確立したプロトコル。** 複合体の MD でのタンパク質とリガンドの相互作用から自動で選ぶ
+  Boresch restraints による double decoupling、リガンドと
   ポケットに REST2 をかけた Hamiltonian replica exchange、MBAR。既定値と用語は文献と公開された
   方法に合わせ、各既定値の出典を文書に書いています。
 - **lambda window。** 既定は adaptive lambda scheduling (Midgley ら 2025)。leg と stage ごとに
@@ -66,9 +67,12 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
    鎖の切れ目にはキャップを付け、欠けたループはモデリングしません。リガンドのパラメータは
    OpenFF 2.2.1 と AM1-BCC 電荷です。系は水で溶媒和するか、二重膜に埋め込みます
    ([protocol: Inputs](docs/protocol.md#inputs)、[Systems](docs/protocol.md#systems))。
-2. **pre-equilibration。** 相互作用がすべてある系で、最小化、NVT、NPT のあと、complex leg では 5 ns
-   の MD を行います。
-3. **Boresch restraint** をその軌跡から OpenFE の規則で選びます
+2. **pre-equilibration。** 相互作用がすべてある系で、最小化、NVT、NPT を行います。complex leg では、
+   溶媒が落ち着くまでタンパク質とリガンドを与えられたポーズに保ちます。二重膜の系ではそのあとさらに
+   10 ns、同じく保ったまま走らせます。
+3. **Boresch restraint。** 複合体の拘束なしの軌跡 4 本 (各 3 ns) を ProLIF で解析し、タンパク質と
+   リガンドの相互作用のうち続いているものからアンカーを選びます (Ding ら 2026)。
+   `restraints.selection: auto` では、代わりに手順 2 の軌跡から OpenFE の規則で選びます
    ([Steps of one leg](docs/protocol.md#steps-of-one-leg))。
 4. **lambda window** を adaptive lambda scheduling で決めます。短い前計算で、隣り合う window の
    overlap が足りるまで window を差し込みます
@@ -146,7 +150,7 @@ RESULT ejm_31: dG_bind = ... ± ... kcal/mol (standard error from time blocks, 1
 | `protein_prepared.pdb` | 計算に使ったタンパク質 |
 | `summary.csv`、`summary.json` | 結合自由エネルギー、不確かさ、メッセージ |
 | `timing.json` | 段階とジョブごとの時間、GPU の使用率 |
-| `<ligand>/repeat_<n>/<leg>/` | leg の restraint、lambda window (`schedule.yaml`)、標本、結果 (`result.json`)、ログ |
+| `<ligand>/repeat_<n>/<leg>/` | leg の restraint、lambda window (`schedule.yaml`)、標本、結果 (`result.json`)、ログ。complex leg には restraint を選んだ軌跡 (`restraint_md/`) とその相互作用 (`interactions.json`、`interactions.csv`、`interactions.png`) も |
 | `<ligand>/repeat_<n>/analysis.png` | 両 leg の forward と reverse の系列、production の前半と後半とブロック、overlap matrix |
 
 既定では、リガンドごとに 1 回だけ計算します。不確かさは、報告する自由
@@ -257,7 +261,9 @@ cufep benchmark run tyk2 --tier smoke
 2 つの example は lambda window あたり 5 ns の production を設定しています (既定は 10 ns)。それ以外の
 設定は既定値です。各 example のリガンドはそのベンチマークセットに入っており、全セットのベンチマーク
 計算では TYK2 ejm_31 が -9.84 ± 0.33 kcal/mol、A2A 4e が -18.91 ± 0.52 kcal/mol でした (1 回の計算
-の標準誤差。[benchmarks/results](benchmarks/results/README.md))。以前のコミットで同じ設定で各 example を
+の標準誤差。[benchmarks/results](benchmarks/results/README.md))。これらの計算と次の 2 つは、拘束を
+`restraints.selection: auto` (当時の既定) で選んでいます。上のコマンドは現在、相互作用から選びます
+(`interactions`)。その設定での example の結果は [PROGRESS.md](PROGRESS.md) にあります。以前のコミットで同じ設定で各 example を
 1 回計算したときは -8.94 ± 0.77 と -11.95 ± 0.73 でした ([docs/configuration.md](docs/configuration.md)
 の `sampling.rest2.region`)。complex leg を繰り返し計算した値どうしは、1 回の計算の標準誤差より
 大きく違います ([protocol: REST2](docs/protocol.md#rest2))。
@@ -345,6 +351,9 @@ cuFEP は公表された方法を実装しています。使用した場合は�
   replica exchange with solute tempering (REST2)", J. Phys. Chem. B 2011, 115, 9431。
 - Shirts and Chodera, "Statistically optimal analysis of samples from multiple equilibrium
   states", J. Chem. Phys. 2008, 129, 124105 (MBAR)。
+- Ding, Liu, Wang, Xia, Wang and Yan, "Development and large-scale benchmarks of a
+  protein-ligand absolute binding free energy toolkit", arXiv:2603.22274 (MD の相互作用から選ぶ
+  restraint のアンカー)。
 - Midgley, Bariami, Habgood and Mackey, "Adaptive Lambda Scheduling: A Method for Computational
   Efficiency in Free Energy Perturbation Simulations", J. Chem. Inf. Model. 2025, 65, 512。
 - Klimovich, Shirts and Mobley, "Guidelines for the analysis of free energy calculations",
