@@ -38,6 +38,11 @@ class OtherBackend(StockBackend):
     refuse = False
     fail = False
     contexts = 0
+    precisions: list = []
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        type(self).precisions.append(self.precision)
 
     def check_system(self, system):
         if type(self).refuse:
@@ -53,7 +58,7 @@ class OtherBackend(StockBackend):
 @pytest.fixture
 def other_backend(monkeypatch):
     """``get_backend`` gives :class:`OtherBackend` for cupotential and counts what it gives."""
-    OtherBackend.refuse, OtherBackend.fail, OtherBackend.contexts = False, False, 0
+    OtherBackend.refuse, OtherBackend.fail, OtherBackend.contexts, OtherBackend.precisions = False, False, 0, []
     asked = []
     made = equilibrate.get_backend
 
@@ -85,9 +90,12 @@ def test_a_backend_that_cannot_run_the_system_leaves_the_md_to_stock_openmm(othe
     OtherBackend.refuse = True
     lines = []
     result = equilibrate.pre_equilibrate(system, positions, box, list(range(8)), settings(), None, lines.append)
-    assert OtherBackend.contexts == 0 and result.frames.shape[0] == 4
+    assert OtherBackend.contexts == 0 and result.frames.shape[0] == 4 and result.backend == "openmm"
     assert lines == ["pre-equilibration MD on stock OpenMM (cupotential cannot run it: this System is not for the "
                      "plugin)"]
+    # the result says so too, as it does for a run that failed (a recovery is in the log and the result)
+    assert result.notes == ["the pre-equilibration MD ran on stock OpenMM: cupotential cannot run it (this System is "
+                            "not for the plugin)"]
 
 
 def test_an_md_that_fails_on_the_backend_is_repeated_on_stock_openmm_and_says_so(other_backend):
@@ -146,3 +154,56 @@ def test_the_plain_md_of_a_leg_takes_its_settings_from_the_configuration():
                                     "backend": {"precision": "single"}})
     assert plain_md_settings(single, 4.0, "isotropic", 1).precision == "mixed"
     assert plain_md_settings(single, 4.0, "isotropic", 1).md_backend == "cupotential"
+
+
+def configured(fallback="openmm", precision="mixed"):
+    """The settings of a short plain MD as a configuration with this ``backend`` section gives them."""
+    from cufep.config.schema import Config
+    from cufep.workflow import plain_md_settings
+
+    cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+                                 "backend": {"name": "cupotential", "fallback": fallback, "precision": precision}})
+    made = plain_md_settings(cfg, 4.0, "isotropic", 3, nvt_ns=0.0001, npt_ns=0.0001, production_ns=0.0004,
+                             frame_interval_ps=0.1, minimize_iterations=20)
+    made.platform = "Reference"                 # the tests have no GPU; the backend is OtherBackend
+    return made
+
+
+def test_without_a_fallback_a_backend_that_cannot_run_the_md_stops_the_leg(other_backend):
+    """``backend.fallback: none`` holds for the plain MD of a leg as for its alchemical run: stock
+    OpenMM does not take over. Before this was so, the MD moved to stock OpenMM whatever the
+    setting, and only the log said so."""
+    system, positions, box = small_system()
+    OtherBackend.refuse = True
+    lines = []
+    with pytest.raises(BackendError, match="cannot run the pre-equilibration MD .* and backend.fallback is none"):
+        equilibrate.pre_equilibrate(system, positions, box, list(range(8)), configured("none"), None, lines.append)
+    assert lines == [] and OtherBackend.contexts == 0
+    # with the fallback of the default, stock OpenMM runs it
+    assert equilibrate.pre_equilibrate(system, positions, box, list(range(8)), configured(), None,
+                                       lines.append).backend == "openmm"
+
+
+def test_without_a_fallback_an_md_that_fails_on_the_backend_is_not_repeated_on_stock_openmm(other_backend):
+    system, positions, box = small_system()
+    OtherBackend.fail = True
+    lines = []
+    with pytest.raises(equilibrate.EquilibrationError, match=r"failed at every time step tried .*the plugin stopped"):
+        equilibrate.pre_equilibrate(system, positions, box, list(range(8)), configured("none"), None, lines.append)
+    assert lines[0] == ("pre-equilibration MD failed on cupotential (the plugin stopped); backend.fallback is none, "
+                        "so it is not repeated on stock OpenMM")
+    assert not [line for line in lines if "repeating it on stock OpenMM" in line]
+
+
+def test_the_plain_md_runs_the_backend_in_the_precision_of_the_alchemical_run(other_backend):
+    """The plugin has no double precision: asked for it, the alchemical run of a leg uses the plugin
+    in mixed precision. So does its plain MD (it gave the plugin "double", which the plugin refuses,
+    and ran on stock OpenMM instead)."""
+    system, positions, box = small_system()
+    result = equilibrate.pre_equilibrate(system, positions, box, list(range(8)), configured(precision="double"),
+                                         None, lambda line: None)
+    assert OtherBackend.precisions == ["mixed"] and result.backend == "cupotential"
+    from cufep.backends.base import backend_precision
+
+    assert [backend_precision("cupotential", p) for p in ("mixed", "single", "double")] == ["mixed", "single", "mixed"]
+    assert [backend_precision("openmm", p) for p in ("mixed", "single", "double")] == ["mixed", "single", "double"]

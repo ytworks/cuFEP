@@ -128,7 +128,11 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
 
 1. Pre-equilibration: minimise, 0.25 ns NVT and 0.5 ns NPT on stock OpenMM, then 5 ns NPT
    on the backend of the leg (solvent leg: 0.1, 0.2 and 0.5 ns), with a frame every 20 ps
-   and one at the end. The whole length asked for is integrated, also where it is not a
+   and one at the end. If that backend cannot run the system, or the run fails on it, stock
+   OpenMM runs it from the same start and the log and the result say so; with
+   `backend.fallback: none` it does not, and the leg stops with the reason, as its alchemical
+   run does. The plugin runs this MD in the precision of the alchemical run (mixed where
+   double is asked, which it does not have). The whole length asked for is integrated, also where it is not a
    whole number of frame intervals, and the length integrated is recorded; versions before
    revision 15 integrated whole intervals only (40 ps of 50 ps), and such a file holding less
    than it was made for is not used again. A bilayer system is held

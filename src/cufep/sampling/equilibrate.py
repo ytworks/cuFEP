@@ -5,7 +5,8 @@ frames are used for the restraint search. Minimisation, NVT and NPT run on stock
 (the cuPotential plugin is reported to fail on unminimised coordinates). The production
 run, which is the long part and cannot be spread over GPUs, runs on the backend of the leg
 (``md_backend``); if that backend cannot run the system or fails, it is repeated on stock
-OpenMM and the fact is recorded.
+OpenMM and the fact is recorded, unless ``backend.fallback`` is ``none``: then nothing else runs
+it and the leg stops with the reason, as the alchemical run of the leg does.
 
 Time step: 4 fs with hydrogen mass repartitioning by default. If the run blows up it is
 repeated once from the minimised structure at 2 fs and the fact is recorded.
@@ -24,6 +25,7 @@ import openmm as mm
 import openmm.unit as u
 
 from cufep.backends import get_backend
+from cufep.backends.base import BackendError, backend_precision
 
 
 class EquilibrationError(RuntimeError):
@@ -48,6 +50,8 @@ class EquilibrationSettings:
     seed: int = 0
     #: backend of the production run (the minimisation, NVT and NPT always use stock OpenMM)
     md_backend: str = "openmm"
+    #: what runs the production if ``md_backend`` cannot or fails: openmm | none (backend.fallback)
+    fallback: str = "openmm"
     #: heavy atoms held by harmonic position restraints during NVT/NPT (released for production)
     restrained_atoms: list[int] = field(default_factory=list)
     restraint_k: float = 1000.0            # kJ/mol/nm^2
@@ -174,26 +178,40 @@ def unrestrained_md(system, start, frame_atoms, settings: EquilibrationSettings,
 
     If that backend cannot run the System, stock OpenMM runs it; if the run fails on that backend,
     it is repeated from ``start`` on stock OpenMM, and the log and the notes of the result say so.
-    ``what`` names the MD in those lines. The result records the backend that ran it.
+    With ``settings.fallback`` "none" (``backend.fallback``) stock OpenMM runs neither: a backend
+    that cannot run the System is a :class:`~cufep.backends.base.BackendError`, and the error of a
+    run that fails is passed on (review of the plan of 2026-11-21: this recovery took no notice of
+    the setting, which the alchemical run of the same leg obeys). ``what`` names the MD in those
+    lines. The backend runs in the precision the alchemical run would give it
+    (:func:`~cufep.backends.base.backend_precision`). The result records the backend that ran it.
     """
     stock = get_backend("openmm", precision=settings.precision, platform=settings.platform)
     notes: list[str] = []
     md_backend = stock
     if settings.md_backend != "openmm":
         try:
-            md_backend = get_backend(settings.md_backend, precision=settings.precision, platform=settings.platform)
+            md_backend = get_backend(settings.md_backend, platform=settings.platform,
+                                     precision=backend_precision(settings.md_backend, settings.precision))
             if hasattr(md_backend, "check_system"):
                 probe = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
                 probe.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in start[2]])
                 md_backend.check_system(probe)
         except Exception as exc:  # noqa: BLE001 - any reason the backend cannot run this system
+            if settings.fallback == "none":
+                raise BackendError(f"the {settings.md_backend} backend cannot run the {what} ({str(exc)[:150]}) and "
+                                   "backend.fallback is none") from exc
             log(f"{what} on stock OpenMM ({settings.md_backend} cannot run it: {str(exc)[:150]})")
+            notes.append(f"the {what} ran on stock OpenMM: {settings.md_backend} cannot run it ({str(exc)[:150]})")
             md_backend = stock
     try:
         return _production(system, md_backend, start, frame_atoms, settings, dt_fs, device, log, notes, seed,
                            barostat_seed)
     except (mm.OpenMMException, EquilibrationError) as exc:
         if md_backend is stock:
+            raise
+        if settings.fallback == "none":
+            log(f"{what} failed on {settings.md_backend} ({str(exc)[:150]}); backend.fallback is none, so it is not "
+                "repeated on stock OpenMM")
             raise
         log(f"{what} failed on {settings.md_backend} ({str(exc)[:150]}); repeating it on stock OpenMM")
         notes.append(f"the {what} failed on {settings.md_backend} and was repeated on stock OpenMM")

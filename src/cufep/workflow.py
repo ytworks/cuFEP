@@ -1385,7 +1385,7 @@ def _choose_backend(cfg: Config, system, log) -> tuple[str, list[str]]:
 def plain_md_settings(cfg: Config, timestep_fs: float, barostat: str, seed: int, **parts):
     """The settings of a plain MD of the fully interacting system as the configuration gives them:
     temperature and pressure (``thermodynamics``), friction and the frequency of the barostat
-    (``dynamics``), the backend, its platform and precision (``backend``). ``timestep_fs`` is the
+    (``dynamics``), the backend, its fallback, platform and precision (``backend``). ``timestep_fs`` is the
     time step to begin with, ``barostat`` that of the leg (isotropic | membrane); ``parts`` are the
     lengths and the atoms that only one kind of MD has. The pre-equilibration and the MD from which
     a restraint is chosen take their settings here, so that neither can differ from the YAML.
@@ -1398,13 +1398,13 @@ def plain_md_settings(cfg: Config, timestep_fs: float, barostat: str, seed: int,
         friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs, barostat=barostat,
         barostat_frequency=cfg.dynamics.barostat_frequency, platform=cfg.backend.platform,
         precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
-        md_backend=cfg.backend.name, **parts)
+        md_backend=cfg.backend.name, fallback=cfg.backend.fallback, **parts)
 
 
 def _precision(cfg: Config, backend: str) -> str:
-    if backend == "cupotential" and cfg.backend.precision == "double":
-        return "mixed"
-    return cfg.backend.precision
+    from cufep.backends.base import backend_precision
+
+    return backend_precision(backend, cfg.backend.precision)
 
 
 def run_leg(job: LegJob) -> dict:

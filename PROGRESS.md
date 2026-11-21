@@ -66,6 +66,16 @@ Open items:
 
 ## Change Log
 
+### 2026-11-21 — [amendment] The plain MD of a leg obeys `backend.fallback` and the precision rule
+- What: the unrestrained MD of the pre-equilibration moved to stock OpenMM when the backend
+  could not run it or failed, whatever `backend.fallback` said, and noted only a failure in the
+  result. Now `none` stops the leg with the reason, a backend that cannot run the MD is a note
+  of the result too, and the plugin gets mixed precision where double is asked, as in the
+  alchemical run (it was given "double", refused it, and stock OpenMM ran the MD).
+- Why: found while planning the MD of the restraint, which runs through the same function
+  (`unrestrained_md`); a recovery is always in the log and the result.
+- Refs: `tests/unit/test_plain_md.py`, `docs/protocol.md` ("Steps of one leg", step 1)
+
 ### 2026-11-21 — [design] Plan: the Boresch restraint from the interactions of unrestrained MD
 - What: plan started. A new `restraints.selection: interactions`, to become the default: four
   unrestrained NPT runs of the complex (3 ns each, first 1 ns dropped), ProLIF interactions and
