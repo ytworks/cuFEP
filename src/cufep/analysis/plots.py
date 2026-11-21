@@ -193,8 +193,10 @@ def plot_interactions(leg_dir: str | Path, path: str | Path | None = None) -> Pa
               ha="left" if needed < 0.5 else "right", va="center")
     for k, row in enumerate(rows):
         if basis[k]:
-            bars.text(min(row["fraction"] + 0.02, 0.98), k, f"{row['fraction']:.2f}", color=_INK, fontsize=8,
-                      va="center", ha="left" if row["fraction"] < 0.86 else "right")
+            # the value at the tip of the bar; inside it, in white, where there is no room beyond the tip
+            outside = row["fraction"] < 0.86
+            bars.text(row["fraction"] + (0.02 if outside else -0.02), k, f"{row['fraction']:.2f}",
+                      color=_INK if outside else "#ffffff", fontsize=8, va="center", ha="left" if outside else "right")
     bars.set_yticks(y)
     bars.set_yticklabels(labels, fontsize=8, color=_INK)
     bars.set_ylim(_ROWS_SHOWN - 0.4, -1.3)             # the same slots whatever the number of rows: thin bars
