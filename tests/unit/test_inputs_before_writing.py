@@ -247,3 +247,50 @@ def test_a_restraint_from_interactions_that_cannot_be_chosen_is_refused_before_a
 
     cfg = config(tmp_path / "small.sdf", selection="auto")
     check_interaction_inputs(cfg, ligands_of_run(cfg))
+
+
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer", "prolif", "MDAnalysis")
+def test_only_the_ligands_whose_complex_leg_is_run_need_guest_anchors(tmp_path, repo, monkeypatch):
+    """Review of f5a77ce (P2): with ejm_31 and acetonitrile in the SDF, `cufep run --ligand ejm_31` and
+    `cufep run --ligand ejm_31 --leg solvent` were refused because of acetonitrile ("cannot give acetonitrile a
+    restraint"), whose complex leg they do not run. Asked of a run are the ligands whose complex leg it runs,
+    and without a complex leg not ProLIF either."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep import run as driver
+    from cufep.analysis import interactions
+
+    source = next(iter(Chem.SDMolSupplier(str(write_sdf(tmp_path / "one.sdf", repo, ["ejm_31"])), removeHs=False)))
+    small = Chem.AddHs(Chem.MolFromSmiles("CC#N"))
+    AllChem.EmbedMolecule(small, randomSeed=1)
+    small.SetProp("_Name", "acetonitrile")
+    writer = Chem.SDWriter(str(tmp_path / "two.sdf"))
+    writer.write(source)
+    writer.write(small)
+    writer.close()
+    cfg = config_for(tmp_path, repo, tmp_path / "two.sdf")
+    assert cfg.restraints.selection == "interactions"
+    out = tmp_path / "out"
+
+    class Reached(Exception):
+        """The run went on to its plan: it was not refused before."""
+
+    def no_preparation(*args, **kwargs):
+        raise Reached
+
+    monkeypatch.setattr("cufep.prep.protein.prepare_protein", no_preparation)
+    for options in ({}, {"only_ligands": ["acetonitrile"]}, {"only_legs": ["complex"]}):
+        with pytest.raises(WorkflowError, match="cannot give acetonitrile a restraint"):
+            driver.run(cfg, log=lambda line: None, **options)
+        assert written(out) == []
+    for options in ({"only_ligands": ["ejm_31"]}, {"only_ligands": ["ejm_31"], "only_legs": ["solvent"]},
+                    {"only_legs": ["solvent"]}, {"only_ligands": ["acetonitrile"], "only_legs": ["solvent"]}):
+        with pytest.raises(Reached):
+            driver.run(cfg, log=lambda line: None, **options)
+    # a run of solvent legs alone chooses no restraint and needs no ProLIF
+    monkeypatch.setattr(interactions, "packages_problem", lambda: "ProLIF cannot be imported here")
+    with pytest.raises(Reached):
+        driver.run(cfg, log=lambda line: None, only_ligands=["ejm_31"], only_legs=["solvent"])
+    with pytest.raises(WorkflowError, match="ProLIF cannot be imported here"):
+        driver.run(cfg, log=lambda line: None, only_ligands=["ejm_31"])

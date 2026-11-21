@@ -131,8 +131,11 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    and one at the end. If that backend cannot run the system, or the run fails on it, stock
    OpenMM runs it from the same start and the log and the result say so; with
    `backend.fallback: none` it does not, and the leg stops with the reason, as its alchemical
-   run does. The plugin runs this MD in the precision of the alchemical run (mixed where
-   double is asked, which it does not have). The whole length asked for is integrated, also where it is not a
+   run does. This MD and the MD from which a restraint is chosen never run in single
+   precision: with `backend.precision: single` they run in mixed precision on either backend,
+   which the log says, and only the alchemical run in single (cuFEP's own rule since its
+   first version, without a source). Where double is asked, the plugin, which does not have
+   it, runs them in mixed precision, as it runs the alchemical run. The whole length asked for is integrated, also where it is not a
    whole number of frame intervals, and the length integrated is recorded; versions before
    revision 15 integrated whole intervals only (40 ps of 50 ps), and such a file holding less
    than it was made for is not used again. A bilayer system is held
@@ -164,7 +167,9 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    trajectory) is reported with the result as a number without a level
    (`ligand_rmsd_from_input_A`), as OpenFE reports the ligand RMSD; the run goes on in any
    case, and the result is the free energy of the pose the ligand is in. The same is measured
-   for manual anchors. The RMSD and the drift of the centre of the ligand in the coupled state
+   for manual anchors and for a restraint chosen from interactions: under every selection
+   over the frames of the pre-equilibration, with the backbone atoms within
+   `restraints.host_max_distance_nm` + 0.5 nm of the ligand as the binding site. The RMSD and the drift of the centre of the ligand in the coupled state
    during the production are numbers of the result too (`structure`).
 
    With `restraints.selection: interactions`, the default, the anchors come from the interactions

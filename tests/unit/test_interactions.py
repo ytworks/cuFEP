@@ -381,7 +381,13 @@ def test_the_trajectories_take_the_settings_of_the_yaml_and_the_end_of_the_pre_e
                                  "backend": {"name": "cupotential", "fallback": "none", "precision": "single"}})
     eq = dict(eq, timestep_fs=2.0)                                # the pre-equilibration had lowered it
     made = trajectories_by_hand(monkeypatch, pos)
-    restraint_trajectories(cfg, job, leg_dir, prep, eq, True, 7, lambda line: None)
+    job.devices = [None]                                          # a run without GPUs
+    lines = []
+    restraint_trajectories(cfg, job, leg_dir, prep, eq, True, 7, lines.append)
+    # the log names the GPUs there are (review of f5a77ce: "(GPU None)") and says that single precision is not
+    # that of this MD
+    assert lines[0] == "MD for the restraint: 2 of 2 trajectories of 0.2 ns to run on 1 worker(s)"
+    assert "the plain MD of the leg (pre-equilibration, MD for the restraint) runs in mixed precision" in lines[1]
     for k, task in enumerate(made):
         s = task.settings
         assert (s.md_backend, s.fallback, s.precision, s.platform) == ("cupotential", "none", "mixed", "CUDA")

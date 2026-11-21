@@ -168,9 +168,11 @@ class RestraintConfig(_Section):
     #: manual selection: atom indices in the prepared complex (H0,H1,H2 / G0,G1,G2)
     host_atoms: list[int] | None = None
     guest_atoms: list[int] | None = None
-    #: selection auto only: the four settings of its search
+    #: the four settings of the search of selection auto
     rmsf_cutoff_nm: float = 0.1
     host_min_distance_nm: float = 0.5
+    #: also, for every selection: the backbone atoms within this distance + 0.5 nm of the ligand are
+    #: the binding site in which ``ligand_rmsd_from_input_A`` is measured
     host_max_distance_nm: float = 1.5
     dssp_filter: bool = True
     #: selection interactions only

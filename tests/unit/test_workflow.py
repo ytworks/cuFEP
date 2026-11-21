@@ -856,6 +856,12 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         == ["membrane_equilibration_ns: 10.0 -> 20.0"]
     with pytest.raises(WorkflowError, match="the pre-equilibration of this leg in .*equil.npz cannot be used again"):
         check_made_from("the pre-equilibration of this leg", tmp_path / "equil.npz", eq, in_membrane)
+    # backend.fallback decides whether the pre-equilibration may be repeated on stock OpenMM: a file made with the
+    # fallback is not one of a run without it (review of f5a77ce: "no difference: the file is used"). The record
+    # of a run with it is the one every earlier version wrote, whose files stay usable
+    without_fallback = equil_made_with(config(backend={"fallback": "none"}), "complex", False, 7)
+    assert settings_differences(eq, without_fallback) == ["fallback: not recorded -> none"]
+    assert "fallback" not in eq
     stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0}))
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 

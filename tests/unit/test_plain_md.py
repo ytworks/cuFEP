@@ -95,6 +95,10 @@ def test_the_plain_md_of_a_leg_takes_its_settings_from_the_configuration():
                                     "backend": {"precision": "single"}})
     assert plain_md_settings(single, 4.0, "isotropic", 1).precision == "mixed"
     assert plain_md_settings(single, 4.0, "isotropic", 1).md_backend == "cupotential"
+    # which the log of the leg says (review of f5a77ce: nothing said so, and the protocol said otherwise)
+    from cufep.workflow import plain_md_precision_line
+
+    assert "runs in mixed precision" in plain_md_precision_line(single) and plain_md_precision_line(cfg) is None
 
 
 def configured(fallback="openmm", precision="mixed"):

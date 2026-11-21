@@ -40,9 +40,12 @@ def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, obje
     from cufep.prep.protein import prepare_protein
 
     check_configuration(cfg)
-    # the ligands first: what they are called decides where anything is written
-    ligands = ligands_of_run(cfg) if ligands is None else ligands
-    check_interaction_inputs(cfg, ligands)       # what restraints.selection: interactions needs, before any MD
+    if ligands is None:
+        # the ligands first: what they are called decides where anything is written
+        ligands = ligands_of_run(cfg)
+        # what restraints.selection: interactions needs, before any MD: a plan is of every complex leg.
+        # A run gives its ligands and has checked those whose complex leg it runs (:func:`run`)
+        check_interaction_inputs(cfg, ligands)
     names = [lig.name for lig in ligands]
     if cfg.system.cofactors:
         raise WorkflowError("system.cofactors is not implemented yet in this version")
@@ -109,7 +112,11 @@ def run(cfg: Config, reschedule: bool = False, log=None, only_ligands=None, only
     """
     check_configuration(cfg)                     # before the output directory is made
     ligands = ligands_of_run(cfg, only_ligands)  # so are the names of the ligands
-    check_interaction_inputs(cfg, ligands)       # and what restraints.selection: interactions needs
+    # and what restraints.selection: interactions needs, of the ligands whose complex leg this run runs:
+    # a ligand that is left out (--ligand), or of which only the solvent leg is run (--leg), needs no restraint
+    with_complex_leg = {name for name, _repeat, leg in select_jobs([lig.name for lig in ligands], 1, only_ligands,
+                                                                    only_legs) if leg == "complex"}
+    check_interaction_inputs(cfg, [lig for lig in ligands if lig.name in with_complex_leg])
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)
