@@ -321,7 +321,8 @@ def main() -> None:
             for run in runs:
                 timing = read_json(run / "timing.json") or {}
                 jobs = [job for job in timing.get("jobs", []) if job.get("ligand") == args.ligand]
-                phases = {f"{job.get('leg')}:{k}": round(v) for job in jobs for k, v in (job.get("phases") or {}).items()}
+                phases = {f"{job.get('leg')}:{k}": round(v)
+                          for job in jobs for k, v in (job.get("phases") or {}).items()}
                 per_iteration = {job.get("leg"): round((job.get("sampling") or {}).get("seconds_per_iteration", 0), 3)
                                  for job in jobs}
                 print(f"{name} {label[run]}: wall {round(timing.get('wall_seconds', 0))} (the whole run); {phases}; "
