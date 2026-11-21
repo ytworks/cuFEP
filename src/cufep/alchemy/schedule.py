@@ -292,7 +292,7 @@ class AlsSettings:
     #: when the windows are run at the same time by a pool of workers: MD per window of the walk
     #: through the initial windows that gives each of them a start configuration
     walk_ps: float = 5.0
-    max_windows: int = 48
+    max_windows: int = 100
     #: REST2: temperature scale of the hot region in the middle of the leg (1 = no REST2). The
     #: windows of the precalculation carry the scale of their place along the leg, and so do
     #: the candidates whose energies are recorded.

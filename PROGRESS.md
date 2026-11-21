@@ -77,6 +77,16 @@ Open items:
 
 ## Change Log
 
+### 2026-11-21 — [design] `lambda_schedule.adaptive.max_windows` is 100 in both legs
+- What: the largest number of lambda windows of a leg in adaptive lambda scheduling goes from 48
+  (complex) and 32 (solvent) to 100. Nothing else changes: with the threshold 0.18 the legs of
+  the two full benchmark runs had 16 to 30 windows. A leg whose precalculation does not reach the
+  threshold now grows to 100 before it ends with its warning.
+  Unit tests in the image: 654 passed; GPU tests not run (they set the limit themselves).
+- Why: the owner's order (2026-11-21); step 2 of the plan, whose candidates start from more windows.
+- Refs: PR #7, `docs/plans/2026-11-21-als-initial-window-design.md`, `docs/configuration.md`
+  (`max_windows`)
+
 ### 2026-11-21 — [design] Plan: the initial windows of adaptive lambda scheduling, three candidates
 - What: the owner's decisions: `max_windows` 100; ALS stays on and starts from more windows that
   need not be evenly spaced; a higher threshold, for which a deficient pair is read from the overlap

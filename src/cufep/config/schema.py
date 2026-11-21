@@ -251,8 +251,14 @@ class InitialWindows(_Section):
 
 
 class WindowLimits(_Section):
-    complex: int = 48
-    solvent: int = 32
+    """Largest number of lambda windows of a leg in adaptive lambda scheduling.
+
+    100 in both legs is the owner's choice of 2026-11-21 (48 and 32 until then; the paper gives
+    no limit).
+    """
+
+    complex: int = 100
+    solvent: int = 100
 
 
 class PrecalculationLengths(_Section):
@@ -267,7 +273,7 @@ class AdaptiveConfig(_Section):
 
     #: a pair of neighbouring windows is deficient if its overlap is at or below this value. 0.18 is
     #: the owner's choice of 2026-11-20 from the examples at 5 ns (the paper: 0.04; at 0.20 the
-    #: precalculation of the TYK2 solvent leg did not converge before max_windows)
+    #: precalculation of the TYK2 solvent leg did not converge before max_windows, 32 then)
     overlap_threshold: float = Field(default=0.18, gt=0.0, lt=0.5)
     #: number of equally spaced candidate lambda values per stage
     candidates: int = Field(default=101, ge=3)

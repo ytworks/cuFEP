@@ -309,7 +309,7 @@ Points the paper does not specify, and cuFEP's rule for each:
 |---|---|
 | an evenly spaced value that is not a candidate | rounded to the nearest candidate, a half to the even one (0.125 becomes 0.12, the value that appears in the paper) |
 | a bad section whose windows are already one candidate apart | skipped; if no section can be refined the precalculation ends with a warning |
-| upper limit of the number of windows | `max_windows`; reaching it ends the precalculation with a warning |
+| upper limit of the number of windows | `max_windows` (100 per leg by default); reaching it ends the precalculation with a warning |
 | a pair exactly at the threshold | deficient (as in the analysis scripts published with the paper) |
 | data used for the overlap matrix | the windows currently in the schedule |
 | energy samples per window | every `sample_interval_ps` (0.5 ps): 100 per window in the solvent leg, 1000 in the complex leg |
@@ -394,9 +394,9 @@ all windows that overlap. Windows that are close to each other therefore have su
 elements near 1 / (number of such windows), however close they are: eleven discharge
 windows of toluene, which has almost no charge, read 0.065 each. Above that level a
 threshold cannot be met and each added window lowers the overlaps further: with a threshold
-of 0.20 the TYK2 complex leg grew to `max_windows` (measured while 0.04 was the default), and
-with 5 ns of production the TYK2 solvent leg grew to 32 windows (2026-11-20). The default of
-0.18 is the owner's choice from those runs.
+of 0.20 the TYK2 complex leg grew to `max_windows`, 48 then (measured while 0.04 was the
+default), and with 5 ns of production the TYK2 solvent leg grew to 32 windows, its limit then
+(2026-11-20). The default of 0.18 is the owner's choice from those runs.
 
 *What windows do not cure.* Runs of TYK2 ejm_31 differ by the same amount with 13 to 34
 windows per leg. In the solvent leg the free energy follows the orientation of the ligand's

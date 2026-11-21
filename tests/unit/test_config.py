@@ -158,7 +158,8 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert ls.fixed_walk_ps == 50.0
     assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
     assert a.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 9}
-    assert (a.max_windows.complex, a.max_windows.solvent) == (48, 32)
+    # the owner, 2026-11-21: 100 in both legs (48 and 32 until then)
+    assert (a.max_windows.complex, a.max_windows.solvent) == (100, 100)
     cfg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {
         "mode": "fixed",
         "windows": {"complex": {"restrain": 4, "vanish": 20}, "solvent": {"vanish": [0.0, 0.5, 0.8, 1.0]}},
