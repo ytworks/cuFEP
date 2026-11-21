@@ -181,3 +181,343 @@ def test_the_hosts_are_the_residues_with_a_backbone_and_dssp_is_counted_frame_by
     stretched[2:] *= 3.0                                                  # no hydrogen bond is left
     half = restraints.stable_structure_fractions(topology, stretched, frame_atoms)
     assert half[helix] == 0.5 and whole[helix] == 1.0
+
+
+# --------------------------------------------------------------------------- the rule
+def unit_vector(v):
+    v = np.asarray(v, dtype=float)
+    return v / np.linalg.norm(v)
+
+
+def backbone_at(l1, l2, alpha_deg, theta_deg, distance=0.4):
+    """N, CA and C of a residue (nm) such that the angle N-L1-L2 is ``alpha_deg``, the angle L1-N-CA
+    is ``theta_deg`` and N, the backbone atom nearest to L1, is ``distance`` from it."""
+    u = unit_vector(l2 - l1)
+    v = unit_vector(np.cross(u, [0.31, 0.57, 0.76]))
+    alpha, theta = np.radians(alpha_deg), np.radians(theta_deg)
+    n = l1 + distance * (np.cos(alpha) * u + np.sin(alpha) * v)
+    w = unit_vector(l1 - n)
+    s = unit_vector(np.cross(w, np.cross(u, v)))
+    ca = n + 0.146 * (np.cos(theta) * w + np.sin(theta) * s)
+    c = ca + 0.152 * unit_vector(np.cross(w, s) + 0.5 * s - 0.5 * w)
+    return np.array([n, ca, c])
+
+
+class World:
+    """A ligand that does not move and residues whose backbone is put where the test wants it, frame
+    by frame. The ligand is N-methylaniline (C0 N1 c2 c3 ... c7): N1 is a suitable L1 with L2 = c2
+    and L3 = c3 or c7, and the angle N1-c2-c3 is that of the ring in every frame. Atom numbers of
+    the System: N, CA, C of residue r are 10 r, 10 r + 1, 10 r + 2; ligand atom i is 1000 + i."""
+
+    L1, L2 = 1, 2
+
+    def __init__(self, n_frames, smiles="CNc1ccccc1"):
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+
+        from cufep.alchemy import interaction_anchors as ia
+
+        self.ia = ia
+        self.mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        AllChem.EmbedMolecule(self.mol, randomSeed=7)
+        self.ligand = self.mol.GetConformer().GetPositions() * 0.1
+        self.graph = ia.LigandGraph.from_rdkit(self.mol)
+        self.n = n_frames
+        self.backbones = {}
+
+    def residue(self, index, alpha=90.0, theta=90.0, distance=0.4):
+        """Residue ``index`` with these angles and this distance in every frame (numbers or one per frame)."""
+        alpha, theta, distance = (np.broadcast_to(np.asarray(x, dtype=float), (self.n,))
+                                  for x in (alpha, theta, distance))
+        self.backbones[index] = np.array([backbone_at(self.ligand[self.L1], self.ligand[self.L2], a, t, d)
+                                          for a, t, d in zip(alpha, theta, distance)])
+        return self
+
+    def host(self, index, order=(0, 1, 2)):
+        return tuple(10 * index + k for k in order)
+
+    def guest(self, *atoms):
+        return tuple(1000 + a for a in atoms)
+
+    def frames(self, stable=None, boxes=None, ligand_shift=None):
+        residues = sorted(self.backbones)
+        xyz = np.concatenate([self.backbones[r] for r in residues]
+                             + [np.repeat(self.ligand[None], self.n, axis=0)], axis=1)
+        if ligand_shift is not None:
+            xyz[:, 3 * len(residues):, :] += np.asarray(ligand_shift, dtype=float)[:, None, :]
+        atoms = [a for r in residues for a in self.host(r)] + [1000 + i for i in range(len(self.ligand))]
+        return self.ia.Frames(xyz=xyz, atoms=np.array(atoms), ligand=[1000 + i for i in range(len(self.ligand))],
+                              hosts={r: self.host(r) for r in residues}, stable_fraction=dict(stable or {}),
+                              boxes=boxes, trajectory=np.arange(self.n) % 2)
+
+    def records(self, *interactions):
+        """One list of (ligand atom, residue, type) per frame from ``(residue, type, frames)``."""
+        out = [[] for _ in range(self.n)]
+        for residue, kind, frames in interactions:
+            for f in frames:
+                out[f].append((self.L1, residue, kind))
+        return out
+
+    def find(self, ranked, residue, order=(0, 1, 2), guest=(1, 2, 3)):
+        return [c for c in ranked if c.host == self.host(residue, order) and c.guest == self.guest(*guest)]
+
+
+pytest_rdkit = pytest.mark.needs("rdkit")
+
+
+@pytest_rdkit
+@pytest.mark.parametrize("n_frames,present,kept", [(800, 320, True), (800, 319, False), (799, 319, True),
+                                                   (799, 318, False)])
+def test_an_interaction_is_kept_in_two_fifths_of_the_frames_rounded_down(n_frames, present, kept):
+    """"Retained if they occur in at least 40% of the analyzed frames", the number of frames rounded
+    down: 320 of 800, and 319 of 799 (319.6)."""
+    world = World(n_frames).residue(3)
+    table = world.ia.interaction_table(world.records((3, "HBAcceptor", range(present))), world.graph, n_frames,
+                                       world.ia.InteractionSettings())
+    assert table.needed == {800: 320, 799: 319}[n_frames]
+    assert (table.kept == [(1, 3, "HBAcceptor")]) is kept
+    row, = table.rows(world.frames())
+    assert (row["ligand_atom"], row["residue"], row["interaction"], row["frames"], row["kept"]) == \
+        (1001, 3, "HBAcceptor", present, kept)
+    assert row["fraction"] == pytest.approx(present / n_frames)
+    assert sum(row["frames_of_trajectory"].values()) == present and set(row["frames_of_trajectory"]) == {0, 1}
+    ranked = world.ia.rank_by_interactions(world.frames(), world.graph, table, world.ia.InteractionSettings())
+    assert bool(ranked) is kept
+
+
+@pytest_rdkit
+def test_an_interaction_counts_once_in_a_frame_and_only_for_the_types_that_carry_anchors():
+    world = World(10).residue(3)
+    records = [[(1, 3, "HBAcceptor"), (1, 3, "HBAcceptor"), (1, 3, "VdWContact"), (1, 3, "Hydrophobic")]] * 10
+    table = world.ia.interaction_table(records, world.graph, 10, world.ia.InteractionSettings())
+    assert {key: len(frames) for key, frames in table.frames_of.items()} == {(1, 3, "HBAcceptor"): 10}
+
+
+@pytest_rdkit
+def test_the_types_of_one_ligand_atom_and_residue_are_merged():
+    """The frames of the kept types together, and the type of the largest weight: a hydrogen bond in
+    frames 0 to 299 and an ionic interaction in 200 to 399 of 500 are 400 frames of an ionic one. A
+    type below the threshold (199 frames, of 200 needed) is not kept and adds no frame."""
+    world = World(500).residue(3)
+    records = world.records((3, "HBAcceptor", range(300)), (3, "Anionic", range(200, 400)),
+                            (3, "XBDonor", range(301, 500)))
+    settings = world.ia.InteractionSettings()
+    table = world.ia.interaction_table(records, world.graph, 500, settings)
+    assert table.kept == [(1, 3, "Anionic"), (1, 3, "HBAcceptor")]
+    ranked = world.ia.rank_by_interactions(world.frames(), world.graph, table, settings)
+    assert {(c.interaction, c.n_frames) for c in ranked} == {("Anionic", 400)}
+
+
+@pytest_rdkit
+@pytest.mark.parametrize("smiles,atom,l1", [
+    ("CC(=O)Nc1ccccc1", 2, 1),             # the O of an amide: its carbon
+    ("CC(=O)Nc1ccccc1", 3, 3),             # the N of an amide is suitable itself
+    ("c1ccccc1S(=O)(=O)C(C)C", 7, 5),      # an O of a sulfonyl group: past S and O, the ring carbon (the lower number)
+    ("CC(C)S(=O)(=O)c1ccccc1", 4, 1),      # the same group written the other way round: the carbon of lower number
+    ("OC(=O)c1ccccc1", 0, 1),              # an O of an acid: the carbon; neither O is ever L1
+    ("COC(=O)c1ccccc1", 1, 2),             # the O of an ester outside a ring is excluded by the second pattern
+    ("Clc1ccccc1", 0, 1),                  # a halogen has one bonded atom
+])
+def test_an_interaction_is_given_to_the_first_suitable_atom_within_three_bonds(smiles, atom, l1):
+    from rdkit import Chem
+
+    from cufep.alchemy.interaction_anchors import LigandGraph
+
+    graph = LigandGraph.from_rdkit(Chem.AddHs(Chem.MolFromSmiles(smiles)))
+    assert graph.anchor_atom(atom) == l1
+    assert all(not graph.suitable(a) for a in graph.excluded)
+
+
+@pytest_rdkit
+def test_atoms_without_a_suitable_atom_within_three_bonds_and_ligands_without_a_chain():
+    from rdkit import Chem
+
+    from cufep.alchemy.interaction_anchors import LigandGraph
+
+    def graph(smiles):
+        return LigandGraph.from_rdkit(Chem.AddHs(Chem.MolFromSmiles(smiles)))
+
+    assert graph("FC(F)(F)S(=O)(=O)C(F)(F)F").anchor_atom(1) == 1            # the carbon of CF3: F and S are heavy
+    assert graph("O=S(=O)(F)F").anchor_atom(0) is None                       # nothing but excluded atoms and ends
+    # a chain L1-L2-L3 of atoms that are no chain ends: butane has one, propane, acetonitrile and water none
+    assert graph("CCCC").has_guest_anchors() and graph("CNc1ccccc1").has_guest_anchors()
+    assert not graph("CCC").has_guest_anchors() and not graph("CC#N").has_guest_anchors()
+    assert not graph("O").has_guest_anchors()
+    assert graph("CNc1ccccc1").guest_pairs(1) == [(2, 3), (2, 7)]            # the methyl carbon leads nowhere
+
+
+def test_the_angle_range_includes_its_ends_and_the_deviation_is_from_90_degrees_over_all_frames():
+    from cufep.alchemy.interaction_anchors import frames_in_range
+
+    inside, away = frames_in_range(np.array([45.0, 135.0, 44.999, 135.001, 90.0]), (45.0, 135.0))
+    assert inside == 3 and away == pytest.approx((45.0 + 45.0 + 45.001 + 45.001 + 0.0) / 5)
+    assert frames_in_range(np.array([np.nan, 60.0]), (45.0, 135.0)) == (1, pytest.approx(60.0))
+
+
+@pytest_rdkit
+def test_anchors_are_candidates_if_two_angles_are_in_range_often_enough_among_the_frames_of_the_interaction():
+    """100 frames, the interaction in frames 0 to 59, 40 frames needed. With P1-L1-L2 at 90 degrees
+    in frames 0 to 39 the anchors are a candidate; at 90 degrees in frames 0 to 38 and 60 to 99 they
+    are not: the frames outside the interaction do not count. L1-P1-P2 decides nothing: it may be
+    out of range in every frame."""
+    settings = World(1).ia.InteractionSettings()
+    for in_range, candidate in ((range(40), True), ([*range(39), *range(60, 100)], False)):
+        alpha = np.full(100, 20.0)
+        alpha[list(in_range)] = 90.0
+        world = World(100).residue(3, alpha=alpha, theta=20.0)
+        table = world.ia.interaction_table(world.records((3, "HBAcceptor", range(60))), world.graph, 100, settings)
+        ranked = world.ia.rank_by_interactions(world.frames(), world.graph, table, settings)
+        found = world.find(ranked, 3)
+        assert bool(found) is candidate
+        if candidate:
+            c, = found
+            assert (c.n_frames, c.n_theta_b, c.n_theta_a, c.n_guest) == (60, 40, 0, 60)
+            assert c.away_theta_a == pytest.approx(70.0) and c.away_theta_b == pytest.approx((40 * 0 + 20 * 70) / 60)
+            # both guests of this L1 and L2, and the hosts in their six orders at most
+            assert world.find(ranked, 3, guest=(1, 2, 7))
+            assert {c.host for c in ranked} <= {world.host(3, order) for order in
+                                               ((0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0))}
+    # with every angle at 90 degrees the backbone gives candidates in all six orders
+    world = World(100).residue(3)
+    table = world.ia.interaction_table(world.records((3, "HBAcceptor", range(100))), world.graph, 100, settings)
+    assert len({c.host for c in world.ia.rank_by_interactions(world.frames(), world.graph, table, settings)}) == 6
+    # a residue without a backbone (a cap) gives none
+    frames = world.frames()
+    frames.hosts = {}
+    assert world.ia.rank_by_interactions(frames, world.graph, table, settings) == []
+
+
+@pytest_rdkit
+@pytest.mark.parametrize("deviation,stable,taper,counted,level", [
+    (19.0, 0.0, 1.0, 799, 50),            # 38 degrees together: no taper; the largest count is level 50
+    (23.5, 0.0, 0.895, 715, 45),          # 47: 0.7 + 13/20 x 0.3; 799 - 715 = 84 frames = 5 levels of 15
+    (31.0, 0.0, 0.7, 559, 34),            # 62: the floor; 240 frames = 16 levels
+    (23.5, 0.51, 0.895, 715, 48),         # a stable residue is raised by 3 levels of 15: 760, 39 frames below
+    (23.5, 0.50, 0.895, 715, 45),         # stable is more than half of the frames
+])
+def test_the_score_of_a_candidate_by_hand(deviation, stable, taper, counted, level):
+    """799 frames, a hydrogen bond in all of them, P1-L1-L2 and L1-P1-P2 in range in all of them and
+    ``deviation`` degrees from 90 each. A level is max(10, 799 // 50) = 15 frames. The score is the
+    two levels and the weight of a hydrogen bond, 0.6."""
+    world = World(799).residue(3, alpha=90.0 + deviation, theta=90.0 - deviation)
+    settings = world.ia.InteractionSettings()
+    table = world.ia.interaction_table(world.records((3, "HBAcceptor", range(799))), world.graph, 799, settings)
+    ranked = world.ia.rank_by_interactions(world.frames(stable={3: stable}), world.graph, table, settings)
+    c, = world.find(ranked, 3)
+    assert (c.n_theta_a, c.n_theta_b) == (799, 799)
+    assert c.away_theta_a + c.away_theta_b == pytest.approx(2 * deviation)
+    assert c.parts["taper"] == pytest.approx(taper) and int(c.parts["taper"] * 799) == counted
+    assert (c.parts["level_theta_a"], c.parts["level_theta_b"], c.parts["frames_per_level"]) == (level, level, 15)
+    assert c.score == pytest.approx(2 * level + 0.6) and c.stable is (stable > 0.5)
+    assert ranked == sorted(ranked, key=lambda x: (-int(x.score * 100), x.host, x.guest))
+
+
+@pytest_rdkit
+def test_the_weight_of_the_interaction_the_bonus_and_the_atoms_decide_between_equal_levels():
+    """Three residues with the same geometry and the same frames. A residue with two kept hydrogen
+    bonds whose second is in more than 0.6 of the frames of the first gets 7 levels (480 of 799
+    frames, not 479); a stacking interaction is no second one. Then an ionic interaction (0.9) is
+    before a hydrogen bond (0.6); with all equal, the atoms of lower number come first."""
+    def ranked_with(second_frames, second="HBDonor"):
+        world = World(799).residue(3).residue(4).residue(5)
+        records = world.records((3, "HBAcceptor", range(799)), (4, "Cationic", range(799)),
+                                (5, "HBAcceptor", range(799)), (5, second, range(second_frames)))
+        settings = world.ia.InteractionSettings()
+        table = world.ia.interaction_table(records, world.graph, 799, settings)
+        ranked = world.ia.rank_by_interactions(world.frames(), world.graph, table, settings)
+        return world, {r: world.find(ranked, r)[0] for r in (3, 4, 5)}, ranked
+
+    world, by_residue, ranked = ranked_with(480)
+    assert [by_residue[r].score for r in (3, 4, 5)] == pytest.approx([100.6, 100.9, 107.6])
+    assert [by_residue[r].parts["bonus"] for r in (3, 4, 5)] == [0, 0, 7]
+    assert ranked[0].residue == 5 and ranked.index(by_residue[4]) < ranked.index(by_residue[3])
+    assert ranked_with(479)[1][5].score == pytest.approx(100.6)                 # 479 / 799 is not more than 0.6
+    assert ranked_with(799, second="EdgeToFace")[1][5].score == pytest.approx(100.6)
+    # equal scores: by the numbers of the host atoms, then of the guest atoms
+    world = World(799).residue(4).residue(3)
+    settings = world.ia.InteractionSettings()
+    table = world.ia.interaction_table(world.records((4, "HBAcceptor", range(799)), (3, "HBAcceptor", range(799))),
+                                       world.graph, 799, settings)
+    ranked = world.ia.rank_by_interactions(world.frames(), world.graph, table, settings)
+    top = [c for c in ranked if int(c.score * 100) == int(ranked[0].score * 100)]
+    assert [(c.host, c.guest) for c in top] == sorted((c.host, c.guest) for c in top) and top[0].residue == 3
+
+
+@pytest_rdkit
+def test_the_distance_method_takes_the_residues_whose_backbone_is_nearest_to_the_ligand():
+    """No interaction: the nearest pair of a ligand N or O and a backbone atom within 1.0 nm, frame
+    by frame; a residue with 15 of 100 frames is a candidate, with 14 it is not; 0.99 nm counts and
+    1.01 nm does not; a ligand written one cell away is the same ligand."""
+    from rdkit import Chem
+
+    from cufep.alchemy.interaction_anchors import LigandGraph, distance_atoms
+
+    settings = World(1).ia.InteractionSettings()
+    assert distance_atoms(World(1).graph) == [1]                                   # N before any carbon
+    assert distance_atoms(LigandGraph.from_rdkit(Chem.AddHs(Chem.MolFromSmiles("Clc1ccccc1")))) == [1, 2, 3, 4, 5, 6]
+
+    def near(frames_near, distance=0.4):
+        d = np.full(100, 1.5)
+        d[:frames_near] = distance
+        return World(100).residue(3, distance=d)
+
+    for frames_near, candidate in ((15, True), (14, False)):
+        world = near(frames_near)
+        found = world.ia.contacts(world.frames(), world.graph, settings)
+        assert {r: (l1, len(where)) for r, (l1, where) in found.items()} == {3: (1, frames_near)}
+        ranked = world.ia.rank_by_distance(world.frames(), world.graph, settings)
+        assert bool(ranked) is candidate
+        if candidate:
+            c, = world.find(ranked, 3)
+            assert (c.interaction, c.n_frames, c.n_theta_a, c.n_theta_b, c.score) == ("contact", 15, 15, 15, None)
+            assert ranked == sorted(ranked, key=lambda x: (-((x.n_theta_a + x.n_theta_b) // 2),
+                                                           x.away_theta_a + x.away_theta_b,
+                                                           x.away_host + x.away_guest, x.host, x.guest))
+    assert len(near(100, 0.99).ia.contacts(near(100, 0.99).frames(), World(1).graph, settings)[3][1]) == 100
+    assert near(100, 1.01).ia.contacts(near(100, 1.01).frames(), World(1).graph, settings) == {}
+    # the ligand one cell away in every second frame, with the boxes of the frames
+    world = near(100)
+    shift = np.zeros((100, 3))
+    shift[::2, 0] = 5.0
+    boxes = np.repeat(5.0 * np.eye(3)[None], 100, axis=0)
+    assert len(world.ia.contacts(world.frames(boxes=boxes, ligand_shift=shift), world.graph, settings)[3][1]) == 100
+    assert len(world.ia.contacts(world.frames(ligand_shift=shift), world.graph, settings)[3][1]) == 50
+    # two residues: each frame belongs to the residue of the nearest backbone atom
+    d3, d4 = np.full(100, 0.5), np.full(100, 0.6)
+    d4[:30] = 0.4
+    world = World(100).residue(3, distance=d3).residue(4, alpha=60.0, distance=d4)
+    found = world.ia.contacts(world.frames(), world.graph, settings)
+    assert {r: len(where) for r, (_l1, where) in found.items()} == {3: 70, 4: 30}
+
+
+@pytest_rdkit
+def test_the_best_candidate_that_can_be_used_is_chosen_and_without_one_there_is_no_restraint():
+    """The interactions first; a candidate that the rules of every restraint refuse is passed over
+    and keeps the reason; if the interactions give none that can be used, the distance method; if
+    that gives none either, the calculation stops."""
+    nearer = np.full(100, 0.45)
+    nearer[:50] = 0.35                      # the backbone of residue 4 is the nearest one in frames 0 to 49
+    world = World(100).residue(3).residue(4, alpha=60.0, distance=nearer)
+    records = world.records((3, "HBAcceptor", range(100)))
+    frames = world.frames()
+    choice = world.ia.choose_anchors(frames, world.graph, records)
+    best = choice.ranked["interactions"][0]
+    assert choice.method == "interactions" and (choice.host, choice.guest) == (best.host, best.guest)
+    assert choice.chosen.residue == 3 and "distance" not in choice.ranked and best.refused is None
+
+    second = world.ia.choose_anchors(frames, world.graph, records, problem_of=lambda host, guest: (
+        "on a straight line" if (host, guest) == (best.host, best.guest) else None))
+    assert second.chosen is second.ranked["interactions"][1]
+    assert second.ranked["interactions"][0].refused == "on a straight line"
+
+    by_distance = world.ia.choose_anchors(frames, world.graph, records, problem_of=lambda host, guest: (
+        "refused" if host[0] // 10 == 3 else None))
+    assert by_distance.method == "distance" and by_distance.chosen.residue == 4
+    assert all(c.refused == "refused" for c in by_distance.ranked["interactions"])
+    assert world.ia.choose_anchors(frames, world.graph, [[] for _ in range(100)]).method == "distance"
+
+    with pytest.raises(RestraintError, match="no Boresch anchors can be chosen from the interactions"):
+        world.ia.choose_anchors(frames, world.graph, records, problem_of=lambda host, guest: "refused")
+    far = World(100).residue(3, distance=1.5)
+    with pytest.raises(RestraintError):
+        far.ia.choose_anchors(far.frames(), far.graph, [[] for _ in range(100)])
