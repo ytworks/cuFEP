@@ -37,8 +37,17 @@ Adaptive mode: adaptive lambda scheduling (ALS)
     uses the data of the windows currently in the schedule.
 
     cuFEP's own: the start of a stage can also be given as lambda values, which need not be
-    evenly spaced (:mod:`cufep.alchemy.candidates`). They are candidates, and like every start
-    they are the smallest schedule: the rule adds windows to them and never removes one.
+    evenly spaced (:mod:`cufep.alchemy.candidates`). They are candidates. As with every start
+    the schedule never has fewer windows than it; step 4 spaces the windows of a bad section
+    evenly, so given values inside a bad section move and those outside every bad section stay.
+
+    cuFEP's own, by a setting (``overlap_matrix: pair``): in step 2 the overlap of a pair is
+    read from the overlap matrix of its two windows alone (:func:`pair_overlap`), not from the
+    matrix of all windows of the stage. The element of the matrix of the stage is shared among
+    all windows that overlap, so it falls when windows get closer than they need to be, and a
+    start with many windows, or a threshold above what that element can reach, makes the rule
+    add windows where none are needed until ``max_windows``. The overlap of a pair alone rises
+    to 0.5 as its windows meet. The rule itself (steps 3 and 4) is the same.
 """
 from __future__ import annotations
 
@@ -62,8 +71,8 @@ from cufep.sampling.states import (
 )
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
-           "initial_window_indices", "bad_sections", "choose_section", "redistribute", "als_step",
-           "adaptive_schedule", "run_window", "STAGE_ALIASES"]
+           "initial_window_indices", "bad_sections", "choose_section", "redistribute", "als_step", "stage_overlap",
+           "pair_overlap", "adaptive_schedule", "run_window", "STAGE_ALIASES"]
 
 
 # ============================================================================ the schedule
@@ -278,6 +287,9 @@ def als_step(windows: list[int], superdiagonal, threshold: float, room: int = 1)
 @dataclass
 class AlsSettings:
     overlap_threshold: float = 0.18             # the owner's choice of 2026-11-20 (the paper: 0.04)
+    #: the overlap matrix whose element is compared with the threshold: "stage", the matrix of all
+    #: windows of the stage (the paper), or "pair", that of the two neighbouring windows alone
+    overlap_matrix: str = "stage"
     candidates: int = 101
     #: per stage the windows of the first iteration: a number of evenly spaced windows, or the
     #: lambda values (candidates, not necessarily evenly spaced)
@@ -321,6 +333,18 @@ def stage_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
     except Exception:  # noqa: BLE001 - no solution means no usable overlap
         return np.zeros(len(windows) - 1)
     return np.array([o[i, i + 1] for i in range(len(windows) - 1)])
+
+
+def pair_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
+    """Overlap of every pair of neighbouring ``windows``, from the samples of the two alone.
+
+    The element of the overlap matrix of just the two windows of a pair, by the same estimator
+    as :func:`stage_overlap` (for a stage of two windows the two are the same number). It lies
+    between 0 and 0.5 and rises as the two windows get closer, whatever other windows the stage
+    has. An element of the matrix of the whole stage is shared among all windows that overlap:
+    it falls again when windows get close, and cannot say then whether a pair is close enough.
+    """
+    return np.array([stage_overlap(energies[i:i + 2], windows[i:i + 2])[0] for i in range(len(windows) - 1)])
 
 
 def _snapshot(context):
@@ -380,6 +404,9 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     """
 
     s = settings or AlsSettings()
+    if s.overlap_matrix not in ("stage", "pair"):
+        raise ValueError(f"overlap_matrix is 'stage' or 'pair', not {s.overlap_matrix!r}")
+    by_pair = s.overlap_matrix == "pair"
     params = context.getParameters()
     present = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS}
     stages = [st for st in (canonical_stage(x) for x in stages) if present[st] in params]
@@ -445,11 +472,16 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         for k, name in enumerate(stages):
             if status[k] != "running":
                 continue
-            sup = stage_overlap([runs[node(k, i)]["energies"][name] for i in windows[k]], windows[k])
-            new, rec = als_step(windows[k], sup, s.overlap_threshold, room=s.max_windows - total_windows())
+            energies = [runs[node(k, i)]["energies"][name] for i in windows[k]]
+            # the element of the matrix of the stage is always recorded: it is what the analysis of
+            # the production checks; the rule reads it, or the overlap of each pair alone
+            sup = stage_overlap(energies, windows[k])
+            read = pair_overlap(energies, windows[k]) if by_pair else sup
+            new, rec = als_step(windows[k], read, s.overlap_threshold, room=s.max_windows - total_windows())
             rec = {"iteration": iteration, "stage": name,
                    "lambda": [round(i / top, 6) for i in rec.pop("windows")],
-                   "superdiagonal": [round(v, 4) for v in rec.pop("superdiagonal")],
+                   "superdiagonal": [round(float(v), 4) for v in sup],
+                   **({"pair_overlap": [round(float(v), 4) for v in read]} if by_pair else {}),
                    "bad_sections": [[round(a / top, 6), round(b / top, 6)] for a, b in rec.pop("bad_sections")],
                    "status": rec["status"],
                    **({"section": [round(v / top, 6) for v in rec["section"]],
@@ -458,7 +490,9 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             if new is None:
                 status[k] = rec["status"]
                 log(f"lambda schedule, {name}: {len(windows[k])} windows, {rec['status']} "
-                    f"(lowest overlap {min(rec['superdiagonal']):.3f})")
+                    f"(lowest overlap {min(rec['pair_overlap' if by_pair else 'superdiagonal']):.3f}"
+                    + (f" of a pair alone, {min(rec['superdiagonal']):.3f} in the matrix of the stage)"
+                       if by_pair else ")"))
             else:
                 log(f"lambda schedule, {name}: iteration {iteration}, overlap at or below {s.overlap_threshold:g} "
                     f"between {rec['section'][0]:g} and {rec['section'][1]:g}; running {rec['new_lambda']}")
@@ -477,6 +511,9 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     values = {name: [i / top for i in windows[k]] for k, name in enumerate(stages)}
     schedule = _assemble(stages, values, "adaptive", s.rest2_scale, notes=notes,
                          provenance={"method": "adaptive lambda scheduling", "overlap_threshold": s.overlap_threshold,
+                                     # the matrix the threshold was compared with (a schedule written
+                                     # before this key existed: that of the stage)
+                                     "overlap_matrix": s.overlap_matrix,
                                      "candidates": s.candidates, "window_ps": s.window_ps,
                                      "equilibration_ps": s.equilibration_ps,
                                      "sample_interval_ps": s.sample_interval_ps,

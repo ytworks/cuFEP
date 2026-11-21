@@ -90,16 +90,32 @@ def lambda_window_table(cfg) -> str:
     lines = ["# lambda windows"]
     if ls.file is not None:
         return "\n".join(lines + [f"taken from {ls.file}"])
-    if ls.mode == "adaptive":
+    adaptive = ls.precalculated_legs()
+    if adaptive:
         a = ls.adaptive
+        fixed = [leg for leg in ("complex", "solvent") if leg not in adaptive]
+
+        def per_leg(text) -> str:
+            """What ``text`` says of a leg: once if the legs agree, else leg by leg."""
+            texts = {leg: text(leg) for leg in adaptive}
+            if len(set(texts.values())) == 1:
+                return texts[adaptive[0]]
+            return "; ".join(f"{leg} leg {t}" for leg, t in texts.items())
+
+        def threshold(leg: str) -> str:
+            alone = " (the overlap of the two windows alone)" if a.matrix(leg) == "pair" else ""
+            return f"at or below {a.threshold(leg):g}{alone}"
+
         lines += [
-            "mode adaptive: adaptive lambda scheduling decides the windows in a precalculation.",
-            f"  a window is added where the overlap of neighbouring windows is at or below {a.overlap_threshold:g};",
-            f"  {a.candidates} candidate lambda values per stage; MD per new window: "
+            "mode adaptive" + (f" in the {adaptive[0]} leg" if fixed else "")
+            + ": adaptive lambda scheduling decides the windows in a precalculation.",
+            f"  a window is added where the overlap of neighbouring windows is {per_leg(threshold)};",
+            f"  {per_leg(lambda leg: str(a.candidates_of(leg)))} candidate lambda values per stage; "
+            "MD per new window: "
             + "; ".join(
                 f"{leg} leg {a.window(leg):g} ps"
                 + (f" after {a.equilibration(leg):g} ps of equilibration" if a.equilibration(leg) > 0 else "")
-                for leg in ("complex", "solvent")
+                for leg in adaptive
             )
             + ";",
             "  start: "
@@ -108,10 +124,11 @@ def lambda_window_table(cfg) -> str:
                     # a number of evenly spaced windows, or the lambda values that were given
                     f"{k} {v}" if isinstance(v, int) else f"{k} {len(v)} ({' '.join(f'{x:g}' for x in v)})"
                     for k, v in a.initial_windows.for_leg(leg).items())
-                for leg in ("complex", "solvent")
+                for leg in adaptive
             )
-            + f"; at most {a.max_windows.complex} (complex) / {a.max_windows.solvent} (solvent) windows.",
-            "The windows of mode fixed, for reference:",
+            + "; at most " + " / ".join(f"{getattr(a.max_windows, leg)} ({leg})" for leg in adaptive) + " windows.",
+            (f"mode fixed in the {fixed[0]} leg: its windows below are used (those of the {adaptive[0]} leg are "
+             "for reference)." if fixed else "The windows of mode fixed, for reference:"),
         ]
     else:
         lines.append("mode fixed: the windows below are used.")

@@ -1,5 +1,5 @@
 # adaptive lambda scheduling の初期 window を設計し直す (max_windows 100、3 案を TYK2 example で評価)
-Status: In progress (手順 1〜3 済み: 計画と draft PR #7、`max_windows` 100、初期 window を数または値の列で)
+Status: In progress (手順 1〜4 済み: 計画と draft PR #7、`max_windows` 100、初期 window を数または値の列で、`overlap_matrix: pair` と leg ごとの設定)
 Refs: this pull request; issue #5; `docs/protocol.md` ("Adaptive lambda scheduling"); `docs/configuration.md` (`lambda_schedule`)
 
 ## Context
@@ -81,7 +81,7 @@ window の約半分が 0.7〜0.9 に入る配分になる (TYK2 49 %、A2A 51 %)
   `_check_stage`)。値は candidate (0.01 刻み) の上にあることを設定の段階で確かめ、外れていれば
   何も書く前に断る。`adaptive_schedule`、前計算の worker の数、provenance、
   `lambda_windows_added` が列を扱えるようにする。
-- 新しい設定 `lambda_schedule.adaptive.overlap_estimate: stage | pair` (名前は実装時に確定)。
+- 新しい設定 `lambda_schedule.adaptive.overlap_matrix: stage | pair` (計画時の仮の名前は `overlap_estimate`)。
   - `stage`: 今の判定 (論文のとおり、stage の全 window の行列)。評価が終わるまで既定のまま。
   - `pair`: 隣り合う 2 window のサンプルだけで作った 2 状態の overlap 行列の要素 (0〜0.5)。
   - `stage_overlap` の隣に置き、解析と同じ `cufep.analysis.mbar.overlap_matrix` を使う
@@ -99,7 +99,7 @@ window の約半分が 0.7〜0.9 に入る配分になる (TYK2 49 %、A2A 51 %)
   |---|---|---|
   | `lambda_schedule.mode` | 1 つ | 1 つ、または `{complex, solvent}` |
   | `adaptive.overlap_threshold` | 1 つ | 1 つ、または `{complex, solvent}` |
-  | `adaptive.overlap_estimate` (新) | - | 1 つ、または `{complex, solvent}` |
+  | `adaptive.overlap_matrix` (新) | - | 1 つ、または `{complex, solvent}` |
   | `adaptive.candidates` | 1 つ | 1 つ、または `{complex, solvent}` |
   | `adaptive.initial_windows` | leg ごと (数) | leg ごと (数または値の列) |
   | `adaptive.max_windows` | leg ごと | そのまま |
@@ -122,7 +122,7 @@ window の約半分が 0.7〜0.9 に入る配分になる (TYK2 49 %、A2A 51 %)
 共通: ALS あり、`max_windows` 100 / 100。それ以外は example のまま (equilibration 1 ns、
 production 5 ns、REST2、restraint)。
 
-- complex leg: `overlap_estimate: pair`、threshold 0.30。3 案の違いは初期 window の設計だけ。
+- complex leg: `overlap_matrix: pair`、threshold 0.30。3 案の違いは初期 window の設計だけ。
 - solvent leg: 3 案とも今の設定のまま (等間隔 5 / 9、threshold 0.18、判定 `stage`)。run 間の差は
   complex leg にあり (標準偏差 1.86 に対して solvent 0.29)、solvent leg は最初の window 以外に
   遅い区間がない (g 約 1.1) ため。leg ごとの設定はこの形で使う。
@@ -200,7 +200,7 @@ production の長さは案に入れない。5 ns で走らせ、短くした場�
 2. `max_windows` 100 / 100: schema、`AlsSettings`、`docs/configuration.md`、`docs/protocol.md`、
    48 / 32 を固定している test、`spikes/m9_als_variants.py`。
 3. `initial_windows` を数または値の列に。
-4. `overlap_estimate` の設定と `pair` の実装。`mode`、`overlap_threshold`、`overlap_estimate`、
+4. `overlap_matrix` の設定と `pair` の実装。`mode`、`overlap_threshold`、`overlap_matrix`、
    `candidates` を 1 つの値または leg ごとの値に。
 5. 100 window の確認 (CPU の test 1 本、必要なら修正)。
 6. 集計の script で「設計の根拠」の表と B・C の初期 window を出し、3 案の YAML を作る。
@@ -252,8 +252,10 @@ production の長さは案に入れない。5 ns で走らせ、短くした場�
     で終わり、`stage` は `max_windows` で終わる (合成のエネルギーを返す pool で
     `adaptive_schedule` を通す。変更前のコードで失敗することを 1 回確認)。
   - YAML の値が前計算に届く (`als_settings(cfg, leg)`: 判定、threshold、leg ごとの上限と長さ)。
-  - 値の列で与えた初期 window がそのまま最初の iteration の window になり、ALS はそこから
-    減らさない。candidate の上にない値、0 と 1 で始まり終わらない列は設定の段階で断られる。
+  - 値の列で与えた初期 window がそのまま最初の iteration の window になり、window の数は
+    そこから減らない。candidate の上にない値、0 と 1 で始まり終わらない列は設定の段階で断られる。
+    (実装で確かめた点: ALS が window を足した bad section の中では、window が等間隔に置き直される
+    ので、与えた値はそこでは動く。bad section の外の値はそのまま残る。)
   - leg ごとに違う設定 (判定、threshold、初期 window、mode) を書いた YAML で、それぞれの leg が
     自分の値を使い、`schedule.yaml` にその値が残る。1 つの値で書いた YAML は両方の leg に同じ値が
     渡る。知らない leg 名や片方だけの指定は設定の段階で断られる。

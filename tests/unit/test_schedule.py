@@ -19,6 +19,7 @@ from cufep.alchemy.schedule import (
     fixed_schedule,
     initial_indices,
     initial_window_indices,
+    pair_overlap,
     redistribute,
     run_window,
     schedule_from_windows,
@@ -204,6 +205,97 @@ def test_stage_overlap_of_harmonic_windows():
     assert bad_sections(sup, T) == [(2, 3)]
 
 
+def harmonic_windows(spacing, length=8.0, samples=4000, seed=5):
+    """Unit-width windows along a line of ``length``, ``spacing`` apart: what stage_overlap takes."""
+    rng = np.random.default_rng(seed)
+    centres = np.arange(0.0, length + 1e-9, spacing)
+    energies = [0.5 * (rng.normal(c, 1.0, size=samples)[:, None] - centres[None, :]) ** 2 for c in centres]
+    return energies, list(range(len(centres)))
+
+
+def test_the_overlap_of_a_pair_alone_rises_as_windows_get_closer_and_the_matrix_of_the_stage_falls():
+    """Why a threshold above about 0.2 cannot be met in the matrix of a stage, and what
+    ``overlap_matrix: pair`` reads instead (the owner's decision of 2026-11-21).
+
+    For unit-width harmonic windows d apart the element of a pair alone is known and rises to
+    0.5; in the matrix of the stage it is d * exp(-d^2 / 4) / (2 sqrt(pi)) once windows are close,
+    shared among all windows that overlap, with its largest value 0.242 at d = sqrt(2). The
+    numbers are those measured with three seeds, which differ by 0.002 at most.
+    """
+    alone, in_stage = [], []
+    for spacing in (2.0, 1.0, 0.5, 0.25):
+        energies, windows = harmonic_windows(spacing)
+        middle = len(windows) // 2
+        alone.append(pair_overlap(energies, windows)[middle])
+        in_stage.append(stage_overlap(energies, windows)[middle])
+    assert alone == pytest.approx([0.223, 0.400, 0.470, 0.492], abs=0.01)
+    assert alone[0] < alone[1] < alone[2] < alone[3] < 0.5
+    # in the matrix of the stage: nearly the same while only neighbours overlap, then falling
+    assert in_stage == pytest.approx([0.207, 0.220, 0.1325, 0.0694], abs=0.01)
+    assert max(in_stage) < 0.25 and in_stage[1] > in_stage[2] > in_stage[3]
+    # windows that only overlap with each other: the two matrices give the same number
+    energies, windows = harmonic_windows(1.0)
+    assert pair_overlap(energies[:2], windows[:2])[0] == stage_overlap(energies[:2], windows[:2])[0]
+    assert pair_overlap(energies, windows).shape == (len(windows) - 1,)
+
+
+def precalculation_of_harmonic_windows(context, integrator, overlap_matrix, max_windows, per_lambda=30.0,
+                                       threshold=0.33):
+    """The precalculation of a vanish stage whose windows are unit-width harmonic windows,
+    ``per_lambda`` widths per unit of lambda: the pool returns the energies of such windows at
+    the candidates, the Context only gives the stage and the start configurations."""
+    class Pool:
+        def run(self, tasks):
+            out = []
+            for task in tasks:
+                lam = 1.0 - task["state"]["lambda_sterics"]
+                grid = np.linspace(0.0, 1.0, task["candidates"])
+                x = np.random.default_rng(int(round(lam * 100)) + 17).normal(per_lambda * lam, 1.0, task["n_samples"])
+                out.append({"energies": {"vanish": 0.5 * (x[:, None] - per_lambda * grid[None, :]) ** 2},
+                            "config": task["config"]})
+            return out
+
+    settings = AlsSettings(overlap_threshold=threshold, overlap_matrix=overlap_matrix, candidates=101,
+                           initial_windows={"vanish": 21}, window_ps=4.0, sample_interval_ps=0.002, walk_ps=0.004,
+                           max_windows=max_windows)
+    return adaptive_schedule(context, integrator, ["vanish"], 300.0, 2.0, settings, lambda m: None, pool=Pool())[0]
+
+
+def test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_a_pair_alone(water_ligand_system):
+    """The owner's choice of 2026-11-21: a start with many windows and a threshold above 0.18.
+
+    21 windows 1.5 widths apart overlap by 0.30 as pairs and by 0.24 in the matrix of the stage.
+    With a threshold of 0.33 the rule on the pair adds windows until neighbours are 1.2 widths
+    apart or less (0.36) and ends; on the matrix of the stage every added window lowers the
+    elements, so it adds until ``max_windows`` and says so.
+    """
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+    integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+    integ.setRandomNumberSeed(31)
+    ctx = mm.Context(alch.system, integ, mm.Platform.getPlatformByName("CPU"))
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300.0, 5)
+
+    by_pair = precalculation_of_harmonic_windows(ctx, integ, "pair", max_windows=100)
+    last = by_pair.provenance["iterations"][-1]
+    values = by_pair.windows()["vanish"]
+    assert by_pair.provenance["overlap_matrix"] == "pair" and last["status"] == "converged" and by_pair.notes == []
+    assert min(last["pair_overlap"]) > 0.33 and len(last["pair_overlap"]) == len(last["superdiagonal"])
+    assert max(np.diff(values)) < 0.045 and 26 <= len(values) <= 32            # 1.2 widths or less, and no more
+    assert max(last["superdiagonal"][1:-1]) < 0.26                             # what the matrix of the stage reads
+
+    by_stage = precalculation_of_harmonic_windows(ctx, integ, "stage", max_windows=28)
+    last = by_stage.provenance["iterations"][-1]
+    assert by_stage.provenance["overlap_matrix"] == "stage" and "pair_overlap" not in last
+    assert last["status"] == "max_windows" and len(by_stage.states) == 28
+    assert any("stopped in the vanish stage at the limit of 28 windows" in note for note in by_stage.notes)
+    assert max(last["superdiagonal"][1:-1]) < 0.26                             # no window could have raised it
+    with pytest.raises(ValueError, match="overlap_matrix is 'stage' or 'pair'"):
+        precalculation_of_harmonic_windows(ctx, integ, "neighbours", max_windows=28)
+
+
 def test_precalculation_on_a_small_system(water_ligand_system):
     system, pos, box, ligand = water_ligand_system
     alch = make_alchemical_system(system, ligand)
@@ -244,8 +336,9 @@ def test_precalculation_on_a_small_system(water_ligand_system):
 
 
 def test_precalculation_from_given_lambda_values(water_ligand_system):
-    """The start of a stage given as lambda values: those windows are run first, and the rule adds
-    to them without removing one."""
+    """The start of a stage given as lambda values: those windows are run first. The schedule
+    never has fewer windows than its start; where the rule adds a window it spaces the windows
+    of that bad section evenly again, so only values of the start outside such a section stay."""
     system, pos, box, ligand = water_ligand_system
     alch = make_alchemical_system(system, ligand)
     integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
@@ -263,7 +356,10 @@ def test_precalculation_from_given_lambda_values(water_ligand_system):
     assert prov["initial_lambda"] == {"discharge": [0.0, 1.0], "vanish": start}
     first = next(rec for rec in prov["iterations"] if rec["stage"] == "vanish")
     assert first["iteration"] == 1 and first["lambda"] == start
-    assert set(start) <= set(schedule.windows()["vanish"])
+    final = schedule.windows()["vanish"]
+    refined = [rec["section"] for rec in prov["iterations"] if rec["stage"] == "vanish" and rec["status"] == "inserted"]
+    assert len(final) >= len(start)
+    assert {v for v in start if not any(a < v < b for a, b in refined)} <= set(final)
     assert len(configs) == len(schedule.states) <= 9
 
 

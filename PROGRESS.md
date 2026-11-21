@@ -63,9 +63,10 @@ Open items:
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
-  `docs/plans/2026-11-21-als-initial-window-design.md` (in progress, a draft pull request; nothing
-  implemented yet) tests the owner's hypothesis: more initial windows of adaptive lambda
-  scheduling, placed where the sampling is slow.
+  `docs/plans/2026-11-21-als-initial-window-design.md` (in progress, draft PR #7: the settings are
+  implemented, the defaults unchanged except `max_windows` 100; the nine runs not started) tests
+  the owner's hypothesis: more initial windows of adaptive lambda scheduling, placed where the
+  sampling is slow.
 - The benchmarks were made with `restraints.selection: auto`, the default until 2026-11-21; a
   rerun with the default `interactions` is not part of the plan. One calculation per example
   says nothing about a difference in accuracy (the spread between runs: the item above).
@@ -76,6 +77,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [progress] The overlap of a pair alone for adaptive lambda scheduling; settings per leg
+- What: `lambda_schedule.adaptive.overlap_matrix`: `stage` (the paper's matrix of all windows of a
+  stage; the default until the candidates of the plan have run) or `pair` (the two neighbouring
+  windows alone; cuFEP's own, the owner's decision). `mode`, `overlap_threshold`, `overlap_matrix`
+  and `candidates` take one value or one per leg. `schedule.yaml` keeps the matrix and, with `pair`,
+  the overlap of each pair beside the element of the stage. The documents now say that the rule
+  spaces a bad section evenly again, so given start values inside one move (the commit of the entry
+  below said none is removed). In the image: unit tests 674 passed, GPU tests 25 passed.
+- Why: an element of the stage matrix falls when windows get close (harmonic windows: at most
+  0.242), so many initial windows or a higher threshold run to `max_windows`; legs set separately.
+- Refs: PR #7, the plan, `docs/configuration.md`, `docs/protocol.md` (adaptive lambda scheduling)
 
 ### 2026-11-21 — [progress] The start of adaptive lambda scheduling can be given as lambda values
 - What: `lambda_schedule.adaptive.initial_windows` takes per stage a number of evenly spaced

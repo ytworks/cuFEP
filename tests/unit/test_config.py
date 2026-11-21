@@ -215,6 +215,70 @@ def test_a_start_the_precalculation_cannot_use_is_refused_when_the_configuration
         "candidates": 11, "initial_windows": {"solvent": {"vanish": 12}}}}}))
 
 
+def test_window_settings_are_one_value_or_one_per_leg_and_reach_the_precalculation(tmp_path):
+    """The owner, 2026-11-21: the complex leg and the solvent leg can run different window
+    settings, set in the YAML. One value is for both legs; ``{complex: ..., solvent: ...}`` gives
+    each leg its own, and the precalculation of a leg is run with the values of that leg."""
+    from cufep.cli import lambda_window_table
+    from cufep.workflow import als_settings
+
+    default = load_config(write(tmp_path, BASE))
+    d = als_settings(default, "complex")
+    # the defaults: the matrix of the stage, as the paper, in both legs
+    assert (d.overlap_threshold, d.overlap_matrix, d.candidates, d.max_windows) == (0.18, "stage", 101, 100)
+    assert default.lambda_schedule.precalculated_legs() == ["complex", "solvent"]
+    assert "  a window is added where the overlap of neighbouring windows is at or below 0.18;\n" \
+           "  101 candidate lambda values per stage; MD per new window: complex leg 500 ps after 500 ps of " \
+           "equilibration; solvent leg 50 ps;" in lambda_window_table(default)
+
+    one = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {
+        "overlap_threshold": 0.3, "overlap_matrix": "pair", "candidates": 51}}}))
+    for leg in ("complex", "solvent"):
+        s = als_settings(one, leg, 1.5)
+        assert (s.overlap_threshold, s.overlap_matrix, s.candidates, s.rest2_scale) == (0.3, "pair", 51, 1.5)
+
+    per_leg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {
+        "mode": {"complex": "adaptive", "solvent": "fixed"},
+        "adaptive": {"overlap_threshold": {"complex": 0.3, "solvent": 0.18},
+                     "overlap_matrix": {"complex": "pair", "solvent": "stage"},
+                     "candidates": {"complex": 101, "solvent": 51},
+                     "initial_windows": {"complex": {"vanish": [0.0, 0.5, 0.75, 1.0]}},
+                     "max_windows": {"complex": 60, "solvent": 20}}}}))
+    ls = per_leg.lambda_schedule
+    assert (ls.mode_of("complex"), ls.mode_of("solvent")) == ("adaptive", "fixed")
+    assert ls.precalculated_legs() == ["complex"]
+    c, s = als_settings(per_leg, "complex"), als_settings(per_leg, "solvent")
+    assert (c.overlap_threshold, c.overlap_matrix, c.candidates, c.max_windows) == (0.3, "pair", 101, 60)
+    assert (s.overlap_threshold, s.overlap_matrix, s.candidates, s.max_windows) == (0.18, "stage", 51, 20)
+    assert c.initial_windows == {"restrain": 3, "discharge": 5, "vanish": [0.0, 0.5, 0.75, 1.0]}
+    assert (c.window_ps, c.equilibration_ps, s.window_ps, s.equilibration_ps) == (500.0, 500.0, 50.0, 0.0)
+    table = lambda_window_table(per_leg)
+    assert "mode adaptive in the complex leg:" in table and "mode fixed in the solvent leg:" in table
+    assert "is at or below 0.3 (the overlap of the two windows alone);" in table
+    assert "at most 60 (complex) windows." in table
+
+    differ = lambda_window_table(load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {
+        "overlap_threshold": {"complex": 0.3, "solvent": 0.18},
+        "overlap_matrix": {"complex": "pair", "solvent": "stage"}}}})))
+    assert ("is complex leg at or below 0.3 (the overlap of the two windows alone); "
+            "solvent leg at or below 0.18;") in differ
+
+
+@pytest.mark.parametrize("section", [
+    {"adaptive": {"overlap_threshold": {"complex": 0.3}}},                                # one leg only
+    {"adaptive": {"overlap_matrix": {"complex": "pair", "solvent": "stage", "membrane": "pair"}}},
+    {"adaptive": {"overlap_matrix": "neighbours"}},
+    {"adaptive": {"overlap_threshold": {"complex": 0.6, "solvent": 0.18}}},               # no overlap is above 0.5
+    {"adaptive": {"overlap_threshold": 0.5}},
+    {"adaptive": {"candidates": {"complex": 2, "solvent": 101}}},
+    {"mode": {"complex": "adaptive"}},
+    {"mode": {"complex": "adaptive", "solvent": "automatic"}},
+])
+def test_window_settings_per_leg_name_both_legs_and_nothing_else(tmp_path, section):
+    with pytest.raises(ValidationError):
+        load_config(write(tmp_path, {**BASE, "lambda_schedule": section}))
+
+
 def test_precalculation_lengths_are_one_number_or_one_per_leg(tmp_path):
     one = load_config(
         write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {"window_ps": 20, "equilibration_ps": 0}}})
