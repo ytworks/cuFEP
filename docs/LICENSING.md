@@ -36,4 +36,8 @@ This is a summary for orientation, not legal advice.
 ## Other software in the image
 
 OpenMM (MIT and LGPL parts), OpenFF Toolkit and force fields (MIT / CC-BY), AmberTools
-(mixed open-source licences), pymbar (MIT), MDTraj (LGPL), PDBFixer (MIT), RDKit (BSD).
+(mixed open-source licences), pymbar (MIT), MDTraj (LGPL), PDBFixer (MIT), RDKit (BSD),
+ProLIF (Apache-2.0) and MDAnalysis (LGPL-3.0-or-later), through which ProLIF reads the frames
+of a trajectory. ProLIF brings gemmi (MPL-2.0), pandas, networkx, dill, multiprocess and psutil
+(BSD-3-Clause) and tqdm (MPL-2.0 and MIT). The licences are those that the packages of the
+image state (`docker/environment.yml`: ProLIF 2.2.3, MDAnalysis 2.11).

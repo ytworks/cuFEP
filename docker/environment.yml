@@ -27,6 +27,10 @@ dependencies:
   - openff-nagl-models
   - openmmforcefields>=0.14
   - pytorch-cpu
+  # protein-ligand interactions of the MD from which the Boresch restraint is chosen
+  # (restraints.selection: interactions); ProLIF reads the frames through MDAnalysis
+  - prolif=2.2.3
+  - mdanalysis=2.11.*
   # development / tests
   - pytest
   - pip

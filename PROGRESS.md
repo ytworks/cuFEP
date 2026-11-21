@@ -41,8 +41,8 @@ restraint from the protein-ligand interactions of unrestrained MD, to become the
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 559 passed on PR #3 (2026-11-20, image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 17 passed on PR #3 (2026-11-20, one GPU, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
+| Unit tests (CPU) | 565 passed (2026-11-21, the code of `main` in the image `cufep:dev` rebuilt with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 17 passed (2026-11-21, one GPU, the same image and code, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). In the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation with the same settings: -8.94 ± 0.77 |
 | A2A example (4e, experiment -12.07 kcal/mol) | in the full A2A run: -18.91 ± 0.52 kcal/mol (complex leg 44.68); one earlier calculation with the same settings: -11.95 ± 0.73 (complex leg 37.61) |
@@ -61,8 +61,8 @@ Open items:
 - `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
   5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
   decision (`.claude/rules/fep-invariants.md`).
-- The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4 and CUDA 13.4
-  only); a rebuild of the image can change other packages.
+- The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4, CUDA 13.4,
+  ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
 
