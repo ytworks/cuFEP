@@ -899,23 +899,22 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
     coordinates: the given anchors, with the reference values of the last frame of the
     pre-equilibration.
 
-    The force of the restraint measures across the periodic boundary, so every frame is taken with
-    the ligand in the periodic image nearest to the host anchors (the same rule as the restraint
-    search, :func:`cufep.alchemy.restraints.nearest_image_of_ligand`). From the raw coordinates a
-    ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, and the restraint held the reference
-    configuration with 52,300 kJ/mol (review of PR 1). The anchors must define the six coordinates
-    in every frame (:func:`cufep.alchemy.restraints.anchor_geometry_problem`, the rule of the
-    search); with ``force_constants: auto`` the constants come from the fluctuations of the six
-    coordinates over the frames, as for anchors the search chose (review of PR 1: they were ignored
-    for manual anchors). Returns (restraint, fluctuations).
+    The anchors are measured by :func:`cufep.alchemy.restraints.measure_anchors`, as anchors chosen
+    from interactions are: every frame with the ligand in the periodic image nearest to the host
+    anchors (from the raw coordinates a ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, and
+    the restraint held the reference configuration with 52,300 kJ/mol, review of PR 1), and the
+    anchors must define the six coordinates in every frame
+    (:func:`cufep.alchemy.restraints.anchor_geometry_problem`, the rule of the search). With
+    ``force_constants: auto`` the constants come from the fluctuations of the six coordinates over
+    the frames, as for anchors the search chose (review of PR 1: they were ignored for manual
+    anchors). ``n_atoms`` is not read any more. Returns (restraint, fluctuations).
     """
     from cufep.alchemy.restraints import (
         BoreschRestraint,
         RestraintSearchSettings,
-        anchor_geometry_problem,
         anchor_margins,
         coordinate_fluctuations,
-        nearest_image_of_ligand,
+        measure_anchors,
         with_force_constants_from_fluctuations,
     )
 
@@ -930,34 +929,20 @@ def manual_boresch_restraint(host_atoms, guest_atoms, ligand_atoms, eq, n_atoms:
             f"restraints.host_atoms / guest_atoms {missing} are not among the atoms whose positions the "
             f"pre-equilibration kept ({where}); the anchors must be atoms of the protein and the ligand"
         )
-    frames = np.asarray(eq["frames"], dtype=float)
-    full = np.zeros((frames.shape[0], int(n_atoms), 3))
-    full[:, frame_atoms, :] = frames
     host, guest = tuple(int(i) for i in host_atoms), tuple(int(i) for i in guest_atoms)
-    full = nearest_image_of_ligand(full, np.asarray(ligand_atoms, dtype=int), full[:, list(host), :].mean(axis=1),
-                                   np.asarray(eq["frame_boxes"], dtype=float))
-    probe = BoreschRestraint(host, guest, 0, 0, 0, 0, 0, 0)
     settings = RestraintSearchSettings(k_r=k_r, k_angle=k_angle)
     # the positions the alchemical run starts from, of which the last frame is a copy in single precision
-    copies = []
-    if "positions" in eq and "box" in eq:
-        start = np.asarray(eq["positions"], dtype=float)
-        copies.append(
-            nearest_image_of_ligand(
-                start,
-                np.asarray(ligand_atoms, dtype=int),
-                start[list(host)].mean(axis=0),
-                np.asarray(eq["box"], dtype=float),
-            )
-        )
-    problem = anchor_geometry_problem(probe, full, anchor_margins(settings, temperature_K), reference_copies=copies)
-    if problem:
-        raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}: {problem}. Choose other "
-                            "anchors; nothing was sampled")
-    values = probe.values(full)
-    fluctuations = coordinate_fluctuations(values)
-    restraint = BoreschRestraint(host, guest, *[float(x) for x in values[-1]], k_r, k_angle, k_angle, k_angle,
-                                 k_angle, k_angle)
+    has_start = "positions" in eq and "box" in eq
+    measured = measure_anchors(host, guest, ligand_atoms, eq["frames"], frame_atoms, eq["frame_boxes"],
+                               anchor_margins(settings, temperature_K),
+                               start=eq["positions"] if has_start else None,
+                               start_box=eq["box"] if has_start else None)
+    if measured.problem:
+        raise WorkflowError(f"restraints.host_atoms {list(host)} / guest_atoms {list(guest)}: {measured.problem}. "
+                            "Choose other anchors; nothing was sampled")
+    fluctuations = coordinate_fluctuations(measured.values)
+    restraint = BoreschRestraint(host, guest, *[float(x) for x in measured.values[-1]], k_r, k_angle, k_angle,
+                                 k_angle, k_angle, k_angle)
     if force_constants == "auto":
         restraint = with_force_constants_from_fluctuations(restraint, fluctuations, temperature_K)
     return restraint, fluctuations

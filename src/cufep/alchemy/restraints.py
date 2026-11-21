@@ -320,6 +320,153 @@ def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, f
     return None
 
 
+@dataclass
+class AnchorMeasurement:
+    """What the frames say about a set of anchors."""
+
+    problem: str | None                    # why the anchors are refused (anchor_geometry_problem), or None
+    values: np.ndarray                     # frames x 6: the six coordinates in every frame
+    start_values: np.ndarray | None        # the six coordinates where the alchemical run starts
+
+
+def measure_anchors(host_atoms, guest_atoms, ligand_atoms, frames, frame_atoms, frame_boxes, flat_margin: float,
+                    start=None, start_box=None, start_among_frames: bool = False) -> AnchorMeasurement:
+    """The six coordinates of the anchors over ``frames`` and whether the anchors can be used: one
+    measurement for anchors that are given (``restraints.selection: manual``) and for anchors
+    chosen from interactions (``interactions``).
+
+    ``frames`` (frames x frame atoms x 3, nm) are the positions of the atoms ``frame_atoms`` (their
+    numbers in the System), whole molecules that are not wrapped into the box. The force of the
+    restraint measures across the periodic boundary, so every frame is taken with the ligand in
+    the periodic image nearest to the host anchors (:func:`nearest_image_of_ligand`; from the raw
+    coordinates a ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, review of PR 1).
+
+    ``start`` (the positions of the whole System, with ``start_box``) is the configuration the
+    alchemical run starts from. The dihedral angles of the anchors must be defined there
+    (:func:`anchor_geometry_problem`). With ``start_among_frames`` it is also held to the rules of
+    the frames, as their last one: for reference values that are not those of the last frame, so
+    that no frame need be the start.
+    """
+    frame_atoms = np.asarray(frame_atoms, dtype=int)
+    host, guest = [int(i) for i in host_atoms], [int(i) for i in guest_atoms]
+    ligand = [int(i) for i in ligand_atoms]
+    # only the anchors and the ligand are read: the frames of a whole protein are not copied
+    needed = sorted(set(host) | set(guest) | set(ligand))
+    row = {int(a): i for i, a in enumerate(frame_atoms)}
+    column = {a: i for i, a in enumerate(needed)}
+    local_host, local_guest = [column[a] for a in host], [column[a] for a in guest]
+    local_ligand = np.array([column[a] for a in ligand], dtype=int)
+    xyz = np.asarray(frames)[:, [row[a] for a in needed], :].astype(float)
+    xyz = nearest_image_of_ligand(xyz, local_ligand, xyz[:, local_host, :].mean(axis=1),
+                                  np.asarray(frame_boxes, dtype=float))
+    probe = BoreschRestraint(tuple(local_host), tuple(local_guest), 0, 0, 0, 0, 0, 0)
+    copies, begin = [], None
+    if start is not None:
+        begin = np.asarray(start, dtype=float)[needed]
+        if start_box is not None:
+            begin = nearest_image_of_ligand(begin, local_ligand, begin[local_host].mean(axis=0),
+                                            np.asarray(start_box, dtype=float))
+        copies.append(begin)
+    checked = np.concatenate([xyz, begin[None]]) if start_among_frames and begin is not None else xyz
+    problem = anchor_geometry_problem(probe, checked, flat_margin, reference_copies=copies)
+    return AnchorMeasurement(problem, probe.values(xyz), None if begin is None else probe.values(begin))
+
+
+#: restraints.selection: interactions takes the reference value of a coordinate from a histogram
+#: of this many bins (the source of Ding et al., commit d6dff91, main_boresch_restraints.py)
+REFERENCE_BINS = 20
+
+
+def reference_values_from_histograms(values: np.ndarray, angle_range_deg=(45.0, 135.0),
+                                     bins: int = REFERENCE_BINS) -> np.ndarray:
+    """The reference values of ``restraints.selection: interactions``: for every coordinate the
+    centre of the fullest bin of its histogram over the frames in which theta_A and theta_B both
+    lie within ``angle_range_deg`` (``values``: frames x 6 in nm and radians; the result likewise).
+
+    The rule of the source of Ding et al. (arXiv:2603.22274; ``filter_mask_histogram_plot.py`` and
+    ``find_ideal_geometry.py`` at commit d6dff91; the paper says only that the reference
+    geometries come from the trajectory): ``bins`` bins, over 0 to 180 degrees for the two angles,
+    over -180 to 180 degrees for the three dihedral angles and over the range of the data for the
+    distance, the centre rounded to 0.1 degree and 0.001 nm. The bins of a dihedral angle cover
+    the circle, so that a peak at 180 degrees lies in two neighbouring bins as a peak on any other
+    edge of a bin does (the source also makes histograms from 0 to 360 degrees, for its figure:
+    they have the same bins).
+
+    Without a frame in the range there is no reference: :class:`RestraintError`.
+    """
+    v = np.asarray(values, dtype=float)
+    deg = np.degrees(v[:, 1:])
+    low, high = (float(x) for x in angle_range_deg)
+    inside = (deg[:, 0] >= low) & (deg[:, 0] <= high) & (deg[:, 1] >= low) & (deg[:, 1] <= high)
+    if not inside.any():
+        raise RestraintError(f"in no frame do both anchor angles (theta_A, theta_B) lie within {low:g} to {high:g} "
+                             "degrees: the anchors give no reference values for the restraint")
+
+    def fullest(x, span):
+        counts, edges = np.histogram(x, bins=int(bins), range=span)
+        k = int(np.argmax(counts))
+        return 0.5 * (edges[k] + edges[k + 1])
+
+    r0 = round(fullest(v[inside, 0], None), 3)
+    angles = [round(fullest(deg[inside, i], (0.0, 180.0)), 1) for i in (0, 1)]
+    dihedrals = [round(fullest(deg[inside, i], (-180.0, 180.0)), 1) for i in (2, 3, 4)]
+    return np.array([r0, *np.radians(angles), *np.radians(dihedrals)])
+
+
+#: the secondary structures that count as stable for restraints.selection: interactions, as DSSP
+#: names them: alpha, 3-10 and pi helix, extended strand and bridge (Ding et al., sec. 2.1)
+STABLE_STRUCTURES = "HGIEB"
+
+
+def stable_structure_fractions(topology, frames, frame_atoms) -> dict[int, float]:
+    """For every amino-acid residue (its index in the topology) the fraction of ``frames`` in which
+    it is in one of :data:`STABLE_STRUCTURES`, by DSSP as MDTraj computes it. ``frames`` (frames x
+    frame atoms x 3, nm) hold the atoms ``frame_atoms``.
+
+    The paper names these five structures; its source uses a DSSP that tells helix, strand and
+    loop apart only, so that a 3-10 or pi helix and a bridge are a loop there.
+    """
+    import mdtraj as md
+
+    from cufep.prep.protein import AMINO_ACIDS
+
+    atoms = list(topology.atoms())
+    row = {int(a): i for i, a in enumerate(np.asarray(frame_atoms, dtype=int))}
+    protein = np.array([a.index for a in atoms if a.residue.name in AMINO_ACIDS and a.index in row], dtype=int)
+    if not len(protein):
+        return {}
+    residues: list[int] = []
+    for a in protein:
+        index = atoms[a].residue.index
+        if not residues or residues[-1] != index:
+            residues.append(index)
+    sub = md.Topology.from_openmm(topology).subset(protein)
+    xyz = np.asarray(frames, dtype=np.float32)[:, [row[int(a)] for a in protein], :]
+    codes = md.compute_dssp(md.Trajectory(xyz, sub), simplified=False)             # frames x residues
+    if codes.shape[1] != len(residues):
+        raise RestraintError(f"DSSP gave {codes.shape[1]} residues for {len(residues)} of the protein")
+    stable = np.isin(codes, list(STABLE_STRUCTURES)).mean(axis=0)
+    return {int(r): float(x) for r, x in zip(residues, stable)}
+
+
+def backbone_hosts(topology) -> dict[int, tuple[int, int, int]]:
+    """The residues that can hold the host anchors of ``restraints.selection: interactions``, with
+    their backbone atoms (N, CA, C) as numbers of the System: the amino-acid residues that have
+    exactly one atom of each name. A cap has no such three atoms and is none."""
+    from cufep.prep.protein import AMINO_ACIDS
+
+    hosts = {}
+    for residue in topology.residues():
+        if residue.name not in AMINO_ACIDS:
+            continue
+        named: dict[str, list[int]] = {}
+        for atom in residue.atoms():
+            named.setdefault(atom.name, []).append(atom.index)
+        if all(len(named.get(name, ())) == 1 for name in ("N", "CA", "C")):
+            hosts[residue.index] = (named["N"][0], named["CA"][0], named["C"][0])
+    return hosts
+
+
 def anchor_margins(settings: "RestraintSearchSettings", temperature_K: float) -> float:
     """The angle (radians) from 0 and pi of :func:`anchor_geometry_problem`: where the energy of a
     restrained angle reaches ``flat_angle_energy_kt`` kT."""
