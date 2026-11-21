@@ -210,6 +210,16 @@ def test_a_leg_result_gives_the_bilayer_and_the_pose_as_numbers_without_verdicts
     combined = combine_ligand(lig, "lig", 1, cfg)
     assert not any("settled" in w or "moved away" in w or "drifted" in w for w in combined["warnings"])
     assert "dg_bind" in combined
+    # a result whose structure numbers are of the earlier rule for the periodic image of the ligand (its record
+    # has no version of them) is made again too, with the free energy it had (review of eb6f89f: it stayed as
+    # "current", with a ligand RMSD of the length of the cell where the ligand was far from the centre)
+    before = dict(again, analysis_record={k: v for k, v in again["analysis_record"].items() if k != "structure"})
+    assert again["analysis_record"]["structure"] == 2 and again["analysis_record"]["version"] == 10
+    (legs["complex"] / "result.json").write_text(json.dumps(before))
+    assert refresh_leg_result(legs["complex"], cfg, said.append) == "reanalysed"
+    once_more = json.loads((legs["complex"] / "result.json").read_text())
+    assert once_more["analysis_record"] == again["analysis_record"]
+    assert once_more["delta_g_decouple"] == again["delta_g_decouple"]
 
     # review of PR 1: a leg run again with --reschedule keeps its earlier samples in previous_<n>/; the archive
     # holds copies of the files of the leg, and an archive of an earlier version is read with the files above it
@@ -245,6 +255,14 @@ def test_a_leg_result_gives_the_bilayer_and_the_pose_as_numbers_without_verdicts
     write_leg_result(legs["complex"], from_interactions)
     assert refresh_leg_result(legs["complex"], cfg, said.append) == "current"
     assert combine_ligand(lig, "lig", 1, cfg)["repeats"][0]["restraint_choice"] == choice
+    # `cufep analyze` prints it too (review of eb6f89f: the command printed the analysis and left it out)
+    from click.testing import CliRunner
+
+    from cufep.cli import main
+
+    printed = json.loads(CliRunner().invoke(main, ["analyze", str(legs["complex"])]).output)
+    assert printed["restraint_choice"] == choice
+    assert "restraint_choice" not in json.loads(CliRunner().invoke(main, ["analyze", str(legs["solvent"])]).output)
     assert leg_result_from_samples(archive_leg(legs["complex"]), cfg, run("complex"))["restraint_choice"] == choice
 
     # without the files there are neither notes nor numbers of them

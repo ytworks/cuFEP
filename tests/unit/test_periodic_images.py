@@ -525,3 +525,51 @@ def test_the_interactions_of_a_lopsided_complex_are_looked_for_in_the_pocket(mon
     with pytest.raises(WorkflowError, match="Nothing was sampled"):
         workflow.interaction_restraint(cfg, prep, mol, eq, trajectories, 298.15)
     assert seen["nearest"].max() < 0.31
+
+
+# ---- review of eb6f89f (Codex): the image the force measures in, and the nearest image of a skewed cell ----
+
+def test_the_nearest_image_of_a_skewed_cell_is_found_whatever_the_length_of_the_displacement():
+    """OpenMM's formula for the minimum image is the nearest image up to half the smallest height of the cell
+    (1.41 nm in the rhombic dodecahedron of 4 nm): of (0, 0, 1.5) nm it makes an image 3.125 nm long. The
+    distance method measured with it and gave such a contact to a residue 1.6 nm away."""
+    from cufep.alchemy.lrc import minimum_image, nearest_image
+
+    box = np.array([[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [2.0, 2.0, 2.0 * np.sqrt(2.0)]])
+    delta = np.array([[0.0, 0.0, 1.5], [1.6, 0.0, 0.0], [0.0, 0.0, 1.3]])
+    assert np.linalg.norm(minimum_image(delta, box), axis=1).tolist() == pytest.approx([3.125, 1.6, 1.3], abs=1e-3)
+    assert np.linalg.norm(nearest_image(delta, box), axis=1).tolist() == pytest.approx([1.5, 1.6, 1.3])
+    # against every lattice vector within two cells, for displacements many cells long, in both cells
+    rng = np.random.default_rng(11)
+    cells = np.array([[i, j, k] for i in range(-2, 3) for j in range(-2, 3) for k in range(-2, 3)], dtype=float)
+    for cell in (box, CUBE, DODECAHEDRON):
+        far = rng.uniform(-12.0, 12.0, size=(200, 3))
+        reduced = minimum_image(far, cell)
+        shortest = np.linalg.norm(reduced[:, None, :] + (cells @ cell)[None], axis=2).min(axis=1)
+        assert np.allclose(np.linalg.norm(nearest_image(far, cell), axis=1), shortest)
+
+
+def test_the_reference_distance_of_a_restraint_is_the_one_its_force_measures():
+    """Review of eb6f89f (P1). H0 at the centre of the three host anchors, G0 2.1 nm from it and the centre of
+    the ligand 1.8 nm, in a cell of 4 nm: the ligand was taken in the image nearest to the centre of the host
+    anchors and r was 2.103 nm, where the force of the restraint measures 1.903 nm across the boundary; the
+    restraint had an energy of 83 kJ/mol at its own reference (k_r 10 kcal/mol/A^2). The ligand is taken in the
+    image in which G0 is nearest to H0."""
+    from cufep.alchemy.restraints import measure_anchors
+
+    box = np.eye(3) * 4.0
+    host = np.array([[0.0, -0.1, -0.05], [0.0, 0.05, -0.05], [0.0, 0.05, 0.10]])            # their centre is the origin
+    guest = np.array([[2.1, 0.0, 0.0], [2.1, 0.15, 0.0], [1.2, 0.15, 0.15]])                # their centre: x = 1.8
+    positions = np.concatenate([host, guest])
+    assert np.allclose(positions[:3].mean(axis=0), 0.0) and positions[3:].mean(axis=0)[0] == pytest.approx(1.8)
+    measured = measure_anchors((0, 1, 2), (3, 4, 5), [3, 4, 5], positions[None], np.arange(6), box[None], 0.3)
+    assert measured.values[0, 0] == pytest.approx(np.linalg.norm([1.9, 0.1, 0.05]), abs=1e-9)   # 1.903 nm
+    restraint = BoreschRestraint((0, 1, 2), (3, 4, 5), *[float(x) for x in measured.values[0]], K_R, K_A, K_A,
+                                 K_A, K_A, K_A)
+    assert restraint_energy(restraint, positions, box) == pytest.approx(0.0, abs=1e-6)
+    # in every image the ligand is written in
+    for name, shift in lattice_shifts(box).items():
+        moved = positions.copy()
+        moved[3:] += shift
+        again = measure_anchors((0, 1, 2), (3, 4, 5), [3, 4, 5], moved[None], np.arange(6), box[None], 0.3)
+        assert np.allclose(again.values, measured.values, atol=1e-9), name

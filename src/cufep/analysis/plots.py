@@ -134,6 +134,21 @@ _DATA, _CONTEXT = "#2a78d6", "#c3c2b7"
 _ROWS_SHOWN = 12
 
 
+def _is_of_the_restraint(report_file: Path, restraint_file: Path) -> bool:
+    """Whether ``interactions.json`` is the analysis the restraint of the leg was chosen from: the leg has a
+    restraint of ``restraints.selection: interactions`` with the anchors the analysis chose. A run that was
+    stopped between the two files and went on with another selection leaves the analysis of a restraint that
+    was never used (review of eb6f89f)."""
+    try:
+        stored = json.loads(restraint_file.read_text())
+        chosen = json.loads(report_file.read_text())["chosen"]
+        return (stored["info"].get("selection") == "interactions"
+                and [int(i) for i in stored["restraint"]["host_atoms"]] == [int(i) for i in chosen["host_atoms"]]
+                and [int(i) for i in stored["restraint"]["guest_atoms"]] == [int(i) for i in chosen["guest_atoms"]])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def plot_interactions(leg_dir: str | Path, path: str | Path | None = None) -> Path | None:
     """What the restraint of a complex leg was chosen from with ``restraints.selection: interactions``,
     from ``interactions.json`` of the leg, written to ``interactions.png`` next to it.
@@ -144,12 +159,13 @@ def plot_interactions(leg_dir: str | Path, path: str | Path | None = None) -> Pa
     right: the frames in which each of them is there, trajectory after trajectory. Below: the six
     coordinates of the chosen anchors over the frames that give the reference values, in the bins
     of the rule, with the reference value of each. Numbers of the analysis, without a verdict.
-    Returns the path, or None if the leg has no such analysis or matplotlib is missing.
+    Returns the path, or None if the leg has no such analysis of the restraint it has
+    (``restraint.json``) or matplotlib is missing.
     """
     leg_dir = Path(leg_dir)
     out = Path(path) if path is not None else leg_dir / "interactions.png"
     source = leg_dir / "interactions.json"
-    if not source.exists():
+    if not source.exists() or not _is_of_the_restraint(source, leg_dir / "restraint.json"):
         out.unlink(missing_ok=True)                  # a figure of an earlier state would be read as the current one
         return None
     try:

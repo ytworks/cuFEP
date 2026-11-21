@@ -782,7 +782,15 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert restraint_made_with(from_md)["interactions"] == {
         "trajectories": 4, "length_ns": 3.0, "discard_ns": 1.0, "frame_interval_ps": 10.0, "min_frame_fraction": 0.4,
         "angle_range_deg": [45.0, 135.0], "stable_structure_fraction": 0.5, "second_interaction_ratio": 0.6,
-        "fallback_frame_fraction": 0.15, "fallback_cutoff_nm": 1.0}
+        "fallback_frame_fraction": 0.15, "fallback_cutoff_nm": 1.0, "frames_needed": [320, 120]}
+    # the thresholds are recorded as the frames they are, and whole numbers of a record are compared exactly
+    # (review of eb6f89f: 0.3999999999 and 0.4 were one setting, 319 and 320 frames; the seeds 1000000000 and
+    # 1000000001 were one seed, and the trajectories of both were used together)
+    nearly = config(restraints={"interactions": {"min_frame_fraction": 0.3999999999}})
+    assert settings_differences(restraint_made_with(nearly), restraint_made_with(from_md)) == [
+        "interactions.frames_needed: [319, 120] -> [320, 120]"]
+    assert settings_differences({"seed": 1000000000}, {"seed": 1000000001}) == ["seed: 1000000000 -> 1000000001"]
+    assert settings_differences({"k": 334.72}, {"k": 334.72 * (1 + 1e-12)}) == []
     assert restraint_contradictions(old_restraint, from_md) == ["restraints.selection: auto -> interactions"]
     with pytest.raises(WorkflowError, match="selection: auto -> interactions"):
         check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(searched()),
@@ -869,6 +877,17 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert earlier == dict(eq, precision="single")                      # what an earlier version recorded
     assert settings_differences(earlier, single) == ["plain_md_precision: not recorded -> single"]
     assert "plain_md_precision" not in eq
+    # double asked of the plugin, which has none: earlier versions ran that MD on stock OpenMM in double
+    # precision and recorded cupotential and double; the plugin runs it in mixed precision now (review of eb6f89f)
+    double = equil_made_with(config(backend={"precision": "double"}), "complex", False, 7)
+    assert double["backend"] == "cupotential" and double["plain_md_precision"] == "mixed"
+    stock = equil_made_with(config(backend={"name": "openmm", "precision": "double"}), "complex", False, 7)
+    assert "plain_md_precision" not in stock
+    # the platform is part of the record, as it is of a trajectory for the restraint: a pre-equilibration on
+    # the Reference platform was used again by a run on the CPU platform. A record without it is one of CUDA
+    on_cpu = equil_made_with(config(backend={"name": "openmm", "platform": "CPU"}), "complex", False, 7)
+    reference = equil_made_with(config(backend={"name": "openmm", "platform": "Reference"}), "complex", False, 7)
+    assert settings_differences(reference, on_cpu) == ["platform: Reference -> CPU"] and "platform" not in eq
     stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0}))
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 

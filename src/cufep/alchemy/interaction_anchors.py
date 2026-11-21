@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from cufep.alchemy.restraints import RestraintError
+from cufep.config.schema import frames_needed  # noqa: F401  (the one rounding of a fraction of the frames)
 
 #: the interactions of ProLIF that can carry anchors, with the weight of each in the ranking and
 #: in the merging of the types of one (L1, residue): ionic 0.9, cation-pi 0.7, hydrogen bond 0.6,
@@ -82,12 +83,6 @@ class InteractionSettings:
     second_interaction_ratio: float = 0.6
     fallback_frame_fraction: float = 0.15
     fallback_cutoff_nm: float = 1.0
-
-
-def frames_needed(n_frames: int, fraction: float) -> int:
-    """The number of frames that ``fraction`` of ``n_frames`` is, rounded down ("frame-count
-    thresholds are rounded down to integers in both selection methods")."""
-    return int(n_frames * fraction)
 
 
 # --------------------------------------------------------------------------- the ligand
@@ -428,7 +423,7 @@ def contacts(frames: Frames, graph: LigandGraph, settings: InteractionSettings) 
     ``fallback_cutoff_nm``; the frame is one of the residue of that backbone atom. L1 of a residue
     is the ligand atom that is the nearest one in most of its frames (the earliest of them if
     several are)."""
-    from cufep.alchemy.lrc import minimum_image
+    from cufep.alchemy.lrc import nearest_image
 
     selected = distance_atoms(graph)
     backbone = [(atom, residue) for residue, trio in sorted(frames.hosts.items()) for atom in trio]
@@ -440,7 +435,7 @@ def contacts(frames: Frames, graph: LigandGraph, settings: InteractionSettings) 
     for f in range(frames.n):
         delta = (lig[f][:, None, :] - bb[f][None, :, :]).reshape(-1, 3)
         if frames.boxes is not None:
-            delta = minimum_image(delta, np.asarray(frames.boxes[f], dtype=float))
+            delta = nearest_image(delta, np.asarray(frames.boxes[f], dtype=float))
         dist = np.sqrt((delta * delta).sum(axis=1))
         k = int(np.argmin(dist))
         if dist[k] <= settings.fallback_cutoff_nm:

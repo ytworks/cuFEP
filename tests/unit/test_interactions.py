@@ -325,6 +325,17 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     assert set(info["versions"]) == {"prolif", "MDAnalysis", "rdkit"}
     assert restraint_choice(info)["anchors"] == info["anchors"] and restraint_choice({"selection": "auto"}) is None
     assert json.loads(json.dumps(info)) == info                 # as restraint.json holds it
+    # the record ties the restraint to the pre-equilibration its trajectories started from, as each trajectory
+    # is tied to it: the restraint of another repeat, or of a pre-equilibration that was made again, has the
+    # same settings and is not this leg's (review of eb6f89f)
+    from cufep.sampling.restraint_md import start_digest
+    from cufep.workflow import WorkflowError, check_restraint_start
+
+    assert info["start"] == start_digest(eq["positions"], eq["velocities"], eq["box"])
+    check_restraint_start({"info": info}, leg_dir / "restraint.json", eq)
+    check_restraint_start({"info": {"selection": "auto"}}, leg_dir / "restraint.json", eq)
+    with pytest.raises(WorkflowError, match="chosen from MD that started from another configuration"):
+        check_restraint_start({"info": info}, leg_dir / "restraint.json", dict(eq, positions=eq["positions"] + 0.001))
     # where the alchemical run starts, in the units the record names (the restraint beside it is in radians)
     assert info["start_values_units"] == {"r": "nm", "angles": "degrees"}
     assert info["start_values"]["r"] == pytest.approx(restraint.r0, abs=0.1) and info["start_values"]["r"] < 1.0
@@ -363,38 +374,59 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     # the figure of the leg is drawn from that file; without the file there is none, and none of an earlier state
     from cufep.analysis.plots import plot_interactions
 
+    # ... and is of the restraint the leg has. Stopped between interactions.json and restraint.json, a leg can go
+    # on with given anchors: the analysis that is left over is of a restraint that was never used (review of
+    # eb6f89f: its figure was drawn as the one of the result)
+    assert plot_interactions(leg_dir) is None                    # no restraint.json yet
+    stored = {"restraint": restraint.to_dict(), "info": info}
+    (leg_dir / "restraint.json").write_text(json.dumps(stored))
     figure = plot_interactions(leg_dir)
     assert figure == leg_dir / "interactions.png" and figure.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    given = dict(stored["restraint"], guest_atoms=[ligand[0], ligand[1], ligand[2]])
+    (leg_dir / "restraint.json").write_text(json.dumps({"restraint": given, "info": {"selection": "manual"}}))
+    assert plot_interactions(leg_dir) is None and not figure.exists()
+    (leg_dir / "restraint.json").write_text(json.dumps(stored))
+    assert plot_interactions(leg_dir) == figure
     (leg_dir / "interactions.json").rename(leg_dir / "interactions.kept")
     assert plot_interactions(leg_dir) is None and not figure.exists()
 
 
-def test_the_residues_of_two_chains_with_one_numbering_have_two_names():
+def test_residues_that_would_share_a_name_are_named_with_the_chain_of_the_input():
     """Review of f5a77ce (P3): the results named a residue by its name and number ("VAL981"), which the two
     chains of a dimer share, and the secondary structure of the residues was recorded under that name, so that
-    one of two residues was lost. A residue is named with its chain where the protein has several, and with
-    its insertion code; what is recorded by residue goes by its index."""
+    one of two residues was lost. Review of eb6f89f (P2): the chain that was then written was the one of the
+    prepared topology, which has a chain for every piece between chain breaks, named anew in their order: the
+    two pieces of the one chain of the A2A example read "ALA59.A" and "HIS278.B", and with chains B, A in the
+    input the first "VAL981" read "VAL981.A". A residue is named as the input names it, with its chain only
+    where two residues would share the name, and with its insertion code."""
     import openmm.app as app
 
     from cufep.workflow import atom_label, residue_names
 
-    def topology(*chain_ids):
+    def topology(*chains):
+        """One prepared chain per entry: its id and the numbers of its valines."""
         top = app.Topology()
-        for chain_id in chain_ids:
+        for chain_id, numbers in chains:
             chain = top.addChain(chain_id)
-            top.addAtom("N", app.element.nitrogen, top.addResidue("VAL", chain, id="981"))
-            top.addAtom("N", app.element.nitrogen, top.addResidue("ASP", chain, id="898", insertionCode="A"))
+            for number in numbers:
+                top.addAtom("N", app.element.nitrogen, top.addResidue("VAL", chain, id=str(number)))
+            top.addAtom("N", app.element.nitrogen, top.addResidue("ASP", chain, id="898", insertionCode=chain_id))
         top.addAtom("C1", app.element.carbon, top.addResidue("LIG", top.addChain("L"), id="1"))
         return top
 
-    dimer = topology("A", "B")
-    names = residue_names(dimer)
-    assert [names[i] for i in range(5)] == ["VAL981.A", "ASP898A.A", "VAL981.B", "ASP898A.B", "LIG1"]
+    dimer = topology(("A", [981]), ("B", [981]))
+    names = residue_names(dimer, {"A": "A", "B": "B"})
+    assert [names[i] for i in range(5)] == ["VAL981.A", "ASP898A", "VAL981.B", "ASP898B", "LIG1"]
     assert atom_label(list(dimer.atoms()), 2, names) == "VAL981.B:N"
-    # one chain: as the input calls it; chains that the input does not tell apart: by their number
-    assert list(residue_names(topology("A")).values()) == ["VAL981", "ASP898A", "LIG1"]
-    assert list(residue_names(topology("A", "A")).values())[:4] == ["VAL981.1", "ASP898A.1", "VAL981.2", "ASP898A.2"]
-    assert list(residue_names(topology("", " ")).values())[2] == "VAL981.2"
+    # the chains of the input in the order B, A: the first piece is the input's chain B
+    assert list(residue_names(dimer, {"A": "B", "B": "A"}).values())[::2][:2] == ["VAL981.B", "VAL981.A"]
+    # two pieces of one chain of the input have no residue in common: no chain is written
+    pieces = topology(("A", [59]), ("B", [278]))
+    assert [residue_names(pieces, {"A": "A", "B": "A"})[i] for i in (0, 2)] == ["VAL59", "VAL278"]
+    # chains that the input does not tell apart, or a preparation that recorded none: their number
+    assert list(residue_names(dimer, {"A": "", "B": ""}).values())[::2][:2] == ["VAL981.1", "VAL981.2"]
+    assert list(residue_names(topology(("A", [981]), ("A", [981]))).values())[::2][:2] == ["VAL981.1", "VAL981.2"]
+    assert list(residue_names(dimer).values())[::2][:2] == ["VAL981.A", "VAL981.B"]
 
 
 def test_the_trajectories_take_the_settings_of_the_yaml_and_the_end_of_the_pre_equilibration(tyk2, tmp_path,

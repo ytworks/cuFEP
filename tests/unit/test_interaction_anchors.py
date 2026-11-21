@@ -148,6 +148,66 @@ def test_the_start_of_the_alchemical_run_is_held_to_the_rules_when_no_frame_is_t
         assert refused.problem is not None
 
 
+def test_anchors_on_a_line_in_every_frame_are_refused_though_the_start_is_bent():
+    """Review of eb6f89f (P1). With the start among the frames, G0-G1-G2 exactly on a line in every frame the
+    reference values come from and bent where the run starts was no longer "on a line in every frame": the
+    anchors passed, and phi_C, which no frame defines, got the reference of the bin of 0 degrees. The rule
+    of a trajectory is one of the frames; the start is held to the rules of a single configuration."""
+    straight = chain()
+    straight[4] = straight[3] + [0.0, 0.15, 0.0]                         # theta_B stays 90 degrees
+    straight[5] = straight[3] + [0.0, 0.30, 0.0]
+    frames = np.repeat(straight[None], 6, axis=0)
+    boxes = np.repeat(BOX[None], 6, axis=0)
+    bent = np.zeros((20, 3))
+    bent[:7] = chain()
+    for among in (False, True):
+        measured = restraints.measure_anchors(HOST, GUEST, LIGAND, frames, np.arange(7), boxes, np.radians(22.0),
+                                              start=bent, start_box=BOX, start_among_frames=among)
+        assert "on a straight line in every frame" in measured.problem, among
+        assert np.all(measured.values[:, 5] == 0.0)                      # what the frames say of phi_C: nothing
+
+
+def test_force_constants_from_fluctuations_are_held_to_the_rule_of_the_flat_angle_themselves():
+    """Review of eb6f89f (P1). OpenFE's check_angle_not_flat takes the force constant of the angle. At 298.15 K
+    theta_A at 60 degrees in half of the frames and at 120 in the other half, and at 30 degrees where the run
+    starts: with 80 kcal/mol/rad^2 the margin is 22.05 degrees and the anchors pass. Their fluctuation of 30
+    degrees gives 20 kcal/mol/rad^2 (the lower limit), whose margin is 44.10 degrees: at 30 degrees the
+    restraint is 4.6 kT from a straight line. The anchors are asked again with the constants they get."""
+    frames = np.array([chain(60.0 if f % 2 == 0 else 120.0) for f in range(20)])
+    boxes = np.repeat(BOX[None], 20, axis=0)
+    start = np.zeros((20, 3))
+    start[:7] = chain(30.0)
+    k_80 = 80.0 * 4.184
+    margin = restraints.flat_margin_of(k_80, 298.15)
+    assert np.degrees(margin) == pytest.approx(22.05, abs=0.01)
+    measured = restraints.measure_anchors(HOST, GUEST, LIGAND, frames, np.arange(7), boxes, margin, start=start,
+                                          start_box=BOX, start_among_frames=True)
+    assert measured.problem is None and measured.held_theta.shape == (21, 2)
+    trial = restraints.BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0)
+    with_them, problem = restraints.constants_from_fluctuations(trial, measured.values, measured.held_theta, 298.15)
+    assert with_them.k_theta_a == pytest.approx(20.0 * 4.184) and with_them.k_theta_b == pytest.approx(4 * k_80)
+    assert np.degrees(restraints.flat_margin_of(with_them.k_theta_a, 298.15)) == pytest.approx(44.10, abs=0.01)
+    assert "H1-H0-G0 (theta_A) comes within 44 degrees of a straight line (30.0 to 120.0" in problem
+    # the energy of the restraint at 30 degrees with that constant, in kT: below the 10 of the rule
+    in_kt = 0.5 * with_them.k_theta_a * np.radians(30.0) ** 2 / (restraints.R_GAS * 298.15)
+    assert in_kt == pytest.approx(4.63, abs=0.01)
+    # anchors that keep their distance from a straight line with the weaker constant too
+    calm = restraints.measure_anchors(HOST, GUEST, LIGAND, frames, np.arange(7), boxes, margin, start=frames[0],
+                                      start_box=BOX, start_among_frames=True)
+    assert restraints.constants_from_fluctuations(trial, calm.values, calm.held_theta, 298.15)[1] is None
+
+    # anchors that are given (restraints.selection: manual) with restraints.force_constants: auto
+    from cufep.workflow import WorkflowError, manual_boresch_restraint
+
+    given = np.concatenate([frames, start[None, :7]])
+    eq = {"frames": given, "frame_atoms": np.arange(7), "frame_boxes": np.repeat(BOX[None], 21, axis=0),
+          "positions": start[:7], "box": BOX}
+    fixed, _fluctuations = manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 7, 10.0 * 4.184 * 100.0, k_80)
+    assert fixed.k_theta_a == pytest.approx(k_80)
+    with pytest.raises(WorkflowError, match="with the force constants of their fluctuations .*within 44 degrees"):
+        manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 7, 10.0 * 4.184 * 100.0, k_80, force_constants="auto")
+
+
 # --------------------------------------------------------------------------- the protein
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_the_hosts_are_the_residues_with_a_backbone_and_dssp_is_counted_frame_by_frame(repo):
@@ -521,3 +581,126 @@ def test_the_best_candidate_that_can_be_used_is_chosen_and_without_one_there_is_
     far = World(100).residue(3, distance=1.5)
     with pytest.raises(RestraintError):
         far.ia.choose_anchors(far.frames(), far.graph, [[] for _ in range(100)])
+
+
+# ---- review of eb6f89f (Codex): through the choice of a leg -------------------------------------------------
+
+@pytest_rdkit
+def test_the_distance_method_measures_to_the_nearest_image_in_a_skewed_cell():
+    """Review of eb6f89f (P1). Cell (4, 0, 0), (0, 4, 0), (2, 2, 2.83) nm and
+    ``fallback_cutoff_nm: 2.0``: the backbone of residue 0 is 1.5 nm from the ligand's N along z, that of
+    residue 1 is 1.6 nm along x. OpenMM's formula for the minimum image made 3.1 nm of the first, and every
+    frame was counted for residue 1."""
+    world = World(10)
+    l1 = world.ligand[world.L1]
+    world.backbones[0] = np.repeat((l1 + [[0.0, 0.0, 1.5], [0.0, 0.1, 1.6], [0.1, 0.1, 1.7]])[None], 10, axis=0)
+    world.backbones[1] = np.repeat((l1 + [[1.6, 0.0, 0.0], [1.7, 0.1, 0.0], [1.8, 0.1, 0.1]])[None], 10, axis=0)
+    box = np.array([[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [2.0, 2.0, 2.0 * np.sqrt(2.0)]])
+    settings = world.ia.InteractionSettings(fallback_cutoff_nm=2.0)
+    found = world.ia.contacts(world.frames(boxes=np.repeat(box[None], 10, axis=0)), world.graph, settings)
+    assert {residue: len(where) for residue, (_l1, where) in found.items()} == {0: 10}
+
+
+def leg_of(world, records, monkeypatch, **restraints_settings):
+    """What ``workflow.interaction_restraint`` gets for the residues 0, 1, ... of ``world``, whose last frame is
+    the configuration the alchemical run starts from: ``(cfg, prep, molecule, eq, trajectories)``. Residue r of
+    the topology has N, CA and C as the atoms 3 r, 3 r + 1 and 3 r + 2, and the ligand follows. In the place of
+    ProLIF and DSSP: ``records`` (one list per frame) and no secondary structure."""
+    import openmm.app as app
+
+    from cufep.analysis import interactions
+    from cufep.config.schema import Config
+    from cufep.sampling.restraint_md import Trajectories
+
+    residues = sorted(world.backbones)
+    assert residues == list(range(len(residues)))
+    top = app.Topology()
+    chain = top.addChain("A")
+    for r in residues:
+        residue = top.addResidue("GLY", chain, id=str(100 + r))
+        for name, element in (("N", "N"), ("CA", "C"), ("C", "C")):
+            top.addAtom(name, app.element.get_by_symbol(element), residue)
+    ligand_residue = top.addResidue("LIG", top.addChain("L"), id="1")
+    for atom in world.mol.GetAtoms():
+        top.addAtom(f"{atom.GetSymbol()}{atom.GetIdx()}", app.element.get_by_symbol(atom.GetSymbol()), ligand_residue)
+    xyz = world.frames().xyz
+    n, n_atoms = xyz.shape[0] - 1, xyz.shape[1]
+    boxes = np.repeat(BOX[None], n, axis=0)
+    monkeypatch.setattr(interactions, "interactions_of_frames", lambda *args, **kwargs: list(records))
+    monkeypatch.setattr(restraints, "stable_structure_fractions", lambda *args, **kwargs: {})
+    settings = {"interactions": {"discard_ns": 0.0}}
+    for key, value in restraints_settings.items():
+        if key in ("angle_range_deg", "min_frame_fraction"):
+            settings["interactions"][key] = value
+        else:
+            settings[key] = value
+    cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"}, "restraints": settings})
+    trajectories = Trajectories(frames=xyz[:-1], boxes=boxes, frame_atoms=np.arange(n_atoms),
+                                trajectory=np.arange(n) % 2, time_ps=10.0 * (1 + np.arange(n) // 2),
+                                backends=["openmm", "openmm"], timesteps_fs=[4.0, 4.0], notes=[])
+    prep = {"topology": top, "ligand": list(range(3 * len(residues), n_atoms))}
+    return cfg, prep, world.mol, {"positions": xyz[-1], "box": BOX}, trajectories
+
+
+def test_anchors_whose_frames_give_no_reference_values_are_a_problem_of_the_candidate():
+    """Review of eb6f89f (P2). Anchors can be candidates, be ranked first and pass OpenFE's rules without one
+    frame in which theta_A and theta_B are both in range (P1-L1-L2 in range in the first half of the frames,
+    L1-P1-P2 in the second): the histograms give them no reference values. The calculation stopped there
+    ("in no frame do both anchor angles") although the next candidate could be the restraint. It is a reason
+    to pass a candidate over, as a broken rule of OpenFE is (the choice of a leg asks both of every candidate:
+    the test of the force constants below goes through it)."""
+    never_both = coordinates(800)
+    never_both[:400, 1] = np.radians(30.0)
+    never_both[400:, 2] = np.radians(30.0)
+    assert "in no frame do both anchor angles (theta_A, theta_B) lie within 45 to 135 degrees" in \
+        restraints.reference_values_problem(never_both)
+    with pytest.raises(RestraintError, match="in no frame do both anchor angles"):
+        restraints.reference_values_from_histograms(never_both)
+    assert restraints.reference_values_problem(coordinates(800)) is None
+    assert restraints.reference_values_problem(coordinates(800, theta_a=88.0, theta_b=90.0), (89.0, 91.0)) is not None
+
+
+@pytest.mark.needs("rdkit", "prolif", "MDAnalysis")
+def test_a_candidate_is_held_to_the_flat_angle_rule_with_the_force_constants_it_gets(monkeypatch):
+    """Review of eb6f89f (P1), through the choice of a leg with ``restraints.force_constants: auto``. Residue 0
+    is ranked first; its theta_A is 60 and 120 degrees in the frames and 30 degrees where the run starts. With
+    the constants its fluctuations give (20 kcal/mol/rad^2, margin 44 degrees) it breaks OpenFE's rule and
+    was chosen all the same. With the configured constants it is the restraint, as before."""
+    from cufep import workflow
+
+    n = 800
+    theta = np.where(np.arange(n + 1) % 2 == 0, 60.0, 120.0)
+    theta[-1] = 30.0
+    world = World(n + 1).residue(0, alpha=90.0, theta=theta).residue(1, alpha=90.0, theta=90.0, distance=0.45)
+    records = world.records((0, "HBAcceptor", range(n)), (1, "HBAcceptor", range(320)))[:n]
+    fixed, fixed_info, _report = workflow.interaction_restraint(*leg_of(world, records, monkeypatch), 298.15)
+    assert fixed_info["start_values"]["theta_A"] == pytest.approx(30.0) and fixed_info["candidates_refused"] == 0
+    restraint, info, report = workflow.interaction_restraint(
+        *leg_of(world, records, monkeypatch, force_constants="auto"), 298.15)
+    margins = [np.degrees(restraints.flat_margin_of(k, 298.15)) for k in (restraint.k_theta_a, restraint.k_theta_b)]
+    start = [info["start_values"]["theta_A"], info["start_values"]["theta_B"]]
+    assert all(m <= angle <= 180.0 - m for m, angle in zip(margins, start))
+    # every candidate that was ranked before it and passed over is in interactions.json, with the reason
+    passed_over = report["refused_candidates"]
+    assert info["candidates_refused"] == len(passed_over) >= 1
+    assert any("comes within 44 degrees of a straight line" in c["refused"] for c in passed_over)
+
+
+@pytest.mark.needs("rdkit", "prolif", "MDAnalysis")
+def test_the_result_names_the_frames_of_the_interaction_it_names(monkeypatch):
+    """Review of eb6f89f (P1). One ligand atom and residue with a hydrogen bond in the frames 0 to 299 and an
+    ionic interaction in 200 to 399 of 500: the candidate rests on the 400 frames with either and is named
+    after the ionic one, which is in 200. The result said "Anionic ... in 400 of 500 frames"."""
+    from cufep import workflow
+
+    n = 500
+    world = World(n + 1).residue(0)
+    records = world.records((0, "HBAcceptor", range(300)), (0, "Anionic", range(200, 400)))[:n]
+    _restraint, info, report = workflow.interaction_restraint(*leg_of(world, records, monkeypatch), 298.15)
+    assert info["interaction"] == {"residue": "GLY100", "type": "Anionic", "frames": 200, "of_frames": 500,
+                                   "frames_with_any_kept_type": 400,
+                                   "kept_types": {"Anionic": 200, "HBAcceptor": 300}}
+    assert report["chosen"]["n_frames"] == 400
+    assert {(row["interaction"], row["frames"]) for row in report["interactions"]} == {("HBAcceptor", 300),
+                                                                                       ("Anionic", 200)}
+

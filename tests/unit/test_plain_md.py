@@ -1,4 +1,6 @@
 """The unrestrained MD of the fully interacting system: which backend runs it and how it recovers."""
+import numpy as np
+import openmm.unit as unit
 import pytest
 from conftest import lj_particles
 
@@ -150,3 +152,45 @@ def test_the_plain_md_runs_the_backend_in_the_precision_of_the_alchemical_run(ot
 
     assert [backend_precision("cupotential", p) for p in ("mixed", "single", "double")] == ["mixed", "single", "mixed"]
     assert [backend_precision("openmm", p) for p in ("mixed", "single", "double")] == ["mixed", "single", "double"]
+
+
+def test_the_backend_is_asked_about_the_box_the_md_starts_in_and_gets_the_system_in_that_box(other_backend,
+                                                                                            monkeypatch):
+    """Review of eb6f89f (P2). The backend was asked whether it can run a copy of the System in the box the MD
+    starts in, and then made its Context of the System as it was prepared, whose box can be another one: a
+    plugin that needs 3 x the cutoff found 2.71 nm enough and then refused the 2.69 nm of the prepared System,
+    outside the fallback, and the leg stopped. Both are the System in the box of the start; the threads of
+    the CPU platform are those of the configuration."""
+    system, positions, box = lj_particles()
+    started_in = np.asarray(box, dtype=float) * 1.01
+    seen, threads = [], []
+
+    def edge(of):
+        return round(of.getDefaultPeriodicBoxVectors()[0][0].value_in_unit(unit.nanometer), 6)
+
+    prepare = other_backend.prepare_system
+
+    def asked(self, checked):
+        seen.append(("asked", edge(checked)))
+
+    def given(self, to_run):
+        seen.append(("given", edge(to_run)))
+        threads.append(self.cpu_threads)
+        return prepare(self, to_run)
+
+    monkeypatch.setattr(other_backend, "check_system", asked)
+    monkeypatch.setattr(other_backend, "prepare_system", given)
+    start = (positions, np.zeros_like(positions), started_in)
+    equilibrate.unrestrained_md(system, start, list(range(8)), settings(cpu_threads=3), 4.0, None, lambda line: None)
+    assert {kind for kind, _edge in seen} == {"asked", "given"}
+    assert {length for _kind, length in seen} == {round(float(started_in[0][0]), 6)}
+    assert set(threads) == {3}
+    assert edge(system) == round(float(np.asarray(box)[0][0]), 6)         # the System of the caller is as it was
+
+    # the settings of the YAML give the threads (resources.cpu_threads_per_worker) to every plain MD of a leg
+    from cufep.config.schema import Config
+    from cufep.workflow import plain_md_settings
+
+    cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+                                 "resources": {"cpu_threads_per_worker": 4}})
+    assert plain_md_settings(cfg, 4.0, "isotropic", 1).cpu_threads == 4

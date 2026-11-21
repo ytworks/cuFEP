@@ -168,8 +168,9 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    (`ligand_rmsd_from_input_A`), as OpenFE reports the ligand RMSD; the run goes on in any
    case, and the result is the free energy of the pose the ligand is in. The same is measured
    for manual anchors and for a restraint chosen from interactions: under every selection
-   over the frames of the pre-equilibration, with the backbone atoms within
-   `restraints.host_max_distance_nm` + 0.5 nm of the ligand as the binding site. The RMSD and the drift of the centre of the ligand in the coupled state
+   over the frames of the pre-equilibration, superposed on the backbone atoms (N, CA, C)
+   within `restraints.host_max_distance_nm` + 0.5 nm of the centre of the ligand's heavy
+   atoms in the first frame, or on all C-alpha atoms if those are fewer than 12. The RMSD and the drift of the centre of the ligand in the coupled state
    during the production are numbers of the result too (`structure`).
 
    With `restraints.selection: interactions`, the default, the anchors come from the interactions

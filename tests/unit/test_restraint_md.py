@@ -256,6 +256,46 @@ def test_a_result_sent_as_the_process_ends_is_read_and_a_process_that_does_not_e
     assert [process.killed for process in made] == [False, True] and len(made) == 2
 
 
+def test_a_trajectory_that_was_published_before_its_process_ended_is_not_run_again(tmp_path, monkeypatch):
+    """Review of eb6f89f (P1). A process that ends after it has published its trajectory and before it has
+    said so was taken for one whose backend failed: the trajectory was run again on stock OpenMM over the
+    file, or the stage ended (``backend.fallback: none``). The file is complete when it is there."""
+    tasks = tasks_in(tmp_path, n=2, fallback="none")
+    started = []
+
+    class Process:
+        """It runs its trajectory where it is made, and is gone without a word."""
+
+        def __init__(self, target=None, args=(), daemon=None):
+            self.task = args[1]
+
+        def start(self):
+            started.append(self.task.index)
+            restraint_md.run_trajectory(self.task, None, lambda line: None)
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            pass
+
+        def kill(self):
+            pass
+
+    class Context:
+        Pipe = staticmethod(_Pipes.pair)
+
+    Context.Process = Process
+    monkeypatch.setattr(restraint_md.mp, "get_context", lambda method: Context)
+    summaries = restraint_md.run_trajectories(tasks, [None, None], lambda line: None)
+    assert started == [0, 1]                                    # none was run again
+    assert [(s["index"], s["backend"], s["frames"], s["notes"]) for s in summaries] == [(0, "openmm", 3, []),
+                                                                                        (1, "openmm", 3, [])]
+    # a file of another task (other settings, another start) is not this trajectory
+    other = tasks_in(tmp_path, n=1, production_ns=0.001)[0]
+    assert restraint_md.published_summary(other) is None and restraint_md.published_summary(tasks[0])["frames"] == 3
+
+
 def test_a_trajectory_of_a_bilayer_system_has_the_membrane_barostat_and_no_restraints(tmp_path, monkeypatch):
     """The trajectories of a system in a bilayer run with the barostat of the leg, the membrane
     one, at the temperature, pressure and frequency of the settings, with no force that holds

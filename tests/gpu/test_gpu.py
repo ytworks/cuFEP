@@ -408,21 +408,39 @@ def test_the_trajectories_for_a_restraint_run_on_the_backend_of_the_leg(backend,
 
 @needs_cuda
 @pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
-def test_the_pre_equilibration_of_a_leg_runs_in_single_precision_where_it_is_asked(backend):
+def test_the_pre_equilibration_of_a_leg_runs_in_single_precision_where_it_is_asked(backend, monkeypatch):
     """``backend.precision: single`` is the precision of the plain MD of a leg too (the owner's decision of
-    2026-11-21; earlier versions ran it in mixed precision then): the minimisation, NVT and NPT on stock
-    OpenMM and the unrestrained MD on the backend of the leg, without a fallback and without a recovery."""
+    2026-11-21; earlier versions made mixed of it where the settings of the YAML become those of the MD): the
+    minimisation, NVT and NPT on stock OpenMM and the unrestrained MD on the backend of the leg, without a
+    fallback and without a recovery. The settings are those the leg makes of the YAML, and the precision is
+    read from every Context that was made (review of eb6f89f: the test gave the MD its settings directly and
+    looked at no Context)."""
     from conftest import build_dipeptides_in_water
 
-    from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
+    from cufep.backends.base import Backend
+    from cufep.config.schema import Config
+    from cufep.sampling.equilibrate import pre_equilibrate
+    from cufep.workflow import plain_md_settings
 
     system, _top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
     solute = sorted(ligand + other)
-    settings = EquilibrationSettings(nvt_ns=0.002, npt_ns=0.002, production_ns=0.004, frame_interval_ps=1.0,
-                                     minimize_iterations=200, platform="CUDA", precision="single", timestep_fs=2.0,
-                                     seed=3, md_backend=backend, fallback="none", restrained_atoms=solute)
+    cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+                                 "backend": {"name": backend, "precision": "single", "fallback": "none"}})
+    settings = plain_md_settings(cfg, 2.0, "isotropic", 3, nvt_ns=0.002, npt_ns=0.002, production_ns=0.004,
+                                 frame_interval_ps=1.0, minimize_iterations=200, restrained_atoms=solute)
+    assert (settings.precision, settings.md_backend, settings.fallback) == ("single", backend, "none")
+    precisions = []
+    make = Backend.make_context
+
+    def made(self, *args, **kwargs):
+        context = make(self, *args, **kwargs)
+        precisions.append(context.getPlatform().getPropertyValue(context, "Precision"))
+        return context
+
+    monkeypatch.setattr(Backend, "make_context", made)
     lines = []
     result = pre_equilibrate(system, pos, box, solute, settings, 0, lines.append)
+    assert precisions and set(precisions) == {"single"}
     assert result.backend == backend and result.notes == [] and result.timestep_fs == 2.0
     assert result.frames.shape == (4, len(solute), 3) and np.all(np.isfinite(result.positions))
     assert np.all(np.isfinite(result.velocities)) and np.abs(result.box - box).max() < 0.2

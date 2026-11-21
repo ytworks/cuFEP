@@ -137,6 +137,25 @@ def _trajectory_process(conn, task: TrajectoryTask, device, parent_pid: int) -> 
         conn.close()
 
 
+def published_summary(task: TrajectoryTask) -> dict | None:
+    """What :func:`run_trajectory` returns for a trajectory whose file is there, made by this task; None
+    without such a file. The file is published in one step when the trajectory is complete, so a process
+    that ends between that step and its last word has done its work (review of eb6f89f: the trajectory was
+    run again on stock OpenMM over the file, or the stage ended with ``backend.fallback: none``)."""
+    path = Path(task.path)
+    if not path.exists():
+        return None
+    try:
+        with np.load(path) as data:
+            if json.loads(str(data["made_with"])) != json.loads(json.dumps(task.made_with)):
+                return None
+            return {"index": int(task.index), "backend": str(data["backend"]),
+                    "timestep_fs": float(data["timestep_fs"]), "frames": int(data["frames"].shape[0]),
+                    "notes": list(json.loads(str(data["notes"])))}
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def _on_stock_openmm(task: TrajectoryTask) -> TrajectoryTask | None:
     """The task of a trajectory whose process died, to be run once more on stock OpenMM; None if the
     configuration allows no fallback or stock OpenMM was running it already."""
@@ -212,6 +231,8 @@ def run_trajectories(tasks: list[TrajectoryTask], devices: list, log=print, inli
                     done[task.index] = ended[1]
                 elif ended[0] == "error":
                     raise TrajectoryError(f"{task.what} failed (device {devices[slot]}): {ended[1]}")
+                elif published_summary(task) is not None:
+                    done[task.index] = published_summary(task)
                 else:
                     again = _on_stock_openmm(task)
                     if again is None:

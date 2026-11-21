@@ -52,6 +52,8 @@ class EquilibrationSettings:
     md_backend: str = "openmm"
     #: what runs the production if ``md_backend`` cannot or fails: openmm | none (backend.fallback)
     fallback: str = "openmm"
+    #: threads of a Context of the CPU platform (resources.cpu_threads_per_worker); None: OpenMM's own number
+    cpu_threads: int | None = None
     #: heavy atoms held by harmonic position restraints during NVT/NPT (released for production)
     restrained_atoms: list[int] = field(default_factory=list)
     restraint_k: float = 1000.0            # kJ/mol/nm^2
@@ -141,7 +143,8 @@ def _load(context, positions, box, velocities=None) -> None:
 
 
 def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettings, dt_fs: float, device, log):
-    backend = get_backend("openmm", precision=settings.precision, platform=settings.platform)
+    backend = get_backend("openmm", precision=settings.precision, platform=settings.platform,
+                          cpu_threads=settings.cpu_threads)
     from cufep.steps import md_steps
 
     temperature = settings.temperature_K * u.kelvin
@@ -188,17 +191,22 @@ def unrestrained_md(system, start, frame_atoms, settings: EquilibrationSettings,
     lines. The backend runs in the precision the alchemical run would give it
     (:func:`~cufep.backends.base.backend_precision`). The result records the backend that ran it.
     """
-    stock = get_backend("openmm", precision=settings.precision, platform=settings.platform)
+    stock = get_backend("openmm", precision=settings.precision, platform=settings.platform,
+                        cpu_threads=settings.cpu_threads)
     notes: list[str] = []
     md_backend = stock
+    # the System in the box the MD starts in: the backend is asked about that box, and makes its Context of
+    # the same System. Asked about the start and given the System of the preparation, whose box can be the
+    # smaller one, the plugin refused it after it had been found able, outside the fallback (review of eb6f89f)
+    system = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(start[2], dtype=float)])
     if settings.md_backend != "openmm":
         try:
             md_backend = get_backend(settings.md_backend, platform=settings.platform,
-                                     precision=backend_precision(settings.md_backend, settings.precision))
+                                     precision=backend_precision(settings.md_backend, settings.precision),
+                                     cpu_threads=settings.cpu_threads)
             if hasattr(md_backend, "check_system"):
-                probe = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
-                probe.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in start[2]])
-                md_backend.check_system(probe)
+                md_backend.check_system(system)
         except Exception as exc:  # noqa: BLE001 - any reason the backend cannot run this system
             if settings.fallback == "none":
                 raise BackendError(f"the {settings.md_backend} backend cannot run the {what} ({str(exc)[:150]}) and "

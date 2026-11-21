@@ -19,11 +19,28 @@ import numpy as np
 
 
 def minimum_image(delta: np.ndarray, box: np.ndarray) -> np.ndarray:
-    """Minimum-image displacement for an OpenMM reduced triclinic box (rows a, b, c)."""
+    """Minimum-image displacement for an OpenMM reduced triclinic box (rows a, b, c), as OpenMM
+    computes it. It is the nearest image of a displacement up to half the smallest height of the
+    cell, which is all that the MD and the tail correction need (a cutoff is never longer); a
+    longer displacement in a skewed cell can come out as an image that is not the nearest one
+    (:func:`nearest_image`)."""
     delta = delta - np.outer(np.round(delta[:, 2] / box[2, 2]), box[2])
     delta = delta - np.outer(np.round(delta[:, 1] / box[1, 1]), box[1])
     delta = delta - np.outer(np.round(delta[:, 0] / box[0, 0]), box[0])
     return delta
+
+
+_NEIGHBOUR_CELLS = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)], dtype=float)
+
+
+def nearest_image(delta: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """The shortest periodic image of every displacement of ``delta`` (n x 3), whatever its length:
+    :func:`minimum_image` and the 26 cells around it are compared. In the rhombic dodecahedron of
+    4 nm, (0, 0, 1.5) nm is its own nearest image, and ``minimum_image`` gives one of 3.1 nm
+    (review of eb6f89f)."""
+    box = np.asarray(box, dtype=float)
+    images = minimum_image(np.asarray(delta, dtype=float), box)[:, None, :] + (_NEIGHBOUR_CELLS @ box)[None]
+    return images[np.arange(images.shape[0]), np.argmin((images * images).sum(axis=2), axis=1)]
 
 
 @dataclass

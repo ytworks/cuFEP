@@ -198,6 +198,9 @@ class RestraintSearchSettings:
     #: theta_A and theta_B must stay this far (in kT of their force constant) from 0 and pi in every
     #: frame: OpenFE's check_angle_not_flat (contributed by V. Gapsys)
     flat_angle_energy_kt: float = 10.0
+    #: restraints.force_constants: auto: a candidate is also held to that rule with the force constants
+    #: its fluctuations give it (:func:`constants_from_fluctuations`)
+    constants_from_fluctuations: bool = False
     max_guest_anchors: int = 8
     max_host_candidates: int = 60
 
@@ -267,7 +270,29 @@ def undefined_dihedral_planes(restraint: "BoreschRestraint", positions: np.ndarr
     return out
 
 
-def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin: float,
+def flat_margin_of(k_angle: float, temperature_K: float, energy_kt: float = 10.0) -> float:
+    """The angle (radians) from 0 and pi at which a restrained angle of force constant ``k_angle``
+    (kJ/mol/rad^2) has the energy ``energy_kt`` kT."""
+    return math.sqrt(2.0 * float(energy_kt) * R_GAS * float(temperature_K) / float(k_angle))
+
+
+def flat_angle_problem(theta: np.ndarray, margins) -> str | None:
+    """Why theta_A and theta_B (``theta``: configurations x 2, radians) break OpenFE's
+    check_angle_not_flat, or None: each must stay its margin away from 0 and pi in every
+    configuration. ``margins`` is one angle for both or one for each: the margin is that of the
+    force constant the angle is restrained with (:func:`flat_margin_of`)."""
+    theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    both = (float(margins),) * 2 if np.ndim(margins) == 0 else tuple(float(m) for m in margins)
+    for k, name in enumerate(ANCHOR_ANGLES[1:3]):
+        low, high = float(theta[:, k].min()), float(theta[:, k].max())
+        if low < both[k] or high > np.pi - both[k]:
+            return (f"the anchor angle {name} comes within {np.degrees(both[k]):.0f} degrees of a straight line "
+                    f"({np.degrees(low):.1f} to {np.degrees(high):.1f} degrees over the frames), where the restraint "
+                    "energy is below 10 kT (OpenFE's check_angle_not_flat)")
+    return None
+
+
+def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin,
                             trajectory: bool = True, reference_copies=()) -> str | None:
     """Why the anchors of ``restraint`` are refused over ``frames`` (positions with the ligand in the
     periodic image nearest the host), or None. The rules are two of OpenFE's (EvaluateBoreschAtoms in
@@ -298,16 +323,9 @@ def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, f
     frames = np.asarray(frames, dtype=float)
     if frames.ndim == 2:
         frames = frames[None]
-    angles = np.atleast_2d(anchor_angles(restraint, frames))
-    for k in (1, 2):
-        name = ANCHOR_ANGLES[k]
-        low, high = float(angles[:, k].min()), float(angles[:, k].max())
-        if low < flat_margin or high > np.pi - flat_margin:
-            return (f"the anchor angle {name} comes within {np.degrees(flat_margin):.0f} degrees of a straight line "
-                    f"({np.degrees(low):.1f} to {np.degrees(high):.1f} degrees over the frames), where the restraint "
-                    "energy is below 10 kT (OpenFE's check_angle_not_flat)")
-    if not trajectory:
-        return None
+    flat = flat_angle_problem(np.atleast_2d(anchor_angles(restraint, frames))[:, 1:3], flat_margin)
+    if flat or not trajectory:
+        return flat
     if bool(np.all(collinear_frames(restraint, frames))):
         return ("the six anchors H2-H1-H0-G0-G1-G2 are on a straight line in every frame (three in a row with "
                 f"|cos| above {COLLINEAR_THRESHOLD:g}, OpenFE's is_collinear): the dihedral angles of the restraint "
@@ -327,6 +345,9 @@ class AnchorMeasurement:
     problem: str | None                    # why the anchors are refused (anchor_geometry_problem), or None
     values: np.ndarray                     # frames x 6: the six coordinates in every frame
     start_values: np.ndarray | None        # the six coordinates where the alchemical run starts
+    #: theta_A and theta_B of every configuration that is held to OpenFE's check_angle_not_flat: the frames,
+    #: and the start where it is held to the rules of the frames
+    held_theta: np.ndarray | None = None
 
 
 def measure_anchors(host_atoms, guest_atoms, ligand_atoms, frames, frame_atoms, frame_boxes, flat_margin: float,
@@ -338,14 +359,19 @@ def measure_anchors(host_atoms, guest_atoms, ligand_atoms, frames, frame_atoms, 
     ``frames`` (frames x frame atoms x 3, nm) are the positions of the atoms ``frame_atoms`` (their
     numbers in the System), whole molecules that are not wrapped into the box. The force of the
     restraint measures across the periodic boundary, so every frame is taken with the ligand in
-    the periodic image nearest to the host anchors (:func:`nearest_image_of_ligand`; from the raw
-    coordinates a ligand one cell away gave r0 = 5.4 nm in a 5 nm cell, review of PR 1).
+    the periodic image in which its first anchor G0 is nearest to the first host anchor H0, which
+    is the distance the force restrains (from the raw coordinates a ligand one cell away gave
+    r0 = 5.4 nm in a 5 nm cell, review of PR 1; with the image nearest to the centre of the three
+    host anchors, H0 at 0 and G0 at 2.1 nm in a cell of 4 nm gave r = 2.1 nm where the force
+    measures 1.9 nm, review of eb6f89f).
 
     ``start`` (the positions of the whole System, with ``start_box``) is the configuration the
     alchemical run starts from. The dihedral angles of the anchors must be defined there
-    (:func:`anchor_geometry_problem`). With ``start_among_frames`` it is also held to the rules of
-    the frames, as their last one: for reference values that are not those of the last frame, so
-    that no frame need be the start.
+    (:func:`anchor_geometry_problem`). With ``start_among_frames`` it is also held to the rule of
+    every frame (theta_A and theta_B away from a straight line): for reference values that are not
+    those of the last frame, so that no frame need be the start. The rule of a trajectory (not on
+    a line in every frame) is one of the frames alone: a start that is bent does not make anchors
+    usable that are on a line in every frame the reference values come from (review of eb6f89f).
     """
     frame_atoms = np.asarray(frame_atoms, dtype=int)
     host, guest = [int(i) for i in host_atoms], [int(i) for i in guest_atoms]
@@ -357,19 +383,50 @@ def measure_anchors(host_atoms, guest_atoms, ligand_atoms, frames, frame_atoms, 
     local_host, local_guest = [column[a] for a in host], [column[a] for a in guest]
     local_ligand = np.array([column[a] for a in ligand], dtype=int)
     xyz = np.asarray(frames)[:, [row[a] for a in needed], :].astype(float)
-    xyz = nearest_image_of_ligand(xyz, local_ligand, xyz[:, local_host, :].mean(axis=1),
-                                  np.asarray(frame_boxes, dtype=float))
+    xyz = ligand_in_the_image_of(xyz, local_ligand, local_guest[:1], xyz[:, local_host[0], :],
+                                 np.asarray(frame_boxes, dtype=float))
     probe = BoreschRestraint(tuple(local_host), tuple(local_guest), 0, 0, 0, 0, 0, 0)
     copies, begin = [], None
     if start is not None:
         begin = np.asarray(start, dtype=float)[needed]
         if start_box is not None:
-            begin = nearest_image_of_ligand(begin, local_ligand, begin[local_host].mean(axis=0),
-                                            np.asarray(start_box, dtype=float))
+            begin = ligand_in_the_image_of(begin, local_ligand, local_guest[:1], begin[local_host[0]],
+                                           np.asarray(start_box, dtype=float))
         copies.append(begin)
-    checked = np.concatenate([xyz, begin[None]]) if start_among_frames and begin is not None else xyz
-    problem = anchor_geometry_problem(probe, checked, flat_margin, reference_copies=copies)
-    return AnchorMeasurement(problem, probe.values(xyz), None if begin is None else probe.values(begin))
+    problem = anchor_geometry_problem(probe, xyz, flat_margin, reference_copies=copies)
+    held = xyz
+    if start_among_frames and begin is not None:
+        held = np.concatenate([xyz, begin[None]])
+        problem = problem or anchor_geometry_problem(probe, begin, flat_margin, trajectory=False)
+    return AnchorMeasurement(problem, probe.values(xyz), None if begin is None else probe.values(begin),
+                             np.atleast_2d(anchor_angles(probe, held))[:, 1:3])
+
+
+def constants_from_fluctuations(restraint: "BoreschRestraint", values: np.ndarray, held_theta: np.ndarray,
+                                temperature_K: float, flat_angle_energy_kt: float = 10.0):
+    """``restraints.force_constants: auto`` for anchors that passed the rules with the configured
+    force constants: ``(the restraint with force constants from the fluctuations of values, why
+    it cannot be used with them or None)``. OpenFE's check_angle_not_flat is a rule of the force
+    constant the angle has: a weaker one puts 10 kT farther from a straight line (44 degrees at
+    20 kcal/mol/rad^2 where 80 gives 22), so theta_A and theta_B (``held_theta``, of every
+    configuration held to the rule) are asked again with the constants the restraint gets
+    (review of eb6f89f: a start at 30 degrees passed, 4.6 kT from a straight line)."""
+    out = with_force_constants_from_fluctuations(restraint, coordinate_fluctuations(values), temperature_K)
+    margins = (flat_margin_of(out.k_theta_a, temperature_K, flat_angle_energy_kt),
+               flat_margin_of(out.k_theta_b, temperature_K, flat_angle_energy_kt))
+    return out, flat_angle_problem(held_theta, margins)
+
+
+def reference_values_problem(values: np.ndarray, angle_range_deg=(45.0, 135.0)) -> str | None:
+    """Why anchors with the coordinates ``values`` (frames x 6) give no reference values by
+    :func:`reference_values_from_histograms`, or None: in no frame do theta_A and theta_B both lie
+    within ``angle_range_deg``."""
+    deg = np.degrees(np.asarray(values, dtype=float)[:, 1:3])
+    low, high = (float(x) for x in angle_range_deg)
+    if not bool(np.any(np.all((deg >= low) & (deg <= high), axis=1))):
+        return (f"in no frame do both anchor angles (theta_A, theta_B) lie within {low:g} to {high:g} "
+                "degrees: the anchors give no reference values for the restraint")
+    return None
 
 
 #: restraints.selection: interactions takes the reference value of a coordinate from a histogram
@@ -398,9 +455,9 @@ def reference_values_from_histograms(values: np.ndarray, angle_range_deg=(45.0, 
     deg = np.degrees(v[:, 1:])
     low, high = (float(x) for x in angle_range_deg)
     inside = (deg[:, 0] >= low) & (deg[:, 0] <= high) & (deg[:, 1] >= low) & (deg[:, 1] <= high)
-    if not inside.any():
-        raise RestraintError(f"in no frame do both anchor angles (theta_A, theta_B) lie within {low:g} to {high:g} "
-                             "degrees: the anchors give no reference values for the restraint")
+    none = reference_values_problem(v, angle_range_deg)
+    if none:
+        raise RestraintError(none)
 
     def fullest(x, span):
         counts, edges = np.histogram(x, bins=int(bins), range=span)
@@ -470,8 +527,7 @@ def backbone_hosts(topology) -> dict[int, tuple[int, int, int]]:
 def anchor_margins(settings: "RestraintSearchSettings", temperature_K: float) -> float:
     """The angle (radians) from 0 and pi of :func:`anchor_geometry_problem`: where the energy of a
     restrained angle reaches ``flat_angle_energy_kt`` kT."""
-    kt = R_GAS * temperature_K
-    return math.sqrt(2.0 * settings.flat_angle_energy_kt * kt / settings.k_angle)
+    return flat_margin_of(settings.k_angle, temperature_K, settings.flat_angle_energy_kt)
 
 
 @dataclass
@@ -569,21 +625,24 @@ def nearest_image_of_ligand(positions_nm: np.ndarray, ligand: np.ndarray, anchor
     box vectors, OpenMM's reduced form) are one per frame accordingly. The ligand may be any
     number of cells away: coordinates of a trajectory are not wrapped into the box.
     """
-    from cufep.alchemy.lrc import minimum_image
+    return ligand_in_the_image_of(positions_nm, ligand, ligand, anchor, box_nm)
+
+
+def ligand_in_the_image_of(positions_nm: np.ndarray, ligand: np.ndarray, of_atoms, anchor: np.ndarray,
+                           box_nm: np.ndarray) -> np.ndarray:
+    """Copy of the coordinates with the ligand moved, as a whole, by the lattice vector that brings
+    the centre of its atoms ``of_atoms`` into the periodic image nearest to ``anchor``. Shapes as for
+    :func:`nearest_image_of_ligand`."""
+    from cufep.alchemy.lrc import nearest_image
 
     single = positions_nm.ndim == 2
     pos = np.array(positions_nm[None] if single else positions_nm, dtype=float)
     anchors = np.asarray(anchor, dtype=float).reshape(-1, 3)
     boxes = np.asarray(box_nm, dtype=float).reshape(-1, 3, 3)
-    shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)], dtype=float)
     for f in range(pos.shape[0]):
-        box = boxes[min(f, len(boxes) - 1)]
-        delta = pos[f, ligand].mean(axis=0) - anchors[min(f, len(anchors) - 1)]
-        # the lattice vector that brings the ligand next to the anchor, however many cells that is,
-        # and its neighbours (in a skewed cell the nearest image need not be that one)
-        candidates = minimum_image(delta[None], box)[0] - delta + shifts @ box
-        best = candidates[np.argmin(np.linalg.norm(delta + candidates, axis=1))]
-        pos[f, ligand] += best
+        delta = pos[f, of_atoms].mean(axis=0) - anchors[min(f, len(anchors) - 1)]
+        # the lattice vector that brings them next to the anchor, however many cells that is
+        pos[f, ligand] += nearest_image(delta[None], boxes[min(f, len(boxes) - 1)])[0] - delta
     return pos[0] if single else pos
 
 
@@ -601,7 +660,7 @@ def ligand_next_to_protein(positions_nm: np.ndarray, ligand: np.ndarray, protein
     one of 477, cell 9.05 nm, ligand 4.93 nm from the centre of the C-alpha atoms and 0.3 nm from
     its pocket; the image nearest to the centre is 1.2 nm from every backbone atom).
     Coordinates without protein atoms are returned as they are."""
-    from cufep.alchemy.lrc import minimum_image
+    from cufep.alchemy.lrc import nearest_image
 
     protein = np.asarray(protein, dtype=int)
     single = positions_nm.ndim == 2
@@ -609,15 +668,11 @@ def ligand_next_to_protein(positions_nm: np.ndarray, ligand: np.ndarray, protein
     if len(protein) == 0:
         return pos[0] if single else pos
     boxes = np.asarray(box_nm, dtype=float).reshape(-1, 3, 3)
-    shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)], dtype=float)
     anchors = np.empty((pos.shape[0], 3))
     for f in range(pos.shape[0]):
-        box = boxes[min(f, len(boxes) - 1)]
-        # every protein atom from the centre of the ligand, in its nearest image (in a skewed cell that
-        # need not be the one of minimum_image: its neighbours are looked at too)
-        delta = minimum_image(pos[f, protein] - pos[f, ligand].mean(axis=0), box)
-        distance = np.linalg.norm(delta[:, None, :] + (shifts @ box)[None], axis=2).min(axis=1)
-        anchors[f] = pos[f, protein[int(np.argmin(distance))]]
+        # every protein atom from the centre of the ligand, in its nearest image
+        delta = nearest_image(pos[f, protein] - pos[f, ligand].mean(axis=0), boxes[min(f, len(boxes) - 1)])
+        anchors[f] = pos[f, protein[int(np.argmin((delta * delta).sum(axis=1)))]]
     moved = nearest_image_of_ligand(pos, ligand, anchors, boxes)
     return moved[0] if single else moved
 
@@ -794,6 +849,9 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
                     if anchor_geometry_problem(r, aligned, flat_margin, reference_copies=copies) is not None:
                         continue
                     v = r.values(aligned)                                           # (frames, 6)
+                    if s.constants_from_fluctuations and constants_from_fluctuations(
+                            r, v, v[:, 1:3], temperature_K, s.flat_angle_energy_kt)[1] is not None:
+                        continue
                     # Reference values: those of the final frame, from which the alchemical run
                     # starts (as OpenFE). A mean over the trajectory is a geometry that a ligand
                     # which moved between two positions never has.

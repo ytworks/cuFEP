@@ -415,3 +415,22 @@ def test_plan_says_how_the_restraint_is_chosen():
     assert "within 1 nm of the ligand in 120 frames or more (0.15)" in said
     assert "selection auto" in restraint_selection_lines(
         Config.model_validate({**BASE, "restraints": {"selection": "auto"}}))
+
+
+def test_a_fraction_of_the_frames_is_rounded_down_as_it_is_written():
+    """Review of eb6f89f (P1). "Frame-count thresholds are rounded down to integers": 0.29 of 800 frames is
+    232. The product of the two binary numbers is 231.99999999999997, and its integer part kept an interaction
+    of 231 frames; of the fractions of two decimals, 14 were one frame too low for 20 to 1200 frames. The rule,
+    the check of the configuration and `cufep plan` round with this one function."""
+    from cufep.alchemy import interaction_anchors
+    from cufep.config.schema import frames_needed
+
+    assert interaction_anchors.frames_needed is frames_needed
+    assert int(800 * 0.29) == 231 and frames_needed(800, 0.29) == 232
+    assert (frames_needed(800, 0.40), frames_needed(800, 0.15), frames_needed(804, 0.40), frames_needed(799, 0.40)) \
+        == (320, 120, 321, 319)
+    for n in (20, 100, 300, 800, 804, 1200):
+        for hundredths in range(1, 100):
+            assert frames_needed(n, hundredths / 100) == n * hundredths // 100
+    assert frames_needed(800, 0.3999999999) == 319 and frames_needed(5, 0.15) == 0 and frames_needed(800, 1e-05) == 0
+
