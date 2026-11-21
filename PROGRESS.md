@@ -37,14 +37,16 @@ and ruff; PR #4, plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.m
 with the settings of the examples, the full sets, an accuracy wiki). Analysis version 10.
 In progress: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` (the Boresch
 restraint from the protein-ligand interactions of unrestrained MD, to become the default
-`restraints.selection`); steps 1 to 12 of 14: `interactions` is the default. Tested on the CPU
-with trajectories made by hand and on a GPU with the trajectories on both backends. Left: the
-review of the whole diff and one run of each example (steps 13 and 14).
+`restraints.selection`); steps 1 to 13 of 14: `interactions` is the default. Tested on the CPU
+with trajectories made by hand and on a GPU with the trajectories on both backends. The whole
+diff was reviewed by a reader who did not write it: no input found for which a wrong number
+passes every check; its four P2 and four P3 findings are fixed. Left: one run of each example
+(step 14).
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 565 passed (2026-11-21, the code of `main` in the image `cufep:dev` rebuilt with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 17 passed (2026-11-21, one GPU, the same image and code, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
+| Unit tests (CPU) | 634 passed (2026-11-21, commit 0f3aa32 of PR #6 in the image `cufep:dev` with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`; `main` in that image: 565) |
+| GPU tests | 23 passed (2026-11-21, one GPU, the same image and commit, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`; `main`: 17) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). In the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation with the same settings: -8.94 ± 0.77 |
 | A2A example (4e, experiment -12.07 kcal/mol) | in the full A2A run: -18.91 ± 0.52 kcal/mol (complex leg 44.68); one earlier calculation with the same settings: -11.95 ± 0.73 (complex leg 37.61) |
@@ -67,6 +69,16 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [amendment] Review of the restraint from interactions; plain MD in the precision asked
+- What: an independent review of `main..f5a77ce` found no input with a wrong number that passes
+  every check; its four P2 and four P3 are fixed. The ligand next to the protein is in the image
+  of its nearest protein atom (one rule for the interactions, the search of `auto` and the pose
+  RMSD); a run asks guest anchors of the ligands whose complex leg it runs; the record of a
+  pre-equilibration holds `backend.fallback: none`; `host_max_distance_nm` is documented for every
+  selection. Plain MD runs in the precision of the YAML, single too (it ran in mixed then).
+- Why: step 13 of the plan; the precision is the owner's decision of 2026-11-21.
+- Refs: PR #6 (1739162, 0db38f6, 8b7ba95, 75a1697), the plan (its last section), `docs/configuration.md`
 
 ### 2026-11-21 — [design] The default `restraints.selection` is `interactions`
 - What: a configuration that names no selection chooses the Boresch restraint from the

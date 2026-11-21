@@ -1,5 +1,5 @@
 # 非拘束 MD の相互作用解析 (ProLIF) から Boresch 拘束を決めるモード
-Status: In progress (steps 1-12 done: the plan, the environment, the plain MD of a leg, the trajectories, the rule, ProLIF, the selection in the leg, the outputs, the GPU test, the default; left: step 13, the review of the whole diff, and step 14, one run of each example)
+Status: In progress (steps 1-13 done: the plan, the environment, the plain MD of a leg, the trajectories, the rule, ProLIF, the selection in the leg, the outputs, the GPU test, the default, the review of the whole diff and the fixes of its findings; left: step 14, one run of each example)
 Refs: this pull request; `docs/protocol.md` ("Steps of one leg"); `docs/configuration.md` (`restraints`)
 
 ## Context
@@ -185,3 +185,30 @@ Felis と変えるところ (cuFEP の選択として `docs/configuration.md` �
   `restraint.json` のアンカー・根拠の相互作用・参照値と、保存されたフレームから数え直した頻度の一致;
   文献の基準 (重なり 0.03、独立サンプル 50) の結果と ΔG ± 標準誤差を、実験値と以前の既定での結果に
   並べて数値で報告する (1 回の計算では精度の差は言えない)。
+
+## レビュー (手順 13) の結果 (2026-11-21)
+
+書いていない者が `main..f5a77ce` を読み、合法な入力で間違った数値が検査を通る例を探した。そのような例
+(P1) は見つからなかった。Felis のソースから独立に書いた第 2 の実装との比較 (乱数で作った 1000 例) で、
+選ばれるアンカーの違いは 0。指摘は P2 が 4 件、P3 が 4 件で、すべて再現してから直した
+(commit 1739162、0db38f6、8b7ba95)。
+
+- P2 周期像: 相互作用を数える前に、リガンドを「全 C-alpha の中心に最も近い像」に移していた。
+  偏った複合体の外側の面にいるリガンドは中心から箱の半分より遠く、その像は反対側の溶媒の中になる
+  (模型: 52 残基の領域と 477 残基の領域、箱 9.05 nm、中心から 4.93 nm。ProLIF に渡る座標で最近接の
+  主鎖原子まで 1.21〜1.28 nm、MD が書いた座標では 0.30 nm 以下)。実在の複合体では再現していない
+  (TYK2 は中心から 1.09 nm、箱の半分は 4.02 nm)。規則を 1 つにした (`ligand_next_to_protein`:
+  リガンドの中心に最も近いタンパク質原子の像)。相互作用、`auto` の探索とその開始配置、入力ポーズからの
+  RMSD、本番の構造の数値がこれを通る。中心の規則が正しかった場合は同じ像なので、数値は変わらない。
+- P2 `--ligand` と `--leg`: 実行しないリガンド (または溶媒 leg だけを実行するリガンド) のせいで実行が
+  拒否された。実行は、complex leg を実行するリガンドだけを調べる。`cufep plan` は全リガンドを調べる。
+- P2 精度: `backend.precision: single` のとき、平の MD (pre-equilibration と拘束用の MD) は mixed で
+  走っていた (最初の版からの cuFEP 独自の規則、出典なし)。`docs/protocol.md` は逆のことを書いていた。
+  オーナーの決定 (2026-11-21): single と書けば平の MD も single で走る。以前の版が `single` の設定で
+  作った `equil.npz` は mixed で走ったものなので、再利用しない (記録のキー `plain_md_precision`)。
+- P2 `restraints.host_max_distance_nm`: 「`auto` だけ」と書いたが、どの選択でも
+  `ligand_rmsd_from_input_A` を測る結合部位を決める。文書と schema の説明を直した。
+- P3: `equil.npz` の記録に `backend.fallback` が無かった (`none` を記録する。以前の版のファイルは既定の
+  ままなら使える)。スケジューラに伝える仕事量の単位が部分ごとに違った (`md_work` に統一) とログの文言。
+  軌跡のプロセスが結果を送って終わる瞬間の読み落としと、終わらないプロセスの放置。2 本の鎖で同じ番号の
+  残基が同じ名前になること (鎖が複数あれば `VAL981.B`)。`restraint.json` の開始配置の値の単位。
