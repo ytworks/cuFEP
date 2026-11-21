@@ -1,5 +1,5 @@
 # 非拘束 MD の相互作用解析 (ProLIF) から Boresch 拘束を決めるモード
-Status: In progress (steps 1-13 done: the plan, the environment, the plain MD of a leg, the trajectories, the rule, ProLIF, the selection in the leg, the outputs, the GPU test, the default, the review of the whole diff and the fixes of its findings; left: step 14, one run of each example)
+Status: In progress (steps 1-14 done: the plan, the environment, the plain MD of a leg, the trajectories, the rule, ProLIF, the selection in the leg, the outputs, the GPU test, the default, the review of the whole diff and the fixes of its findings, one run of each example; the pull request is a draft and waits for the owner)
 Refs: this pull request; `docs/protocol.md` ("Steps of one leg"); `docs/configuration.md` (`restraints`)
 
 ## Context
@@ -308,6 +308,50 @@ pre-equilibration (拘束なしの MD 5 ns、膜では 10 ns) の終わりから
   (定数 2 なら 0.03〜0.06) で、大半は角度と二面角 (出典と同じ 80) による。距離の揺らぎは 0.18〜0.23 Å、
   拘束の幅は定数 10 で 0.24 Å、2 で 0.54 Å。
 - TYK2 の実行間のばらつき (拘束が同じでも complex leg が動く) は、この変更では説明も解決もできない。
+
+## example の実行結果 (手順 14、開始点の変更の後)
+
+イメージ `cufep:720cdb1` (clean な checkout から作成)。既定の `restraints.selection: interactions`、本番 5 ns、
+GPU 4 枚 (TYK2 は 0〜3、A2A は 4〜7、同時)、1 回の計算。拘束用の MD は、溶質の重原子を保持した
+pre-equilibration の終わり (与えられたポーズ) から始まる。
+
+| | TYK2 ejm_31 | A2A 4e |
+|---|---|---|
+| ΔG_bind (kcal/mol) | -12.16 ± 0.32 | -15.47 ± 1.00 |
+| 実験 | -9.54 | -12.07 |
+| complex leg | 42.95 ± 0.26 | 41.83 ± 0.99 |
+| 溶媒 leg | 20.23 ± 0.18 | 16.57 ± 0.14 |
+| 拘束の解放 | -10.57 | -9.80 |
+| lambda window (complex、溶媒) | 22、19 | 18、17 |
+| 重なりの最小値 (基準 0.03) | 0.135、0.187 | 0.163、0.170 |
+| 独立サンプルの最少 (基準 50) | 77、46 | 15、280 |
+| 拘束のホスト | VAL981 N, CA, C | GLU169 N, CA, C |
+| 拘束のゲスト | N2x, C7x, C6x | C3x, N1x, N2x |
+| 根拠の水素結合 | 771/800 | 795/800 |
+| 順位づけした候補、試した候補 | 32、1 | 54、1 |
+| r0 | 3.03 Å | 5.76 Å |
+| 入力ポーズからのリガンドの RMSD | 0.71 Å | 0.81 Å |
+
+- どちらも NOT RELIABLE は無い。独立サンプルが 50 未満の window がある: TYK2 は溶媒 leg の window 0 (46)、
+  A2A は complex leg の window 16 (vanish stage、15。隣の window とのエネルギー差が 130 iterations にわたって
+  相関)。
+- 4 本の軌跡はどちらも cuPotential で走り、回復は無い。同じコマンドをもう一度実行すると、MD も標本も
+  作り直されず、既存のファイルのチェックサムは変わらない (同じ内容の `result.previous.json` が各 leg に
+  増えるだけ)。
+- 保存フレームを ProLIF 自身の実行で数え直すと (`spikes/m17_recount_interactions.py`)、リガンド原子・残基・種類の
+  組ごとのフレームは `interactions.json` と同じ (TYK2 は 10 組中 10、A2A は 14 組中 14。片方にしか無い
+  フレームは 0)。
+- A2A: 入力ポーズにある ASN253 との水素結合は拘束用の MD に残っている (648/800 と 462/800)。40% を超えた
+  相互作用は GLU169 の水素結合 (795)、PHE168 のスタッキング (790)、HIS278 の水素結合 (776)、ASN253 の 2 つ。
+  ALA59 は 234 で残らない (変更の前の 2 回は 773 と 800)。拘束は点数が最も高い GLU169 から決まり、順位 1 位の
+  候補がそのまま OpenFE の規則を通った (変更の前は 56 個目と 62 個目)。
+- リガンドの RMSD は、変更の前は 1.66 Å と 1.90 Å (A2A)、0.86 Å (TYK2 の 1 回目) だった。ただし変更の前は
+  拘束なしの pre-equilibration の後半で測っており、測る区間が違う。
+- 値: TYK2 は -12.16 (変更の前の 4 回は -10.85、-11.99、-5.83、-9.77)、A2A は -15.47 (変更の前の 2 回は
+  -12.14、-16.85。`auto` の 2 回は -18.91、-11.95)。どれも 1 回の計算で、同じ手順の実行間のばらつき (TYK2 の
+  4 回で標準偏差 2.7 kcal/mol) があるので、開始点の変更で値が動いたかどうかは、この実行からは言えない。
+- 手順 14 はここまで。ベンチマークの再実行はこの計画の外。実行間のばらつき (issue #5) をこの PR で調べるか、
+  別の計画にするかは、オーナーの判断を待つ。
 
 ## Codex による確認 (3〜5 回目、2026-11-21)
 
