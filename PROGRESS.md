@@ -31,13 +31,13 @@ OpenMM, on all GPUs of a machine, from two files.
 
 ## Current Status
 
-Snapshot date: 2026-11-21. `main` is cda6965 (PR #1, the engine of plan
-`docs/plans/2026-11-18-abfe-engine.md`; PR #2, the README and the harness; PR #3, wording fixes
-and ruff; PR #4, plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`: benchmarks
-with the settings of the examples, the full sets, an accuracy wiki). Analysis version 10.
-In progress: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` (the Boresch
-restraint from the protein-ligand interactions of unrestrained MD, the default
-`restraints.selection`); its 14 steps are done and PR #6, a draft, waits for the owner. Tested
+Snapshot date: 2026-11-21. `main` holds PR #1 (the engine of plan
+`docs/plans/2026-11-18-abfe-engine.md`), PR #2 (the README and the harness), PR #3 (wording fixes
+and ruff), PR #4 (plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`: benchmarks
+with the settings of the examples, the full sets, an accuracy wiki) and PR #6, merged on the
+owner's order of 2026-11-21 (plan `docs/plans/2026-11-21-restraints-from-md-interactions.md`,
+done: the Boresch restraint from the protein-ligand interactions of unrestrained MD, the default
+`restraints.selection`). Analysis version 10. PR #6 was tested
 on the CPU with trajectories made by hand and on a GPU with the trajectories on both backends.
 The whole diff was reviewed by readers who did not write it (an independent review and, on the
 owner's order, Codex, whose later passes confirm the fixes): their findings are fixed, each
@@ -46,8 +46,8 @@ after it was reproduced, or answered on PR #6. Both examples ran once with the i
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 654 passed (2026-11-21, the head of PR #6 in the image `cufep:dev` with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`; `main` in that image: 565) |
-| GPU tests | 25 passed (2026-11-21, one GPU, the same image and commit, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`; `main`: 17) |
+| Unit tests (CPU) | 654 passed (2026-11-21, the head of PR #6 in the image `cufep:dev` with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`; `main` before PR #6 in that image: 565) |
+| GPU tests | 25 passed (2026-11-21, one GPU, the same image and commit, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`; `main` before PR #6: 17) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7 |
 | A2A example (4e, experiment -12.07 kcal/mol) | in the full A2A run: -18.91 ± 0.52 kcal/mol (complex leg 44.68); one earlier calculation with the same settings: -11.95 ± 0.73 (complex leg 37.61). With the default `interactions` (one calculation, image of commit 0f3aa32, 4 GPUs, PR #6): -12.14 ± 0.49 kcal/mol (complex leg 38.71); lowest overlap 0.102 and 0.178; a window with fewer than 50 independent samples in the complex leg; restraint from the hydrogen bond with ALA 59 (773 of 800 frames), all four trajectories on the plugin. A second calculation (fce6929): -16.85 ± 0.64 kcal/mol (complex leg 43.04), with the restraint on ASN 253 where the first had it on ALA 59. Both started the MD for the restraint after 10 ns of free MD. From the pose that was given, held through those 10 ns (one calculation, 720cdb1, 4 GPUs): -15.47 ± 1.00 kcal/mol (complex leg 41.83 ± 0.99, solvent leg 16.57 ± 0.14, release -9.80); lowest overlap 0.163 and 0.170; fewest independent samples 15 (complex leg, a window of the vanish stage, below 50) and 280; restraint from the hydrogen bond with GLU 169 (795 of 800 frames), the first of 54 ranked candidates; the hydrogen bonds with ASN 253 of the input pose are in 648 and 462 frames, the one with ALA 59 in 234; ligand RMSD 0.81 A; all four trajectories on the plugin; the same command again computed nothing again |
@@ -62,8 +62,8 @@ Open items:
   and the measurements that would separate the causes of cuFEP's larger errors; nothing decided.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
-  0.9; the restraint does not explain it and no cause is established). Whether that is looked
-  into in PR #6 or in a plan of its own waits for the owner.
+  0.9; the restraint does not explain it and no cause is established). It was not looked into in
+  PR #6; a plan of its own waits for the owner's decision.
 - The benchmarks were made with `restraints.selection: auto`, the default until 2026-11-21; a
   rerun with the default `interactions` is not part of the plan. One calculation per example
   says nothing about a difference in accuracy (the spread between runs: the item above).
@@ -74,6 +74,14 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [progress] PR #6 merged on the owner's order: the restraint from interactions
+- What: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` is done (14 steps, an
+  independent review, seven passes of Codex, both examples) and its pull request is merged into
+  `main`: `restraints.selection: interactions` is the default there. The spread between runs
+  (the entry below) was measured and is not explained.
+- Why: the owner's order (2026-11-21).
+- Refs: PR #6
 
 ### 2026-11-21 — [progress] The TYK2 example three more times: 3.9 kcal/mol between runs
 - What: on the owner's order, three runs of the example as it is (image of 1b770da, 4 GPUs each,

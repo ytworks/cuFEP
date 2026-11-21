@@ -1,5 +1,5 @@
 # 非拘束 MD の相互作用解析 (ProLIF) から Boresch 拘束を決めるモード
-Status: In progress (steps 1-14 done: the plan, the environment, the plain MD of a leg, the trajectories, the rule, ProLIF, the selection in the leg, the outputs, the GPU test, the default, the review of the whole diff and the fixes of its findings, one run of each example; the pull request is a draft and waits for the owner)
+Status: Done (PR #6; merged on the owner's order of 2026-11-21)
 Refs: this pull request; `docs/protocol.md` ("Steps of one leg"); `docs/configuration.md` (`restraints`)
 
 ## Context
