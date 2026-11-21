@@ -63,6 +63,9 @@ class EquilibrationSettings:
     wall_centre_nm: float = 0.0
     wall_half_width_nm: float = 0.0
     wall_k: float = 500.0                  # kJ/mol/nm^2
+    #: a bilayer system: say how the bilayer changed at the end of the unrestrained MD (the
+    #: equilibration of a bilayer does; an MD that starts from an equilibrated one does not)
+    bilayer_report: bool = True
 
 
 @dataclass
@@ -289,7 +292,7 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
     # a membrane system: how the bilayer changed at the end, as numbers (no verdict, and the run is never
     # made longer for it)
     drift = None
-    if settings.barostat == "membrane":
+    if settings.barostat == "membrane" and settings.bilayer_report:
         drift = membrane_drift(areas, waters)
         if drift["area_change"] is not None:
             water = "" if drift["pocket_water_change"] is None else \

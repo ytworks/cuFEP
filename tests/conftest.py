@@ -52,6 +52,71 @@ def repo() -> Path:
     return REPO
 
 
+def lj_particles(n: int = 8, edge: float = 3.0):
+    """``n`` Lennard-Jones particles in a periodic box: (System, positions, box), nm. Small enough
+    for MD on the Reference platform in a unit test."""
+    import openmm as mm
+
+    system = mm.System()
+    system.setDefaultPeriodicBoxVectors(mm.Vec3(edge, 0, 0), mm.Vec3(0, edge, 0), mm.Vec3(0, 0, edge))
+    nonbonded = mm.NonbondedForce()
+    nonbonded.setNonbondedMethod(mm.NonbondedForce.CutoffPeriodic)
+    nonbonded.setCutoffDistance(1.0)
+    for _ in range(n):
+        system.addParticle(40.0)
+        nonbonded.addParticle(0.0, 0.3, 0.5)
+    system.addForce(nonbonded)
+    positions = np.array([[0.7 * (i % 2), 0.7 * ((i // 2) % 2), 0.7 * (i // 4)] for i in range(n)]) + 0.5
+    return system, positions, edge * np.eye(3)
+
+
+@pytest.fixture
+def other_backend(monkeypatch):
+    """A second backend for the plain MD of a leg, in the place of the cuPotential plugin: stock
+    OpenMM underneath, so that it runs without a GPU. The fixture gives its class: set ``refuse``
+    (it cannot run the System) or ``fail`` (it stops when it makes a Context), read ``contexts``
+    (the Contexts it made), ``precisions`` (the precision of each instance) and ``asked`` (every
+    name the plain MD asked a backend for)."""
+    import openmm as mm
+
+    from cufep.backends.base import BackendError
+    from cufep.backends.openmm_stock import StockBackend
+    from cufep.sampling import equilibrate
+
+    class OtherBackend(StockBackend):
+        name = "cupotential"
+        refuse = False
+        fail = False
+        contexts = 0
+        precisions: list = []
+        asked: list = []
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            type(self).precisions.append(self.precision)
+
+        def check_system(self, system):
+            if type(self).refuse:
+                raise BackendError("this System is not for the plugin")
+
+        def make_context(self, system, integrator, device_index=None):
+            if type(self).fail:
+                raise mm.OpenMMException("the plugin stopped")
+            type(self).contexts += 1
+            return super().make_context(system, integrator, device_index)
+
+    made = equilibrate.get_backend
+
+    def get(name, **kwargs):
+        OtherBackend.asked.append(name)
+        if name == "cupotential":
+            return OtherBackend(**kwargs)
+        return made(name, **kwargs)
+
+    monkeypatch.setattr(equilibrate, "get_backend", get)
+    return OtherBackend
+
+
 @pytest.fixture(scope="session")
 def water_ligand_system():
     """A small TIP3P box in which one water molecule plays the role of the ligand.

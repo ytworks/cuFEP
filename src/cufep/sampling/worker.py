@@ -381,20 +381,29 @@ class ReplicaWorker:
         del self.integrator
 
 
-def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker_id: int, start: int = 0,
-                parent_pid: int | None = None) -> None:
-    """Entry point of a worker process. It ends with the job that started it (cufep.processes)."""
+def worker_environment(cpu_threads: int, mps_thread_percentage: int | None = None,
+                       parent_pid: int | None = None) -> None:
+    """What every process that a job starts for MD on a GPU sets before it makes a Context: it ends
+    with the job that started it (cufep.processes), its threads are those of
+    ``resources.cpu_threads_per_worker``, and it uses cuFEP's own MPS daemon if the run started one
+    (cufep.mps), never somebody else's. One function for the workers of the replica exchange and
+    of the lambda precalculation and for the MD from which a restraint is chosen."""
     if parent_pid is not None:
         from cufep.processes import die_with_parent
 
         die_with_parent(parent_pid)
-    os.environ["OPENMM_CPU_THREADS"] = str(spec.cpu_threads)
+    os.environ["OPENMM_CPU_THREADS"] = str(cpu_threads)
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
-        os.environ[var] = str(spec.cpu_threads)
-    # Use cuFEP's own MPS daemon if the run started one (cufep.mps); never somebody else's.
+        os.environ[var] = str(cpu_threads)
     os.environ.setdefault("CUDA_MPS_PIPE_DIRECTORY", "/tmp/cufep-no-mps")
-    if spec.mps_thread_percentage:
-        os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(int(spec.mps_thread_percentage))
+    if mps_thread_percentage:
+        os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(int(mps_thread_percentage))
+
+
+def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker_id: int, start: int = 0,
+                parent_pid: int | None = None) -> None:
+    """Entry point of a worker process. It ends with the job that started it (cufep.processes)."""
+    worker_environment(spec.cpu_threads, spec.mps_thread_percentage, parent_pid)
     arrays = None
     worker = None
     try:
