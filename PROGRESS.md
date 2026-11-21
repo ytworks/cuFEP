@@ -46,8 +46,8 @@ after it was reproduced, or answered on PR #6. Both examples ran once with the i
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 654 passed (2026-11-21, the head of PR #6 in the image `cufep:dev` with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`; `main` before PR #6 in that image: 565) |
-| GPU tests | 25 passed (2026-11-21, one GPU, the same image and commit, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`; `main` before PR #6: 17) |
+| Unit tests (CPU) | 675 passed (2026-11-21, the branch of draft PR #7 in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`); `main`: 654 passed (the head of PR #6 in that image, with ProLIF 2.2.3 and MDAnalysis 2.11.0) |
+| GPU tests | 25 passed (2026-11-21, one GPU, the branch of draft PR #7 in the same image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); `main`: 25 passed |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7 |
 | A2A example (4e, experiment -12.07 kcal/mol) | in the full A2A run: -18.91 ± 0.52 kcal/mol (complex leg 44.68); one earlier calculation with the same settings: -11.95 ± 0.73 (complex leg 37.61). With the default `interactions` (one calculation, image of commit 0f3aa32, 4 GPUs, PR #6): -12.14 ± 0.49 kcal/mol (complex leg 38.71); lowest overlap 0.102 and 0.178; a window with fewer than 50 independent samples in the complex leg; restraint from the hydrogen bond with ALA 59 (773 of 800 frames), all four trajectories on the plugin. A second calculation (fce6929): -16.85 ± 0.64 kcal/mol (complex leg 43.04), with the restraint on ASN 253 where the first had it on ALA 59. Both started the MD for the restraint after 10 ns of free MD. From the pose that was given, held through those 10 ns (one calculation, 720cdb1, 4 GPUs): -15.47 ± 1.00 kcal/mol (complex leg 41.83 ± 0.99, solvent leg 16.57 ± 0.14, release -9.80); lowest overlap 0.163 and 0.170; fewest independent samples 15 (complex leg, a window of the vanish stage, below 50) and 280; restraint from the hydrogen bond with GLU 169 (795 of 800 frames), the first of 54 ranked candidates; the hydrogen bonds with ASN 253 of the input pose are in 648 and 462 frames, the one with ALA 59 in 234; ligand RMSD 0.81 A; all four trajectories on the plugin; the same command again computed nothing again |
@@ -67,6 +67,13 @@ Open items:
   implemented, the defaults unchanged except `max_windows` 100; the nine runs not started) tests
   the owner's hypothesis: more initial windows of adaptive lambda scheduling, placed where the
   sampling is slow.
+- Windows much closer than they need to be read low in the overlap matrix of a leg, which the
+  analysis checks: 81 unit-width harmonic windows 0.05 widths apart overlap by 0.50 as pairs and
+  read 0.016, below the level of 0.03, so such a result is `NOT RELIABLE` although its free
+  energy is right, and the message advises more windows. Reachable with a start of many windows
+  (`max_windows` 100). The owner's decision (2026-11-21): this may happen, what counts is the
+  accuracy. The level, the verdict and its message are unchanged; such a result is reported and
+  compared, not left out (`docs/protocol.md`, "Why the threshold cannot go much higher").
 - The benchmarks were made with `restraints.selection: auto`, the default until 2026-11-21; a
   rerun with the default `interactions` is not part of the plan. One calculation per example
   says nothing about a difference in accuracy (the spread between runs: the item above).
@@ -77,6 +84,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [amendment] Reviews of PR #7 before its runs: fixes; the start of candidate C made again
+- What: an independent review (no must-fix) and Codex (ten P2 by reading), each finding reproduced
+  first. A start is a candidate to the six decimals cuFEP writes (a recorded start was refused with
+  100 candidates). A leg that keeps its `schedule.yaml` says so in its log. One count of independent
+  samples for the check and for tables (`counted_samples`). The design script moved windows that
+  fell on one candidate upwards: 14 of the 37 inner vanish values of candidate C were up to 0.03 too
+  high; a candidate step now holds at most one interval, the rest is shared by weight (B unchanged).
+  Documents corrected. Not changed: `cufep plan`, the four decimals of records. In the image: unit
+  tests 675 passed, GPU tests 25 passed.
+- Why: the whole diff is read by someone who did not write it before the runs of the plan.
+- Refs: PR #7 (review 6005834599 and its replies), `spikes/m18_window_design.py`, `docs/protocol.md`
 
 ### 2026-11-21 — [progress] The overlap of a pair alone for adaptive lambda scheduling; settings per leg
 - What: `lambda_schedule.adaptive.overlap_matrix`: `stage` (the paper's matrix of all windows of a

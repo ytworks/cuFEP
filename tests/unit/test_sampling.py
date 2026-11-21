@@ -1254,6 +1254,11 @@ def test_the_samples_check_counts_what_mbar_gets(monkeypatch):
     assert samples["ok"] is False and samples["kept"] == 33 and samples["window"] == 0
     assert samples["fewest"] == pytest.approx(53.76, abs=0.01)                # the estimate alone would pass
     assert quality_checks(res.to_dict(), min_effective_samples=33.0)["samples"]["ok"] is True
+    # the count of the check is the one every table of samples takes (review of PR 7: a table of the
+    # windows with fewer than 50 samples had counted the estimate alone, 60 where MBAR got 40)
+    assert mbar.counted_samples(res.to_dict()) == [33.0, 33.0] and samples["counted"] == 33.0
+    assert mbar.counted_samples({"window_effective_samples": [60.07, 30.0], "window_kept_samples": [40, 35]}) == [
+        40.0, 30.0]
 
 
 def test_the_overlap_is_also_taken_from_the_samples_of_the_estimate():

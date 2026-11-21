@@ -105,6 +105,14 @@ def test_a_stage_starts_from_a_number_of_windows_or_from_given_candidates():
             initial_window_indices(bad, 101)
     with pytest.raises(ValueError, match="12 windows do not fit on 11 candidates"):
         initial_window_indices(12, 11)
+    # Reviews of PR 7: lambda values are written with six decimals, and what one run wrote as its
+    # start (or its windows) was refused as the start of another unless a candidate step is a
+    # decimal: "0.266667 is not one of the 31 candidate lambda values".
+    assert initial_window_indices([0.0, 0.266667, 0.5, 0.733333, 1.0], 31) == [0, 8, 15, 22, 30]
+    assert initial_window_indices([0.0, 0.333333, 0.666667, 1.0], 100) == initial_indices(4, 100) == [0, 33, 66, 99]
+    assert initial_window_indices([0.0, 0.333333, 0.666667, 1.0], 7) == [0, 2, 4, 6]
+    with pytest.raises(ValueError, match="0.33334 is not one of the 100 candidate lambda values"):
+        initial_window_indices([0.0, 0.33334, 1.0], 100)                           # not to six decimals
 
 
 def test_a_pair_is_deficient_at_or_below_the_threshold():
@@ -240,7 +248,7 @@ def test_the_overlap_of_a_pair_alone_rises_as_windows_get_closer_and_the_matrix_
 
 
 def precalculation_of_harmonic_windows(context, integrator, overlap_matrix, max_windows, per_lambda=30.0,
-                                       threshold=0.33):
+                                       threshold=0.33, candidates=101, start=21):
     """The precalculation of a vanish stage whose windows are unit-width harmonic windows,
     ``per_lambda`` widths per unit of lambda: the pool returns the energies of such windows at
     the candidates, the Context only gives the stage and the start configurations."""
@@ -255,8 +263,8 @@ def precalculation_of_harmonic_windows(context, integrator, overlap_matrix, max_
                             "config": task["config"]})
             return out
 
-    settings = AlsSettings(overlap_threshold=threshold, overlap_matrix=overlap_matrix, candidates=101,
-                           initial_windows={"vanish": 21}, window_ps=4.0, sample_interval_ps=0.002, walk_ps=0.004,
+    settings = AlsSettings(overlap_threshold=threshold, overlap_matrix=overlap_matrix, candidates=candidates,
+                           initial_windows={"vanish": start}, window_ps=4.0, sample_interval_ps=0.002, walk_ps=0.004,
                            max_windows=max_windows)
     return adaptive_schedule(context, integrator, ["vanish"], 300.0, 2.0, settings, lambda m: None, pool=Pool())[0]
 
@@ -294,6 +302,15 @@ def test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_
     assert max(last["superdiagonal"][1:-1]) < 0.26                             # no window could have raised it
     with pytest.raises(ValueError, match="overlap_matrix is 'stage' or 'pair'"):
         precalculation_of_harmonic_windows(ctx, integ, "neighbours", max_windows=28)
+
+    # the start and the windows that a schedule records are a start again, also where a candidate
+    # step is no decimal (100 candidates: 1/99)
+    thirds = precalculation_of_harmonic_windows(ctx, integ, "pair", max_windows=100, per_lambda=3.0,
+                                                candidates=100, start=4)
+    assert thirds.provenance["initial_lambda"]["vanish"] == [0.0, 0.333333, 0.666667, 1.0]
+    assert initial_window_indices(thirds.provenance["initial_lambda"]["vanish"], 100) == [0, 33, 66, 99]
+    again = initial_window_indices(thirds.windows()["vanish"], 100)
+    assert again[0] == 0 and again[-1] == 99 and len(again) == len(thirds.states)
 
 
 def test_precalculation_on_a_small_system(water_ligand_system):

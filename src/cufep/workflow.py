@@ -2268,6 +2268,10 @@ def run_leg(job: LegJob) -> dict:
             schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
             start = np.load(start_file)
             configs = (start["positions"], start["boxes"], start["velocities"])
+            # said every time: a change of lambda_schedule in the YAML does not reach a leg that has its windows
+            log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has "
+                "(schedule.yaml); the settings of lambda_schedule are not applied to them, "
+                "cufep run --reschedule determines the windows again")
         else:
             backend = get_backend(backend_name, precision=_precision(cfg, backend_name), platform=cfg.backend.platform)
             prepared = backend.prepare_system(alch.system)

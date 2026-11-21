@@ -14,8 +14,10 @@ Printed per leg kind (complex, solvent) and stage, by tenths of lambda:
 - the density of the windows: the mean number of intervals between neighbouring windows that
   lie in the tenth (an interval counts by the part of it that lies there);
 - g: the geometric mean and the largest value of the windows in the tenth, and how many of
-  them kept fewer than 50 independent samples. The window at the end of a stage is the first
-  of the next one; it is listed once, at lambda 1.0 of the earlier stage.
+  them have fewer than 50 independent samples, counted as the check of the analysis counts them
+  (``cufep.analysis.mbar.counted_samples``: the production divided by g, and not more than the
+  samples MBAR got). The window at the end of a stage is the first of the next one; it is
+  listed once, at lambda 1.0 of the earlier stage.
 
 The start (plan docs/plans/2026-11-21-als-initial-window-design.md, cuFEP's own design). The
 variance that an interval of width d contributes to the free energy is about d^2 * s^2 * g, with
@@ -25,8 +27,12 @@ s * sqrt(g). The density with which adaptive lambda scheduling placed its window
 (it places them at equal overlap), so every interval of a stored leg gets the weight sqrt(g),
 with g the geometric mean of its two windows, spread evenly over the interval. The weights of
 all legs are added. A leg that starts with N windows gets its N - 1 intervals shared among the
-stages by their weight (at least one each), and within a stage the windows lie at equal steps of
-the cumulative weight, moved to the nearest candidate (a multiple of 0.01).
+stages by their weight (at least one each). Within a stage every candidate step (0.01) gets a
+part of the stage's intervals in proportion to its weight, but not more than one interval:
+windows are candidates, so a step cannot hold two. What that limit takes from a step goes to
+the other steps in proportion to their weights. The windows then lie where the running sum of
+these parts reaches 1, 2, ..., each moved to its nearest candidate; because no step holds more
+than one interval, no two windows share a candidate and none has to be moved aside.
 
 The tables and the start are also written to spikes/out/window_design/ (untracked).
 """
@@ -39,6 +45,8 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+
+from cufep.analysis.mbar import counted_samples
 
 CANDIDATES = 101
 STAGES = {"complex": ["restrain", "discharge", "vanish"], "solvent": ["discharge", "vanish"]}
@@ -54,9 +62,10 @@ def legs_of(run_dir: Path, leg: str):
             continue
         result = json.loads(result_file.read_text())
         analysis = result.get("analysis") or {}
-        g, n = analysis.get("window_statistical_inefficiency"), analysis.get("window_effective_samples")
+        # the samples of a window as the check of the analysis counts them (not more than MBAR got)
+        g, n = analysis.get("window_statistical_inefficiency"), counted_samples(analysis)
         windows = result.get("lambda_windows") or {}
-        if g is None or n is None or any(stage not in windows for stage in STAGES[leg]):
+        if g is None or not n or any(stage not in windows for stage in STAGES[leg]):
             continue
         yield f"{run_dir.name}/{result_file.parts[-4]}/{result_file.parts[-3]}", windows, g, n
 
@@ -108,30 +117,54 @@ def collect(run_dirs: list[Path], leg: str) -> dict:
     return out
 
 
+def shared_among_stages(total: dict, intervals: int, most: int) -> dict:
+    """The intervals of a leg shared among its stages in proportion to their weights: at least
+    one each, at most ``most`` (a stage has no more intervals than candidate steps). One at a
+    time to the stage that is furthest below its share."""
+    stages = list(total)
+    if intervals < len(stages) or intervals > most * len(stages):
+        raise ValueError(f"{intervals + 1} windows cannot be placed on {len(stages)} stage(s) of {most + 1} candidates")
+    whole = sum(total.values())
+    count = {s: 1 for s in stages}
+    for _ in range(intervals - len(stages)):
+        count[max((s for s in stages if count[s] < most), key=lambda s: intervals * total[s] / whole - count[s])] += 1
+    return count
+
+
+def intervals_per_step(weight: np.ndarray, intervals: int) -> np.ndarray:
+    """How many of the ``intervals`` of a stage each candidate step gets: in proportion to its
+    weight, and at most one, since windows are candidates and two of them cannot lie within one
+    step. What the limit takes from a step goes to the other steps in proportion to their weights."""
+    weight = np.asarray(weight, dtype=float)
+    out, free, left = np.zeros(len(weight)), weight > 0.0, float(intervals)
+    while free.any():
+        scale = left / weight[free].sum()
+        full = free & (weight * scale >= 1.0)
+        if not full.any():
+            out[free] = weight[free] * scale
+            break
+        out[full] = 1.0
+        free &= ~full
+        left -= float(full.sum())
+    return out
+
+
 def start_of(data: dict, leg: str, n_windows: int) -> dict:
     """The lambda values of each stage for a leg that starts with ``n_windows`` windows."""
     top = CANDIDATES - 1
     stages = STAGES[leg]
-    total = {s: float(data["weight"][s].sum()) for s in stages}
-    intervals = n_windows - 1
-    share = {s: intervals * total[s] / sum(total.values()) for s in stages}
-    count = {s: max(1, int(math.floor(share[s]))) for s in stages}
-    while sum(count.values()) < intervals:                       # the largest remainders get the rest
-        best = max(stages, key=lambda s: share[s] - count[s])
-        count[best] += 1
-    while sum(count.values()) > intervals:
-        count[max((s for s in stages if count[s] > 1), key=lambda s: count[s] - share[s])] -= 1
+    count = shared_among_stages({s: float(data["weight"][s].sum()) for s in stages}, n_windows - 1, top)
+    grid = np.arange(CANDIDATES) / top
     out = {}
     for stage in stages:
-        cumulative = np.concatenate([[0.0], np.cumsum(data["weight"][stage])])
-        grid = np.arange(CANDIDATES) / top
-        inner = []
-        for m in range(1, count[stage]):
-            value = float(np.interp(m / count[stage] * cumulative[-1], cumulative, grid))
-            index = int(round(value * top))
-            index = max(index, (inner[-1] if inner else 0) + 1)                  # distinct candidates
-            inner.append(min(index, top - (count[stage] - m)))
-        out[stage] = [0.0] + [round(i / top, 2) for i in inner] + [1.0]
+        cumulative = np.concatenate([[0.0], np.cumsum(intervals_per_step(data["weight"][stage], count[stage]))])
+        # no step holds more than one interval, so neighbouring windows are a step or more apart and
+        # their nearest candidates differ
+        inner = [int(math.floor(float(np.interp(m, cumulative, grid)) * top + 0.5)) for m in range(1, count[stage])]
+        values = [0] + inner + [top]
+        if any(b <= a for a, b in zip(values, values[1:])):
+            raise ValueError(f"the windows of the {stage} stage do not fall on distinct candidates: {values}")
+        out[stage] = [round(i / top, 2) for i in values]
     return out
 
 
@@ -177,8 +210,11 @@ def main() -> None:
             if one["legs"]:
                 summary[f"{leg}:{run_dir.name}"] = report(one, leg, run_dir.name)
         pooled = collect(run_dirs, leg)
-        summary[f"{leg}:all"] = report(pooled, leg, "all runs")
         summary[f"{leg}:legs"] = pooled["legs"]
+        if not pooled["legs"]:
+            print(f"\n## {leg} leg: none of the runs has one whose windows adaptive lambda scheduling chose")
+            continue
+        summary[f"{leg}:all"] = report(pooled, leg, "all runs")
         if leg == "complex":
             summary["start"] = {}
             for n in args.windows:

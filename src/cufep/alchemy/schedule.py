@@ -473,8 +473,9 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             if status[k] != "running":
                 continue
             energies = [runs[node(k, i)]["energies"][name] for i in windows[k]]
-            # the element of the matrix of the stage is always recorded: it is what the analysis of
-            # the production checks; the rule reads it, or the overlap of each pair alone
+            # the element of the matrix of the windows of the stage is always recorded (from the
+            # samples of the precalculation; the analysis of the production checks the matrix of all
+            # windows of the leg from its own samples); the rule reads it, or each pair alone
             sup = stage_overlap(energies, windows[k])
             read = pair_overlap(energies, windows[k]) if by_pair else sup
             new, rec = als_step(windows[k], read, s.overlap_threshold, room=s.max_windows - total_windows())

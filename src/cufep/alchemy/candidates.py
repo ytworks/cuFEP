@@ -16,6 +16,9 @@ from numbers import Integral
 
 __all__ = ["initial_indices", "candidate_indices", "initial_window_indices"]
 
+#: lambda values are written with six decimals; a given value that close to a candidate is that candidate
+WRITTEN_PRECISION = 1e-6
+
 
 def initial_indices(n_windows: int, n_candidates: int = 101) -> list[int]:
     """Candidate indices of ``n_windows`` evenly spaced windows (halves go to the even candidate)."""
@@ -33,14 +36,16 @@ def candidate_indices(values, n_candidates: int = 101) -> list[int]:
     """Candidate indices of the lambda ``values`` of a stage.
 
     Every value must be a candidate, and the values must increase from 0.0 (the start of the
-    stage) to 1.0 (its end); a ValueError says which of the two a list breaks.
+    stage) to 1.0 (its end); a ValueError says which of the two a list breaks. A value is a
+    candidate if it is one to the six decimals with which cuFEP writes lambda values
+    (``schedule.yaml``, the results), so that what one run wrote can be the start of another
+    whatever the number of candidates (a third of 99 steps is written 0.333333).
     """
     top = int(n_candidates) - 1
     idx = []
     for value in values:
-        position = float(value) * top
-        index = int(round(position))
-        if abs(position - index) > 1e-6:
+        index = int(round(float(value) * top))
+        if abs(float(value) - index / top) > WRITTEN_PRECISION:
             raise ValueError(f"{float(value):g} is not one of the {int(n_candidates)} candidate lambda values "
                              f"(multiples of {1.0 / top:g})")
         idx.append(index)

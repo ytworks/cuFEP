@@ -22,6 +22,11 @@ TYK2 example (ejm_31) を同じ YAML で 4 回実行した結果は -12.16、-12
 5. バラツキを抑えつつ計算時間も抑える既定値を 3 案作り、TYK2 example を各 3 回実行して評価する
    (9 run)。この計画の承認が評価 run の開始までの許可になる。
 6. draft pull request を作り、こまめに push する。
+7. (review の報告を受けて) window が必要以上に密だと、結果の解析の overlap (leg の全 window の
+   行列) が基準 0.03 を下回り `NOT RELIABLE` になることがある。下回ってもよい。重要なのは精度が
+   良くなること。基準と表示は変えない。そういう結果も外さずに報告して比べる。案の評価は精度
+   (実験値との差とばらつき) で行う。
+8. 並行できることはできるだけ並行して進める (test、review、イメージ、評価 run、集計)。
 
 調べて分かった事実 (cuFEP、`main` の 4e0b8c4):
 
@@ -87,7 +92,9 @@ window の約半分が 0.7〜0.9 に入る配分になる (TYK2 49 %、A2A 51 %)
   - `stage_overlap` の隣に置き、解析と同じ `cufep.analysis.mbar.overlap_matrix` を使う
     (2 window の stage では `stage` と同じ値になる作り)。
   - iteration の記録の `superdiagonal` は今のまま stage の行列の値を残し (既存の script と test が
-    読む。production の基準と比べる値でもある)、`pair` のときは `pair_overlap` を足す。
+    読む)、`pair` のときは `pair_overlap` を足す。どちらも前計算のサンプルと 1 つの stage の window の
+    値で、production の解析が見る値 (leg の全 window の行列、production のサンプル) とは別の量
+    (review での訂正)。
     provenance と log と `cufep` の表示に判定の種類を出す。キーのない古い `schedule.yaml` は
     `stage` と読む。
   - `workflow.py` で `AlsSettings` を組み立てている 1 か所を `als_settings(cfg, leg)` に切り出す。
@@ -159,8 +166,17 @@ restraint での TYK2 example 4 run。3 案の YAML は `spikes/m18_candidates/t
   restrain 0, 0.13, 0.26, 0.46, 0.73, 1.0。discharge 0, 0.16, 0.33, 0.51, 0.73, 1.0。
   vanish 0, 0.15, 0.29, 0.41, 0.52, 0.61, 0.67, 0.72, 0.75, 0.77, 0.79, 0.80, 0.82, 0.83, 0.85,
   0.86, 0.88, 0.92, 0.96, 1.0。
-- C (59 window) は restrain 11 / discharge 11 / vanish 39。vanish の 0.72〜0.94 は 0.01 刻みで、
-  candidate を全部使う (この区間には ALS は足せない)。
+- C (59 window) は restrain 11 / discharge 11 / vanish 39。59 window では vanish の 0.8 付近で、
+  配分が candidate 1 つ (0.01) に 1 window より多くを求める。stage はそれを置けないので、
+  candidate の 1 区間には区間 1 つまでという上限をかけ、あふれた分をほかの区間に重みの比で配る。
+  vanish 0, 0.07, 0.13, 0.20, 0.26, 0.32, 0.37, 0.42, 0.47, 0.52, 0.56, 0.60, 0.63, 0.66, 0.68,
+  0.70, 0.72, 0.73, 0.75 から 0.89 まで 0.01 刻み, 0.91, 0.93, 0.94, 0.96, 0.98, 1.0。0.75〜0.89 は
+  candidate を全部使うので ALS は足せない。それ以外 (0.74、0.90 など) には足せる。
+  - review での訂正 (2026-11-21): 最初の script は、同じ candidate に丸まった window を 1 つ上に
+    ずらしていた。密な区間でこれが連鎖し、C の vanish の内側 37 点のうち 14 点が最大 0.03 上に
+    ずれて、0.9〜1.0 の区間数が重みどおりの 4.9 でなく 7 になっていた。上の規則に直して C を
+    作り直した (B は変わらない)。「0.72〜0.94 は candidate を全部使う」と書いたのも誤りで、
+    0.74 が空いていた。
 - 今の既定の restraint での 4 run のうち 2 run で、restrain stage の最後の window の g が約 100
   (97、113)。37 leg のうちの 4 leg なので配分にはほとんど効いていない。
 
@@ -188,7 +204,8 @@ production の長さは案に入れない。5 ns で走らせ、短くした場�
   sampling のコードは変えないので、今の設定での再実行はしない。
 - 報告する数値 (判定の言葉は付けない):
   - run ごと: ΔG_bind ± 標準誤差、complex leg、solvent leg、restraint の解放、実験値 -9.54 との差。
-  - 案ごと: 3 回の平均、標準偏差、最大と最小の差。production を 0.5 ns 刻みで短くした場合の同じ値。
+  - 案ごと: 3 回の平均、標準偏差、最大と最小の差、実験値との差 (平均の差と、3 回の差の二乗平均平方根)。
+    production を 0.5 ns 刻みで短くした場合の同じ値。
   - window: stage ごとの数、ALS が足した数と場所、overlap の最小値 (基準 0.03)、独立サンプルの
     最少 (基準 50) とその window の場所、round trip。
   - 実行時間はオーナーへの報告と untracked の出力だけに書く (`docs/LICENSING.md`)。

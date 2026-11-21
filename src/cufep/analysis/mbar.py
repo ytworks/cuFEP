@@ -987,6 +987,17 @@ def _number(value) -> float | None:
     return value if np.isfinite(value) else None
 
 
+def counted_samples(analysis: dict) -> list[float]:
+    """The uncorrelated samples of every lambda window as the check of the samples counts them: the
+    production divided by the statistical inefficiency of the window (``window_effective_samples``),
+    and not more than the samples MBAR really gets from it (``window_kept_samples``). One count for
+    :func:`quality_checks` and for every table that says how many samples a window has."""
+    per_window = analysis.get("window_effective_samples") or []
+    kept = analysis.get("window_kept_samples") or []
+    return [min(float(e), float(kept[j])) if len(kept) == len(per_window) else float(e)
+            for j, e in enumerate(per_window)]
+
+
 def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samples: float = 50.0) -> dict:
     """What the analysis of a leg says about its reliability. ``analysis`` holds energies in kJ/mol.
 
@@ -1036,8 +1047,7 @@ def quality_checks(analysis: dict, min_overlap: float = 0.03, min_effective_samp
     samples = {"ok": None, "threshold": float(min_effective_samples)}
     per_window = analysis.get("window_effective_samples")
     if per_window:
-        counts = [min(float(e), float(kept[j])) if len(kept) == len(per_window) else float(e)
-                  for j, e in enumerate(per_window)]
+        counts = counted_samples(analysis)
         j = int(np.argmin(counts))
         samples.update(ok=bool(counts[j] >= min_effective_samples), fewest=float(per_window[j]), window=j,
                        statistical_inefficiency=float(analysis["window_statistical_inefficiency"][j]),
