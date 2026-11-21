@@ -144,6 +144,47 @@ def test_the_protein_has_the_charges_of_its_force_field_residue_by_residue(tyk2)
     assert sorted(set(formal.values())) == [-1, 0, 1] and sum(formal.values()) == round(sum(of_force_field.values()))
 
 
+def test_a_membrane_protein_with_charged_histidines_and_an_ion_is_read_as_its_force_field_has_it(repo):
+    """The A2A example: three peptide segments, two histidines with both hydrogens (HIS 264 and 278,
+    +1 each) and a sodium ion. Residue by residue the formal charge of the protein that ProLIF gets
+    is the charge of ff14SB; the ion is no residue of the protein and holds no anchors. The input
+    pose of compound 4e has the contacts of the crystal structure (PDB 5OLZ): hydrogen bonds with
+    ASN 253 in both directions and stacking with PHE 168."""
+    import openmm.app as app
+
+    from cufep.alchemy.restraints import backbone_hosts
+    from cufep.analysis.interactions import InteractionFinder, interactions_of_frames
+    from cufep.prep.ligand import load_ligands
+    from cufep.prep.protein import prepare_protein
+    from cufep.prep.solvate import combine, ligand_atom_indices
+
+    protein = prepare_protein(repo / "examples/membrane_a2a/protein.pdb")
+    ligand = load_ligands(repo / "examples/membrane_a2a/ligand.sdf")[0]
+    modeller = combine((protein.topology, protein.positions), ligand)
+    topology = modeller.topology
+    pos = np.asarray(modeller.positions.value_in_unit(u.nanometer))
+    ligand_atoms, rdmol = list(ligand_atom_indices(topology)), ligand.to_rdkit()
+    names = {r.index: f"{r.name}{r.id}" for r in topology.residues()}
+    finder = InteractionFinder(topology, ligand_atoms, rdmol)
+    residue_of = {a.index: a.residue.index for a in topology.atoms()}
+    formal: dict[int, int] = {}
+    for atom, index in zip(finder.protein.GetAtoms(), finder.protein_atoms):
+        formal[residue_of[int(index)]] = formal.get(residue_of[int(index)], 0) + atom.GetFormalCharge()
+    system = app.ForceField("amber14/protein.ff14SB.xml", "amber14/tip3p.xml").createSystem(protein.topology)
+    nonbonded = next(f for f in system.getForces() if f.__class__.__name__ == "NonbondedForce")
+    of_force_field: dict[int, float] = {}
+    for atom in protein.topology.atoms():
+        q = nonbonded.getParticleParameters(atom.index)[0].value_in_unit(u.elementary_charge)
+        of_force_field[atom.residue.index] = of_force_field.get(atom.residue.index, 0.0) + q
+    ion, = [r for r, name in names.items() if name.startswith("NA")]
+    assert {r: int(round(q)) for r, q in of_force_field.items() if r != ion} == formal
+    assert {names[r] for r, q in formal.items() if q == 1 and names[r].startswith("HIS")} == {"HIS264", "HIS278"}
+    assert ion not in formal and ion not in backbone_hosts(topology)
+    frame, = interactions_of_frames(topology, pos[None], np.arange(len(pos)), ligand_atoms, rdmol)
+    found = {(names[residue], kind) for _atom, residue, kind in frame}
+    assert {("ASN253", "HBDonor"), ("ASN253", "HBAcceptor"), ("PHE168", "FaceToFace")} <= found
+
+
 def test_the_ligand_is_read_with_rdkits_aromaticity():
     """The molecule of the preparation carries the MDL model of aromaticity, in which a
     five-membered ring is not aromatic; ProLIF's patterns for rings and for hydrogen-bond partners
