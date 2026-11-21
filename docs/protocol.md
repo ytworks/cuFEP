@@ -431,7 +431,10 @@ the two numbers are, by the distance of neighbours in widths: 2: 0.21 and 0.22; 
 0.40; 0.5: 0.13 and 0.47; 0.25: 0.07 and 0.49 (matrix of the stage, pair alone; measured in the
 unit tests). The same threshold therefore asks for another spacing under the two matrices, and
 a leg whose threshold is not given has the default of the matrix it reads: 0.18 for the stage,
-0.30 for the pair (0.30 on the matrix of a stage would add windows until `max_windows`). The
+0.30 for the pair. With 0.30 on the matrix of a stage nearly every pair of the default start of
+the complex leg reads as deficient (26, 26 and 27 of 29 in the three runs of start A below, 6 by
+the pair alone; only pairs at an end of a stage read above 0.30, at most 0.333), and harmonic
+windows grow to `max_windows`. The
 analysis of a result keeps the matrix of all windows and its level of 0.03.
 
 That level can be missed by windows that are much closer than they need to be, by the sharing
@@ -452,8 +455,9 @@ seed), all with the overlap of a pair alone and the threshold 0.30, the solvent 
 (plan `docs/plans/2026-11-21-als-initial-window-design.md`, tables by
 `spikes/m19_window_runs.py`). A: the recommended windows of mode fixed, the values of OpenFE's
 ABFE protocol. B: as many windows, with a density proportional to that of the windows the rule
-chose in the stored benchmark legs times the square root of the statistical inefficiency
-there, which puts half of the vanish windows at lambda 0.7 to 0.9. C: twice the windows of B.
+chose in 37 stored complex legs (the 33 of the two full benchmark runs and the four runs of
+ejm_31 that are the comparison here; `spikes/m18_window_design.py`) times the square root of
+the statistical inefficiency there, which puts half of the vanish windows at lambda 0.7 to 0.9. C: twice the windows of B.
 The four runs of the default until then (3, 5 and 9 evenly spaced windows, threshold 0.18 of
 the matrix of the stage) are the comparison. Free energies in kcal/mol; the experimental
 binding free energy is -9.54.

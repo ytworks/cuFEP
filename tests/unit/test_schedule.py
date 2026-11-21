@@ -315,10 +315,10 @@ def test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_
 
 def test_a_leg_that_is_only_told_its_overlap_matrix_gets_the_threshold_of_that_matrix(water_ligand_system):
     """Review of the defaults of 2026-11-22. The complex leg reads the overlap of a pair alone
-    with a threshold of 0.30; ``overlap_matrix: stage`` alone left it that threshold, which an
-    element of the matrix of a stage does not reach: from the default start of the complex leg,
-    harmonic windows 30 widths per unit of lambda went to ``max_windows`` (100; lowest element
-    0.083). A threshold that is not given is the one that belongs to the matrix its leg reads:
+    with a threshold of 0.30; ``overlap_matrix: stage`` alone left it that threshold, which the
+    elements of the matrix of a stage between close windows do not reach: from the default start
+    of the complex leg, harmonic windows 30 widths per unit of lambda went to ``max_windows``
+    (100; lowest element 0.083). A threshold that is not given is the one that belongs to the matrix its leg reads:
     0.18 for the stage, 0.30 for the pair."""
     from cufep.config.schema import AdaptiveConfig
 

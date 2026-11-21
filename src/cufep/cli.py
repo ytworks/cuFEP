@@ -344,9 +344,12 @@ def benchmark_list() -> None:
 def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
     """Run benchmark NAME (resumable)."""
     from cufep import run as driver
-    from cufep.benchmarks.runner import benchmark_config, report
+    from cufep.benchmarks.runner import benchmark_config, example_notices, report
 
     try:
+        example, notices = example_notices(name)
+        for notice in notices:
+            click.echo(f"note: {example}: {notice}", err=True)
         cfg = _apply_overrides(benchmark_config(name, tier, output), repeats, None, gpus, None, None)
         summary = driver.run(cfg)
         click.echo(report(name, cfg.output.dir))

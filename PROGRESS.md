@@ -46,7 +46,7 @@ after it was reproduced, or answered on PR #6. Both examples ran once with the i
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 679 passed (2026-11-22, the branch of PR #7 with the defaults of that day in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`); `main`: 654 passed (the head of PR #6 in that image, with ProLIF 2.2.3 and MDAnalysis 2.11.0) |
+| Unit tests (CPU) | 680 passed (2026-11-22, the branch of PR #7 with the defaults of that day in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`); `main`: 654 passed (the head of PR #6 in that image, with ProLIF 2.2.3 and MDAnalysis 2.11.0) |
 | GPU tests | 25 passed (2026-11-22, one GPU, the branch of PR #7 with the defaults of that day in the same image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); `main`: 25 passed |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7 |
@@ -88,6 +88,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-22 — [amendment] Review by Codex of the new defaults: fixes and a correction
+- What: review 6007410417 (seven P2), each reproduced. Correction of `docs/configuration.md` and
+  of the entry below: an element of the matrix of a stage can reach 0.30, at an end of a stage (at
+  most 0.333 among 784 recorded pairs); 26 or 27 of the 29 pairs of the default start read at or
+  below 0.30 there in the runs of A (6 by the pair alone), and the run to `max_windows` was of
+  harmonic windows. `cufep benchmark run` prints the notes about the file of its example. The
+  figure script counts the last exchange, reads results of earlier versions and draws moves rarer
+  than 0.001. B and C came from 37 legs, not 33. Declined: an old YAML with `max_windows.complex`
+  below 30 is refused with the setting to add. In the image: unit tests 680 passed.
+- Why: the review after the push (the working agreement of PR #7).
+- Refs: PR #7 (review 6007410417 and its replies), `docs/protocol.md`, `docs/configuration.md`
 
 ### 2026-11-22 — [design] The complex leg starts from the windows of mode fixed and reads the overlap of a pair
 - What: defaults of `lambda_schedule.adaptive` for the complex leg: `initial_windows` restrain 6,

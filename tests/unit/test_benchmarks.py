@@ -10,6 +10,7 @@ from cufep.benchmarks.curate import compound_id, evenly_spaced_subset
 from cufep.benchmarks.runner import (
     benchmark_config,
     data_root,
+    example_notices,
     load_registry,
     overlap_places,
     read_reference,
@@ -18,6 +19,40 @@ from cufep.benchmarks.runner import (
 from cufep.benchmarks.stats import bootstrap, metrics
 from cufep.config.schema import load_config
 from cufep.prep.ligand import load_ligands
+
+
+def test_a_benchmark_run_says_of_the_file_of_its_example_what_cufep_run_says(tmp_path, monkeypatch):
+    """Review of the defaults of 2026-11-22 (Codex): a benchmark reads the configuration of its
+    example and dropped the notices about it, so an example with a threshold and no overlap matrix
+    was read otherwise than by earlier versions without a word."""
+    import yaml
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep import run as driver
+
+    assert example_notices("tyk2")[1] == [] and example_notices("a2a")[1] == []
+    relative = load_registry()["tyk2"]["example"]
+    settings = yaml.safe_load((data_root() / relative).read_text())
+    settings["lambda_schedule"] = {"adaptive": {"overlap_threshold": 0.18}}
+    (tmp_path / "benchmarks").mkdir()
+    example = tmp_path / relative
+    example.parent.mkdir(parents=True)
+    example.write_text(yaml.safe_dump(settings))
+    monkeypatch.setenv("CUFEP_DATA", str(tmp_path))
+    path, notices = example_notices("tyk2")
+    assert path == example and len(notices) == 1
+    assert notices[0].startswith("lambda_schedule.adaptive.overlap_threshold is given without overlap_matrix: in "
+                                 "the complex leg the threshold (0.18) is compared with the overlap of the two windows")
+
+    def not_run(cfg):
+        raise RuntimeError("not run in this test")
+
+    monkeypatch.setattr(driver, "run", not_run)
+    result = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--tier", "smoke", "-o", str(tmp_path / "out")])
+    printed = result.output + (result.stderr if getattr(result, "stderr_bytes", None) is not None else "")
+    assert result.exit_code != 0 and "not run in this test" in printed
+    assert f"note: {example}: lambda_schedule.adaptive.overlap_threshold is given without overlap_matrix" in printed
 
 
 def test_metrics_on_known_numbers():

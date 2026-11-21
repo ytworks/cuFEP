@@ -56,6 +56,19 @@ def _shorten(into: dict, values: dict) -> None:
             into[key] = copy.deepcopy(value)
 
 
+def example_notices(name: str) -> tuple[Path, list[str]]:
+    """The configuration file of the set's example and the notices about it (settings of earlier
+    versions, a threshold without its overlap matrix): a benchmark run reads that file, so it
+    says of it what ``cufep run`` says."""
+    from cufep.config.schema import load_config_with_notices
+
+    registry = load_registry()
+    if name not in registry:
+        raise KeyError(f"unknown benchmark '{name}' (available: {', '.join(registry)})")
+    path = data_root() / registry[name]["example"]
+    return path, load_config_with_notices(path)[1]
+
+
 def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) -> Config:
     """Configuration of a benchmark tier.
 

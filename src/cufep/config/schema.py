@@ -319,8 +319,9 @@ def _of_leg(value, leg: str):
 #: belongs to the matrix. stage: 0.18, the owner's choice of 2026-11-20 from the examples at 5 ns
 #: (the paper: 0.04; at 0.20 the precalculation of the TYK2 solvent leg did not converge before
 #: max_windows, 32 then). pair: 0.30, the owner's choice of 2026-11-22 for the complex leg with
-#: its start; an element of the matrix of a stage does not reach it (review of that change:
-#: ``overlap_matrix: stage`` alone sent the complex leg to max_windows)
+#: its start. In the matrix of a stage nearly every pair of that start reads at or below 0.30 (26
+#: or 27 of 29 in the three runs of the TYK2 example, 6 by the pair alone), so with
+#: ``overlap_matrix: stage`` alone the rule kept adding windows (harmonic windows: to max_windows)
 DEFAULT_OVERLAP_THRESHOLD = {"stage": 0.18, "pair": 0.30}
 
 

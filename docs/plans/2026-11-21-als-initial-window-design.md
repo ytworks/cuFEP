@@ -366,8 +366,11 @@ production を短くした場合 (同じ run のサンプルを前から切り�
 直した:
 
 - 必ず直すもの: `overlap_matrix: stage` だけを書くと、complex leg は「stage の行列 × 既定の
-  threshold 0.30」になり、stage の行列の要素は 0.30 に届かないので、前計算が `max_windows` まで
-  window を足す (既定の開始からの調和ポテンシャルの window で 100 window)。対処: threshold を
+  threshold 0.30」になる。stage の行列では、既定の開始の 29 pair のうち 26〜27 が 0.30 以下と
+  読まれ (案 A の 3 run の記録。pair だけでは 6。0.30 を超えるのは stage の端の pair だけで、
+  9 run の記録 784 pair の最大は 0.333)、既定の開始からの調和ポテンシャルの window では前計算が
+  `max_windows` (100) まで window を足す。(この項は最初「stage の行列の要素は 0.30 に届かない」と
+  書いていた。端の pair は届くので、Codex の指摘で直した。)対処: threshold を
   書いていない leg は、その leg が読む行列の既定値を使う (`stage` 0.18、`pair` 0.30)。0.18 と 0.30 は
   オーナーの決定の値で、行列だけを変えた leg がその行列の値を使うことは cuFEP 独自。solvent leg の
   `pair` と 0.30 の組は走らせていない。
@@ -383,10 +386,25 @@ production を短くした場合 (同じ run のサンプルを前から切り�
   どれも leg ごとの値を通る。以前の既定値で作った run の再開は、文書のとおり leg が自分の
   `schedule.yaml` を使い、保存済みの条件の確認に `lambda_schedule` は入っていない。
 
+Codex の review (push のあと、head d5f9c3f、PR の review 6007410417、P2 が 7 件)。どれも再現して
+から対処した:
+
+- `spikes/m20_replica_exchange_figures.py`: 保存された状態は交換の前のものなので、最後の
+  iteration の交換が行列に入っていなかった (checkpoint から読むようにした)。以前の版の結果
+  (`n_equilibration_iterations` がない) で止まった (production の始まりをサンプルから読む)。図で
+  0.001 未満の移動が移動なしと同じ色だった (0.001 の色にした)。
+- `cufep benchmark run` が example のファイルについての note を出していなかった (出すようにした)。
+- 文書: 「stage の行列の要素は 0.30 に届かない」は誤り (上の項)。案 B と C の根拠は benchmark の
+  33 leg だけでなく、ejm_31 の既存の 4 run を含む 37 leg (`docs/protocol.md` と
+  `docs/configuration.md` を直した)。
+- 変えなかったもの: 既定の開始 (30 window) に合わない `max_windows.complex` を書いた以前の YAML が
+  `cufep analyze --config` でも断られる点。メッセージが既定の開始であることと書くべき設定
+  (`initial_windows.complex`) を言う。以前の開始 (3 / 5 / 9) を書けば、以前と同じ設定になる。
+
 確かめたこと (2026-11-22、イメージ `cufep:dev`、作業ツリーのコード):
 
-- unit tests 679 passed、GPU tests 25 passed (GPU 1 枚)、`scripts/lint.sh` と harness の 3 つの
-  確認が通る (review の対処のあとのコードで)。
+- unit tests 680 passed、GPU tests 25 passed (GPU 1 枚)、`scripts/lint.sh` と harness の 3 つの
+  確認が通る (unit tests と lint は Codex の review の対処のあと、GPU の test は独立した review の対処のあとのコードで。そのあとの変更は benchmark の note の表示、schema のコメント、spikes の script、文書だけ)。
 - `cufep plan` が両方の example で、complex leg の開始 6 / 11 / 15 (`pair`、0.3)、solvent leg の
   開始 5 / 9 (`stage`、0.18) を出す。
 - benchmark の smoke tier (1 リガンド、ごく短い sampling) を TYK2 と A2A の両方で実行し、終了

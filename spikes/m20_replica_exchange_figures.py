@@ -12,21 +12,25 @@ Every argument ``label=run`` is one run. For each of them, from the stored sampl
   is the share of the iterations after which a replica that was in window i is in window j
   (every row adds up to 1). The exchange of an iteration tries many pairs of replicas, so a
   replica can move by more than one window in an iteration. Counted from the state of every
-  replica in every iteration;
+  replica in every iteration. The stored state of an iteration is the one it was sampled in,
+  before its exchange, so the exchange of the last iteration is read from the checkpoint; where
+  the checkpoint is not of the last stored iteration, that one exchange is not counted;
 - the acceptance of the exchanges between the replicas of neighbouring windows, the only
   acceptances that a run records, and the number of round trips.
 
-A leg that has a result gives the acceptances and the round trips of its result. A leg that is
+A leg that has a result gives the acceptances and the round trips of its result (a result of an
+earlier version too: where the production begins is read from the samples). A leg that is
 still being sampled is read up to its last checkpoint: its windows are those of ``schedule.yaml``
 and the two numbers are computed by the functions of the analysis from the iterations stored so
 far; the number of those iterations is shown. A leg without iterations of the production is named
 and left out.
 
-``--out``: a figure. The colour of a cell is on a logarithmic scale from 0.001 to 1; a cell
-without a move has the colour of the surface; thin lines mark where one stage ends and the next
-begins. ``--text``: the same matrices as characters (' ' no move, '·' below 0.003, '░' below 0.03,
-'▒' below 0.1, '▓' below 0.3, '█' from 0.3), each row with the first letter of its stage and the
-number of its window, and under them the acceptances in percent. Nothing is written to the runs.
+``--out``: a figure. The colour of a cell is on a logarithmic scale from 0.001 to 1, a move that
+is rarer has the colour of 0.001, and a cell without a move has the colour of the surface; thin
+lines mark where one stage ends and the next begins. ``--text``: the same matrices as characters
+(' ' no move, '·' below 0.003, '░' below 0.03, '▒' below 0.1, '▓' below 0.3, '█' from 0.3), each
+row with the first letter of its stage and the number of its window, and under them the
+acceptances in percent. Nothing is written to the runs.
 """
 from __future__ import annotations
 
@@ -60,23 +64,25 @@ def moves_of(run: Path, ligand: str, leg: str) -> dict | None:
         samples = read_samples(leg_dir / "hrex")
     except (StorageError, OSError):
         return None
-    sampled = None
+    attrs, stored = samples["attrs"], np.asarray(samples["states"])
+    # where the production begins: from the samples (a result of an earlier version does not say)
+    first = equilibration_boundary(attrs, leg_dir)
+    if first is None or len(stored) < first + 2:
+        return None
+    states, sampled = stored[first:], None
     if (leg_dir / "result.json").exists():
         result = json.loads((leg_dir / "result.json").read_text())
-        states = np.asarray(samples["states"])[int(result["n_equilibration_iterations"]):]
         windows = result.get("lambda_windows") or {}
         acceptance = result["analysis"].get("swap_acceptance_neighbour") or []
         round_trips = result["analysis"].get("round_trips")
     else:                                                  # being sampled: up to the last checkpoint
-        attrs = samples["attrs"]
-        first = equilibration_boundary(attrs, leg_dir)
-        if first is None or len(samples["states"]) < first + 2:
-            return None
-        states = np.asarray(samples["states"])[first:]
         windows = yaml.safe_load((leg_dir / "schedule.yaml").read_text())["windows"]
         acceptance = swap_acceptance(samples, first, len(states)) or []
         round_trips = count_round_trips(states)
         sampled = (len(states), int(attrs["n_planned_iterations"]) - first)
+    after = after_the_last_exchange(leg_dir, len(stored))
+    if after is not None:
+        states = np.vstack([states, after[None, :]])
     k = len(samples["attrs"]["states"])
     counts = np.zeros((k, k))
     np.add.at(counts, (states[:-1].ravel(), states[1:].ravel()), 1.0)
@@ -88,6 +94,18 @@ def moves_of(run: Path, ligand: str, leg: str) -> dict | None:
             "stage_ends": list(itertools.accumulate(n - 1 for n in stages[:-1])),
             "acceptance": [float("nan") if v is None else float(v) for v in acceptance],
             "round_trips": round_trips, "sampled": sampled}
+
+
+def after_the_last_exchange(leg_dir: Path, n_stored: int) -> np.ndarray | None:
+    """The windows of the replicas after the exchange of the last stored iteration: those of the
+    checkpoint, if it is of that iteration; None otherwise."""
+    try:
+        with np.load(leg_dir / "hrex" / "checkpoint.npz") as checkpoint:
+            if int(checkpoint["iteration"]) != n_stored:
+                return None
+            return np.asarray(checkpoint["state_of_replica"], dtype=int)
+    except (OSError, KeyError, ValueError):
+        return None
 
 
 def headline(label: str, d: dict) -> str:
@@ -163,7 +181,8 @@ def write_figure(data: list[tuple[str, dict]], ligand: str, leg: str, columns: i
     for n, (label, d) in enumerate(data):
         r, c = divmod(n, columns)
         ax = fig.add_subplot(grid[2 * r, c])
-        matrix = np.where(d["matrix"] > 0, d["matrix"], np.nan)
+        # a move below the scale keeps the colour of its lower end: only no move is the surface
+        matrix = np.where(d["matrix"] > 0, np.maximum(d["matrix"], norm.vmin), np.nan)
         # aspect auto: the matrix is as wide as the acceptances under it, so that the windows line up
         image = ax.imshow(matrix, cmap=cmap, norm=norm, origin="upper", interpolation="nearest", aspect="auto",
                           extent=(-0.5, d["k"] - 0.5, d["k"] - 0.5, -0.5))
