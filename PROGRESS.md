@@ -62,8 +62,10 @@ Open items:
   and the measurements that would separate the causes of cuFEP's larger errors; nothing decided.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
-  0.9; the restraint does not explain it and no cause is established). It was not looked into in
-  PR #6; a plan of its own waits for the owner's decision.
+  0.9; the restraint does not explain it and no cause is established). Plan
+  `docs/plans/2026-11-21-als-initial-window-design.md` (in progress, a draft pull request; nothing
+  implemented yet) tests the owner's hypothesis: more initial windows of adaptive lambda
+  scheduling, placed where the sampling is slow.
 - The benchmarks were made with `restraints.selection: auto`, the default until 2026-11-21; a
   rerun with the default `interactions` is not part of the plan. One calculation per example
   says nothing about a difference in accuracy (the spread between runs: the item above).
@@ -74,6 +76,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [design] Plan: the initial windows of adaptive lambda scheduling, three candidates
+- What: the owner's decisions: `max_windows` 100; ALS stays on and starts from more windows that
+  need not be evenly spaced; a higher threshold, for which a deficient pair is read from the overlap
+  of the two neighbouring windows alone (cuFEP's own; the paper's matrix stays a setting); every
+  window setting per leg in the YAML. Three candidates for the complex leg (OpenFE's values; a
+  layout by where ALS put windows times the square root of the statistical inefficiency; that
+  layout doubled), three runs of the TYK2 example each. Defaults change after the owner picks.
+- Why: the complex leg differs between runs (standard deviation 1.9 kcal/mol); in the stored
+  benchmark legs 31 of the 41 windows with fewer than 50 independent samples lie at vanish 0.7-1.0.
+- Refs: `docs/plans/2026-11-21-als-initial-window-design.md` (not implemented yet), issue #5
 
 ### 2026-11-21 — [progress] PR #6 merged on the owner's order: the restraint from interactions
 - What: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` is done (14 steps, an
