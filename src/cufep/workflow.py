@@ -982,10 +982,31 @@ def restraint_made_with(cfg: Config) -> dict:
     return data
 
 
-def atom_label(atoms: list, index: int) -> str:
-    """An atom of the System as the log and the results name it: residue name and number, atom name."""
+def residue_names(topology) -> dict[int, str]:
+    """What the log and the results call every residue, by its index in the topology: name, number
+    and insertion code as the input has them (``VAL981``), followed by its chain where the protein
+    has more than one (``VAL981.B``, as ProLIF writes a residue), so that the residues of two
+    chains with one numbering have two names (review of f5a77ce). The chain is its id in the
+    input; where the chains of the protein do not have distinct ids, its number among them."""
+    from cufep.prep.protein import AMINO_ACIDS, CAPS
+
+    chains = []
+    for residue in topology.residues():
+        if (residue.name in AMINO_ACIDS or residue.name in CAPS) and residue.chain not in chains:
+            chains.append(residue.chain)
+    ids = [str(chain.id).strip() for chain in chains]
+    distinct = all(ids) and len(set(ids)) == len(ids)
+    behind = {chain.index: f".{ids[k] if distinct else k + 1}" for k, chain in enumerate(chains)} \
+        if len(chains) > 1 else {}
+    return {residue.index: f"{residue.name}{residue.id}{str(getattr(residue, 'insertionCode', '') or '').strip()}"
+                           + behind.get(residue.chain.index, "") for residue in topology.residues()}
+
+
+def atom_label(atoms: list, index: int, residues: dict[int, str]) -> str:
+    """An atom of the System as the log and the results name it: its residue (:func:`residue_names`)
+    and its name."""
     atom = atoms[int(index)]
-    return f"{atom.residue.name}{atom.residue.id}:{atom.name}"
+    return f"{residues[atom.residue.index]}:{atom.name}"
 
 
 def check_interaction_inputs(cfg: Config, ligands) -> None:
@@ -1075,8 +1096,10 @@ def restraint_trajectories(cfg: Config, job: "LegJob", leg_dir: Path, prep: dict
         devices = list(job.devices)
         granted = None
         if job.control is not None and not job.inline and len(missing) > 1:
+            work = md_work(ri.length_ns * 1000.0, len(prep["positions"]), cfg.sampling.time_per_iteration_ps)
             granted = job.control.request_devices(
-                len(missing), len(missing) * ri.length_ns * 1000.0 / max(1, job.oversubscription), pinned=True)
+                len(missing), len(missing) * work / max(1, job.oversubscription), pinned=True,
+                what=f"{len(missing)} trajectories for the restraint")
             devices = granted or devices
         tasks = [TrajectoryTask(index=k, path=str(trajectory_file(leg_dir, k)), system_xml=prep["system_xml"],
                                 positions=np.asarray(eq["positions"]), velocities=np.asarray(eq["velocities"]),
@@ -1184,14 +1207,15 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
     if rc.force_constants == "auto":
         restraint = with_force_constants_from_fluctuations(restraint, fluctuations, temperature_K)
 
+    names = residue_names(topology)
+
     def residue_label(index: int) -> str:
-        residue = atoms[hosts[index][0]].residue if index in hosts else list(topology.residues())[index]
-        return f"{residue.name}{residue.id}"
+        return names[int(index)]
 
     def described(candidate) -> dict:
         out = candidate.to_dict()
-        out.update(host=[atom_label(atoms, i) for i in candidate.host],
-                   guest=[atom_label(atoms, i) for i in candidate.guest],
+        out.update(host=[atom_label(atoms, i, names) for i in candidate.host],
+                   guest=[atom_label(atoms, i, names) for i in candidate.guest],
                    host_atoms=[int(i) for i in candidate.host], guest_atoms=[int(i) for i in candidate.guest],
                    residue=residue_label(candidate.residue), residue_index=int(candidate.residue))
         return out
@@ -1202,19 +1226,20 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
     info = {
         "selection": "interactions", "force_constants": rc.force_constants, "fluctuations": fluctuations,
         "method": choice.method,
-        "anchors": {"host": [atom_label(atoms, i) for i in choice.host],
-                    "guest": [atom_label(atoms, i) for i in choice.guest]},
+        "anchors": {"host": [atom_label(atoms, i, names) for i in choice.host],
+                    "guest": [atom_label(atoms, i, names) for i in choice.guest]},
         "interaction": {"residue": residue_label(chosen.residue), "type": chosen.interaction,
                         "frames": int(chosen.n_frames), "of_frames": n},
         "score": chosen.score, "candidates_tested": sum(len(v) for v in choice.ranked.values()),
         "candidates_refused": len(refused),
         "start_values": dict(zip(COORDINATES, in_degrees(values.start_values))),
+        "start_values_units": {"r": "nm", "angles": "degrees"},          # the restraint itself is in nm and radians
         "md": {"trajectories": int(ri.trajectories), "frames_analysed": n, "backends": list(trajectories.backends),
                "timesteps_fs": [float(x) for x in trajectories.timesteps_fs]},
         "versions": versions(), "notes": list(trajectories.notes)}
     rows = choice.table.rows(frames)
     for entry in rows:
-        entry.update(ligand_atom_name=atom_label(atoms, entry["ligand_atom"]),
+        entry.update(ligand_atom_name=atom_label(atoms, entry["ligand_atom"], names),
                      residue_name=residue_label(entry["residue"]))
     by_residue = occupancies(records)
     for entry in by_residue:
@@ -1225,8 +1250,10 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
         "frames_needed_distance": rule.frames_needed(n, ri.fallback_frame_fraction),
         "trajectory_of_frame": [int(k) for k in analysed.trajectory],
         "interactions": rows, "residues": by_residue,
-        "stable_structure_fraction": {residue_label(r): float(x) for r, x in sorted(stable.items())
-                                      if r in {c.residue for ranked in choice.ranked.values() for c in ranked}},
+        # by the index of the residue: two residues can have one name
+        "stable_structure_fraction": [{"residue": int(r), "residue_name": residue_label(r), "fraction": float(x)}
+                                      for r, x in sorted(stable.items())
+                                      if r in {c.residue for ranked in choice.ranked.values() for c in ranked}],
         "method": choice.method,
         "candidates": {method: [described(c) for c in ranked[:200]] for method, ranked in choice.ranked.items()},
         "candidates_in_all": {method: len(ranked) for method, ranked in choice.ranked.items()},
@@ -1400,12 +1427,16 @@ class JobControl:
         except (BrokenPipeError, OSError):
             pass
 
-    def request_devices(self, replicas: int, work: float, timeout: float = 300.0, pinned: bool = False) -> list | None:
+    def request_devices(self, replicas: int, work: float, timeout: float = 300.0, pinned: bool = False,
+                        what: str | None = None) -> list | None:
         """Tell the scheduler that sampling starts; returns the GPU of every worker to use. With
         ``pinned`` the job keeps these GPUs until it asks again or goes back to serial work: it cannot
-        move its workers (the precalculation of adaptive lambda scheduling), so the scheduler must not
-        count them as moved (review of PR 1)."""
-        self._send({"event": "sampling", "replicas": int(replicas), "work": float(work), "pinned": bool(pinned)})
+        move its workers (the precalculation of adaptive lambda scheduling, the trajectories for a
+        restraint), so the scheduler must not count them as moved (review of PR 1). ``work`` is what
+        the workers still have to do (:func:`md_work`); ``what`` is what the log of the scheduler
+        calls it, where it is not the replica exchange of ``replicas`` lambda windows."""
+        self._send({"event": "sampling", "replicas": int(replicas), "work": float(work), "pinned": bool(pinned),
+                    "what": what})
         try:
             if self.conn.poll(timeout):
                 return list(self.conn.recv()["devices"])
@@ -1427,7 +1458,7 @@ class JobControl:
         self._send({"event": "progress", "work": float(work)})
 
     def serial(self) -> None:
-        """Sampling is over: the job needs a single worker at most from now on."""
+        """The part that used several workers is over: the job needs a single worker at most from now on."""
         self._send({"event": "serial"})
 
 
@@ -2056,9 +2087,11 @@ def run_leg(job: LegJob) -> dict:
                 n_first = sum(als.initial_windows[st] for st in stages) - (len(stages) - 1)
                 devices = list(job.devices)
                 if job.control is not None:
+                    work = md_work(als.window_ps + als.equilibration_ps, alch.system.getNumParticles(),
+                                   cfg.sampling.time_per_iteration_ps)
                     granted = job.control.request_devices(
-                        n_first, n_first * (als.window_ps + als.equilibration_ps) / max(1, job.oversubscription),
-                        pinned=True)
+                        n_first, n_first * work / max(1, job.oversubscription), pinned=True,
+                        what=f"the precalculation of the lambda schedule ({n_first} lambda windows)")
                     devices = granted or devices
                 if job.inline or len(devices) < 2:
                     schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log)
@@ -2110,7 +2143,8 @@ def run_leg(job: LegJob) -> dict:
         n_windows, total = len(schedule.states), n_equil + n_prod
         control = job.control
         # seconds one replica needs per iteration: a guess until the first iterations were timed
-        replica_seconds = [0.05 * (1.0 + alch.system.getNumParticles() / 50000.0)]
+        replica_seconds = [md_work(cfg.sampling.time_per_iteration_ps, alch.system.getNumParticles(),
+                                   cfg.sampling.time_per_iteration_ps)]
 
         def remaining_work(done: int) -> float:
             return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)

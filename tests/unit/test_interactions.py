@@ -325,6 +325,10 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     assert set(info["versions"]) == {"prolif", "MDAnalysis", "rdkit"}
     assert restraint_choice(info)["anchors"] == info["anchors"] and restraint_choice({"selection": "auto"}) is None
     assert json.loads(json.dumps(info)) == info                 # as restraint.json holds it
+    # where the alchemical run starts, in the units the record names (the restraint beside it is in radians)
+    assert info["start_values_units"] == {"r": "nm", "angles": "degrees"}
+    assert info["start_values"]["r"] == pytest.approx(restraint.r0, abs=0.1) and info["start_values"]["r"] < 1.0
+    assert np.radians(info["start_values"]["theta_A"]) == pytest.approx(restraint.theta_a0, abs=0.5)
     # the reference values: the histograms of the analysed frames (those later than 0.1 ns of both trajectories)
     from cufep.sampling.restraint_md import read_trajectories
 
@@ -346,6 +350,8 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     assert all(row["frames"] < 8 for row in report["interactions"] if not row["kept"])
     assert all(sum(row["frames_of_trajectory"].values()) == row["frames"] for row in report["interactions"])
     assert len(report["coordinates"]["r"]) == 20 and report["made_with"]["selection"] == "interactions"
+    assert {"residue": hinge(topology), "residue_name": "VAL981"} in [
+        {key: row[key] for key in ("residue", "residue_name")} for row in report["stable_structure_fraction"]]
     table = (leg_dir / "interactions.csv").read_text().splitlines()
     assert table[0] == "ligand_atom,residue,interaction,frames,fraction,kept,frames_of_trajectory_0," \
                        "frames_of_trajectory_1"
@@ -361,6 +367,34 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     assert figure == leg_dir / "interactions.png" and figure.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     (leg_dir / "interactions.json").rename(leg_dir / "interactions.kept")
     assert plot_interactions(leg_dir) is None and not figure.exists()
+
+
+def test_the_residues_of_two_chains_with_one_numbering_have_two_names():
+    """Review of f5a77ce (P3): the results named a residue by its name and number ("VAL981"), which the two
+    chains of a dimer share, and the secondary structure of the residues was recorded under that name, so that
+    one of two residues was lost. A residue is named with its chain where the protein has several, and with
+    its insertion code; what is recorded by residue goes by its index."""
+    import openmm.app as app
+
+    from cufep.workflow import atom_label, residue_names
+
+    def topology(*chain_ids):
+        top = app.Topology()
+        for chain_id in chain_ids:
+            chain = top.addChain(chain_id)
+            top.addAtom("N", app.element.nitrogen, top.addResidue("VAL", chain, id="981"))
+            top.addAtom("N", app.element.nitrogen, top.addResidue("ASP", chain, id="898", insertionCode="A"))
+        top.addAtom("C1", app.element.carbon, top.addResidue("LIG", top.addChain("L"), id="1"))
+        return top
+
+    dimer = topology("A", "B")
+    names = residue_names(dimer)
+    assert [names[i] for i in range(5)] == ["VAL981.A", "ASP898A.A", "VAL981.B", "ASP898A.B", "LIG1"]
+    assert atom_label(list(dimer.atoms()), 2, names) == "VAL981.B:N"
+    # one chain: as the input calls it; chains that the input does not tell apart: by their number
+    assert list(residue_names(topology("A")).values()) == ["VAL981", "ASP898A", "LIG1"]
+    assert list(residue_names(topology("A", "A")).values())[:4] == ["VAL981.1", "ASP898A.1", "VAL981.2", "ASP898A.2"]
+    assert list(residue_names(topology("", " ")).values())[2] == "VAL981.2"
 
 
 def test_the_trajectories_take_the_settings_of_the_yaml_and_the_end_of_the_pre_equilibration(tyk2, tmp_path,
@@ -514,8 +548,9 @@ def test_the_job_asks_for_gpus_only_for_trajectories_it_must_run_and_goes_on_wit
         def __init__(self):
             self.asked, self.serial_calls = [], 0
 
-        def request_devices(self, replicas, work, timeout=300.0, pinned=False):
+        def request_devices(self, replicas, work, timeout=300.0, pinned=False, what=None):
             self.asked.append((replicas, pinned))
+            self.work, self.what = work, what
             return [3, 3, 5]
 
         def serial(self):
@@ -540,6 +575,14 @@ def test_the_job_asks_for_gpus_only_for_trajectories_it_must_run_and_goes_on_wit
     assert job.control.asked == [(3, True)] and used == [[3, 3, 5]] and len(made) == 3
     assert job.devices == [3] and job.control.serial_calls == 1
     assert {task.mps_thread_percentage for task in made} == {100}          # two workers of this job on a GPU
+    # the work of the three trajectories of 0.2 ns, two workers on a GPU, in the unit in which replica exchange
+    # tells its iterations (review of f5a77ce: it was told in picoseconds, replica exchange tells seconds)
+    from cufep.workflow import md_work
+
+    iteration_ps = cfg.sampling.time_per_iteration_ps
+    one_iteration = md_work(iteration_ps, len(pos), iteration_ps)
+    assert job.control.work == pytest.approx(3 * (200.0 / iteration_ps) * one_iteration / 2)
+    assert job.control.what == "3 trajectories for the restraint"
     # all trajectories are there: nothing is asked for, and the job stays where it is
     job.devices = [6]
     restraint_trajectories(cfg, job, leg_dir, prep, eq, False, 7, lambda line: None)

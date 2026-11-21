@@ -165,6 +165,19 @@ def run_trajectories(tasks: list[TrajectoryTask], devices: list, log=print, inli
     if inline or len(devices) < 2 or len(tasks) < 2:
         device = devices[0] if devices else None
         return [run_trajectory(task, device, log) for task in tasks]
+    def last_word(pipe, wait: float):
+        """What a process said of how its trajectory ended, if it has; its lines for the log are passed on."""
+        try:
+            while pipe.poll(wait):
+                message = pipe.recv()
+                if message[0] != "log":
+                    return message
+                log(message[1])
+                wait = 0.0
+        except (EOFError, OSError):
+            return ("died",)
+        return None
+
     ctx = mp.get_context("spawn")
     pending = list(tasks)
     running: dict[int, tuple] = {}                         # position in devices -> (process, pipe, task)
@@ -182,21 +195,17 @@ def run_trajectories(tasks: list[TrajectoryTask], devices: list, log=print, inli
                     running[slot] = (process, parent, task)
             for slot in list(running):
                 process, pipe, task = running[slot]
-                ended = None
-                try:
-                    while ended is None and pipe.poll(poll_seconds):
-                        message = pipe.recv()
-                        if message[0] == "log":
-                            log(message[1])
-                        else:
-                            ended = message
-                except (EOFError, OSError):
-                    ended = ("died",)
+                ended = last_word(pipe, poll_seconds)
                 if ended is None and not process.is_alive():
-                    ended = ("died",)
+                    # it is gone; what it sent between the look at the pipe and this one is still to be read
+                    ended = last_word(pipe, 0.0) or ("died",)
                 if ended is None:
                     continue
                 process.join(15)
+                if process.is_alive():
+                    # it has said how it ended and does not end: it does not keep its GPU
+                    process.kill()
+                    process.join(5)
                 pipe.close()
                 del running[slot]
                 if ended[0] == "done":

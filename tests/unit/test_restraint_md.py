@@ -185,6 +185,77 @@ def test_a_process_that_dies_is_seen_and_its_trajectory_is_run_again(tmp_path, m
     assert restraint_md.read_trajectories(tmp_path, 2).frames.shape[0] == 2 * 20
 
 
+class _Pipes:
+    """The two ends of a pipe without a process: what is sent into one end is read at the other."""
+
+    def __init__(self):
+        self.messages, self.other = [], None
+
+    @classmethod
+    def pair(cls):
+        parent, child = cls(), cls()
+        parent.other, child.other = child, parent
+        return parent, child
+
+    def send(self, message):
+        self.other.messages.append(message)
+
+    def poll(self, timeout=0.0):
+        return bool(self.messages)
+
+    def recv(self):
+        return self.messages.pop(0)
+
+    def close(self):
+        pass
+
+
+def test_a_result_sent_as_the_process_ends_is_read_and_a_process_that_does_not_end_is_stopped(tmp_path, monkeypatch):
+    """Review of f5a77ce (P3, found by reading). A process that sends its result and ends between the job's look
+    at its pipe and its look at the process was taken as one that died: its trajectory was run again on stock
+    OpenMM, or the stage ended ("ended without a result"). And a process that has sent its result and does not
+    end within the time it is given was forgotten, with its GPU: it is stopped."""
+    tasks = tasks_in(tmp_path, n=2)
+    made = []
+
+    class Process:
+        """Trajectory 0: its result arrives after the look at the pipe, and it is gone at the look at the
+        process. Trajectory 1: its result is there at once, and it does not end unless it is killed."""
+
+        def __init__(self, target=None, args=(), daemon=None):
+            self.pipe, self.task, self.killed, self.sent = args[0], args[1], False, False
+            made.append(self)
+
+        def start(self):
+            if self.task.index == 1:
+                self.pipe.send(("done", {"index": 1}))
+
+        def is_alive(self):
+            if self.task.index == 0:
+                if not self.sent:
+                    self.pipe.send(("log", "a line of MD 0"))
+                    self.pipe.send(("done", {"index": 0}))
+                    self.sent = True
+                return False
+            return not self.killed
+
+        def join(self, timeout=None):
+            pass
+
+        def kill(self):
+            self.killed = True
+
+    class Context:
+        Pipe = staticmethod(_Pipes.pair)
+
+    Context.Process = Process
+    monkeypatch.setattr(restraint_md.mp, "get_context", lambda method: Context)
+    lines = []
+    assert restraint_md.run_trajectories(tasks, [None, None], lines.append) == [{"index": 0}, {"index": 1}]
+    assert lines == ["a line of MD 0"]
+    assert [process.killed for process in made] == [False, True] and len(made) == 2
+
+
 def test_a_trajectory_of_a_bilayer_system_has_the_membrane_barostat_and_no_restraints(tmp_path, monkeypatch):
     """The trajectories of a system in a bilayer run with the barostat of the leg, the membrane
     one, at the temperature, pressure and frequency of the settings, with no force that holds
