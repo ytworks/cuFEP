@@ -31,10 +31,13 @@ OpenMM, on all GPUs of a machine, from two files.
 
 ## Current Status
 
-Snapshot date: 2026-11-20. `main` is d4dc9be (PR #1, the engine of plan
+Snapshot date: 2026-11-21. `main` is cda6965 (PR #1, the engine of plan
 `docs/plans/2026-11-18-abfe-engine.md`; PR #2, the README and the harness; PR #3, wording fixes
-and ruff). PR #4 (plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`): benchmarks
-with the settings of the examples, the full sets, an accuracy wiki. Analysis version 10.
+and ruff; PR #4, plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`: benchmarks
+with the settings of the examples, the full sets, an accuracy wiki). Analysis version 10.
+In progress: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` (the Boresch
+restraint from the protein-ligand interactions of unrestrained MD, to become the default
+`restraints.selection`); step 1 of 14, nothing of it in the code yet.
 
 | item | status |
 |---|---|
@@ -49,9 +52,12 @@ with the settings of the examples, the full sets, an accuracy wiki. Analysis ver
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- PR #4: review and merge, then the wiki pages are published on the GitHub Wiki (the owner
-  creates its first page). Issue #5: the differences from Felis and the measurements that would
-  separate the causes of cuFEP's larger errors; nothing decided.
+- The wiki pages of PR #4 (`docs/wiki/`) are not yet on the GitHub Wiki: it has no page
+  (checked 2026-11-21; the owner creates its first page). Issue #5: the differences from Felis
+  and the measurements that would separate the causes of cuFEP's larger errors; nothing decided.
+- The benchmarks and both example results above were made with `restraints.selection: auto`.
+  The plan of 2026-11-21 changes the default at its step 12; a rerun of the benchmarks is not
+  part of that plan.
 - `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
   5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
   decision (`.claude/rules/fep-invariants.md`).
@@ -59,6 +65,16 @@ Open items:
   only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [design] Plan: the Boresch restraint from the interactions of unrestrained MD
+- What: plan started. A new `restraints.selection: interactions`, to become the default: four
+  unrestrained NPT runs of the complex (3 ns each, first 1 ns dropped), ProLIF interactions and
+  DSSP over their frames, anchors and reference values by the rule of Ding et al.
+  (arXiv:2603.22274 v3, sec. 2.1 and 2.4, and its source at commit d6dff91); the present search
+  stays as `auto`. The MD runs by the settings of the YAML on the backend of the leg.
+- Why: the owner's order of 2026-11-21 (the mode as the default, the source read where the
+  paper is silent, both examples run once, a draft pull request).
+- Refs: `docs/plans/2026-11-21-restraints-from-md-interactions.md`, issue #5
 
 ### 2026-11-21 — [progress] Full TYK2 and A2A benchmarks; accuracy wiki
 - What: TYK2 (16) and A2A (17) run once each with the example settings (5 ns per window, commit
