@@ -193,8 +193,20 @@ def build_dipeptides_in_water(box_nm: float = 2.4, dispersion_correction: bool =
             previous_c = local["C"] if res_name != "NME" else None
     ff = app.ForceField("amber14/protein.ff14SB.xml", "amber14/tip3p.xml")
     mod = app.Modeller(top, pos * u.nanometer)
-    mod.addHydrogens(ff)
-    mod.addSolvent(ff, boxSize=mm.Vec3(box_nm, box_nm, box_nm) * u.nanometer)
+    # the same configuration in every run and on every machine. OpenMM puts a new hydrogen at a random place
+    # next to its atom (Python's random) and minimises: with a fixed seed and the Reference platform that is
+    # one geometry, and the MD below runs on one thread with deterministic forces. Without these every build
+    # was another configuration, with another number of waters, and the GPU test that holds the two backends
+    # to 0.1 kT on it met 0.007 to 0.054 kT in six builds and 0.141 in a seventh
+    import random
+
+    state = random.getstate()
+    random.seed(20261121)
+    try:
+        mod.addHydrogens(ff, platform=mm.Platform.getPlatformByName("Reference"))
+        mod.addSolvent(ff, boxSize=mm.Vec3(box_nm, box_nm, box_nm) * u.nanometer)
+    finally:
+        random.setstate(state)
     system = ff.createSystem(mod.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,
                              constraints=app.HBonds, rigidWater=True, ewaldErrorTolerance=5e-4)
     for f in system.getForces():
@@ -202,7 +214,8 @@ def build_dipeptides_in_water(box_nm: float = 2.4, dispersion_correction: bool =
             f.setUseDispersionCorrection(dispersion_correction)
     integ = mm.LangevinMiddleIntegrator(300 * u.kelvin, 1 / u.picosecond, 0.002 * u.picoseconds)
     integ.setRandomNumberSeed(1)
-    ctx = mm.Context(system, integ, mm.Platform.getPlatformByName("CPU"))
+    ctx = mm.Context(system, integ, mm.Platform.getPlatformByName("CPU"),
+                     {"Threads": "1", "DeterministicForces": "true"})
     ctx.setPositions(mod.positions)
     mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 300)
     ctx.setVelocitiesToTemperature(300 * u.kelvin, 1)
