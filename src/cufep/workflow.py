@@ -62,7 +62,8 @@ def safe_name(name: str) -> str:
 OUTPUT_ROOT_NAMES = frozenset({
     "cache", "cufep.log", "resolved_config.yaml", "resolved_config.refused.yaml", "auto_report.md",
     "protein_prepared.pdb", "summary.json", "summary.csv", "timing.json", "timing_rerun.json",
-    "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "frozen_schedules", ".cufep.lock"})
+    "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "benchmark_report_ligands.png",
+    "frozen_schedules", ".cufep.lock"})
 
 
 def ligand_dir_name(name: str) -> str:
@@ -2390,6 +2391,29 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     return result
 
 
+def overlap_below_level(result: dict, cfg) -> list[dict]:
+    """Where the overlap of neighbouring lambda windows of a leg is below ``analysis.min_overlap``,
+    the check behind NOT RELIABLE (:func:`leg_quality`): for all iterations and for the samples the
+    free energy is estimated from (``of``, as the check's ``below`` names them), the overlap, the
+    pair of windows with the lowest one, its stage and its two lambda values. Empty if the leg
+    meets the level. The summary of a ligand keeps it, so that the benchmark report can say where."""
+    ov = leg_quality(result["analysis"], cfg)["overlap"]
+    used = ov.get("used")
+    checks = [("all iterations", ov, not ov.get("all_ok", ov["ok"])),
+              ("the samples of the estimate", used, bool(used) and used["ok"] is False)]
+    windows = result.get("lambda_windows") or {}
+    out = []
+    for of, check, below in checks:
+        if not below:
+            continue
+        pair = check.get("windows")
+        where = None if not pair else window_stage(windows, pair[0])
+        out.append({"of": of, "overlap": check["lowest"], "windows": pair,
+                    "stage": None if where is None else where[0],
+                    "lambda": None if where is None else [where[1], where[2]]})
+    return out
+
+
 def quality_warnings(result: dict, cfg) -> list[str]:
     """Warnings about a finished leg, from its checks. None of them changes what is run.
 
@@ -2708,6 +2732,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
 
     levels = analysis_settings_of(run_record) if run_record is not None else analysis_settings_of(None)
     flagged: dict[str, list[str]] = {check: [] for check in QUALITY_CHECKS}
+    overlap_places: list[dict] = []            # where the legs flagged NOT RELIABLE are below the level
     failed_legs: list[str] = []
     failed_leg_ids: list[list] = []        # [repeat, leg] of every failed leg and every leg without a free energy
     for r in range(repeats):
@@ -2789,6 +2814,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
             for check, legs in flagged.items():
                 if (quality.get(check) or {}).get("ok") is False:
                     legs.append(where)
+            overlap_places += [dict(leg=where, **place) for place in overlap_below_level(leg_result, levels)]
     inconsistent, not_compared = cycle_differences(complete)
     if inconsistent:
         # these legs are not legs of one thermodynamic cycle: no number is made from them
@@ -2832,6 +2858,7 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
         "origin_not_recorded": unrecorded,
         "old_analysis": old_analysis,
         "not_reliable": flagged["overlap"],
+        "overlap_below_level": overlap_places,
         "few_samples": flagged["samples"],
         "repeats_planned": int(repeats),
         "analysis_record": run_record,

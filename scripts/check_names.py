@@ -3,9 +3,9 @@
 
 The project's rule (.claude/rules/fep-invariants.md): no text says that a decision of cuFEP
 follows, copies or was made by looking at a commercial FEP product. Such a name appears only
-where accuracy is compared (the benchmark report against the published FEP+ predictions) and
-where a source is cited (the benchmark set). This check holds the names to the files that do
-that. Run by the `harness` job of CI. Standard library only.
+where accuracy is compared (the benchmark report and the accuracy pages of the wiki against the
+published FEP+ predictions) and where a source is cited (the benchmark set). This check holds the
+names to the files that do that. Run by the `harness` job of CI. Standard library only.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ FOR_ACCURACY_AND_SOURCES = re.compile(r"FEP\+|Schr(?:ö|oe?)dinger", re.IGNORECA
 ACCURACY_AND_SOURCE_FILES = (
     "benchmarks/*", "src/cufep/benchmarks/*", "src/cufep/cli.py", "tests/unit/test_benchmarks.py",
     "examples/*", "README.md", "README.ja.md", "CLAUDE.md", "PROGRESS.md", "docs/plans/*",
-    "docs/LICENSING.md",
+    "docs/LICENSING.md", "docs/wiki/*", "spikes/wiki_tables.py", "spikes/benchmark_progress.py",
 )
 THIS_CHECK = ("scripts/check_names.py", "tests/unit/test_harness.py")
 

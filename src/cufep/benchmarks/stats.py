@@ -7,15 +7,15 @@ removing each method's mean signed error ("centred"), on pairwise differences, a
 rank correlation.
 
 A statistic that is not defined for the data (a correlation of one ligand or of a constant
-series, a pairwise error of one ligand) is None, shown as N/A, never a number (review of PR 1: two
-ligands with R^2 = 1 were reported as 0.00).
+series, a pairwise error or an error around the mean of one ligand) is None, shown as N/A, never
+a number (review of PR 1: two ligands with R^2 = 1 were reported as 0.00).
 """
 from __future__ import annotations
 
 import numpy as np
 
 #: statistics of the agreement between two series that need two different values in each
-CORRELATIONS = ("kendall_tau", "spearman", "pearson_r2")
+CORRELATIONS = ("kendall_tau", "spearman", "pearson_r", "pearson_r2")
 
 
 def _defined(a: np.ndarray, b: np.ndarray) -> bool:
@@ -43,12 +43,17 @@ def spearman(a: np.ndarray, b: np.ndarray) -> float | None:
     return float(r) if np.isfinite(r) else None
 
 
-def pearson_r2(a: np.ndarray, b: np.ndarray) -> float | None:
+def pearson_r(a: np.ndarray, b: np.ndarray) -> float | None:
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     if not _defined(a, b):
         return None
     r = np.corrcoef(a, b)[0, 1]
-    return float(r * r) if np.isfinite(r) else None
+    return float(r) if np.isfinite(r) else None
+
+
+def pearson_r2(a: np.ndarray, b: np.ndarray) -> float | None:
+    r = pearson_r(a, b)
+    return None if r is None else r * r
 
 
 def metrics(pred, exp) -> dict[str, float | None]:
@@ -58,9 +63,11 @@ def metrics(pred, exp) -> dict[str, float | None]:
     i, j = np.triu_indices(len(pred), k=1)
     pair = (pred[i] - pred[j]) - (exp[i] - exp[j])
     return {"n": float(len(pred)), "mean_signed_error": float(err.mean()), "rmse": float(np.sqrt(np.mean(err ** 2))),
-            "mue": float(np.mean(np.abs(err))), "centred_rmse": float(np.sqrt(np.mean(centred ** 2))),
+            "mue": float(np.mean(np.abs(err))),
+            "centred_rmse": float(np.sqrt(np.mean(centred ** 2))) if len(pred) >= 2 else None,
             "pairwise_rmse": float(np.sqrt(np.mean(pair ** 2))) if len(pair) else None,
-            "kendall_tau": kendall_tau(pred, exp), "spearman": spearman(pred, exp), "pearson_r2": pearson_r2(pred, exp)}
+            "kendall_tau": kendall_tau(pred, exp), "spearman": spearman(pred, exp), "pearson_r": pearson_r(pred, exp),
+            "pearson_r2": pearson_r2(pred, exp)}
 
 
 def bootstrap(pred, exp, n_boot: int = 2000, seed: int = 0, level: float = 0.95) -> dict[str, tuple[float, float]]:

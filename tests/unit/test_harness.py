@@ -74,6 +74,30 @@ def test_the_two_readmes_are_compared_by_outline_commands_and_links(tmp_path):
     assert any("#インストール: no such heading" in p for p in problems(JAPANESE.replace("## インストール", "## 導入")))
 
 
+def test_the_wiki_pages_are_compared_like_the_readmes_and_by_the_numbers_in_their_tables(tmp_path):
+    """The accuracy page of the wiki in English and in Japanese: the same outline, figures and numbers in
+    the tables (cells of prose are translated and are not compared); each links to the other's wiki page."""
+    pair = check_readme_pair.PAIRS[1]
+    wiki = check_readme_pair.WIKI
+    (tmp_path / "docs" / "wiki" / "images").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "images" / "tyk2.png").write_bytes(b"png")
+    english = (f"# Accuracy\n[日本語]({wiki}Accuracy-ja)\n\n## TYK2\n\n| ligand | experiment | cuFEP | note |\n"
+               "|---|---|---|---|\n| ejm_31 | -9.54 | -10.12 ± 0.50 | two windows |\n\n![TYK2](images/tyk2.png)\n")
+    japanese = (f"# 精度\n[English]({wiki}Accuracy)\n\n## TYK2\n\n| リガンド | 実験値 | cuFEP | 注 |\n"
+                "|---|---|---|---|\n| ejm_31 | −9.54 | -10.12 ± 0.50 | 2 つの窓 |\n\n![TYK2](images/tyk2.png)\n")
+
+    def problems(japanese):
+        return check_readme_pair.pair_problems(english, japanese, tmp_path, pair)
+
+    assert problems(japanese) == []
+    assert any("the numbers in the tables differ" in p and "'-10.12' / '-10.21'" in p
+               for p in problems(japanese.replace("-10.12", "-10.21")))
+    assert any("numbers in the tables differ" in p for p in problems(japanese.replace(" ± 0.50", "")))
+    assert any(f"does not link to {wiki}Accuracy" in p for p in problems(japanese.replace(f"({wiki}Accuracy)", "")))
+    assert any("links to files differ" in p for p in problems(japanese.replace("![TYK2](images/tyk2.png)", "")))
+    assert any("no such file" in p for p in problems(japanese.replace("tyk2.png", "a2a.png")))
+
+
 def test_anchors_are_those_github_gives():
     assert check_readme_pair.slug("How cuFEP compares") == "how-cufep-compares"
     assert check_readme_pair.slug("`sampling.rest2` and REST2 (pocket)") == "samplingrest2-and-rest2-pocket"

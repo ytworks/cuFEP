@@ -408,7 +408,9 @@ otherwise the same settings -10.56) and -11.95 ± 0.73 for A2A 4e (experiment -1
 with the ligand alone). These are single runs: the complex legs of these examples differ from
 run to run by more than their standard errors (the discharge stage of TYK2 from 15.3 to 18.4
 kcal/mol over runs with thresholds of 0.10 to 0.18). The owner made the pocket the default on
-2026-11-20.
+2026-11-20. The full benchmark runs of 2026-11-20/21 (commit 3b45bfe, the same settings) gave
+-9.84 ± 0.33 for ejm_31 and -18.91 ± 0.52 for 4e, whose complex leg was 44.68 kcal/mol against
+37.61 in the earlier run (`benchmarks/results/`).
 
 Only the free energy of a whole leg is a physical quantity then. The scale is not 1 where one
 stage ends and the next begins, so the free energies of the single stages in the results
@@ -601,7 +603,10 @@ same number of samples:
 
 After the production the analysis of each leg makes four checks. They change nothing in what
 is run. What they find is written to the result line, to `result.json` (`quality`), to
-`summary.csv` and to the benchmark report. Every level is one that the literature gives:
+`summary.csv` and to the benchmark report. The report compares every ligand with a result
+with experiment and with the predictions published with the set, NOT RELIABLE ones included,
+also in two groups apart, and names the pair of windows below the level
+(`overlap_below_level` in `summary.json`). Every level is one that the literature gives:
 Klimovich, Shirts and Mobley, "Guidelines for the analysis of free energy calculations", J.
 Comput. Aided Mol. Des. 2015, 29, 397, and Mey et al., "Best Practices for Alchemical Free
 Energy Calculations", LiveCoMS 2020.

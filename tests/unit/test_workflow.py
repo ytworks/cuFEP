@@ -215,7 +215,7 @@ def test_combination_follows_the_thermodynamic_cycle(tmp_path):
 def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_path):
     from cufep.analysis.mbar import quality_checks
     from cufep.config.schema import Config
-    from cufep.workflow import leg_quality, quality_warnings
+    from cufep.workflow import leg_quality, overlap_below_level, quality_warnings
 
     cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}})
     kcal = 4.184
@@ -260,6 +260,11 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     )
     assert "--leg complex --reschedule" in staged[0] and "--leg complex --production-ns" in staged[1]
     assert staged[1].startswith("few independent samples: lambda window 1 (vanish stage) has 12")
+    # where the leg is below the level, as the summary of the ligand keeps it for the benchmark report
+    assert overlap_below_level({"analysis": poor, "lambda_windows": {"restrain": [0.0, 1.0],
+                                                                     "vanish": [0.0, 0.5, 1.0]}}, cfg) == [
+        {"of": "all iterations", "overlap": 0.02, "windows": [1, 2], "stage": "vanish", "lambda": [0.0, 0.5]}]
+    assert overlap_below_level({"analysis": steady}, cfg) == []
     # the overlap among the samples of the estimate, and what MBAR gets from the slowest window
     thinned = dict(steady, overlap_used_neighbour=[0.2, 0.012], window_kept_samples=[400, 12, 300],
                    window_inefficiency_neighbour=[1, -1, -1], window_effective_samples=[400.0, 12.4, 300.0],
@@ -270,6 +275,8 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
         "NOT RELIABLE: among the samples the free energy is estimated from, the overlap between lambda windows 1 "
         "and 2 is 0.012, below 0.03; window 1 gives it 12 samples and window 2 gives 300.")
     assert "--leg complex --production-ns" in notes_thinned[0] and "--reschedule" in notes_thinned[0]
+    assert overlap_below_level({"analysis": thinned}, cfg) == [
+        {"of": "the samples of the estimate", "overlap": 0.012, "windows": [1, 2], "stage": None, "lambda": None}]
     assert notes_thinned[1].startswith(
         "few independent samples: lambda window 1 has 12 and gives MBAR 12 samples (its energy difference to the "
         "previous window is correlated over 200 iterations); 50 are recommended for MBAR (Mey et al. 2020)")
@@ -285,6 +292,7 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
     lenient = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
                                      "analysis": {"min_overlap": 0.01, "min_effective_samples": 10}})
     assert quality_warnings({"analysis": poor}, lenient) == []
+    assert overlap_below_level({"analysis": poor}, lenient) == []
     # checks stored by an older version are not used: they are made again from the analysis
     assert len(quality_warnings({"analysis": poor, "quality": {"overlap": {"ok": True}, "halves": {"ok": False},
                                                               "estimators": {"ok": False}}}, cfg)) == 2
@@ -306,6 +314,8 @@ def test_checks_of_the_analysis_reach_the_leg_notes_and_the_ligand_result(tmp_pa
             "lambda_windows_added": {"vanish": 2} if name == "solvent" else None}))
     out = combine_ligand(tmp_path, "lig", 1)
     assert out["not_reliable"] == ["complex leg"] and out["few_samples"] == ["complex leg"]
+    assert out["overlap_below_level"] == [{"leg": "complex leg", "of": "all iterations", "overlap": 0.02,
+                                           "windows": [1, 2], "stage": None, "lambda": None}]
     assert not any(key in out for key in ("halves_differ", "halves_not_compared", "halves_below_level",
                                           "estimators_disagree"))
     assert out["repeats"][0]["lambda_windows_added"] == {"complex": None, "solvent": {"vanish": 2}}

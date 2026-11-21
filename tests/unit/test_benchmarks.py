@@ -7,8 +7,16 @@ import pytest
 
 from cufep.analysis.structure import structural_analysis
 from cufep.benchmarks.curate import compound_id, evenly_spaced_subset
-from cufep.benchmarks.runner import benchmark_config, data_root, load_registry, read_reference, report
+from cufep.benchmarks.runner import (
+    benchmark_config,
+    data_root,
+    load_registry,
+    overlap_places,
+    read_reference,
+    report,
+)
 from cufep.benchmarks.stats import bootstrap, metrics
+from cufep.config.schema import load_config
 from cufep.prep.ligand import load_ligands
 
 
@@ -19,8 +27,10 @@ def test_metrics_on_known_numbers():
     assert m["mean_signed_error"] == pytest.approx(2.0) and m["rmse"] == pytest.approx(2.0)
     assert m["centred_rmse"] == pytest.approx(0.0, abs=1e-12) and m["pairwise_rmse"] == pytest.approx(0.0, abs=1e-12)
     assert m["kendall_tau"] == pytest.approx(1.0) and m["spearman"] == pytest.approx(1.0)
+    assert m["pearson_r"] == pytest.approx(1.0) and m["pearson_r2"] == pytest.approx(1.0)
     m = metrics(exp[::-1], exp)
-    assert m["kendall_tau"] == pytest.approx(-1.0)
+    assert m["kendall_tau"] == pytest.approx(-1.0) and m["pearson_r"] == pytest.approx(-1.0)
+    assert m["pearson_r2"] == pytest.approx(1.0)
     # pairwise RMSE equals sqrt(2 N / (N - 1)) times the centred RMSE
     rng = np.random.default_rng(0)
     pred = exp + rng.normal(size=4)
@@ -62,19 +72,64 @@ def test_compound_names():
 def test_benchmark_tiers(tmp_path):
     smoke = benchmark_config("tyk2", "smoke", tmp_path / "s")
     assert smoke.system.ligand_names == ["jmc_23"] and smoke.sampling.repeats == 1
-    assert smoke.sampling.production_ns == 0.1 and smoke.lambda_schedule.adaptive.window_ps == 10
+    assert smoke.sampling.production_ns == 0.1
+    assert smoke.lambda_schedule.adaptive.window("complex") == smoke.lambda_schedule.adaptive.window("solvent") == 10
     assert smoke.lambda_schedule.adaptive.equilibration("complex") == 0.0
-    subset = benchmark_config("a2a", "subset", tmp_path / "x")
-    assert subset.system.ligand_names == load_registry()["a2a"]["subset"]
-    assert subset.sampling.repeats == 1 and subset.membrane.enabled is True     # one run per ligand
-    full = benchmark_config("tyk2", "full")
-    assert full.system.ligand_names is None and full.sampling.production_ns == 10.0
-    assert full.membrane.enabled is False and smoke.membrane.enabled is False
-    assert benchmark_config("a2a", "smoke").membrane.enabled is True
+    a2a_smoke = benchmark_config("a2a", "smoke", tmp_path / "m")
+    assert a2a_smoke.membrane.enabled is True and a2a_smoke.membrane.equilibration_ns == 0.5
+    assert benchmark_config("a2a", "subset", tmp_path / "x").system.ligand_names == load_registry()["a2a"]["subset"]
+    assert benchmark_config("tyk2", "full").system.ligand_names is None
     with pytest.raises(KeyError):
         benchmark_config("nope", "full")
     with pytest.raises(KeyError):
         benchmark_config("tyk2", "huge")
+
+
+def _sdf_records(path) -> dict[str, str]:
+    return {r.split("\n")[0].strip(): r for r in path.read_text().split("$$$$\n") if r.strip()}
+
+
+@pytest.mark.parametrize("name", ["tyk2", "a2a"])
+def test_a_benchmark_set_runs_with_the_settings_of_its_example(name, tmp_path):
+    """A set runs as its example runs: the same settings, only the input files and the output
+    directory differ; and the example is a member of the set (the same protein file, its ligand's
+    record in the set), so the set's result for that ligand is the example's calculation."""
+    entry, root = load_registry()[name], data_root()
+    example = load_config(root / entry["example"])
+
+    def settings(cfg) -> dict:
+        data = cfg.model_dump(mode="json")
+        data["system"].pop("protein"), data["system"].pop("ligand"), data["system"].pop("ligand_names")
+        data.pop("output")
+        return data
+
+    for tier, names in (("subset", entry["subset"]), ("full", None)):
+        cfg = benchmark_config(name, tier, tmp_path / tier)
+        assert settings(cfg) == settings(example)
+        assert cfg.system.ligand_names == names
+        assert cfg.system.protein == root / entry["protein"] and cfg.system.ligand == root / entry["ligands"]
+    assert example.system.protein.read_bytes() == (root / entry["protein"]).read_bytes()
+    (ligand, record), = _sdf_records(example.system.ligand).items()
+    assert _sdf_records(root / entry["ligands"])[ligand] == record
+
+
+def test_the_tiers_choose_the_ligands_and_smoke_never_lengthens_a_setting_of_the_example(tmp_path, monkeypatch):
+    """Independent review of PR 4: an example that selects ligands made the full tier run only those, and the
+    smoke tier set 0.5 ns of membrane equilibration where the example had 0.2."""
+    (tmp_path / "benchmarks").mkdir()
+    (tmp_path / "examples" / "membrane_a2a").mkdir(parents=True)
+    (tmp_path / "examples" / "membrane_a2a" / "config.yaml").write_text(
+        "system: {protein: protein.pdb, ligand: ligand.sdf, ligand_names: [4e]}\n"
+        "membrane: {enabled: true, equilibration_ns: 0.2}\n"
+        "sampling: {production_ns: {complex: 0.05, solvent: 5.0}, rest2: {region: ligand}}\n")
+    monkeypatch.setenv("CUFEP_DATA", str(tmp_path))
+    example = load_config(tmp_path / "examples" / "membrane_a2a" / "config.yaml")
+    assert benchmark_config("a2a", "full").system.ligand_names is None
+    smoke = benchmark_config("a2a", "smoke", tmp_path / "s")
+    assert smoke.system.ligand_names == ["4e"] and smoke.membrane.equilibration_ns == 0.2
+    assert smoke.sampling.production_ns.complex == 0.05 and smoke.sampling.production_ns.solvent == 0.1
+    assert smoke.sampling.rest2 == example.sampling.rest2 and smoke.membrane.enabled is True
+    assert smoke.restraints == example.restraints and smoke.analysis == example.analysis
 
 
 def test_report_from_a_synthetic_run(tmp_path):
@@ -106,6 +161,91 @@ def test_report_from_a_synthetic_run(tmp_path):
     assert (tmp_path / "benchmark_report.md").exists() and (tmp_path / "benchmark_report.csv").exists()
     with open(tmp_path / "benchmark_report.csv") as fh:
         assert len(list(csv.DictReader(fh))) == 16
+
+
+def test_not_reliable_ligands_are_compared_with_experiment_and_fepplus_like_the_others(tmp_path):
+    """The owner, 2026-11-20: NOT RELIABLE results are compared properly, not left out. They count in the
+    statistics of all ligands, have their signed errors and the place below the level of overlap, and the
+    breakdown compares them and the others with experiment, FEP+ on the same ligands."""
+    ref = read_reference("tyk2")
+    dg = {"jmc_23": -12.5, "ejm_47": -9.2, "ejm_49": -10.75, "ejm_31": -13.04}
+    place = {"leg": "complex leg", "windows": [13, 14], "stage": "vanish", "lambda": [0.75, 0.88]}
+    unreliable = {
+        "ejm_31": [dict(place, of="all iterations", overlap=0.024), dict(place, of="the samples of the estimate",
+                                                                           overlap=0.021)],
+        "ejm_49": [{"leg": "solvent leg", "of": "all iterations", "overlap": 0.011, "windows": [0, 1],
+                    "stage": "discharge", "lambda": [0.0, 0.25]}],
+    }
+    summary = [{"ligand": name, "dg_bind": value, "dg_bind_error": 0.5, "dg_bind_std": None, "n_repeats": 1,
+                "warnings": [], "min_overlap": 0.08, "not_reliable": [p["leg"] for p in unreliable.get(name, [])][:1],
+                "overlap_below_level": unreliable.get(name, [])} for name, value in dg.items()]
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    text = report("tyk2", tmp_path)
+
+    def err(names, method):
+        values = [(dg[n] if method == "cufep" else ref[n]["fepplus"]) - ref[n]["exp"] for n in names]
+        return np.mean(values), np.sqrt(np.mean(np.square(values)))
+
+    # every ligand is in the statistics of all ligands
+    mse_all = err(dg, "cufep")[0]
+    assert [line.split("|")[2].split("[")[0].strip() for line in text.splitlines()
+            if line.startswith("| mean signed")][0] == f"{mse_all:.2f}"
+    # ... with its signed errors, marked, and the place below the level
+    assert (f"| ejm_31 (NOT RELIABLE) | -9.54 | -13.04 | 0.50 |  | 1 | {ref['ejm_31']['fepplus']:.2f} | -3.50 | "
+            f"{ref['ejm_31']['fepplus'] + 9.54:+.2f} |") in text
+    assert ("| complex leg, lambda windows 13 and 14 (vanish stage, lambda 0.75 and 0.88): 0.024 among all "
+            "iterations, 0.021 among the samples of the estimate |") in text
+    # the breakdown: both groups, cuFEP and FEP+ on the same ligands
+    assert ("| statistic | cuFEP, NOT RELIABLE (2) | FEP+, the same ligands | cuFEP, the others (2) | FEP+, the same "
+            "ligands |") in text
+    row = [line for line in text.splitlines() if line.startswith("| RMSE, raw")][-1]
+    expected = [err(["ejm_31", "ejm_49"], "cufep")[1], err(["ejm_31", "ejm_49"], "fepplus")[1],
+                err(["jmc_23", "ejm_47"], "cufep")[1], err(["jmc_23", "ejm_47"], "fepplus")[1]]
+    assert [float(x) for x in row.split("|")[2:6]] == pytest.approx(expected, abs=0.005)
+    assert "NOT RELIABLE (overlap below 0.03 in a leg, Klimovich et al. 2015): ejm_31, ejm_49." in text
+    with open(tmp_path / "benchmark_report.csv") as fh:
+        rows = {r["ligand"]: r for r in csv.DictReader(fh)}
+    assert float(rows["ejm_31"]["cufep_minus_exp"]) == pytest.approx(-3.5)
+    assert rows["ejm_49"]["overlap_below_level"].startswith("solvent leg, lambda windows 0 and 1 (discharge stage")
+    assert rows["jmc_23"]["overlap_below_level"] == "" and (tmp_path / "benchmark_report.png").exists()
+    # a group of one ligand has no error around its mean; no NOT RELIABLE ligand: said so
+    (tmp_path / "summary.json").write_text(json.dumps([s for s in summary if s["ligand"] != "ejm_49"]))
+    row = [line for line in report("tyk2", tmp_path).splitlines() if line.startswith("| RMSE after")][-1]
+    assert row.split("|")[2:4] == [" N/A ", " N/A "]
+    (tmp_path / "summary.json").write_text(json.dumps([s for s in summary if s["ligand"] not in unreliable]))
+    text = report("tyk2", tmp_path)
+    assert "No ligand with a binding free energy is NOT RELIABLE." in text and "meet the level" not in text
+    # the level is the one the analysis of the run recorded
+    level = [dict(s, analysis_record={"min_overlap": 0.05}) for s in summary]
+    (tmp_path / "summary.json").write_text(json.dumps(level))
+    text = report("tyk2", tmp_path)
+    assert "NOT RELIABLE (overlap below 0.05, Klimovich" in text and "below 0.03" not in text
+    # a summary of an earlier version names the legs only
+    assert overlap_places({"not_reliable": ["complex leg"]}) == "complex leg (the windows are not in this summary.json)"
+    # the figures carry the correlation coefficients and the errors of both methods over all their ligands
+    from cufep.benchmarks.runner import figure_statistics
+
+    lines = figure_statistics([{"ligand": n, "exp": ref[n]["exp"], "cufep": v, "fepplus": ref[n]["fepplus"]}
+                               for n, v in dg.items()])
+    r = np.corrcoef(list(dg.values()), [ref[n]["exp"] for n in dg])[0, 1]
+    assert lines[0].startswith(f"cuFEP, 4 ligands: Pearson r {r:.2f}, Kendall")
+    assert lines[1].startswith("FEP+, 4 ligands")
+    assert figure_statistics([{"ligand": "x", "exp": -9.0, "cufep": -10.0, "fepplus": -9.5}])[0] == (
+        "cuFEP, 1 ligands: Pearson r N/A, Kendall \u03c4 N/A, RMSE 1.00, RMSE after removing the mean error N/A "
+        "kcal/mol")
+
+
+def test_ligands_an_earlier_version_analysed_are_not_said_to_meet_the_level(tmp_path):
+    """Independent review of PR 4: for a summary of an earlier version (no checks of this version) the breakdown
+    said that the ligands "meet the level of overlap"; a binding free energy written as null stopped the report."""
+    old = [{"ligand": name, "dg_bind": value, "dg_bind_mbar_error": 0.3, "dg_bind_std": None, "n_repeats": 1}
+           for name, value in (("jmc_23", -12.0), ("jmc_30", -11.0))]
+    old.append({"ligand": "ejm_31", "dg_bind": None, "n_repeats": 1, "not_reliable": ["solvent leg"], "warnings": []})
+    (tmp_path / "summary.json").write_text(json.dumps(old))
+    text = report("tyk2", tmp_path)
+    assert ("No ligand with a binding free energy is NOT RELIABLE. The checks of this version were not made for "
+            "jmc_23, jmc_30 (analysed by an earlier version).") in text
+    assert "| ejm_31 | -9.54 | NOT RELIABLE (overlap): solvent leg" in text and "Ligands with a result: 2 of 3" in text
 
 
 def _samples(shift):
@@ -142,7 +282,9 @@ def test_a_report_is_that_of_the_run_as_it_is_now(tmp_path):
     (tmp_path / "summary.json").write_text(json.dumps([good]))
     assert "-12.34" in report("tyk2", tmp_path)
     assert "-12.34" in (tmp_path / "benchmark_report.csv").read_text()
+    assert (tmp_path / "benchmark_report_ligands.png").exists()            # the figure ligand by ligand
     (tmp_path / "benchmark_report.png").write_text("the figure of that state")      # also where no figure can be made
+    (tmp_path / "benchmark_report_ligands.png").write_text("the figure of that state")
 
     failed = {"ligand": "jmc_23", "n_repeats": 0, "failed_legs": ["complex leg"],
               "warnings": ["repeat 0 complex: FAILED: the GPU was lost.", "repeat 0 is incomplete"]}
@@ -154,7 +296,7 @@ def test_a_report_is_that_of_the_run_as_it_is_now(tmp_path):
     with open(tmp_path / "benchmark_report.csv") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == 1 and rows[0]["cufep"] == "" and rows[0]["flags"] == "FAILED: complex leg"
-    assert not (tmp_path / "benchmark_report.png").exists()
+    assert not (tmp_path / "benchmark_report.png").exists() and not (tmp_path / "benchmark_report_ligands.png").exists()
 
     # some ligands with a result and some without: both are in the report and in the table
     (tmp_path / "summary.json").write_text(json.dumps([

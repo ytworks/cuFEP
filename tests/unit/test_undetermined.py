@@ -88,7 +88,7 @@ def test_correlations_are_computed_where_they_are_defined_and_shown_as_na_where_
     assert m["pearson_r2"] == pytest.approx(1.0) and m["spearman"] == pytest.approx(1.0)
     assert m["kendall_tau"] == pytest.approx(1.0)
     one = metrics([-10.0], [-9.0])
-    assert one["pearson_r2"] is None and one["spearman"] is None and one["kendall_tau"] is None
+    assert all(one[key] is None for key in ("pearson_r2", "pearson_r", "spearman", "kendall_tau"))
     assert one["pairwise_rmse"] is None and one["mean_signed_error"] == -1.0
     flat = metrics([-10.0, -10.0, -10.0], [-9.0, -7.0, -8.0])
     assert flat["pearson_r2"] is None and flat["kendall_tau"] is None
