@@ -862,6 +862,13 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     without_fallback = equil_made_with(config(backend={"fallback": "none"}), "complex", False, 7)
     assert settings_differences(eq, without_fallback) == ["fallback: not recorded -> none"]
     assert "fallback" not in eq
+    # plain MD runs in single precision where it is asked (the owner's decision of 2026-11-21). Earlier versions
+    # ran it in mixed precision then and recorded "single": such a file is not one of an MD in single precision
+    single = equil_made_with(config(backend={"precision": "single"}), "complex", False, 7)
+    earlier = {key: value for key, value in single.items() if key != "plain_md_precision"}
+    assert earlier == dict(eq, precision="single")                      # what an earlier version recorded
+    assert settings_differences(earlier, single) == ["plain_md_precision: not recorded -> single"]
+    assert "plain_md_precision" not in eq
     stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0}))
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 

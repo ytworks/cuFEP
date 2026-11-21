@@ -906,6 +906,10 @@ def equil_made_with(cfg: Config, leg: str, in_membrane: bool, seed: int) -> dict
     # the fallback was used again by a run with backend.fallback: none)
     if cfg.backend.fallback != FALLBACK_BEFORE_IT_DECIDED_PLAIN_MD:
         out["fallback"] = cfg.backend.fallback
+    # every version before plain MD took backend.precision: single ran it in mixed precision and recorded
+    # "single": a record of single without this key is of an MD in mixed precision, not of this run's
+    if cfg.backend.precision == "single":
+        out["plain_md_precision"] = "single"
     return out
 
 
@@ -1112,8 +1116,6 @@ def restraint_trajectories(cfg: Config, job: "LegJob", leg_dir: Path, prep: dict
         on_gpus = [str(d) for d in devices if d is not None]             # a run without GPUs has the device None
         log(f"MD for the restraint: {len(missing)} of {ri.trajectories} trajectories of {ri.length_ns:g} ns to run "
             f"on {len(devices)} worker(s)" + (f" (GPU {', '.join(on_gpus)})" if on_gpus else ""))
-        if plain_md_precision_line(cfg):
-            log(plain_md_precision_line(cfg))
         try:
             for done in run_trajectories(tasks, devices, log, inline=job.inline):
                 log(f"MD {done['index']} for the restraint: {done['frames']} frames on {done['backend']} "
@@ -1750,17 +1752,16 @@ def plain_md_settings(cfg: Config, timestep_fs: float, barostat: str, seed: int,
     lengths and the atoms that only one kind of MD has. The pre-equilibration and the MD from which
     a restraint is chosen take their settings here, so that neither can differ from the YAML.
 
-    Single precision is not used for plain MD: with ``backend.precision: single`` it runs in mixed
-    precision on either backend and only the alchemical run in single (cuFEP's own rule since its
-    first version, without a source; ``docs/configuration.md``). :func:`plain_md_precision_line` is
-    what the log says of it."""
+    The precision is the one of the YAML, single too (the owner's decision of 2026-11-21). Earlier
+    versions ran plain MD in mixed precision where single was asked, a rule of their own without a
+    source that the log did not say (:func:`equil_made_with` tells their files apart)."""
     from cufep.sampling.equilibrate import EquilibrationSettings
 
     return EquilibrationSettings(
         temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
         friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs, barostat=barostat,
         barostat_frequency=cfg.dynamics.barostat_frequency, platform=cfg.backend.platform,
-        precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
+        precision=cfg.backend.precision, seed=seed,
         md_backend=cfg.backend.name, fallback=cfg.backend.fallback, **parts)
 
 
@@ -1772,15 +1773,6 @@ def md_work(ps: float, n_atoms: int, iteration_ps: float) -> float:
     of f5a77ce: the trajectories for a restraint and the precalculation of the lambda schedule told
     picoseconds, replica exchange seconds). Only ratios matter, and no result depends on it."""
     return float(ps) / float(iteration_ps) * 0.05 * (1.0 + int(n_atoms) / 50000.0)
-
-
-def plain_md_precision_line(cfg: Config) -> str | None:
-    """What the log of a leg says where its plain MD does not run in the precision of the YAML
-    (:func:`plain_md_settings`), or None."""
-    if cfg.backend.precision != "single":
-        return None
-    return ("backend.precision: single is the precision of the alchemical run; the plain MD of the leg "
-            "(pre-equilibration, MD for the restraint) runs in mixed precision")
 
 
 def _precision(cfg: Config, backend: str) -> str:
@@ -1876,8 +1868,6 @@ def run_leg(job: LegJob) -> dict:
             water_oxygens=[a.index for a in prep["topology"].atoms()
                            if a.residue.name == "HOH" and a.element is not None and a.element.symbol == "O"]
             if in_membrane else [])
-        if plain_md_precision_line(cfg):
-            log(plain_md_precision_line(cfg))
         t0 = time.perf_counter()
         eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device0, log)
         # the restraint search uses the last pre_equilibration md_ns of the trajectory

@@ -360,12 +360,14 @@ def test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends(
 
 # ------------------------------------------------------------------- MD for the restraint
 @needs_cuda
+@pytest.mark.parametrize("precision", ["mixed", "single"])
 @pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
-def test_the_trajectories_for_a_restraint_run_on_the_backend_of_the_leg(backend, tmp_path):
+def test_the_trajectories_for_a_restraint_run_on_the_backend_of_the_leg(backend, precision, tmp_path):
     """The unrestrained NPT trajectories from which ``restraints.selection: interactions`` chooses a
     restraint run on the backend that is configured, two processes at a time on one GPU and in the
     process of the job alike, and each file records that backend. No fallback is allowed here: a
-    plugin that is configured and not used fails the test instead of passing on stock OpenMM."""
+    plugin that is configured and not used fails the test instead of passing on stock OpenMM. In
+    mixed and in single precision: plain MD runs in the one of the YAML."""
     from conftest import build_dipeptides_in_water
 
     from cufep.sampling import restraint_md
@@ -373,7 +375,7 @@ def test_the_trajectories_for_a_restraint_run_on_the_backend_of_the_leg(backend,
 
     system, _top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
     solute = sorted(ligand + other)
-    settings = EquilibrationSettings(production_ns=0.002, frame_interval_ps=0.5, platform="CUDA", precision="mixed",
+    settings = EquilibrationSettings(production_ns=0.002, frame_interval_ps=0.5, platform="CUDA", precision=precision,
                                      timestep_fs=2.0, seed=5, md_backend=backend, fallback="none",
                                      temperature_K=300.0, pressure_bar=1.0, barostat_frequency=25)
 
@@ -402,3 +404,26 @@ def test_the_trajectories_for_a_restraint_run_on_the_backend_of_the_leg(backend,
     inline = restraint_md.run_trajectories(tasks(tmp_path / "inline", 2), [0], lines.append, inline=True)
     assert [s["backend"] for s in inline] == [backend] * 2
     assert restraint_md.read_trajectories(tmp_path / "inline", 2).frames.shape == (8, len(solute), 3)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_the_pre_equilibration_of_a_leg_runs_in_single_precision_where_it_is_asked(backend):
+    """``backend.precision: single`` is the precision of the plain MD of a leg too (the owner's decision of
+    2026-11-21; earlier versions ran it in mixed precision then): the minimisation, NVT and NPT on stock
+    OpenMM and the unrestrained MD on the backend of the leg, without a fallback and without a recovery."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
+
+    system, _top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    solute = sorted(ligand + other)
+    settings = EquilibrationSettings(nvt_ns=0.002, npt_ns=0.002, production_ns=0.004, frame_interval_ps=1.0,
+                                     minimize_iterations=200, platform="CUDA", precision="single", timestep_fs=2.0,
+                                     seed=3, md_backend=backend, fallback="none", restrained_atoms=solute)
+    lines = []
+    result = pre_equilibrate(system, pos, box, solute, settings, 0, lines.append)
+    assert result.backend == backend and result.notes == [] and result.timestep_fs == 2.0
+    assert result.frames.shape == (4, len(solute), 3) and np.all(np.isfinite(result.positions))
+    assert np.all(np.isfinite(result.velocities)) and np.abs(result.box - box).max() < 0.2
+    assert not [line for line in lines if "stock OpenMM" in line or "2 fs" in line]

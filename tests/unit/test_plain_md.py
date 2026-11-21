@@ -76,7 +76,7 @@ def test_an_unstable_md_is_repeated_once_at_2_fs_and_says_so(monkeypatch):
 
 def test_the_plain_md_of_a_leg_takes_its_settings_from_the_configuration():
     """Temperature, pressure, friction, the frequency of the barostat, the backend, its platform and
-    its precision are those of the YAML for every plain MD of a leg; single precision runs as mixed."""
+    its precision are those of the YAML for every plain MD of a leg."""
     from cufep.config.schema import Config
     from cufep.workflow import plain_md_settings
 
@@ -93,12 +93,10 @@ def test_the_plain_md_of_a_leg_takes_its_settings_from_the_configuration():
         (3.0, "membrane", 17, 1.5, 10.0)
     single = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
                                     "backend": {"precision": "single"}})
-    assert plain_md_settings(single, 4.0, "isotropic", 1).precision == "mixed"
+    # single precision too (the owner's decision of 2026-11-21 after the review of f5a77ce: plain MD ran in
+    # mixed precision where single was asked, which no document said and the log did not show)
+    assert plain_md_settings(single, 4.0, "isotropic", 1).precision == "single"
     assert plain_md_settings(single, 4.0, "isotropic", 1).md_backend == "cupotential"
-    # which the log of the leg says (review of f5a77ce: nothing said so, and the protocol said otherwise)
-    from cufep.workflow import plain_md_precision_line
-
-    assert "runs in mixed precision" in plain_md_precision_line(single) and plain_md_precision_line(cfg) is None
 
 
 def configured(fallback="openmm", precision="mixed"):

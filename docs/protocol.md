@@ -131,11 +131,11 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    and one at the end. If that backend cannot run the system, or the run fails on it, stock
    OpenMM runs it from the same start and the log and the result say so; with
    `backend.fallback: none` it does not, and the leg stops with the reason, as its alchemical
-   run does. This MD and the MD from which a restraint is chosen never run in single
-   precision: with `backend.precision: single` they run in mixed precision on either backend,
-   which the log says, and only the alchemical run in single (cuFEP's own rule since its
-   first version, without a source). Where double is asked, the plugin, which does not have
-   it, runs them in mixed precision, as it runs the alchemical run. The whole length asked for is integrated, also where it is not a
+   run does. This MD and the MD from which a restraint is chosen run in the precision of
+   the alchemical run (`backend.precision`), single too; where double is asked, the plugin,
+   which does not have it, runs in mixed precision. Versions before 2026-11-21 ran them in
+   mixed precision where single was asked, and a pre-equilibration they made with
+   `backend.precision: single` is not used again. The whole length asked for is integrated, also where it is not a
    whole number of frame intervals, and the length integrated is recorded; versions before
    revision 15 integrated whole intervals only (40 ps of 50 ps), and such a file holding less
    than it was made for is not used again. A bilayer system is held
