@@ -313,6 +313,53 @@ def test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_
     assert again[0] == 0 and again[-1] == 99 and len(again) == len(thirds.states)
 
 
+def test_a_leg_that_is_only_told_its_overlap_matrix_gets_the_threshold_of_that_matrix(water_ligand_system):
+    """Review of the defaults of 2026-11-22. The complex leg reads the overlap of a pair alone
+    with a threshold of 0.30; ``overlap_matrix: stage`` alone left it that threshold, which an
+    element of the matrix of a stage does not reach: from the default start of the complex leg,
+    harmonic windows 30 widths per unit of lambda went to ``max_windows`` (100; lowest element
+    0.083). A threshold that is not given is the one that belongs to the matrix its leg reads:
+    0.18 for the stage, 0.30 for the pair."""
+    from cufep.config.schema import AdaptiveConfig
+
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+    integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+    integ.setRandomNumberSeed(31)
+    ctx = mm.Context(alch.system, integ, mm.Platform.getPlatformByName("CPU"))
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300.0, 5)
+
+    def precalculation(adaptive, max_windows, threshold=None):
+        start = adaptive.initial_windows.for_leg("complex")["vanish"]
+        return precalculation_of_harmonic_windows(
+            ctx, integ, adaptive.matrix("complex"), max_windows=max_windows, start=start,
+            threshold=adaptive.threshold("complex") if threshold is None else threshold)
+
+    default, stage = AdaptiveConfig(), AdaptiveConfig(overlap_matrix="stage")
+    assert (default.threshold("complex"), default.matrix("complex")) == (0.30, "pair")
+    assert (stage.threshold("complex"), stage.matrix("complex")) == (0.18, "stage")
+    assert (stage.threshold("solvent"), stage.matrix("solvent")) == (0.18, "stage")
+    assert AdaptiveConfig(overlap_matrix="pair").threshold("solvent") == 0.30
+    mixed = AdaptiveConfig(overlap_matrix={"complex": "stage", "solvent": "pair"})
+    assert (mixed.threshold("complex"), mixed.threshold("solvent")) == (0.18, 0.30)
+    # a threshold that is given is kept, whatever the matrix
+    given = AdaptiveConfig(overlap_matrix="stage", overlap_threshold=0.1)
+    assert (given.threshold("complex"), given.threshold("solvent")) == (0.1, 0.1)
+
+    for adaptive, windows in ((default, 25), (stage, 22)):
+        schedule = precalculation(adaptive, 100)
+        last = schedule.provenance["iterations"][-1]
+        assert last["status"] == "converged" and schedule.notes == [], adaptive.matrix("complex")
+        assert abs(len(schedule.states) - windows) <= 3
+    # what the review found: the threshold of the pair on the matrix of the stage does not end
+    unreachable = precalculation(stage, 40, threshold=0.30)
+    last = unreachable.provenance["iterations"][-1]
+    assert last["status"] == "max_windows" and len(unreachable.states) == 40
+    assert max(last["superdiagonal"][1:-1]) < 0.30
+
+
 def test_precalculation_on_a_small_system(water_ligand_system):
     system, pos, box, ligand = water_ligand_system
     alch = make_alchemical_system(system, ligand)

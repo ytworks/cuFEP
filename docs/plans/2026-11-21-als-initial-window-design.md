@@ -1,5 +1,5 @@
 # adaptive lambda scheduling の初期 window を設計し直す (max_windows 100、3 案を TYK2 example で評価)
-Status: In progress (手順 1〜9 済み: 計画と draft PR #7、`max_windows` 100、初期 window を数または値の列で、`overlap_matrix: pair` と leg ごとの設定、100 window の test、設計の集計と 3 案の YAML、review、9 run、結果。オーナーは 2026-11-22 に案 A を選んだ。残りは手順 10: 既定値)
+Status: Done (PR #7: 手順 1〜10 済み。オーナーの決定 2026-11-22 で案 A が complex leg の既定値。merge はオーナーの指示を待つ)
 Refs: this pull request; issue #5; `docs/protocol.md` ("Adaptive lambda scheduling"); `docs/configuration.md` (`lambda_schedule`)
 
 ## Context
@@ -345,6 +345,61 @@ production を短くした場合 (同じ run のサンプルを前から切り�
 
 オーナーの決定 (2026-11-22): 案 A を既定値にする。example と benchmark が A で動くようにして、
 この計画を完了とする。production の長さは変えない (決定は A の採用だけ)。
+
+手順 10 で変えたもの (1 つの commit):
+
+- 既定値 (`src/cufep/config/schema.py`): complex leg の `initial_windows` を restrain 6、
+  discharge 11、vanish は `windows.complex.vanish` の 15 個の値 (fixed mode の window と同じ) に。
+  `overlap_matrix` を complex `pair` / solvent `stage`、`overlap_threshold` を complex 0.30 /
+  solvent 0.18 に。solvent leg (5 / 9、`stage`、0.18) は変えない。
+- example と benchmark: どちらの example の YAML も window の設定を書いていないので、既定値に
+  従う。benchmark は example の設定で動く (`src/cufep/benchmarks/registry.yaml`)。ファイルの変更は
+  要らなかった。
+- 文書: `docs/configuration.md` (YAML、説明、根拠の表)、`docs/protocol.md` (定義、論文との違いの
+  表、「The starts of the complex leg that were compared」)、`.claude/rules/fep-invariants.md` の
+  ALS の行、README (window を増やす例)、`PROGRESS.md`。
+- 既定の初期値は値の列なので、`candidates` を値の乗らない数に変えるとき、または
+  `max_windows.complex` を 30 未満にするときは、complex leg の初期 window も書く必要がある
+  (設定を読んだ時点で断り、何を直すかを言う)。
+
+独立した review (この diff を書いていない読み手、2026-11-22) の指摘と対処。どれも再現してから
+直した:
+
+- 必ず直すもの: `overlap_matrix: stage` だけを書くと、complex leg は「stage の行列 × 既定の
+  threshold 0.30」になり、stage の行列の要素は 0.30 に届かないので、前計算が `max_windows` まで
+  window を足す (既定の開始からの調和ポテンシャルの window で 100 window)。対処: threshold を
+  書いていない leg は、その leg が読む行列の既定値を使う (`stage` 0.18、`pair` 0.30)。0.18 と 0.30 は
+  オーナーの決定の値で、行列だけを変えた leg がその行列の値を使うことは cuFEP 独自。solvent leg の
+  `pair` と 0.30 の組は走らせていない。
+- threshold だけを書いたファイル (`overlap_matrix` ができる前の `resolved_config.yaml` を含む) は、
+  complex leg では pair の overlap と比べられる。対処: 読んだときに note を出し、以前の意味にする
+  書き方 (`overlap_matrix: stage`) を言う。
+- 既定の開始 (値の列、30 window) に合わない `candidates` や `max_windows.complex` を断る
+  メッセージに、既定の開始であることと何を書けばよいかを足した。
+- 文書: 既定の開始は「fixed mode の推奨値」であって `lambda_schedule.windows` の変更には従わない
+  ことを書いた。変えていない行に残っていた以前の既定値の記述 (README、wiki の精度のページ、
+  `docs/protocol.md`、`benchmarks/results/README.md`) を直した。
+- review が正しいと確かめた点: 表と本文の数値は 13 run の記録とすべて一致。設定を読む場所は
+  どれも leg ごとの値を通る。以前の既定値で作った run の再開は、文書のとおり leg が自分の
+  `schedule.yaml` を使い、保存済みの条件の確認に `lambda_schedule` は入っていない。
+
+確かめたこと (2026-11-22、イメージ `cufep:dev`、作業ツリーのコード):
+
+- unit tests 679 passed、GPU tests 25 passed (GPU 1 枚)、`scripts/lint.sh` と harness の 3 つの
+  確認が通る (review の対処のあとのコードで)。
+- `cufep plan` が両方の example で、complex leg の開始 6 / 11 / 15 (`pair`、0.3)、solvent leg の
+  開始 5 / 9 (`stage`、0.18) を出す。
+- benchmark の smoke tier (1 リガンド、ごく短い sampling) を TYK2 と A2A の両方で実行し、終了
+  コード 0。complex leg の前計算は 30 window から始まり、32 window (TYK2 jmc_23) と 30 window
+  (A2A 4e) で終わった。smoke tier の値は精度の結果ではない。
+- 評価の run A3 に同じコマンドをもう一度実行すると、sampling はやり直されず (「the leg holds
+  all its 2400 iterations」)、解析だけが行われて同じ値 (-9.33 ± 0.51) が出た (イメージ
+  `cufep:5e2cf33`)。
+- TYK2 example の今の既定値での結果は、案 A の 3 run そのもの (run の `resolved_config.yaml` の
+  window の設定が今の既定値と同じ)。
+
+未実施 (not run): A2A example と、benchmark の subset・full tier を新しい既定値で。
+`benchmarks/results/` と `docs/wiki/Accuracy.md` の数値は以前の既定値の run のもの。
 
 ## Invariants
 

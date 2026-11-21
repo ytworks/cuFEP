@@ -229,14 +229,21 @@ class WindowsConfig(_Section):
 
 
 class ComplexInitialWindows(_Section):
-    restrain: StageWindows = 3
-    discharge: StageWindows = 5
-    vanish: StageWindows = 9
+    """The start of the complex leg: the recommended windows of mode fixed (``windows.complex``),
+    30 in all. The owner's choice of 2026-11-22 from three runs of each of three starts on the
+    TYK2 example (3, 5 and 9 evenly spaced windows until then; docs/configuration.md)."""
+
+    restrain: StageWindows = 6
+    discharge: StageWindows = 11
+    vanish: StageWindows = Field(default_factory=lambda: list(RECOMMENDED_VANISH_COMPLEX))
 
     _check = field_validator("restrain", "discharge", "vanish")(_check_stage)
 
 
 class SolventInitialWindows(_Section):
+    """The start of the solvent leg: 9 evenly spaced windows are the paper's number for one lambda
+    coordinate; the discharge stage starts with fewer (cuFEP's own)."""
+
     discharge: StageWindows = 5
     vanish: StageWindows = 9
 
@@ -307,6 +314,16 @@ def _of_leg(value, leg: str):
     return getattr(value, leg) if isinstance(value, _Section) else value
 
 
+#: The threshold of a leg whose ``overlap_threshold`` is not given, by the overlap matrix that the
+#: leg reads. A threshold means another spacing of the windows under each matrix, so the default
+#: belongs to the matrix. stage: 0.18, the owner's choice of 2026-11-20 from the examples at 5 ns
+#: (the paper: 0.04; at 0.20 the precalculation of the TYK2 solvent leg did not converge before
+#: max_windows, 32 then). pair: 0.30, the owner's choice of 2026-11-22 for the complex leg with
+#: its start; an element of the matrix of a stage does not reach it (review of that change:
+#: ``overlap_matrix: stage`` alone sent the complex leg to max_windows)
+DEFAULT_OVERLAP_THRESHOLD = {"stage": 0.18, "pair": 0.30}
+
+
 class AdaptiveConfig(_Section):
     """Adaptive lambda scheduling (Midgley et al., J. Chem. Inf. Model. 2025, 65, 512).
 
@@ -315,16 +332,21 @@ class AdaptiveConfig(_Section):
     ``initial_windows`` and ``max_windows`` are always given per leg.
     """
 
-    #: a pair of neighbouring windows is deficient if its overlap is at or below this value. 0.18 is
-    #: the owner's choice of 2026-11-20 from the examples at 5 ns (the paper: 0.04; at 0.20 the
-    #: precalculation of the TYK2 solvent leg did not converge before max_windows, 32 then)
-    overlap_threshold: float | LegThresholds = 0.18
+    #: a pair of neighbouring windows is deficient if its overlap is at or below this value. Not
+    #: given, it is for each leg the threshold of the matrix that the leg reads
+    #: (DEFAULT_OVERLAP_THRESHOLD): with the default matrices 0.30 in the complex leg and 0.18 in
+    #: the solvent leg
+    overlap_threshold: float | LegThresholds = Field(
+        default_factory=lambda: LegThresholds(complex=DEFAULT_OVERLAP_THRESHOLD["pair"],
+                                              solvent=DEFAULT_OVERLAP_THRESHOLD["stage"]))
     #: the overlap matrix whose element is that overlap. stage: the matrix of all windows of the
-    #: stage (the paper). pair: the matrix of the two neighbouring windows alone (cuFEP's own, the
-    #: owner's decision of 2026-11-21). An element of the stage matrix is shared among all
-    #: windows that overlap, so it falls when windows get closer and windows that are close
-    #: enough read as deficient; the overlap of a pair alone rises to 0.5 as its windows meet
-    overlap_matrix: Literal["stage", "pair"] | LegOverlapMatrices = "stage"
+    #: stage (the paper; the solvent leg). pair: the matrix of the two neighbouring windows alone
+    #: (cuFEP's own, the owner's decision of 2026-11-21; the complex leg since 2026-11-22). An
+    #: element of the stage matrix is shared among all windows that overlap, so it falls when
+    #: windows get closer and windows that are close enough read as deficient; the overlap of a
+    #: pair alone rises to 0.5 as its windows meet
+    overlap_matrix: Literal["stage", "pair"] | LegOverlapMatrices = Field(
+        default_factory=lambda: LegOverlapMatrices(complex="pair", solvent="stage"))
     #: number of equally spaced candidate lambda values per stage
     candidates: int | LegCandidates = 101
     #: windows per leg and stage in the first iteration (the schedule never gets smaller than this):
@@ -361,6 +383,14 @@ class AdaptiveConfig(_Section):
         if not isinstance(v, LegCandidates) and v < 3:
             raise ValueError("candidates must be at least 3")
         return v
+
+    @model_validator(mode="after")
+    def _a_threshold_that_is_not_given_is_that_of_the_matrix(self):
+        if "overlap_threshold" not in self.model_fields_set:
+            # written past __setattr__: the setting stays one that was not given
+            self.__dict__["overlap_threshold"] = LegThresholds(**{
+                leg: DEFAULT_OVERLAP_THRESHOLD[self.matrix(leg)] for leg in ("complex", "solvent")})
+        return self
 
     def threshold(self, leg: str) -> float:
         """The overlap at or below which a pair of neighbouring windows of this leg is deficient."""
@@ -668,20 +698,41 @@ def initial_window_problems(cfg: "Config") -> list[str]:
     a, problems = ls.adaptive, []
     for leg in ls.precalculated_legs():
         total, stages = 0, a.initial_windows.for_leg(leg)
+        # a start that the file did not give is refused for a setting it did give: say so
+        default = ("" if stages != InitialWindows().for_leg(leg) else
+                   f"; this is the default start of the {leg} leg: give "
+                   f"lambda_schedule.adaptive.initial_windows.{leg} for these settings as well")
         for stage, spec in stages.items():
             try:
                 total += len(initial_window_indices(spec, a.candidates_of(leg)))
             except ValueError as exc:
                 problems.append(f"lambda_schedule.adaptive.initial_windows.{leg}.{stage}: {exc} "
-                                f"(lambda_schedule.adaptive.candidates = {a.candidates_of(leg)})")
+                                f"(lambda_schedule.adaptive.candidates = {a.candidates_of(leg)}){default}")
                 total = None
                 break
         limit = getattr(a.max_windows, leg)
         if total is not None and total - (len(stages) - 1) > limit:
             problems.append(f"lambda_schedule.adaptive.initial_windows.{leg} gives the {leg} leg "
                             f"{total - (len(stages) - 1)} lambda windows to start with (windows at stage boundaries "
-                            f"are shared), more than lambda_schedule.adaptive.max_windows.{leg} = {limit}")
+                            f"are shared), more than lambda_schedule.adaptive.max_windows.{leg} = {limit}{default}")
     return problems
+
+
+def unpaired_threshold_notices(data: dict, cfg: "Config") -> list[str]:
+    """A notice for a file that gives ``lambda_schedule.adaptive.overlap_threshold`` and not the
+    overlap matrix it is compared with, where a leg then reads the overlap of a pair alone: files
+    written before ``overlap_matrix`` existed meant the matrix of the stage in both legs (review of
+    the defaults of 2026-11-22)."""
+    block = data.get("lambda_schedule")
+    adaptive = block.get("adaptive") if isinstance(block, dict) else None
+    if not isinstance(adaptive, dict) or "overlap_threshold" not in adaptive or "overlap_matrix" in adaptive:
+        return []
+    a = cfg.lambda_schedule.adaptive
+    return [f"lambda_schedule.adaptive.overlap_threshold is given without overlap_matrix: in the {leg} leg the "
+            f"threshold ({a.threshold(leg):g}) is compared with the overlap of the two windows of a pair alone, the "
+            "default of that leg. Earlier versions compared it with the overlap matrix of the stage; "
+            "overlap_matrix: stage beside the threshold does that."
+            for leg in cfg.lambda_schedule.precalculated_legs() if a.matrix(leg) == "pair"]
 
 
 def frames_needed(n_frames: int, fraction: float) -> int:
@@ -826,6 +877,7 @@ def load_config_with_notices(path: str | Path) -> tuple[Config, list[str]]:
         raise ValueError(f"{path}: the top level of the configuration must be a mapping")
     data, notices = migrate_settings(data)
     cfg = Config.model_validate(data)
+    notices += unpaired_threshold_notices(data, cfg)
     base = path.resolve().parent
 
     def resolve(p: Path) -> Path:

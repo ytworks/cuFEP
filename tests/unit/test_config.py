@@ -150,13 +150,17 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert len(ls.windows.complex.vanish) == 15 and ls.windows.solvent.discharge == 5
     assert len(ls.windows.solvent.vanish) == 10
     a = ls.adaptive
-    # the owner, 2026-11-20: 0.18 (Midgley et al. 2025 use 0.04)
-    assert (a.overlap_threshold, a.candidates) == (0.18, 101)
+    # the solvent leg: 0.18 of the matrix of the stage (the owner, 2026-11-20; Midgley et al. 2025
+    # use 0.04). The complex leg: 0.30 of the overlap of a pair alone (the owner, 2026-11-22)
+    assert (a.threshold("solvent"), a.matrix("solvent")) == (0.18, "stage")
+    assert (a.threshold("complex"), a.matrix("complex")) == (0.30, "pair")
+    assert a.candidates == 101
     # the precalculation: the paper's 50 ps in the solvent leg, 500 ps after 500 ps in the complex leg
     assert (a.window("solvent"), a.equilibration("solvent")) == (50.0, 0.0)
     assert (a.window("complex"), a.equilibration("complex")) == (500.0, 500.0)
     assert ls.fixed_walk_ps == 50.0
-    assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": 9}
+    # the complex leg starts from the recommended windows of mode fixed (the owner, 2026-11-22)
+    assert a.initial_windows.for_leg("complex") == ls.windows.for_leg("complex")
     assert a.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 9}
     # the owner, 2026-11-21: 100 in both legs (48 and 32 until then)
     assert (a.max_windows.complex, a.max_windows.solvent) == (100, 100)
@@ -171,11 +175,8 @@ def test_lambda_windows_have_recommended_defaults_and_can_be_set(tmp_path):
     assert list(w.for_leg("complex")) == ["restrain", "discharge", "vanish"]
     assert cfg.lambda_schedule.adaptive.overlap_threshold == 0.03
     assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("solvent") == {"discharge": 5, "vanish": 5}
-    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == {
-        "restrain": 3,
-        "discharge": 5,
-        "vanish": 9,
-    }
+    # the start of the complex leg is a setting of its own: it does not follow `windows`
+    assert cfg.lambda_schedule.adaptive.initial_windows.for_leg("complex") == ls.windows.for_leg("complex")
 
 
 def test_initial_windows_are_a_number_or_lambda_values(tmp_path):
@@ -187,9 +188,9 @@ def test_initial_windows_are_a_number_or_lambda_values(tmp_path):
     cfg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {
         "initial_windows": {"complex": {"vanish": values}, "solvent": {"discharge": 7}}}}}))
     a = cfg.lambda_schedule.adaptive
-    assert a.initial_windows.for_leg("complex") == {"restrain": 3, "discharge": 5, "vanish": values}
+    assert a.initial_windows.for_leg("complex") == {"restrain": 6, "discharge": 11, "vanish": values}
     assert a.initial_windows.for_leg("solvent") == {"discharge": 7, "vanish": 9}
-    assert ("start: complex leg restrain 3, discharge 5, vanish 6 (0 0.5 0.75 0.82 0.88 1); "
+    assert ("start: complex leg restrain 6, discharge 11, vanish 6 (0 0.5 0.75 0.82 0.88 1); "
             "solvent leg discharge 7, vanish 9;") in lambda_window_table(cfg)
 
 
@@ -204,6 +205,14 @@ def test_initial_windows_are_a_number_or_lambda_values(tmp_path):
     ({"initial_windows": {"complex": {"vanish": [0.1, 1.0]}}}, "must increase from 0.0"),
     ({"initial_windows": {"complex": {"vanish": [0.0, 0.5, 0.5, 1.0]}}}, "must increase from 0.0"),
     ({"initial_windows": {"complex": {"vanish": 1}}}, "a stage needs at least two lambda windows"),
+    # the default start of the complex leg is 30 windows given as values (review of the defaults of
+    # 2026-11-22): a setting that it does not fit is refused, and the message says whose start it is
+    ({"candidates": 51},
+     r"initial_windows.complex.vanish: 0.65 is not one of the 51 candidate lambda values .*; this is the default "
+     r"start of the complex leg: give lambda_schedule.adaptive.initial_windows.complex for these settings as well"),
+    ({"max_windows": {"complex": 29}},
+     r"gives the complex leg 30 lambda windows to start with .*max_windows.complex = 29; this is the default start "
+     r"of the complex leg"),
 ])
 def test_a_start_the_precalculation_cannot_use_is_refused_when_the_configuration_is_read(tmp_path, adaptive, why):
     """Before this, a number of windows that does not fit on the candidates stopped the leg after
@@ -213,6 +222,10 @@ def test_a_start_the_precalculation_cannot_use_is_refused_when_the_configuration
     # a configuration that runs no precalculation does not use the start
     load_config(write(tmp_path, {**BASE, "lambda_schedule": {"mode": "fixed", "adaptive": {
         "candidates": 11, "initial_windows": {"solvent": {"vanish": 12}}}}}))
+    # nor does a leg that runs none: the default start of the complex leg with settings it does not fit
+    load_config(write(tmp_path, {**BASE, "lambda_schedule": {
+        "mode": {"complex": "fixed", "solvent": "adaptive"},
+        "adaptive": {"candidates": 51, "max_windows": {"complex": 29}}}}))
 
 
 def test_window_settings_are_one_value_or_one_per_leg_and_reach_the_precalculation(tmp_path):
@@ -223,19 +236,25 @@ def test_window_settings_are_one_value_or_one_per_leg_and_reach_the_precalculati
     from cufep.workflow import als_settings
 
     default = load_config(write(tmp_path, BASE))
-    d = als_settings(default, "complex")
-    # the defaults: the matrix of the stage, as the paper, in both legs
-    assert (d.overlap_threshold, d.overlap_matrix, d.candidates, d.max_windows) == (0.18, "stage", 101, 100)
+    c, s = als_settings(default, "complex"), als_settings(default, "solvent")
+    # the defaults (the owner, 2026-11-22): the complex leg reads the overlap of a pair alone and
+    # starts from the recommended windows of mode fixed; the solvent leg is as the paper starts
+    assert (c.overlap_threshold, c.overlap_matrix, c.candidates, c.max_windows) == (0.3, "pair", 101, 100)
+    assert (s.overlap_threshold, s.overlap_matrix, s.candidates, s.max_windows) == (0.18, "stage", 101, 100)
+    assert c.initial_windows == default.lambda_schedule.windows.for_leg("complex")
+    assert s.initial_windows == {"discharge": 5, "vanish": 9}
     assert default.lambda_schedule.precalculated_legs() == ["complex", "solvent"]
-    assert "  a window is added where the overlap of neighbouring windows is at or below 0.18;\n" \
-           "  101 candidate lambda values per stage; MD per new window: complex leg 500 ps after 500 ps of " \
-           "equilibration; solvent leg 50 ps;" in lambda_window_table(default)
+    assert ("  a window is added where the overlap of neighbouring windows is complex leg at or below 0.3 "
+            "(the overlap of the two windows alone); solvent leg at or below 0.18;\n"
+            "  101 candidate lambda values per stage; MD per new window: complex leg 500 ps after 500 ps of "
+            "equilibration; solvent leg 50 ps;") in lambda_window_table(default)
 
+    # one value is for both legs (21 candidates: the default start of the complex leg lies on them)
     one = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {
-        "overlap_threshold": 0.3, "overlap_matrix": "pair", "candidates": 51}}}))
+        "overlap_threshold": 0.3, "overlap_matrix": "pair", "candidates": 21}}}))
     for leg in ("complex", "solvent"):
         s = als_settings(one, leg, 1.5)
-        assert (s.overlap_threshold, s.overlap_matrix, s.candidates, s.rest2_scale) == (0.3, "pair", 51, 1.5)
+        assert (s.overlap_threshold, s.overlap_matrix, s.candidates, s.rest2_scale) == (0.3, "pair", 21, 1.5)
 
     per_leg = load_config(write(tmp_path, {**BASE, "lambda_schedule": {
         "mode": {"complex": "adaptive", "solvent": "fixed"},
@@ -250,7 +269,7 @@ def test_window_settings_are_one_value_or_one_per_leg_and_reach_the_precalculati
     c, s = als_settings(per_leg, "complex"), als_settings(per_leg, "solvent")
     assert (c.overlap_threshold, c.overlap_matrix, c.candidates, c.max_windows) == (0.3, "pair", 101, 60)
     assert (s.overlap_threshold, s.overlap_matrix, s.candidates, s.max_windows) == (0.18, "stage", 51, 20)
-    assert c.initial_windows == {"restrain": 3, "discharge": 5, "vanish": [0.0, 0.5, 0.75, 1.0]}
+    assert c.initial_windows == {"restrain": 6, "discharge": 11, "vanish": [0.0, 0.5, 0.75, 1.0]}
     assert (c.window_ps, c.equilibration_ps, s.window_ps, s.equilibration_ps) == (500.0, 500.0, 50.0, 0.0)
     table = lambda_window_table(per_leg)
     assert "mode adaptive in the complex leg:" in table and "mode fixed in the solvent leg:" in table
@@ -262,6 +281,43 @@ def test_window_settings_are_one_value_or_one_per_leg_and_reach_the_precalculati
         "overlap_matrix": {"complex": "pair", "solvent": "stage"}}}})))
     assert ("is complex leg at or below 0.3 (the overlap of the two windows alone); "
             "solvent leg at or below 0.18;") in differ
+
+
+def test_a_threshold_and_the_overlap_matrix_it_is_compared_with_belong_together(tmp_path):
+    """Review of the defaults of 2026-11-22: the two settings have a default per leg, so a file that
+    gives one of them gets the other from the defaults. A matrix alone brings the threshold that
+    belongs to it (``overlap_matrix: stage`` alone kept 0.30 in the complex leg, which the matrix of
+    a stage does not reach). A threshold alone is compared with the default matrix of each leg, and
+    the file is told: files written before ``overlap_matrix`` existed meant the stage in both legs."""
+    from cufep.cli import lambda_window_table
+    from cufep.config.schema import load_config_with_notices
+    from cufep.workflow import als_settings
+
+    def read(adaptive):
+        cfg, notices = load_config_with_notices(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": adaptive}}))
+        return cfg, [(s.overlap_threshold, s.overlap_matrix) for s in (als_settings(cfg, "complex"),
+                                                                       als_settings(cfg, "solvent"))], notices
+
+    cfg, legs, notices = read({"overlap_matrix": "stage"})
+    assert legs == [(0.18, "stage"), (0.18, "stage")] and notices == []
+    assert "neighbouring windows is at or below 0.18;" in lambda_window_table(cfg)
+    # the resolved configuration holds that threshold, so it reads the same again
+    again = Config.model_validate(cfg.model_dump(mode="json")).lambda_schedule.adaptive
+    assert (again.threshold("complex"), again.matrix("complex")) == (0.18, "stage")
+    assert read({"overlap_matrix": "pair"})[1] == [(0.3, "pair"), (0.3, "pair")]
+    assert read({"overlap_matrix": {"complex": "stage", "solvent": "pair"}})[1] == [(0.18, "stage"), (0.3, "pair")]
+
+    _cfg, legs, notices = read({"overlap_threshold": 0.2})
+    assert legs == [(0.2, "pair"), (0.2, "stage")]
+    assert len(notices) == 1 and notices[0].startswith(
+        "lambda_schedule.adaptive.overlap_threshold is given without overlap_matrix: in the complex leg the "
+        "threshold (0.2) is compared with the overlap of the two windows of a pair alone")
+    assert "overlap_matrix: stage beside the threshold does that" in notices[0]
+    # with the matrix beside it, or where no leg reads a pair, nothing is to be said
+    assert read({"overlap_threshold": 0.2, "overlap_matrix": "stage"})[1:] == ([(0.2, "stage"), (0.2, "stage")], [])
+    _cfg, notices = load_config_with_notices(write(tmp_path, {**BASE, "lambda_schedule": {
+        "mode": {"complex": "fixed", "solvent": "adaptive"}, "adaptive": {"overlap_threshold": 0.2}}}))
+    assert notices == []
 
 
 @pytest.mark.parametrize("section", [

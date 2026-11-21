@@ -286,6 +286,10 @@ def als_step(windows: list[int], superdiagonal, threshold: float, room: int = 1)
 # ============================================================================ ALS: the precalculation
 @dataclass
 class AlsSettings:
+    """The settings of the precalculation of one leg. A run takes them from the configuration,
+    leg by leg (``cufep.workflow.als_settings``, whose defaults are those of
+    ``lambda_schedule.adaptive``); the values here are those of a call that gives none."""
+
     overlap_threshold: float = 0.18             # the owner's choice of 2026-11-20 (the paper: 0.04)
     #: the overlap matrix whose element is compared with the threshold: "stage", the matrix of all
     #: windows of the stage (the paper), or "pair", that of the two neighbouring windows alone

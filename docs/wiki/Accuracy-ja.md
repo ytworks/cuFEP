@@ -64,7 +64,7 @@ cuPotential プラグインです。各セットは、その example の設定
 | 力場 | ff14SB (タンパク質)、TIP3P (水)、OpenFF 2.2.1 と AM1-BCC 電荷 (リガンド)、Lipid21 の POPC (A2A の二重膜) |
 | 条件 | 298.15 K、1 bar、イオン強度 0.15 M。時間刻み 4 fs、水素質量再分配 (3 amu) |
 | アルケミカル計算の前 | complex leg は NVT 0.25 ns、NPT 0.5 ns、MD 5 ns。solvent leg は 0.1、0.2、0.5 ns。A2A は二重膜の平衡化 10 ns |
-| lambda window | adaptive lambda scheduling (Midgley ら 2025)、基準 0.18 |
+| lambda window | adaptive lambda scheduling (Midgley ら 2025)、stage の overlap 行列で基準 0.18。complex leg は 3・5・9 window から、solvent leg は 5・9 window から (計算した当時の既定。現在の complex leg は 30 window から始め、隣り合う 2 window だけの overlap を基準 0.30 で読みます) |
 | サンプリング | Hamiltonian レプリカ交換、1 iteration 2.5 ps。リガンドと、その 0.4 nm 以内の残基に REST2、scale 1.5 |
 | lambda window あたり | 平衡化 1 ns と production 5 ns (cuFEP の既定は 10 ns。example とベンチマークは 5 ns を設定) |
 | 解析 | MBAR から長距離分散補正を引いた値。標準誤差は時間ブロックから求め、解析的な値を下回らない (ブロックが作れないほどサンプルが少ないときは解析的な値)。解析のバージョン 10 |

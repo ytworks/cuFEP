@@ -12,8 +12,11 @@ How to read them, and the comparison with experiment, FEP+ and another ABFE meth
 - Calculation: `cufep benchmark run <set> --tier full` in a Docker image built from the commit
   named (`docker/Dockerfile`, with NVIDIA's cuPotential plugin), on one machine with eight GPUs.
   The set runs with the settings of its example (5 ns of production per lambda window, and for A2A
-  the POPC bilayer, `membrane.enabled`; every other setting the default); `resolved_config.yaml`
-  holds all of them. One calculation per ligand.
+  the POPC bilayer, `membrane.enabled`; every other setting the default of that commit);
+  `resolved_config.yaml` holds all of them. It was written before
+  `lambda_schedule.adaptive.overlap_matrix` existed: its threshold of 0.18 was compared with the
+  overlap matrix of the stage in both legs, and reading it with the present version needs
+  `overlap_matrix: stage` beside the threshold for that. One calculation per ligand.
 - Report: `cufep benchmark report <set> <run directory>` from the run's `summary.json`, with the
   report of the commit named (the same numbers as the report the run wrote, plus Pearson r and the
   figure ligand by ligand).

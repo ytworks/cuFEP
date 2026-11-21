@@ -195,7 +195,7 @@ production の一部にしか基づかないことを示します。実行のそ
 cufep run config.yaml --ligand ejm_31 --leg complex --production-ns 20
 
 # lambda window を増やす: config.yaml の lambda_schedule を変え (例えば
-# adaptive.initial_windows.complex.vanish: 13)、その leg を最初からやり直す
+# adaptive.initial_windows.complex.vanish: 21)、その leg を最初からやり直す
 cufep run config.yaml --ligand ejm_31 --leg complex --reschedule
 
 # 標本を取っている最中の leg を見る (最後のチェックポイントまで)
@@ -262,8 +262,10 @@ cufep benchmark run tyk2 --tier smoke
 設定は既定値です。各 example のリガンドはそのベンチマークセットに入っており、全セットのベンチマーク
 計算では TYK2 ejm_31 が -9.84 ± 0.33 kcal/mol、A2A 4e が -18.91 ± 0.52 kcal/mol でした (1 回の計算
 の標準誤差。[benchmarks/results](benchmarks/results/README.md))。これらの計算と次の 2 つは、拘束を
-`restraints.selection: auto` (当時の既定) で選んでいます。上のコマンドは現在、相互作用から選びます
-(`interactions`)。その設定での example の結果は [PROGRESS.md](PROGRESS.md) にあります。以前のコミットで同じ設定で各 example を
+`restraints.selection: auto` で選び、complex leg の adaptive lambda scheduling を 15 window から始めて
+います (どちらも当時の既定)。上のコマンドは現在、拘束を相互作用から選び (`interactions`)、complex leg を
+30 window から始めます ([docs/configuration.md](docs/configuration.md))。その後の example の結果は
+[PROGRESS.md](PROGRESS.md) にあります。以前のコミットで同じ設定で各 example を
 1 回計算したときは -8.94 ± 0.77 と -11.95 ± 0.73 でした ([docs/configuration.md](docs/configuration.md)
 の `sampling.rest2.region`)。complex leg を繰り返し計算した値どうしは、1 回の計算の標準誤差より
 大きく違います ([protocol: REST2](docs/protocol.md#rest2))。
@@ -293,7 +295,7 @@ cuFEP を、実験値と、セットとともに公開されている FEP+ の�
 示します。結果のあるリガンドはすべて、NOT RELIABLE のものも含めて比較します。さらに NOT RELIABLE の
 リガンドとそれ以外を分けて比較し、NOT RELIABLE の leg がどこで overlap の基準を下回ったかを示します。
 
-全セットを example の設定で 1 回ずつ計算しました: TYK2 は 16 リガンドすべて、A2A は 17 化合物すべてに
+全セットを当時の example の設定で 1 回ずつ計算しました: TYK2 は 16 リガンドすべて、A2A は 17 化合物すべてに
 結果があり、NOT RELIABLE の結果はありません。平均誤差を除いた RMSE は TYK2 で 1.74 kcal/mol、A2A で
 2.26 (FEP+ は 0.47 と 1.08)、Kendall τ は 0.12 と 0.38 (FEP+ は 0.81 と 0.59)、平均符号誤差は
 -0.62 と -4.12 です。結果は [benchmarks/results](benchmarks/results/README.md) にあり、実験値、FEP+、
