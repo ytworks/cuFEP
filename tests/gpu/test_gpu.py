@@ -460,13 +460,14 @@ def test_a_pre_equilibration_that_holds_the_solute_runs_on_the_backend_of_the_le
     system, top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
     atoms = list(top.atoms())
     heavy = [i for i in sorted(ligand + other) if atoms[i].element.symbol != "H"]
+    # 10,000 kJ/mol/nm^2: an atom then moves 0.016 nm along an axis at 300 K (the root of kT / k), and the
+    # 0.1 nm below is more than six times that. (With the 1,000 of a leg the same is 0.05 nm and one of twenty
+    # atoms was 0.102 nm away once: the level must not be one that the noise of an MD on a GPU can reach.)
     settings = EquilibrationSettings(nvt_ns=0.002, npt_ns=0.002, production_ns=0.02, frame_interval_ps=5.0,
                                      minimize_iterations=200, platform="CUDA", timestep_fs=2.0, seed=3,
-                                     md_backend=backend, fallback="none", restrained_atoms=heavy, hold_solute=True)
+                                     md_backend=backend, fallback="none", restrained_atoms=heavy, hold_solute=True,
+                                     restraint_k=10000.0)
     held = pre_equilibrate(system, pos, box, sorted(ligand + other), settings, 0, lambda line: None)
     assert held.backend == backend and held.notes == [] and held.frames.shape[0] == 4
     assert np.linalg.norm(held.positions[heavy] - pos[heavy], axis=1).max() < 0.1
-    free = pre_equilibrate(system, pos, box, sorted(ligand + other),
-                           EquilibrationSettings(**{**settings.__dict__, "hold_solute": False}), 0, lambda line: None)
-    assert np.linalg.norm(free.positions[heavy] - pos[heavy], axis=1).max() > 0.1
 

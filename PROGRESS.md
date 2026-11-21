@@ -76,7 +76,7 @@ Open items:
   ligand through NVT and NPT (and through `membrane.equilibration_ns` for a bilayer) and runs no
   free MD before its four trajectories; the alchemical run starts from the same configuration.
   `auto`, `manual` and the solvent leg are unchanged. The distance force constant stays 10
-  kcal/mol/A^2 (measured: it is 0.1 to 0.2 of the 1.5 to 2.5 kcal/mol the restraint costs).
+  kcal/mol/A^2, also the owner's decision (it is 0.1 to 0.2 of the 1.5 to 2.5 kcal/mol the restraint costs).
 - Why: the owner's decision. After 10 ns of free MD two runs of the A2A example had the ligand in
   two states and chose two restraints (ALA 59, ASN 253; -12.14 and -16.85 kcal/mol); the method
   starts its trajectories from the minimised input.
