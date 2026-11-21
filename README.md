@@ -69,8 +69,9 @@ from the protein (complex leg) and from water (solvent leg).
    parameters come from OpenFF 2.2.1 with AM1-BCC charges. The system is solvated in water, or
    embedded in a bilayer ([protocol: Inputs](docs/protocol.md#inputs),
    [Systems](docs/protocol.md#systems)).
-2. **Pre-equilibration** of the fully interacting system (minimisation, NVT, NPT, then 5 ns of
-   MD in the complex leg).
+2. **Pre-equilibration** of the fully interacting system (minimisation, NVT, NPT). In the
+   complex leg the protein and the ligand are held in the pose that was given while the solvent
+   settles; a bilayer then runs 10 ns more, with them still held.
 3. **Boresch restraint.** Four unrestrained trajectories of the complex (3 ns each) are analysed
    with ProLIF, and the anchors are chosen from the interactions between protein and ligand
    that last (Ding et al. 2026). With `restraints.selection: auto` they are chosen from the

@@ -728,7 +728,8 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
 
     # under the default of today the pre-equilibration of a complex leg holds the pose that was given and has
     # no free MD: a file of free MD is not one of it
-    assert equil_contradictions(old_eq, cfg, "complex", False) == ["length of the MD: 5 ns -> 0 ns"]
+    held = "the solute during the pre-equilibration: free -> held (restraints.selection: interactions)"
+    assert equil_contradictions(old_eq, cfg, "complex", False) == ["length of the MD: 5 ns -> 0 ns", held]
     assert equil_contradictions(old_eq, searched_then(), "complex", False) == []     # 2 fs used, 4 fs configured
     assert equil_contradictions(old_eq, searched_then(dynamics={"timestep_fs": 1.0}), "complex", False) \
         == ["time step: 2 fs -> 1 fs"]
@@ -740,6 +741,10 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
              pocket_waters=np.full(40, 6.0))
     old_membrane = np.load(tmp_path / "old_membrane.npz")
     assert equil_in_membrane(old_membrane) is True
+    # the 10 ns of a bilayer are as long as those the default asks for, and were free: a file without a record
+    # is not the pre-equilibration that holds the solute (the fourth pass of Codex: it was used, and the MD for
+    # the restraint started from the end of 10 ns of free MD)
+    assert equil_contradictions(old_membrane, config(membrane={"enabled": True}), "complex", True) == [held]
     assert equil_contradictions(old_membrane, searched_then(membrane={"enabled": True}), "complex", True) == []
     assert "bilayer: yes -> no" in equil_contradictions(old_membrane, searched_then(), "complex", False)
     np.savez(tmp_path / "older.npz", timestep_fs=4.0, simulated_ns=5.0)          # a file that does not tell
@@ -890,12 +895,15 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     # pre-equilibration and restraint of a leg
     eq = equil_made_with(cfg, "complex", False, 7)
     longer = config(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}})
-    assert settings_differences(eq, equil_made_with(longer, "complex", False, 7)) == [
-        "pre_equilibration.md_ns: 5.0 -> 1.0"
-    ]
-    assert settings_differences(eq, equil_made_with(longer, "solvent", False, 7))[0].startswith(
-        "pre_equilibration.md_ns"
-    )
+    # the free MD of a pre-equilibration is a setting of the selections that have it (the search here)
+    searched_longer = config(restraints={"selection": "auto"},
+                             sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}})
+    assert settings_differences(equil_made_with(searched(), "complex", False, 7),
+                                equil_made_with(searched_longer, "complex", False, 7)) == [
+        "pre_equilibration.md_ns: 5.0 -> 1.0"]
+    assert settings_differences(eq, equil_made_with(longer, "complex", False, 7)) == []
+    assert "pre_equilibration.md_ns: not recorded -> 0.5" in settings_differences(
+        eq, equil_made_with(longer, "solvent", False, 7))
     assert settings_differences(
         eq, equil_made_with(config(thermodynamics={"temperature_K": 310.0}), "complex", False, 7)
     ) == ["temperature_K: 298.15 -> 310.0"]

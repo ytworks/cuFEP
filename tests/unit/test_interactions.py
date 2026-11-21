@@ -395,6 +395,12 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     assert plot_interactions(leg_dir) is None and report["start"] == info["start"]
     (leg_dir / "restraint.json").write_text(json.dumps(stored))
     assert plot_interactions(leg_dir) == figure
+    # an analysis written before it recorded its start: the anchors and the reference values tell that the pair
+    # belongs together, and its figure stays (the third review by Codex: it was deleted)
+    without_start = {key: value for key, value in report.items() if key != "start"}
+    (leg_dir / "interactions.json").write_text(json.dumps(without_start))
+    assert plot_interactions(leg_dir) == figure and figure.exists()
+    (leg_dir / "interactions.json").write_text(json.dumps(report))
     # ... and every reading of the samples of a leg asks whether its restraint is of its pre-equilibration
     # (review of 877ab88: cufep analyze gave the release of a restraint of another repeat)
     from cufep.workflow import restraint_release_of

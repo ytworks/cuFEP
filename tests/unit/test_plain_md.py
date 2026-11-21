@@ -217,8 +217,17 @@ def test_a_pre_equilibration_can_hold_the_solute_where_it_was_given(monkeypatch)
     assert pre_equilibration_parts(searched, "complex", True) == (10.0, False)
     # the two are different pre-equilibrations, and a file of an earlier version is one of free MD
     held, free = equil_made_with(default, "complex", False, 7), equil_made_with(searched, "complex", False, 7)
-    assert settings_differences(free, held) == ["solute_held: not recorded -> True"]
+    assert settings_differences(free, held) == ["pre_equilibration.md_ns: 5.0 -> not given",
+                                                "solute_held: not recorded -> True"]
     assert "solute_held" not in equil_made_with(default, "solvent", False, 7)
+    # md_ns is the free MD of the other selections: a change of it is no other pre-equilibration of this one (the
+    # fourth pass of Codex: a run with the default selection was refused for it), and it is one of theirs
+    other = {"sampling": {"pre_equilibration": {"complex": {"md_ns": 1.0}}}}
+    assert settings_differences(held, equil_made_with(config(**other), "complex", False, 7)) == []
+    assert settings_differences(held, equil_made_with(config(**other), "complex", True, 7)) == [
+        "membrane_equilibration_ns: None -> 10.0"]
+    assert settings_differences(free, equil_made_with(config(restraints={"selection": "auto"}, **other), "complex",
+                                                      False, 7)) == ["pre_equilibration.md_ns: 5.0 -> 1.0"]
 
     system, positions, box = lj_particles()
     made = []

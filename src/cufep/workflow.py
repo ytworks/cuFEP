@@ -454,6 +454,10 @@ def equil_contradictions(eq, cfg: Config, leg: str, in_membrane: bool) -> list[s
     has_bilayer = equil_in_membrane(eq)
     if has_bilayer is not None and has_bilayer != bool(in_membrane):
         out.append(f"bilayer: {'yes' if has_bilayer else 'no'} -> {'yes' if in_membrane else 'no'}")
+    if pre_equilibration_parts(cfg, leg, in_membrane)[1]:
+        # a file without a record is of a version before the solute was ever held: its MD was free, also the
+        # 10 ns of a bilayer, whose length is the one that is asked for now (the fourth pass of Codex)
+        out.append("the solute during the pre-equilibration: free -> held (restraints.selection: interactions)")
     return out
 
 
@@ -976,6 +980,9 @@ def equil_made_with(cfg: Config, leg: str, in_membrane: bool, seed: int) -> dict
     # one than the free MD of the other selections and of every earlier version, whose records have no such key
     if pre_equilibration_parts(cfg, leg, in_membrane)[1]:
         out["solute_held"] = True
+        # md_ns is the free MD of the other selections, which this pre-equilibration does not have: a change of
+        # it is no other pre-equilibration (the fourth pass of Codex: the run was refused for it)
+        out["pre_equilibration"] = {key: value for key, value in out["pre_equilibration"].items() if key != "md_ns"}
     return out
 
 
@@ -2060,7 +2067,10 @@ def run_leg(job: LegJob) -> dict:
                     frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
                     simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
                     backend=eq.backend,               # what ran the unrestrained MD (made_with: what was asked)
-                    backend_precision=_precision(cfg, eq.backend),                   # and in which precision
+                    # and in which precision, where the platform takes one (the Reference platform is double
+                    # whatever is asked: the fourth pass of Codex)
+                    backend_precision=(_precision(cfg, eq.backend) if cfg.backend.platform in ("CUDA", "OpenCL")
+                                       else f"that of the {cfg.backend.platform} platform"),
                     pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
                     made_with=json.dumps(equil_from), membrane_drift=json.dumps(eq.drift))
         timed("pre_equilibration", t0)
@@ -2070,6 +2080,8 @@ def run_leg(job: LegJob) -> dict:
     origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
     if not check_equil_file(eq, equil_file, cfg, job.leg, in_membrane, seed, log):
         origin_not_recorded.append("the pre-equilibration")
+    elif "platform" not in json.loads(str(eq["made_with"])):
+        origin_not_recorded.append("the platform of the pre-equilibration")
     timestep_fs = float(eq["timestep_fs"])
     # the notes of the pre-equilibration and of the restraint are made from their files when the
     # result is made (notes_of_leg_files), with the levels of the run that makes it

@@ -148,8 +148,10 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    whole number of frame intervals, and the length integrated is recorded; versions before
    revision 15 integrated whole intervals only (40 ps of 50 ps), and such a file holding less
    than it was made for is not used again. A bilayer system is held
-   by position restraints during NVT and NPT and then runs unrestrained for
-   `membrane.equilibration_ns`. How the bilayer changed at the end of that run is reported with
+   by position restraints during NVT and NPT, the NPT twice as long as for a soluble system
+   (1.0 ns), and then runs for `membrane.equilibration_ns`: unrestrained with
+   `restraints.selection: auto` and `manual`, with the heavy atoms of protein and ligand still
+   held with `interactions` (above). How the bilayer changed at the end of that run is reported with
    the result of the complex leg, as numbers without a verdict (`bilayer`): the relative change
    of the mean area in the membrane plane and the change of the mean number of water molecules
    within 0.6 nm of the ligand between the last two quarters. The run is never made longer for
@@ -176,8 +178,10 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    trajectory) is reported with the result as a number without a level
    (`ligand_rmsd_from_input_A`), as OpenFE reports the ligand RMSD; the run goes on in any
    case, and the result is the free energy of the pose the ligand is in. The same is measured
-   for manual anchors and for a restraint chosen from interactions: under every selection
-   over the frames of the pre-equilibration, superposed on the backbone atoms (N, CA, C)
+   for manual anchors and for a restraint chosen from interactions, over the free MD the
+   selection has: the second half of the frames of the pre-equilibration for `auto` and
+   `manual`; for `interactions`, whose pre-equilibration holds the pose, 200 of the analysed
+   frames of the four trajectories, evenly spaced, all of them counted. The frames are superposed on the backbone atoms (N, CA, C)
    within `restraints.host_max_distance_nm` + 0.5 nm of the centre of the ligand's heavy
    atoms in the first frame, or on all C-alpha atoms if those are fewer than 12. The RMSD and the drift of the centre of the ligand in the coupled state
    during the production are numbers of the result too (`structure`).

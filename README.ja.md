@@ -67,8 +67,9 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
    鎖の切れ目にはキャップを付け、欠けたループはモデリングしません。リガンドのパラメータは
    OpenFF 2.2.1 と AM1-BCC 電荷です。系は水で溶媒和するか、二重膜に埋め込みます
    ([protocol: Inputs](docs/protocol.md#inputs)、[Systems](docs/protocol.md#systems))。
-2. **pre-equilibration。** 相互作用がすべてある系で、最小化、NVT、NPT のあと、complex leg では 5 ns
-   の MD を行います。
+2. **pre-equilibration。** 相互作用がすべてある系で、最小化、NVT、NPT を行います。complex leg では、
+   溶媒が落ち着くまでタンパク質とリガンドを与えられたポーズに保ちます。二重膜の系ではそのあとさらに
+   10 ns、同じく保ったまま走らせます。
 3. **Boresch restraint。** 複合体の拘束なしの軌跡 4 本 (各 3 ns) を ProLIF で解析し、タンパク質と
    リガンドの相互作用のうち続いているものからアンカーを選びます (Ding ら 2026)。
    `restraints.selection: auto` では、代わりに手順 2 の軌跡から OpenFE の規則で選びます
