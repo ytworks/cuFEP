@@ -1725,6 +1725,21 @@ def backend_fallback_refusal(exc: BaseException, backend_name: str, fallback: st
     return None
 
 
+def leg_with_samples_stays_on_its_backend(exc: BaseException) -> str:
+    """What a leg says whose cuPotential run failed and which had samples from an earlier run
+    (:func:`backend_fallback_refusal`): it is not repeated on stock OpenMM from its start. What
+    keeps it on cuPotential is its samples, which were made there (a leg with samples goes on with
+    the backend they were made with). Its pre-equilibration can have run on stock OpenMM alone: that
+    of a soluble complex whose restraint is chosen from interactions ends with the NPT that holds
+    the solute (the sixth pass of Codex: the message said the pre-equilibration was made on
+    cuPotential, where ``equil.npz`` of the TYK2 example names stock OpenMM)."""
+    return (f"the cuPotential run of this leg failed ({str(exc)[:300]}). The leg had samples from an earlier "
+            "run, so it is not repeated on stock OpenMM from its start: its samples and checkpoint are left "
+            "in hrex/. Run the leg again to continue it on cuPotential, or run the calculation on stock "
+            "OpenMM (backend.name: openmm) in a new output.dir: the samples of this leg were made on "
+            "cuPotential, and samples of the two backends are never mixed")
+
+
 #: the files of a leg that its samples were made from and that a new set of lambda windows uses again
 LEG_INPUT_FILES = ("equil.npz", "restraint.json")
 
@@ -2426,12 +2441,7 @@ def run_leg(job: LegJob) -> dict:
         refusal = backend_fallback_refusal(exc, backend_name, cfg.backend.fallback, had_samples)
         if refusal is not None:
             if refusal == "the leg had samples from an earlier run":
-                raise WorkflowError(
-                    f"the cuPotential run of this leg failed ({str(exc)[:300]}). The leg had samples from an earlier "
-                    "run, so it is not repeated on stock OpenMM from its start: its samples and checkpoint are left "
-                    "in hrex/. Run the leg again to continue it on cuPotential, or run the calculation on stock "
-                    "OpenMM (backend.name: openmm) in a new output.dir: the pre-equilibration of this directory was "
-                    "made on cuPotential, and a leg keeps the backend of its files") from exc
+                raise WorkflowError(leg_with_samples_stays_on_its_backend(exc)) from exc
             raise
         kept = set_aside_failed_backend(leg_dir)
         log(f"cuPotential run failed ({str(exc)[:300]}); repeating this leg on stock OpenMM; what the failed run "
