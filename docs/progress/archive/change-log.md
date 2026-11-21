@@ -5,6 +5,61 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-21 — [progress] Step 14: both examples from the pose that was given
+- What: one calculation each with the image of 720cdb1 (4 GPUs, 5 ns of production per window,
+  the default `interactions`). TYK2 ejm_31: -12.16 ± 0.32 kcal/mol (experiment -9.54), restraint
+  on VAL 981 as in the four earlier runs. A2A 4e: -15.47 ± 1.00 (experiment -12.07), restraint on
+  GLU 169; the hydrogen bonds with ASN 253 of the input pose are kept in the MD (648 and 462 of
+  800 frames). Overlap criterion met in all legs; a window with fewer than 50 independent
+  samples in one leg of each. The same commands again computed nothing again.
+- Why: the last step of the plan. With one calculation each and a spread between runs of 2.7
+  kcal/mol (TYK2), the runs do not say whether the change of the start moved the values.
+- Refs: PR #6, the plan (its section on these runs), `runs/*_interactions_720cdb1` (untracked)
+
+### 2026-11-21 — [amendment] Confirmation passes of Codex (third to fifth): fixes
+- What: three passes that confirm the fixes (reviews 6004258602, 6004435142, 6004511116 on PR #6;
+  read only). After the last two: the record of a pre-equilibration that holds the solute has no
+  `md_ns` (a change of that setting, which such a leg does not read, had refused the run), and the
+  files of the two commits that recorded it (720cdb1, 48213b7: the example runs) stay usable;
+  `equil.npz` names the precision of the platform where the platform has its own; the documents
+  give the lengths with a bilayer and "at most 200 frames" for the RMSD. Not changed, reasons on
+  the PR: 4, 16, 19, 29, 30 and two new points about a refusal after a changed setting.
+- Why: the owner's order (a review by Codex after fixes; only what needs fixing is fixed).
+- Refs: PR #6, the plan (its last section)
+
+### 2026-11-21 — [design] The MD for the restraint starts from the pose that was given
+- What: a complex leg with `restraints.selection: interactions` holds the heavy atoms of protein and
+  ligand through NVT and NPT (and through `membrane.equilibration_ns` for a bilayer) and runs no
+  free MD before its four trajectories; the alchemical run starts from the same configuration.
+  `auto`, `manual` and the solvent leg are unchanged. The distance force constant stays 10
+  kcal/mol/A^2, also the owner's decision (it is 0.1 to 0.2 of the 1.5 to 2.5 kcal/mol the restraint costs).
+- Why: the owner's decision. After 10 ns of free MD two runs of the A2A example had the ligand in
+  two states and chose two restraints (ALA 59, ASN 253; -12.14 and -16.85 kcal/mol); the method
+  starts its trajectories from the minimised input.
+- Refs: PR #6, the plan (its last section), `docs/protocol.md` (steps 1 and 2)
+
+### 2026-11-21 — [amendment] Re-review by Codex: fixes; two runs of the TYK2 example 5 kcal/mol apart
+- What: 36 findings by reading, each reproduced before it was changed (88965b8); seven not changed
+  (reasons on the PR). The six coordinates of a restraint are measured as its force measures them
+  (OpenMM's periodic rule for every displacement); OpenFE's flat-angle rule is asked once, with the
+  constants the restraint gets, of the frames, the start and the reference angles; settings of
+  records are compared without a tolerance. The TYK2 example ran twice with `interactions`: -10.85
+  ± 0.65 (image 0f3aa32) and -5.83 ± 0.75 kcal/mol (fce6929): same anchors and force constants,
+  the difference in the vanish stage; code of the alchemical run and analysis unchanged between them.
+- Why: the owner's order (a review by Codex after fixes; only what needs fixing is fixed).
+- Refs: PR #6 (review 6003995828), the plan (its last two sections), issue #5
+
+### 2026-11-21 — [amendment] Second review (Codex) of the restraint from interactions: fixes
+- What: 26 findings by reading (11 P1), each reproduced before it was changed. The nearest image in a
+  skewed cell; the six coordinates of a restraint in the image its force measures in; the start held
+  to the rules of one configuration; OpenFE's flat-angle rule with the force constants that
+  `force_constants: auto` gives (all three selections); a candidate without reference values passed
+  over; a fraction of the frames rounded down as written; whole numbers of records compared exactly;
+  a restraint tied to its pre-equilibration; residues named as the input names them. Three findings
+  not changed (reasons on the PR): a threshold of no frame stays a refusal by the owner's decision.
+- Why: the owner's order of 2026-11-21 (a review by Codex after the push).
+- Refs: PR #6 (review 6003453011; commits b4b26e6, 9b0f8fd), the plan (its last section)
+
 ### 2026-11-21 — [amendment] Review of the restraint from interactions; plain MD in the precision asked
 - What: an independent review of `main..f5a77ce` found no input with a wrong number that passes
   every check; its four P2 and four P3 are fixed. The ligand next to the protein is in the image
