@@ -6,8 +6,10 @@ compare with what the leg recorded (``interactions.json``).
 The leg found its interactions with molecules that are made once and take the coordinates of each
 frame (:mod:`cufep.analysis.interactions`). Here ProLIF converts protein and ligand again for every
 frame from an MDAnalysis universe, as its ``Fingerprint.run`` does, with the ligand's chemistry
-perceived by MDAnalysis and not taken from the prepared molecule. Printed: for every residue and
-type of interaction the frames in which it is there by both counts, and the largest difference.
+perceived by MDAnalysis and not taken from the prepared molecule. Printed: for every ligand atom
+L1, residue and type of interaction the frames in which it is there by both counts and the number
+of frames that only one of the two counts has, and the largest such number (a count per residue
+and type alone would not see two ligand atoms or two sets of frames that changed places).
 The frames are those the leg analysed (later than ``discard_ns`` of its record), with the ligand
 in the periodic image next to the protein.
 """
@@ -21,9 +23,11 @@ import numpy as np
 def main(leg_dir: str) -> int:
     import MDAnalysis as mda
     import prolif
+    from openff.toolkit import Molecule
 
+    from cufep.alchemy.interaction_anchors import LigandGraph
     from cufep.alchemy.restraints import backbone_hosts, ligand_next_to_protein
-    from cufep.analysis.interactions import INTERACTIONS, VICINITY_CUTOFF_A, protein_atoms_of
+    from cufep.analysis.interactions import INTERACTIONS, VICINITY_CUTOFF_A, protein_atoms_of, with_rdkit_aromaticity
     from cufep.sampling.restraint_md import read_trajectories
     from cufep.workflow import load_prepared
 
@@ -46,20 +50,29 @@ def main(leg_dir: str) -> int:
     fingerprint = prolif.Fingerprint(list(INTERACTIONS), count=True, vicinity_cutoff=VICINITY_CUTOFF_A)
     fingerprint.run(universe.trajectory, universe.atoms[np.array(ligand)],
                     universe.atoms[protein_atoms_of(topology, among=row)], n_jobs=8, progress=False)
-    again: dict[tuple[int, str], int] = {}
+    # the atom L1 of an interaction by the rule of the leg, from the ligand atom ProLIF names first
+    rdmol = Molecule.from_json((leg.parent.parent / "prep" / "ligand.json").read_text()).to_rdkit()
+    graph = LigandGraph.from_rdkit(with_rdkit_aromaticity(rdmol))
+    again: dict[tuple[int, int, str], set[int]] = {}
     for f in range(n):
-        for key in {(int(residue.number), str(name)) for (_l, residue), by_type in fingerprint.ifp.get(f, {}).items()
-                    for name in by_type}:
-            again[key] = again.get(key, 0) + 1
-    recorded = {(int(r["residue"]), r["interaction"]): int(r["frames"]) for r in report["residues"]}
-    names = {int(r["residue"]): r["residue_name"] for r in report["residues"]}
-    print(f"{n} frames; recorded {len(recorded)} residue/type pairs, counted again {len(again)}")
+        for (_l, residue), by_type in fingerprint.ifp.get(f, {}).items():
+            for name, occurrences in by_type.items():
+                for occurrence in occurrences:
+                    l1 = graph.anchor_atom(int(occurrence["parent_indices"]["ligand"][0]))
+                    if l1 is not None:
+                        again.setdefault((int(ligand[l1]), int(residue.number), str(name)), set()).add(f)
+    recorded = {(int(r["ligand_atom"]), int(r["residue"]), r["interaction"]): {int(f) for f in r["in_frames"]}
+                for r in report["interactions"]}
+    names = {(int(r["ligand_atom"]), int(r["residue"])): f"{r['ligand_atom_name']} {r['residue_name']}"
+             for r in report["interactions"]}
+    print(f"{n} frames; recorded {len(recorded)} interactions (ligand atom, residue, type), counted again {len(again)}")
     worst = 0
-    for key in sorted(set(recorded) | set(again), key=lambda k: -max(recorded.get(k, 0), again.get(k, 0))):
-        a, b = recorded.get(key, 0), again.get(key, 0)
-        worst = max(worst, abs(a - b))
-        print(f"  {names.get(key[0], key[0])!s:10s} {key[1]:11s} recorded {a:4d}  again {b:4d}")
-    print(f"largest difference: {worst} frame(s)")
+    for key in sorted(set(recorded) | set(again), key=lambda k: -max(len(recorded.get(k, ())), len(again.get(k, ())))):
+        a, b = recorded.get(key, set()), again.get(key, set())
+        worst = max(worst, len(a ^ b))
+        print(f"  {names.get(key[:2], key[:2])!s:24s} {key[2]:11s} recorded {len(a):4d}  again {len(b):4d}  "
+              f"frames in one count only {len(a ^ b):4d}")
+    print(f"largest number of frames in one count only: {worst}")
     return 0
 
 
