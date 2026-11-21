@@ -124,3 +124,148 @@ def plot_repeat(repeat_dir: str | Path, path: str | Path | None = None) -> Path 
     publish_with(out, lambda fh: fig.savefig(fh, format=Path(out).suffix.lstrip(".") or "png"), mode="wb")
     plt.close(fig)
     return out
+
+
+#: the colours of the figure of the interactions: one hue for the data, grey for what is context,
+#: ink for text and for the reference values
+_SURFACE, _INK, _INK_2, _MUTED, _GRID, _AXIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
+_DATA, _CONTEXT = "#2a78d6", "#c3c2b7"
+#: the rows of interactions the figure shows at most (the most frequent ones; the table holds all)
+_ROWS_SHOWN = 12
+
+
+def plot_interactions(leg_dir: str | Path, path: str | Path | None = None) -> Path | None:
+    """What the restraint of a complex leg was chosen from with ``restraints.selection: interactions``,
+    from ``interactions.json`` of the leg, written to ``interactions.png`` next to it.
+
+    Top left: in what fraction of the analysed frames each interaction (ligand atom, residue, type)
+    is there, with the fraction from which an interaction is kept; the interactions of the ligand
+    atom and residue that the anchors were chosen from are in colour, the others in grey. Top
+    right: the frames in which each of them is there, trajectory after trajectory. Below: the six
+    coordinates of the chosen anchors over the frames that give the reference values, in the bins
+    of the rule, with the reference value of each. Numbers of the analysis, without a verdict.
+    Returns the path, or None if the leg has no such analysis or matplotlib is missing.
+    """
+    leg_dir = Path(leg_dir)
+    out = Path(path) if path is not None else leg_dir / "interactions.png"
+    source = leg_dir / "interactions.json"
+    if not source.exists():
+        out.unlink(missing_ok=True)                  # a figure of an earlier state would be read as the current one
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+    except Exception:  # noqa: BLE001
+        return None
+    report = json.loads(source.read_text())
+    n = int(report["frames_analysed"])
+    chosen = report["chosen"]
+    rows = report["interactions"][:_ROWS_SHOWN]
+    basis = [row["ligand_atom"] == chosen["guest_atoms"][0] and row["residue"] == chosen["residue_index"]
+             and report["method"] == "interactions" for row in rows]
+    colours = [_DATA if b else _CONTEXT for b in basis]
+    labels = [f"{row['ligand_atom_name'].split(':')[-1]} - {row['residue_name']}  {row['interaction']}" for row in rows]
+
+    fig = plt.figure(figsize=(11.5, 8.4), dpi=130, facecolor=_SURFACE)
+    grid = fig.add_gridspec(2, 6, height_ratios=[1.25, 1.0], hspace=0.55, wspace=0.55,
+                            left=0.215, right=0.975, top=0.86, bottom=0.085)
+    bars, code = fig.add_subplot(grid[0, :2]), fig.add_subplot(grid[0, 2:])
+
+    def quiet(ax, grid_axis=None):
+        ax.set_facecolor(_SURFACE)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color(_AXIS)
+        ax.tick_params(colors=_INK_2, labelsize=8, length=0)
+        if grid_axis:
+            ax.grid(axis=grid_axis, color=_GRID, linewidth=0.8)
+            ax.set_axisbelow(True)
+
+    # ---- how often each interaction is there
+    y = np.arange(len(rows))
+    bars.barh(y, [row["fraction"] for row in rows], height=0.56, color=colours, edgecolor="none")
+    needed = report["frames_needed"] / n if n else 0.0
+    bars.axvline(needed, color=_INK_2, linewidth=1.0)
+    bars.text(needed + (0.015 if needed < 0.5 else -0.015), -0.85,
+              f"kept from {report['frames_needed']} of {n} frames", color=_INK_2, fontsize=7.5,
+              ha="left" if needed < 0.5 else "right", va="center")
+    for k, row in enumerate(rows):
+        if basis[k]:
+            bars.text(min(row["fraction"] + 0.02, 0.98), k, f"{row['fraction']:.2f}", color=_INK, fontsize=8,
+                      va="center", ha="left" if row["fraction"] < 0.86 else "right")
+    bars.set_yticks(y)
+    bars.set_yticklabels(labels, fontsize=8, color=_INK)
+    bars.set_ylim(_ROWS_SHOWN - 0.4, -1.3)             # the same slots whatever the number of rows: thin bars
+    bars.set_xlim(0.0, 1.0)
+    bars.set_xlabel("fraction of the analysed frames", fontsize=8, color=_INK_2, loc="left")
+    bars.set_title("interactions (ligand atom - residue, type)", fontsize=9, color=_INK, loc="left")
+    quiet(bars, "x")
+    if any(basis):
+        bars.legend(handles=[Patch(color=_DATA, label="of the anchors' atom and residue"),
+                             Patch(color=_CONTEXT, label="other interactions")],
+                    frameon=False, fontsize=7.5, loc="upper right", bbox_to_anchor=(1.02, -0.13), ncols=1,
+                    labelcolor=_INK_2, handlelength=1.2, borderaxespad=0.0)
+
+    # ---- the frames in which each is there, trajectory after trajectory
+    of_frame = np.asarray(report.get("trajectory_of_frame") or [0] * n, dtype=int)
+    for k, row in enumerate(rows):
+        code.vlines(row["in_frames"], k - 0.3, k + 0.3, color=colours[k], linewidth=0.9)
+    starts = [0, *[int(f) for f in np.nonzero(np.diff(of_frame))[0] + 1]]
+    for start, trajectory in zip(starts, of_frame[starts] if n else []):
+        if start:
+            code.axvline(start - 0.5, color=_AXIS, linewidth=0.8)
+        code.text(start + 0.01 * n, -0.85, f"trajectory {int(trajectory)}", color=_INK_2, fontsize=7.5, va="center")
+    code.set_xlim(-0.5, max(n, 1) - 0.5)
+    code.set_ylim(_ROWS_SHOWN - 0.4, -1.3)
+    code.set_yticks([])
+    code.set_xlabel("analysed frame", fontsize=8, color=_INK_2)
+    code.set_title("the frames in which each interaction is there", fontsize=9, color=_INK, loc="left")
+    quiet(code)
+
+    # ---- the six coordinates of the chosen anchors, in the bins of the rule
+    series = {name: np.asarray(values, dtype=float) for name, values in report["coordinates"].items()}
+    low, high = 45.0, 135.0
+    made_with = (report.get("made_with") or {}).get("interactions") or {}
+    if made_with.get("angle_range_deg"):
+        low, high = (float(x) for x in made_with["angle_range_deg"])
+    inside = (series["theta_A"] >= low) & (series["theta_A"] <= high) \
+        & (series["theta_B"] >= low) & (series["theta_B"] <= high)
+    spans = {"r": None, "theta_A": (0.0, 180.0), "theta_B": (0.0, 180.0), "phi_A": (-180.0, 180.0),
+             "phi_B": (-180.0, 180.0), "phi_C": (-180.0, 180.0)}
+    for k, (name, span) in enumerate(spans.items()):
+        ax = fig.add_subplot(grid[1, k])
+        values = series[name][inside] if inside.any() else series[name]
+        counts, edges = np.histogram(values, bins=20, range=span)
+        ax.bar(0.5 * (edges[:-1] + edges[1:]), counts, width=0.86 * (edges[1] - edges[0]), color=_DATA,
+               edgecolor="none")
+        reference = float(report["reference_values"][name])
+        ax.axvline(reference, color=_INK, linewidth=1.2)
+        unit = "nm" if name == "r" else "deg"
+        ax.set_title(f"{name}\nreference {reference:.3f} {unit}" if name == "r"
+                     else f"{name}\nreference {reference:.1f} {unit}", fontsize=8, color=_INK, loc="left")
+        if name in ("theta_A", "theta_B"):
+            for bound in (low, high):
+                ax.axvline(bound, color=_AXIS, linewidth=0.8)
+        if span is not None:
+            ax.set_xlim(*span)
+            ax.set_xticks(np.linspace(span[0], span[1], 3))
+        ax.set_xlabel(unit, fontsize=7.5, color=_INK_2)
+        if k == 0:
+            ax.set_ylabel("frames", fontsize=8, color=_INK_2)
+        quiet(ax, "y")
+        ax.tick_params(labelsize=7)
+    how = ("chosen from an interaction" if report["method"] == "interactions"
+           else "chosen by the distance method (no interaction gave anchors)")
+    fig.suptitle(f"restraint {how}: host {', '.join(chosen['host'])} | guest {', '.join(chosen['guest'])}",
+                 fontsize=10, color=_INK, x=0.02, ha="left", y=0.965)
+    fig.text(0.02, 0.925, f"{n} frames of {report['md']['trajectories']} unrestrained trajectories of the complex; "
+             f"below: the coordinates of these anchors over the {int(inside.sum())} frames with both anchor angles "
+             f"within {low:g} to {high:g} degrees", fontsize=8, color=_INK_2, ha="left")
+    from cufep.files import publish_with
+
+    publish_with(out, lambda fh: fig.savefig(fh, format=Path(out).suffix.lstrip(".") or "png", facecolor=_SURFACE),
+                 mode="wb")
+    plt.close(fig)
+    return out

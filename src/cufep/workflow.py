@@ -1214,9 +1214,6 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
         "frames_needed_distance": rule.frames_needed(n, ri.fallback_frame_fraction),
         "trajectory_of_frame": [int(k) for k in analysed.trajectory],
         "interactions": rows, "residues": by_residue,
-        "frames_of_interaction": [{"residue_name": residue_label(r), "interaction": kind, "frames": sorted(
-            f for f, frame in enumerate(records) if any(res == r and k == kind for _a, res, k in frame))}
-            for r, kind in sorted({(res, k) for frame in records for _a, res, k in frame})],
         "stable_structure_fraction": {residue_label(r): float(x) for r, x in sorted(stable.items())
                                       if r in {c.residue for ranked in choice.ranked.values() for c in ranked}},
         "method": choice.method,

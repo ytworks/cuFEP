@@ -309,6 +309,16 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
                        "frames_of_trajectory_1"
     assert len(table) == 1 + len(report["interactions"]) and any(",VAL981,HB" in line for line in table[1:])
     assert any(line.startswith("restraint (interactions: HB") and "host VAL981:" in line for line in lines)
+    assert all(row["in_frames"] == sorted(row["in_frames"]) and len(row["in_frames"]) == row["frames"]
+               for row in report["interactions"])
+
+    # the figure of the leg is drawn from that file; without the file there is none, and none of an earlier state
+    from cufep.analysis.plots import plot_interactions
+
+    figure = plot_interactions(leg_dir)
+    assert figure == leg_dir / "interactions.png" and figure.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    (leg_dir / "interactions.json").rename(leg_dir / "interactions.kept")
+    assert plot_interactions(leg_dir) is None and not figure.exists()
 
 
 def test_the_trajectories_take_the_settings_of_the_yaml_and_the_end_of_the_pre_equilibration(tyk2, tmp_path,

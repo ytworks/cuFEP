@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from cufep import jsonio, mps
-from cufep.analysis.plots import plot_repeat
+from cufep.analysis.plots import plot_interactions, plot_repeat
 from cufep.benchmarks.runner import LEG_FLAGS, flags_of
 from cufep.config.auto import AutoReport, resolve
 from cufep.config.schema import Config, check_configuration, dump_config, read_settings
@@ -229,6 +229,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         for r in range(repeats):
             try:
                 plot_repeat(lig_dirs[lig.name] / f"repeat_{r}")
+                # what a restraint chosen from interactions rests on (no figure for another selection)
+                plot_interactions(lig_dirs[lig.name] / f"repeat_{r}" / "complex")
             except Exception as exc:  # noqa: BLE001  a figure never fails a run
                 log(f"WARNING: no analysis figure for {lig.name}, repeat {r}: {type(exc).__name__}: {exc}")
     for s in summary:

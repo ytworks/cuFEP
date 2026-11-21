@@ -293,14 +293,14 @@ class InteractionTable:
 
     def rows(self, frames: Frames | None = None) -> list[dict]:
         """One row per interaction for the output: counts, the fraction of the frames, the counts
-        of each trajectory and whether it is kept."""
+        of each trajectory, whether it is kept, and the frames it is in."""
         rows = []
         for key in sorted(self.frames_of, key=lambda k: (-len(self.frames_of[k]), k)):
             where = self.frames_of[key]
             row = {"ligand_atom": int(key[0] if frames is None else frames.ligand[key[0]]), "residue": int(key[1]),
                    "interaction": key[2], "frames": int(len(where)),
                    "fraction": float(len(where) / self.n_frames) if self.n_frames else 0.0,
-                   "kept": key in set(self.kept)}
+                   "kept": key in set(self.kept), "in_frames": [int(f) for f in where]}
             if frames is not None and frames.trajectory is not None:
                 of = np.asarray(frames.trajectory)[where]
                 row["frames_of_trajectory"] = {int(t): int(np.count_nonzero(of == t))
