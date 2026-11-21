@@ -413,6 +413,12 @@ def check_equil_file(eq, equil_file: Path, cfg: Config, leg: str, in_membrane: b
         current.pop("platform")                  # a file of a version that did not record its platform
         log(f"the pre-equilibration in {equil_file} was written by a version that did not record its platform: "
             f"whether it ran on {cfg.backend.platform} is not known, and it is used as it is")
+    if stored is not None and stored.get("solute_held") and current.get("solute_held"):
+        # the first two commits that held the solute (720cdb1, 48213b7) recorded md_ns, the free MD such a
+        # pre-equilibration does not have (equil_made_with): their files are of this pre-equilibration (the
+        # fifth pass of Codex: the two example runs of 720cdb1 were refused for "md_ns: 5.0 -> not given")
+        stored = {**stored, "pre_equilibration": {key: value for key, value in stored["pre_equilibration"].items()
+                                                  if key != "md_ns"}}
     recorded = check_made_from("the pre-equilibration of this leg", equil_file, stored, current, log,
                                contradictions=equil_contradictions(eq, cfg, leg, in_membrane))
     if "simulated_ns" in eq.files:
@@ -1963,6 +1969,16 @@ def _precision(cfg: Config, backend: str) -> str:
     return backend_precision(backend, cfg.backend.precision)
 
 
+def precision_that_ran(cfg: Config, backend: str) -> str:
+    """The precision a plain MD of a leg ran in on ``backend``, as ``equil.npz`` records it: the one of
+    :func:`_precision` where the platform takes a precision (CUDA, OpenCL). The Reference and the CPU
+    platform have their own whatever is asked, and the record says that instead (the fourth pass of
+    Codex: a run on the Reference platform, which is double, was recorded as mixed)."""
+    if cfg.backend.platform in ("CUDA", "OpenCL"):
+        return _precision(cfg, backend)
+    return f"that of the {cfg.backend.platform} platform"
+
+
 def run_leg(job: LegJob) -> dict:
     """Run (or resume, or extend) one leg and return its result dictionary."""
     import openmm as mm
@@ -2067,10 +2083,7 @@ def run_leg(job: LegJob) -> dict:
                     frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
                     simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
                     backend=eq.backend,               # what ran the unrestrained MD (made_with: what was asked)
-                    # and in which precision, where the platform takes one (the Reference platform is double
-                    # whatever is asked: the fourth pass of Codex)
-                    backend_precision=(_precision(cfg, eq.backend) if cfg.backend.platform in ("CUDA", "OpenCL")
-                                       else f"that of the {cfg.backend.platform} platform"),
+                    backend_precision=precision_that_ran(cfg, eq.backend),
                     pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
                     made_with=json.dumps(equil_from), membrane_drift=json.dumps(eq.drift))
         timed("pre_equilibration", t0)

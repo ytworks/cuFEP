@@ -180,8 +180,9 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    case, and the result is the free energy of the pose the ligand is in. The same is measured
    for manual anchors and for a restraint chosen from interactions, over the free MD the
    selection has: the second half of the frames of the pre-equilibration for `auto` and
-   `manual`; for `interactions`, whose pre-equilibration holds the pose, 200 of the analysed
-   frames of the four trajectories, evenly spaced, all of them counted. The frames are superposed on the backbone atoms (N, CA, C)
+   `manual`; for `interactions`, whose pre-equilibration holds the pose, the analysed frames
+   of the four trajectories, of which at most 200 are taken, evenly spaced (800 analysed
+   frames give 200; fewer than 200 are all taken), and all of those counted. The frames are superposed on the backbone atoms (N, CA, C)
    within `restraints.host_max_distance_nm` + 0.5 nm of the centre of the ligand's heavy
    atoms in the first frame, or on all C-alpha atoms if those are fewer than 12. The RMSD and the drift of the centre of the ligand in the coupled state
    during the production are numbers of the result too (`structure`).
@@ -1065,7 +1066,7 @@ The absolute binding protocol of OpenFE, from its documentation and source code 
 | checks after the run | plots of the MBAR overlap matrix, the replica exchange matrix, the forward and reverse convergence and the replica states; no verdict | overlap below 0.03 and fewer than 50 independent samples per window, the levels of the literature; the series, halves and BAR shown without a verdict; messages in the result |
 | a calculation that is not good enough | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
 | replica exchange | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
-| MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
+| MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns; a complex leg with the default `restraints.selection: interactions`: 0.25 + 0.5 ns with the heavy atoms of protein and ligand held and no free MD (a bilayer: 0.25 + 1.0 + 10 ns, held), from the end of which the alchemical run and the four trajectories of 3 ns for the restraint start |
 | restraint | Boresch, atoms chosen automatically, fixed force constants | from the interactions of unrestrained MD of the complex by default (`restraints.selection: interactions`); as OpenFE with `auto` |
 | water sampling | none | none |
 | GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |

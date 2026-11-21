@@ -71,6 +71,17 @@ Open items:
 
 ## Change Log
 
+### 2026-11-21 — [amendment] Confirmation passes of Codex (third to fifth): fixes
+- What: three passes that confirm the fixes (reviews 6004258602, 6004435142, 6004511116 on PR #6;
+  read only). After the last two: the record of a pre-equilibration that holds the solute has no
+  `md_ns` (a change of that setting, which such a leg does not read, had refused the run), and the
+  files of the two commits that recorded it (720cdb1, 48213b7: the example runs) stay usable;
+  `equil.npz` names the precision of the platform where the platform has its own; the documents
+  give the lengths with a bilayer and "at most 200 frames" for the RMSD. Not changed, reasons on
+  the PR: 4, 16, 19, 29, 30 and two new points about a refusal after a changed setting.
+- Why: the owner's order (a review by Codex after fixes; only what needs fixing is fixed).
+- Refs: PR #6, the plan (its last section)
+
 ### 2026-11-21 — [design] The MD for the restraint starts from the pose that was given
 - What: a complex leg with `restraints.selection: interactions` holds the heavy atoms of protein and
   ligand through NVT and NPT (and through `membrane.equilibration_ns` for a bilayer) and runs no

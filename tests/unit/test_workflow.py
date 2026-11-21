@@ -790,6 +790,30 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     for cfg_now in (on_reference, on_cpu):
         assert check_equil_file(np.load(tmp_path / "earlier.npz"), tmp_path / "earlier.npz", cfg_now, "solvent", False,
                                 seed)
+    # the fifth pass of Codex: the first two commits that held the solute (720cdb1, 48213b7) recorded md_ns, which
+    # such a pre-equilibration does not have and its record no longer holds. Their files are this pre-equilibration
+    # (the two example runs of 720cdb1 were refused: "pre_equilibration.md_ns: 5.0 -> not given"); a file of free
+    # MD is not, whatever its md_ns
+    holding = config()
+    seed = leg_seed(holding, 0, "complex")
+    record = equil_made_with(holding, "complex", False, seed)
+    assert record["solute_held"] is True and "md_ns" not in record["pre_equilibration"]
+    of_720cdb1 = {**record, "pre_equilibration": {**record["pre_equilibration"], "md_ns": 5.0}}
+    np.savez(tmp_path / "held.npz", timestep_fs=4.0, simulated_ns=0.0, simulated_ns_is_integrated=True,
+             made_with=json.dumps(of_720cdb1))
+    assert check_equil_file(np.load(tmp_path / "held.npz"), tmp_path / "held.npz", holding, "complex", False, seed)
+    free = {key: value for key, value in of_720cdb1.items() if key != "solute_held"}
+    np.savez(tmp_path / "free.npz", timestep_fs=4.0, simulated_ns=5.0, simulated_ns_is_integrated=True,
+             made_with=json.dumps(free))
+    with pytest.raises(WorkflowError, match="md_ns: 5.0 -> not given; solute_held: not recorded -> True"):
+        check_equil_file(np.load(tmp_path / "free.npz"), tmp_path / "free.npz", holding, "complex", False, seed)
+    # the precision the file says its MD ran in is the one of the platform where the platform has its own (the
+    # fourth pass of Codex: a run on the Reference platform, which is double, was recorded as mixed)
+    from cufep.workflow import precision_that_ran
+
+    assert precision_that_ran(on_reference, "openmm") == "that of the Reference platform"
+    assert precision_that_ran(config(backend={"precision": "double"}), "cupotential") == "mixed"
+    assert precision_that_ran(config(backend={"precision": "double"}), "openmm") == "double"
     # the restraint of such a version: all six force constants it holds (kJ/mol/nm^2 and kJ/mol/rad^2)
     angles = {key: 80.0 * 4.184 for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")}
     old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0,
