@@ -37,7 +37,9 @@ and ruff; PR #4, plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.m
 with the settings of the examples, the full sets, an accuracy wiki). Analysis version 10.
 In progress: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` (the Boresch
 restraint from the protein-ligand interactions of unrestrained MD, to become the default
-`restraints.selection`); step 1 of 14, nothing of it in the code yet.
+`restraints.selection`); steps 1 to 9 of 14: `restraints.selection: interactions` can be chosen
+and is tested on the CPU with trajectories made by hand; the default is still `auto`. Not run
+on a GPU yet; no example run yet.
 
 | item | status |
 |---|---|
@@ -65,6 +67,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [progress] `restraints.selection: interactions` can be chosen
+- What: the complex leg can choose its Boresch restraint from four unrestrained NPT trajectories
+  (3 ns, first 1 ns left out) that start from the end of the pre-equilibration and run as every
+  plain MD of the leg does (backend, fallback, the settings of the YAML): ProLIF interactions
+  and DSSP per frame, anchors by the rule of Ding et al. (thresholds of the paper as settings,
+  the ranking constants of its source), the candidate also held to OpenFE's two rules,
+  reference values from histograms. `interactions.json` / `.csv` per leg, `restraint_choice` in
+  the results. Default unchanged (`auto`). CPU tests only so far.
+- Refs: PR #6, `docs/protocol.md` ("Steps of one leg", step 2), `docs/configuration.md`
+  (`restraints.interactions` and its basis), `.claude/rules/fep-invariants.md`
 
 ### 2026-11-21 — [amendment] The plain MD of a leg obeys `backend.fallback` and the precision rule
 - What: the unrestrained MD of the pre-equilibration moved to stock OpenMM when the backend

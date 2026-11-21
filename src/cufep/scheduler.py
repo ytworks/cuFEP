@@ -14,6 +14,10 @@ Capacity
 Allocation (recomputed whenever a job starts, changes phase or ends)
     * A job that is in a part that cannot be spread out (plain MD before the alchemical
       run, restraint search, lambda schedule) holds one worker.
+    * A job whose workers cannot move asks for them and keeps them until it asks again or is
+      serial again: the windows of the lambda precalculation, and the trajectories from which
+      a restraint is chosen (``restraints.selection: interactions``), one worker each. When
+      it is serial again it goes on with the first GPU of what it was granted.
     * The rest of the capacity is divided among the jobs that are sampling, in proportion
       to the work they still have to do, and never more than one worker per replica.
     * A job learns about a change at its next iteration boundary and starts or stops

@@ -204,3 +204,46 @@ def test_what_a_complex_job_would_refuse_is_refused_before_any_job(tmp_path, mon
     np.savez(leg / "equil.npz", positions=pos, frames=pos[None], frame_atoms=np.arange(len(pos)),
              frame_boxes=np.asarray(box)[None])
     check_before_jobs(manual, lig_dir, {(0, "complex")})
+
+
+@pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer", "prolif", "MDAnalysis")
+def test_a_restraint_from_interactions_that_cannot_be_chosen_is_refused_before_anything_is_written(
+        tmp_path, repo, monkeypatch):
+    """``restraints.selection: interactions`` needs ProLIF, and a ligand with three bonded heavy atoms
+    that can be guest anchors. Without either, `cufep run` and `cufep plan` stop before the protein is
+    prepared and before a directory is made; acetonitrile has no such atoms, ejm_31 has."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep import run as driver
+    from cufep.analysis import interactions
+
+    def config(sdf, selection="interactions"):
+        data = config_for(tmp_path, repo, sdf).model_dump(mode="json")
+        data["restraints"] = {"selection": selection}
+        return Config.model_validate(data)
+
+    small = Chem.AddHs(Chem.MolFromSmiles("CC#N"))
+    AllChem.EmbedMolecule(small, randomSeed=1)
+    small.SetProp("_Name", "acetonitrile")
+    writer = Chem.SDWriter(str(tmp_path / "small.sdf"))
+    writer.write(small)
+    writer.close()
+    out = tmp_path / "out"
+    for command in (driver.run, lambda cfg: driver.plan(cfg, lambda line: None)):
+        with pytest.raises(WorkflowError, match="cannot give acetonitrile a restraint: the ligand has no atom"):
+            command(config(tmp_path / "small.sdf"))
+        assert written(out) == []
+    good = write_sdf(tmp_path / "good.sdf", repo, ["ejm_31"])
+    monkeypatch.setattr(interactions, "packages_problem",
+                        lambda: "restraints.selection: interactions needs ProLIF and MDAnalysis, which cannot be "
+                                "imported here: prolif (ImportError: No module named 'prolif')")
+    for command in (driver.run, lambda cfg: driver.plan(cfg, lambda line: None)):
+        with pytest.raises(WorkflowError, match="needs ProLIF and MDAnalysis"):
+            command(config(good))
+        assert written(out) == []
+    # another selection asks for neither
+    from cufep.workflow import check_interaction_inputs, ligands_of_run
+
+    cfg = config(tmp_path / "small.sdf", selection="auto")
+    check_interaction_inputs(cfg, ligands_of_run(cfg))

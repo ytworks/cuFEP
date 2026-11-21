@@ -765,6 +765,28 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert restraint_contradictions(old_restraint, cfg) == []
     assert restraint_contradictions(old_restraint, config(restraints={"force_constants": "auto"})) \
         == ["restraints.force_constants: openfe -> auto"]
+    # the selection "interactions" came later, with settings of its own. The record of a restraint of another
+    # selection is what it was before (commit cda6965), so that the restraints of earlier runs stay usable; a
+    # restraint of the search is not one of a run that chooses from interactions, recorded or not
+    from_md = config(restraints={"selection": "interactions"})
+    assert restraint_made_with(cfg) == {
+        "type": "boresch", "selection": "auto", "force_constants": "openfe", "k_r_kcal_per_A2": 10.0,
+        "k_angle_kcal_per_rad2": 80.0, "host_atoms": None, "guest_atoms": None, "rmsf_cutoff_nm": 0.1,
+        "host_min_distance_nm": 0.5, "host_max_distance_nm": 1.5, "dssp_filter": True}
+    assert restraint_made_with(from_md)["interactions"] == {
+        "trajectories": 4, "length_ns": 3.0, "discard_ns": 1.0, "frame_interval_ps": 10.0, "min_frame_fraction": 0.4,
+        "angle_range_deg": [45.0, 135.0], "stable_structure_fraction": 0.5, "second_interaction_ratio": 0.6,
+        "fallback_frame_fraction": 0.15, "fallback_cutoff_nm": 1.0}
+    assert restraint_contradictions(old_restraint, from_md) == ["restraints.selection: auto -> interactions"]
+    with pytest.raises(WorkflowError, match="selection: auto -> interactions"):
+        check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(cfg),
+                        restraint_made_with(from_md))
+    assert check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(from_md),
+                           restraint_made_with(config(restraints={"selection": "interactions"})))
+    with pytest.raises(WorkflowError, match="interactions.length_ns: 3.0 -> 2.0"):
+        check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(from_md),
+                        restraint_made_with(config(restraints={"selection": "interactions",
+                                                               "interactions": {"length_ns": 2.0}})))
     assert restraint_contradictions(old_restraint, config(restraints={"k_r_kcal_per_A2": 20.0})) \
         == ["restraints.k_r_kcal_per_A2: 10 -> 20"]
     # review of PR 1: the distance constant kept and the angle constant changed from 80 to 20 went through

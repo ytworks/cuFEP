@@ -225,9 +225,31 @@ def test_a_leg_result_gives_the_bilayer_and_the_pose_as_numbers_without_verdicts
     for name in ("hrex", "result.json"):
         (archived / name).rename(legs["complex"] / name)
 
+    # what a restraint chosen from interactions rests on is a number of its file too, and of no other restraint:
+    # the same through a new result, a result made again, the result of the ligand and an archive
+    assert finished["restraint_choice"] is None and again["restraint_choice"] is None
+    choice = {"method": "interactions", "anchors": {"host": ["VAL981:N", "VAL981:CA", "VAL981:C"],
+                                                    "guest": ["LIG1:N2x", "LIG1:C7x", "LIG1:C6x"]},
+              "interaction": {"residue": "VAL981", "type": "HBAcceptor", "frames": 744, "of_frames": 800},
+              "score": 107.6, "candidates_tested": 32, "candidates_refused": 0,
+              "md": {"trajectories": 4, "frames_analysed": 800, "backends": ["cupotential"] * 4,
+                     "timesteps_fs": [4.0] * 4}}
+    (legs["complex"] / "restraint.json").write_text(json.dumps({"restraint": restraint.to_dict(), "info": dict(
+        choice, selection="interactions", ligand_rmsd_A=2.5, ligand_rmsd_reference="input pose",
+        notes=["MD 2 for the restraint: time step lowered automatically to 2 fs after an unstable run at 4 fs"],
+        versions={"prolif": "2.2.3"})}))
+    from_interactions = leg_result_from_samples(legs["complex"], cfg, run("complex"))
+    assert from_interactions["restraint_choice"] == choice
+    assert "MD 2 for the restraint: time step lowered automatically to 2 fs after an unstable run at 4 fs" \
+        in from_interactions["notes"]
+    write_leg_result(legs["complex"], from_interactions)
+    assert refresh_leg_result(legs["complex"], cfg, said.append) == "current"
+    assert combine_ligand(lig, "lig", 1, cfg)["repeats"][0]["restraint_choice"] == choice
+    assert leg_result_from_samples(archive_leg(legs["complex"]), cfg, run("complex"))["restraint_choice"] == choice
+
     # without the files there are neither notes nor numbers of them
     assert notes_of_leg_files(legs["solvent"].parent / "nothing") == (
-        [], {"bilayer": None, "ligand_rmsd_from_input_A": None})
+        [], {"bilayer": None, "ligand_rmsd_from_input_A": None, "restraint_choice": None})
 
 
 

@@ -19,6 +19,7 @@ from cufep.workflow import (
     WorkflowError,
     _Log,
     check_before_jobs,
+    check_interaction_inputs,
     check_leg_reuse,
     check_partner_legs,
     check_prepared,
@@ -41,6 +42,7 @@ def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, obje
     check_configuration(cfg)
     # the ligands first: what they are called decides where anything is written
     ligands = ligands_of_run(cfg) if ligands is None else ligands
+    check_interaction_inputs(cfg, ligands)       # what restraints.selection: interactions needs, before any MD
     names = [lig.name for lig in ligands]
     if cfg.system.cofactors:
         raise WorkflowError("system.cofactors is not implemented yet in this version")
@@ -107,6 +109,7 @@ def run(cfg: Config, reschedule: bool = False, log=None, only_ligands=None, only
     """
     check_configuration(cfg)                     # before the output directory is made
     ligands = ligands_of_run(cfg, only_ligands)  # so are the names of the ligands
+    check_interaction_inputs(cfg, ligands)       # and what restraints.selection: interactions needs
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)

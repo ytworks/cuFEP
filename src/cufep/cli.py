@@ -140,6 +140,34 @@ def lambda_window_table(cfg) -> str:
     return "\n".join(lines)
 
 
+def restraint_selection_lines(cfg) -> str:
+    """How a run with this configuration chooses the Boresch restraint of the complex leg."""
+    from cufep.config.schema import analysed_frames
+
+    rc = cfg.restraints
+    lines = ["# restraint"]
+    if rc.selection == "interactions":
+        ri = rc.interactions
+        n = analysed_frames(cfg)
+        lines += [
+            "selection interactions: the anchors are chosen from the protein-ligand interactions of unrestrained MD.",
+            f"  {ri.trajectories} trajectories of {ri.length_ns:g} ns from the end of the pre-equilibration, a frame "
+            f"every {ri.frame_interval_ps:g} ps, the first {ri.discard_ns:g} ns of each left out: {n} frames;",
+            f"  on the backend of the leg ({cfg.backend.name}, fallback {cfg.backend.fallback});",
+            f"  an interaction is kept in {int(n * ri.min_frame_fraction)} frames or more "
+            f"({ri.min_frame_fraction:g}), anchor angles within {ri.angle_range_deg[0]:g} to "
+            f"{ri.angle_range_deg[1]:g} degrees;",
+            f"  without one: the backbone within {ri.fallback_cutoff_nm:g} nm of the ligand in "
+            f"{int(n * ri.fallback_frame_fraction)} frames or more ({ri.fallback_frame_fraction:g}).",
+        ]
+    elif rc.selection == "manual":
+        lines.append(f"selection manual: host atoms {rc.host_atoms}, guest atoms {rc.guest_atoms}.")
+    else:
+        lines.append("selection auto: the anchors with the smallest fluctuations over the frames of the "
+                     "pre-equilibration.")
+    return "\n".join(lines)
+
+
 @main.command()
 @click.argument("config", type=click.Path(exists=True, dir_okay=False))
 def plan(config: str) -> None:
@@ -156,6 +184,7 @@ def plan(config: str) -> None:
     click.echo(report.to_markdown())
     click.echo(f"ligands ({len(ligands)}): " + ", ".join(f"{lig.name} [{lig.formal_charge:+d}]" for lig in ligands))
     click.echo("\n" + lambda_window_table(resolved))
+    click.echo("\n" + restraint_selection_lines(resolved))
     click.echo("\n# resolved configuration\n" + dump_config(resolved))
 
 

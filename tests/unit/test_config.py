@@ -367,3 +367,49 @@ def test_settings_changed_after_reading_are_checked_before_anything_is_written(t
     assert not (tmp_path / "out").exists()
     with pytest.raises(ConfigurationError, match="barostat_frequency"):
         driver.plan(cfg)
+
+
+def test_the_restraint_from_interactions_is_a_selection_with_settings_of_its_own():
+    """``restraints.selection`` is auto, interactions or manual. The section ``restraints.interactions``
+    holds the MD and the thresholds of that selection; a configuration that would analyse no frame, or
+    whose thresholds are less than one frame, is refused when it is read."""
+    from cufep.config.schema import analysed_frames
+
+    assert Config.model_validate(BASE).restraints.selection == "auto"
+    chosen = Config.model_validate({**BASE, "restraints": {"selection": "interactions"}})
+    ri = chosen.restraints.interactions
+    assert (ri.trajectories, ri.length_ns, ri.discard_ns, ri.frame_interval_ps) == (4, 3.0, 1.0, 10.0)
+    assert analysed_frames(chosen) == 800                      # 4 x 200 frames later than 1 ns, at 4 fs
+    at_3_fs = Config.model_validate({**BASE, "restraints": {"selection": "interactions"},
+                                     "dynamics": {"timestep_fs": 3.0}})
+    assert analysed_frames(at_3_fs) == 804                     # a frame interval of 3333 steps is 9.999 ps
+
+    def with_settings(**settings):
+        return Config.model_validate({**BASE, "restraints": {"selection": "interactions", "interactions": settings}})
+
+    longer = with_settings(trajectories=1, length_ns=12.0)
+    assert analysed_frames(longer) == 1100
+    for settings, why in (({"discard_ns": 3.0}, "leaves nothing of a trajectory"),
+                          ({"angle_range_deg": [135.0, 45.0]}, "the lower first"),
+                          ({"trajectories": 0}, "greater than or equal to 1"),
+                          ({"length_ns": 0.02, "discard_ns": 0.0, "trajectories": 1}, "is less than one frame"),
+                          ({"length_ns": 0.05, "discard_ns": 0.0, "trajectories": 1}, "fallback_frame_fraction")):
+        with pytest.raises(ValidationError, match=why):
+            with_settings(**settings)
+    # the thresholds are not read for another selection
+    Config.model_validate({**BASE, "restraints": {"interactions": {"length_ns": 0.02, "discard_ns": 0.0,
+                                                                   "trajectories": 1}}})
+    with pytest.raises(ValidationError):
+        Config.model_validate({**BASE, "restraints": {"selection": "prolif"}})
+
+
+def test_plan_says_how_the_restraint_is_chosen():
+    from cufep.cli import restraint_selection_lines
+
+    said = restraint_selection_lines(Config.model_validate({**BASE, "restraints": {"selection": "interactions"}}))
+    assert "4 trajectories of 3 ns from the end of the pre-equilibration, a frame every 10 ps, the first 1 ns of " \
+           "each left out: 800 frames" in said
+    assert "on the backend of the leg (cupotential, fallback openmm)" in said
+    assert "kept in 320 frames or more (0.4), anchor angles within 45 to 135 degrees" in said
+    assert "within 1 nm of the ligand in 120 frames or more (0.15)" in said
+    assert "selection auto" in restraint_selection_lines(Config.model_validate(BASE))
