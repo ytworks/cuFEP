@@ -1,5 +1,5 @@
 # adaptive lambda scheduling の初期 window を設計し直す (max_windows 100、3 案を TYK2 example で評価)
-Status: In progress (手順 1〜4 済み: 計画と draft PR #7、`max_windows` 100、初期 window を数または値の列で、`overlap_matrix: pair` と leg ごとの設定)
+Status: In progress (手順 1〜6 済み: 計画と draft PR #7、`max_windows` 100、初期 window を数または値の列で、`overlap_matrix: pair` と leg ごとの設定、100 window の test、設計の集計と 3 案の YAML)
 Refs: this pull request; issue #5; `docs/protocol.md` ("Adaptive lambda scheduling"); `docs/configuration.md` (`lambda_schedule`)
 
 ## Context
@@ -141,6 +141,28 @@ ALS 後の見込みはガウス分布の近似からの値で、実測ではな�
 - discharge 7: 等間隔
 - vanish 18: 0, 0.15, 0.30, 0.42, 0.52, 0.60, 0.66, 0.71, 0.74, 0.77, 0.80, 0.82, 0.84, 0.86,
   0.88, 0.90, 0.95, 1.0
+
+手順 6 の結果 (`spikes/m18_window_design.py`、37 complex leg: benchmark の 33 leg と今の既定の
+restraint での TYK2 example 4 run。3 案の YAML は `spikes/m18_candidates/tyk2_{a,b,c}.yaml`):
+
+| complex leg、全 37 leg | 0〜0.5 | 0.5〜0.6 | 0.6〜0.7 | 0.7〜0.8 | 0.8〜0.9 | 0.9〜1.0 | stage の重み |
+|---|---|---|---|---|---|---|---|
+| vanish: ALS の区間の数 | 各 0.83〜1.05 | 1.12 | 1.32 | 1.84 | 1.86 | 1.01 | |
+| vanish: g の幾何平均 (最大) | 1.5〜2.0 | 2.4 (12) | 4.0 (51) | 12.9 (174) | 23.9 (481) | 9.6 (234) | |
+| vanish: 独立サンプル 50 未満 / window 数 | 0 / 142 | 0 / 47 | 1 / 56 | 9 / 64 | 20 / 78 | 9 / 51 | 0.66 |
+| restrain: 同上 | 9 / 87 | 0 / 20 | 1 / 21 | 0 / 2 | 0 / 0 | 3 / 37 | 0.17 |
+| discharge: 同上 | 0 / 56 | 0 / 37 | 0 / 4 | 0 / 37 | 0 / 0 | 0 / 37 | 0.17 |
+
+- 独立サンプル 50 未満の window は 52 個で、38 個が vanish の 0.7〜1.0 にある (stage の境目の window は
+  前の stage で 1 回だけ数える)。
+- B (30 window) は restrain 6 / discharge 6 / vanish 20 になった (上の手計算の目安は 7 / 7 / 18)。
+  restrain 0, 0.13, 0.26, 0.46, 0.73, 1.0。discharge 0, 0.16, 0.33, 0.51, 0.73, 1.0。
+  vanish 0, 0.15, 0.29, 0.41, 0.52, 0.61, 0.67, 0.72, 0.75, 0.77, 0.79, 0.80, 0.82, 0.83, 0.85,
+  0.86, 0.88, 0.92, 0.96, 1.0。
+- C (59 window) は restrain 11 / discharge 11 / vanish 39。vanish の 0.72〜0.94 は 0.01 刻みで、
+  candidate を全部使う (この区間には ALS は足せない)。
+- 今の既定の restraint での 4 run のうち 2 run で、restrain stage の最後の window の g が約 100
+  (97、113)。37 leg のうちの 4 leg なので配分にはほとんど効いていない。
 
 何が分かるか:
 
