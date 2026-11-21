@@ -410,3 +410,118 @@ def test_anchors_on_a_straight_line_are_refused_only_if_they_are_in_every_frame(
         bent[4] = bent[3] + [0.0, -0.15, 0.0]
         bent[5] = bent[4] + 0.15 * np.array([np.sin(a), -np.cos(a), 0.0])
         assert bool(collinear_frames(probe, bent)[0]) is on_line, angle
+
+
+# ---- review of f5a77ce: the image next to the protein is not the image nearest to its centre --------------
+
+def _lopsided_complex(n_frames=40, seed=3):
+    """A domain of 52 residues on one of 477, every residue its N, CA and C at the density of a protein (one
+    residue in 0.137 nm^3), and pentan-1-ol 0.45 nm outside the small domain; in the cell that cuFEP's solvation
+    gives this solute (a rhombic dodecahedron of width 2 x the radius of the solute + 1.0 nm). Returns
+    (topology, frames, boxes, ligand atoms, C-alpha atoms, the molecule)."""
+    import openmm.app as app
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    rng = np.random.default_rng(seed)
+
+    def ball(radius, centre):
+        n = int(4.19 * radius ** 3 / 0.137)
+        p = rng.normal(size=(4 * n, 3))
+        p = p / np.linalg.norm(p, axis=1)[:, None] * radius * rng.random(4 * n)[:, None] ** (1 / 3)
+        return p[:n] + np.asarray(centre, dtype=float)
+
+    ca = np.concatenate([ball(1.2, (0.0, 0.0, 0.0)), ball(2.5, (-3.7, 0.0, 0.0))])
+    backbone = np.stack([ca + [-0.10, 0.08, 0.0], ca, ca + [0.11, 0.07, 0.05]], axis=1).reshape(-1, 3)
+    mol = Chem.AddHs(Chem.MolFromSmiles("CCCCCO"))
+    AllChem.EmbedMolecule(mol, randomSeed=4)
+    conformer = mol.GetConformer().GetPositions() / 10.0
+    positions = np.concatenate([backbone, conformer - conformer.mean(axis=0) + [1.65, 0.0, 0.0]])
+    top = app.Topology()
+    chain = top.addChain("A")
+    for k in range(len(ca)):
+        residue = top.addResidue("GLY", chain, id=str(k + 1))
+        for name, element in (("N", "N"), ("CA", "C"), ("C", "C")):
+            top.addAtom(name, app.element.get_by_symbol(element), residue)
+    ligand_residue = top.addResidue("LIG", top.addChain("L"))
+    for atom in mol.GetAtoms():
+        top.addAtom(f"{atom.GetSymbol()}{atom.GetIdx() + 1}", app.element.get_by_symbol(atom.GetSymbol()),
+                    ligand_residue)
+    centre = 0.5 * (positions.min(axis=0) + positions.max(axis=0))
+    width = 2.0 * float(np.linalg.norm(positions - centre, axis=1).max()) + 1.0
+    box = np.array([[width, 0.0, 0.0], [0.0, width, 0.0], [width / 2, width / 2, width * np.sqrt(2) / 2]])
+    frames = positions[None] + rng.normal(scale=0.015, size=(n_frames, len(positions), 3))
+    ligand = np.arange(3 * len(ca), len(positions))
+    return top, frames, np.repeat(box[None], n_frames, axis=0), ligand, np.arange(1, 3 * len(ca), 3), mol
+
+
+def _nearest_backbone_atom(frames, ligand):
+    protein = np.setdiff1d(np.arange(frames.shape[1]), ligand)
+    return np.linalg.norm(frames[:, ligand, None, :] - frames[:, None, protein, :], axis=-1).min(axis=(1, 2))
+
+
+@pytest.mark.needs("rdkit")
+def test_a_ligand_far_from_the_centre_of_a_lopsided_complex_stays_in_its_pocket():
+    """Review of f5a77ce (P2): the ligand was brought to the image nearest to the centre of the C-alpha atoms. In
+    this complex it is 4.93 nm from that centre in a cell 9.05 nm wide, and that image is another one: 1.19 nm
+    or more from every backbone atom, where the MD wrote it 0.30 nm or less from one. The image next to the
+    protein is the one of the nearest protein atom, wherever the ligand was written."""
+    from cufep.alchemy.restraints import binding_site_frames
+
+    top, frames, boxes, ligand, ca, _mol = _lopsided_complex()
+    width = boxes[0, 0, 0]
+    from_centre = np.linalg.norm(frames[0, ligand].mean(axis=0) - frames[0, ca].mean(axis=0))
+    assert width == pytest.approx(9.05, abs=0.01) and from_centre == pytest.approx(4.93, abs=0.01)
+    assert from_centre > width / 2
+    written = _nearest_backbone_atom(frames, ligand)
+    assert 0.2 < written.min() and written.max() < 0.31
+    # the geometry of the finding: the image nearest to the centre of the protein is not the one in the pocket
+    by_centre = nearest_image_of_ligand(frames, ligand, frames[:, ca, :].mean(axis=1), boxes)
+    assert _nearest_backbone_atom(by_centre, ligand).min() > 1.19
+    assert np.allclose(by_centre[0, ligand].mean(axis=0) - frames[0, ligand].mean(axis=0), [-width, 0.0, 0.0])
+    # what the search of restraints.selection: auto and the RMSD of the pose look at
+    looked_at, _aligned, _site = binding_site_frames(top, frames, ligand, ligand[:6], 1.5, boxes)
+    assert np.allclose(looked_at, frames, atol=1e-9)
+    # the rule they share
+    from cufep.alchemy.restraints import ligand_next_to_protein
+
+    assert np.allclose(ligand_next_to_protein(frames, ligand, ca, boxes), frames, atol=1e-9)
+    for name, shift in lattice_shifts(boxes[0]).items():
+        moved = frames.copy()
+        moved[:, ligand] += shift + 2 * boxes[0, 1]
+        assert np.allclose(ligand_next_to_protein(moved, ligand, ca, boxes), frames, atol=1e-9), name
+    assert np.allclose(ligand_next_to_protein(frames[0], ligand, ca, boxes[0]), frames[0], atol=1e-9)
+
+
+@pytest.mark.needs("rdkit")
+def test_the_interactions_of_a_lopsided_complex_are_looked_for_in_the_pocket(monkeypatch):
+    """The same complex through the choice of ``restraints.selection: interactions``: ProLIF and the rule got the
+    ligand 1.21 to 1.28 nm from the nearest backbone atom, an image in which nothing interacts and no angle is
+    that of the restraint (the distance method ranked six candidates there). They get it where the MD wrote it.
+    Here no anchors can be chosen, and the calculation stops: pentan-1-ol outside a ball of backbone atoms."""
+    from cufep import workflow
+    from cufep.alchemy import restraints
+    from cufep.analysis import interactions
+    from cufep.config.schema import Config
+    from cufep.sampling.restraint_md import Trajectories
+
+    top, frames, boxes, ligand, _ca, mol = _lopsided_complex()
+    n, n_atoms = frames.shape[0], frames.shape[1]
+    seen = {}
+
+    def no_interactions(topology, xyz, frame_atoms, ligand_atoms, rdmol):
+        seen["nearest"] = _nearest_backbone_atom(np.asarray(xyz), ligand)
+        return [[] for _ in range(len(xyz))]
+
+    monkeypatch.setattr(interactions, "interactions_of_frames", no_interactions)
+    monkeypatch.setattr(restraints, "stable_structure_fractions", lambda topology, xyz, frame_atoms: {})
+    cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+                                 "restraints": {"interactions": {"discard_ns": 0.0}}})
+    trajectories = Trajectories(frames=frames, boxes=boxes, frame_atoms=np.arange(n_atoms),
+                                trajectory=np.zeros(n, dtype=int), time_ps=10.0 * (1 + np.arange(n)),
+                                backends=["openmm"], timesteps_fs=[4.0], notes=[])
+    prep = {"topology": top, "ligand": [int(i) for i in ligand]}
+    eq = {"positions": frames[-1], "box": boxes[-1]}
+    with pytest.raises(WorkflowError, match="Nothing was sampled"):
+        workflow.interaction_restraint(cfg, prep, mol, eq, trajectories, 298.15)
+    assert seen["nearest"].max() < 0.31

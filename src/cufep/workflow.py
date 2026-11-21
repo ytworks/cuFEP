@@ -1113,8 +1113,8 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
         anchor_margins,
         backbone_hosts,
         coordinate_fluctuations,
+        ligand_next_to_protein,
         measure_anchors,
-        nearest_image_of_ligand,
         reference_values_from_histograms,
         stable_structure_fractions,
         with_force_constants_from_fluctuations,
@@ -1141,9 +1141,8 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
     if len(c_alpha) < 1:
         raise WorkflowError("the frames of the MD for the restraint hold no protein backbone")
     # whole molecules with the ligand in the image next to the protein: ProLIF and the angles of the rule know no box
-    xyz = nearest_image_of_ligand(analysed.frames, np.array([row[i] for i in ligand], dtype=int),
-                                  np.asarray(analysed.frames, dtype=float)[:, c_alpha, :].mean(axis=1),
-                                  np.asarray(analysed.boxes, dtype=float))
+    xyz = ligand_next_to_protein(analysed.frames, np.array([row[i] for i in ligand], dtype=int),
+                                 np.array(c_alpha, dtype=int), np.asarray(analysed.boxes, dtype=float))
     records = interactions_of_frames(topology, xyz, frame_atoms, ligand, rdmol)
     stable = stable_structure_fractions(topology, xyz, frame_atoms)
     frames = rule.Frames(xyz=xyz, atoms=frame_atoms, ligand=ligand, hosts=hosts, stable_fraction=stable,

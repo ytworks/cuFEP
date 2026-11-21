@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from cufep.alchemy.restraints import kabsch_align, nearest_image_of_ligand
+from cufep.alchemy.restraints import kabsch_align, ligand_next_to_protein
 
 
 def structural_analysis(samples: dict, n_equilibration: int = 0) -> dict | None:
@@ -27,8 +27,7 @@ def structural_analysis(samples: dict, n_equilibration: int = 0) -> dict | None:
     boxes = samples.get("frame_box")
     images_checked = boxes is not None and len(boxes) == len(samples["frame_iter"])
     if images_checked:
-        frames = nearest_image_of_ligand(frames, lig, frames[:, ca, :].mean(axis=1),
-                                         np.asarray(boxes, dtype=float)[keep])
+        frames = ligand_next_to_protein(frames, lig, ca, np.asarray(boxes, dtype=float)[keep])
     aligned = kabsch_align(frames, frames[0], ca)
     d_lig = aligned[:, lig, :] - aligned[0, lig, :]
     lig_rmsd = 10.0 * np.sqrt((d_lig ** 2).sum(axis=2).mean(axis=1))

@@ -172,7 +172,7 @@ class Frames:
     """The analysed frames in the words of the rule. Every index is a number of the System.
 
     ``xyz`` (frames x frame atoms x 3, nm) holds whole molecules with the ligand in the periodic
-    image nearest to the protein (:func:`cufep.alchemy.restraints.nearest_image_of_ligand`), so
+    image nearest to the protein (:func:`cufep.alchemy.restraints.ligand_next_to_protein`), so
     that an angle between protein and ligand atoms is that of the neighbours and not of images
     (the source measures the angles as the coordinates were written).
     """

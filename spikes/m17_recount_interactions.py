@@ -22,7 +22,7 @@ def main(leg_dir: str) -> int:
     import MDAnalysis as mda
     import prolif
 
-    from cufep.alchemy.restraints import backbone_hosts, nearest_image_of_ligand
+    from cufep.alchemy.restraints import backbone_hosts, ligand_next_to_protein
     from cufep.analysis.interactions import INTERACTIONS, VICINITY_CUTOFF_A, protein_atoms_of
     from cufep.sampling.restraint_md import read_trajectories
     from cufep.workflow import load_prepared
@@ -36,9 +36,8 @@ def main(leg_dir: str) -> int:
     frame_atoms = np.asarray(analysed.frame_atoms, dtype=int)
     row = {int(a): i for i, a in enumerate(frame_atoms)}
     c_alpha = [row[trio[1]] for trio in backbone_hosts(topology).values() if trio[1] in row]
-    xyz = nearest_image_of_ligand(analysed.frames, np.array([row[i] for i in ligand]),
-                                  np.asarray(analysed.frames, dtype=float)[:, c_alpha, :].mean(axis=1),
-                                  np.asarray(analysed.boxes, dtype=float))
+    xyz = ligand_next_to_protein(analysed.frames, np.array([row[i] for i in ligand]), np.array(c_alpha),
+                                 np.asarray(analysed.boxes, dtype=float))
     n = xyz.shape[0]
     whole = np.zeros((n, topology.getNumAtoms(), 3), dtype=np.float32)
     whole[:, frame_atoms, :] = xyz * 10.0

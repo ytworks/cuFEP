@@ -27,7 +27,7 @@ The molecules are made once and take the coordinates of each frame (:class:`Inte
 a test holds this to ProLIF's own run over a trajectory, which makes them again for every frame.
 
 The coordinates must be those of neighbours: whole molecules with the ligand in the periodic
-image next to the protein (:func:`cufep.alchemy.restraints.nearest_image_of_ligand`). ProLIF
+image next to the protein (:func:`cufep.alchemy.restraints.ligand_next_to_protein`). ProLIF
 knows no box.
 """
 from __future__ import annotations

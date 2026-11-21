@@ -587,6 +587,41 @@ def nearest_image_of_ligand(positions_nm: np.ndarray, ligand: np.ndarray, anchor
     return pos[0] if single else pos
 
 
+def ligand_next_to_protein(positions_nm: np.ndarray, ligand: np.ndarray, protein: np.ndarray,
+                           box_nm: np.ndarray) -> np.ndarray:
+    """Copy of the coordinates with the ligand, as a whole, in the periodic image in which it lies
+    next to the protein: the image nearest to that atom of ``protein`` (its C-alpha atoms) which is
+    nearest to the centre of the ligand in any image. Shapes as for :func:`nearest_image_of_ligand`.
+
+    The one rule of everything that looks at the bound ligand without knowing its pocket (the
+    interactions of an MD, the search of ``restraints.selection: auto``, the RMSD of the pose).
+    It is not the image nearest to the centre of the protein: a ligand on the outer face of a
+    lopsided complex is farther from that centre than half a cell, and the image nearest to the
+    centre then lies in the solvent on the far side (review of f5a77ce: a domain of 52 residues on
+    one of 477, cell 9.05 nm, ligand 4.93 nm from the centre of the C-alpha atoms and 0.3 nm from
+    its pocket; the image nearest to the centre is 1.2 nm from every backbone atom).
+    Coordinates without protein atoms are returned as they are."""
+    from cufep.alchemy.lrc import minimum_image
+
+    protein = np.asarray(protein, dtype=int)
+    single = positions_nm.ndim == 2
+    pos = np.array(positions_nm[None] if single else positions_nm, dtype=float)
+    if len(protein) == 0:
+        return pos[0] if single else pos
+    boxes = np.asarray(box_nm, dtype=float).reshape(-1, 3, 3)
+    shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)], dtype=float)
+    anchors = np.empty((pos.shape[0], 3))
+    for f in range(pos.shape[0]):
+        box = boxes[min(f, len(boxes) - 1)]
+        # every protein atom from the centre of the ligand, in its nearest image (in a skewed cell that
+        # need not be the one of minimum_image: its neighbours are looked at too)
+        delta = minimum_image(pos[f, protein] - pos[f, ligand].mean(axis=0), box)
+        distance = np.linalg.norm(delta[:, None, :] + (shifts @ box)[None], axis=2).min(axis=1)
+        anchors[f] = pos[f, protein[int(np.argmin(distance))]]
+    moved = nearest_image_of_ligand(pos, ligand, anchors, boxes)
+    return moved[0] if single else moved
+
+
 def _c_alpha_atoms(topology) -> np.ndarray:
     from cufep.prep.protein import AMINO_ACIDS
 
@@ -606,7 +641,7 @@ def binding_site_frames(topology, frames_nm: np.ndarray, ligand: np.ndarray, lig
     ca = _c_alpha_atoms(topology)
     if frame_boxes_nm is not None:
         # the ligand in the periodic image nearest to the protein, whatever image it was written in
-        frames_nm = nearest_image_of_ligand(frames_nm, ligand, frames_nm[:, ca, :].mean(axis=1), frame_boxes_nm)
+        frames_nm = ligand_next_to_protein(frames_nm, ligand, ca, frame_boxes_nm)
     backbone_all = np.array([a.index for a in topology.atoms() if a.residue.name in AMINO_ACIDS
                              and a.name in ("N", "CA", "C")], dtype=int)
     centroid = frames_nm[0, ligand_heavy, :].mean(axis=0)
@@ -631,7 +666,7 @@ def pose_rmsd_in_site(topology, aligned: np.ndarray, site: np.ndarray, ligand: n
     else:
         given = np.array(input_pose_nm, dtype=float)
         if input_box_nm is not None:
-            given = nearest_image_of_ligand(given, ligand, given[_c_alpha_atoms(topology)].mean(axis=0), input_box_nm)
+            given = ligand_next_to_protein(given, ligand, _c_alpha_atoms(topology), input_box_nm)
         reference = kabsch_align(given[None], mean, site)[0][ligand_heavy, :]
     rmsd = None
     for perm in heavy_atom_symmetries(rdmol):
@@ -737,7 +772,7 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
     if start_nm is not None:
         start = np.asarray(start_nm, dtype=float)
         if start_box_nm is not None:
-            start = nearest_image_of_ligand(start, lig, start[ca].mean(axis=0), np.asarray(start_box_nm, dtype=float))
+            start = ligand_next_to_protein(start, lig, ca, np.asarray(start_box_nm, dtype=float))
         copies.append(start)
     best = None
     n_tested = 0
