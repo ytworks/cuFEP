@@ -2249,6 +2249,52 @@ def tiny_leg(water_ligand_system):
     return spec, pos, box
 
 
+def test_a_leg_of_a_hundred_lambda_windows_is_sampled_stored_and_analysed(tmp_path, water_ligand_system):
+    """``lambda_schedule.adaptive.max_windows`` is 100 (the owner, 2026-11-21): nothing between the
+    replica exchange and the figure of the analysis has a smaller limit.
+
+    In two parts, because a hundred windows of a real system are slow on the CPU. The sampler
+    runs a hundred replicas of the small water box for two iterations and stores their energies
+    at a hundred states. The analysis gets a hundred unit-width harmonic windows 0.6 widths
+    apart, whose free energies are equal and whose neighbours overlap by 0.15 in the matrix of
+    the leg (0.6 * exp(-0.09) / (2 sqrt(pi))).
+    """
+    pytest.importorskip("matplotlib")
+    from cufep.analysis.mbar import quality_checks
+    from cufep.analysis.plots import plot_repeat
+
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 33, "vanish": 66})
+    k = len(schedule.states)
+    assert k == 100
+    spec = LegSpec(name="hundred", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=system.getNumParticles(),
+                   backend="openmm", platform="CPU", precision="mixed", temperature_K=300.0, pressure_bar=1.0,
+                   barostat="isotropic", barostat_frequency=5, timestep_fs=2.0, steps_per_iteration=5, seed=5,
+                   frame_atoms=list(ligand))
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(2, record_stride=1, checkpoint_stride=2)
+    data = read_samples(tmp_path / "hrex")
+    assert data["u"].shape == (2, k, k) and data["states"].shape == (2, k)
+    assert all(sorted(row) == list(range(k)) for row in data["states"].tolist())       # one replica in every state
+    assert np.all(np.isfinite(data["u"][np.arange(2)[:, None], np.arange(k), data["states"]]))
+
+    centres = 0.6 * np.arange(k)
+    x = np.random.default_rng(1).normal(centres[None, :], 1.0, size=(60, k))
+    samples = {"u": 0.5 * (x[:, :, None] - centres[None, None, :]) ** 2, "states": np.tile(np.arange(k), (60, 1))}
+    leg = analyze_leg(samples, 298.15)
+    assert abs(leg.delta_g) < 3 * leg.delta_g_error
+    assert np.array(leg.overlap_matrix).shape == (k, k) and len(leg.overlap_neighbour) == k - 1
+    assert leg.min_overlap == pytest.approx(0.155, abs=0.02) and len(leg.window_effective_samples) == k
+    analysis = leg.to_dict()
+    (tmp_path / "solvent").mkdir()
+    (tmp_path / "solvent" / "result.json").write_text(json.dumps(
+        {"ligand": "lig", "repeat": 0, "leg": "solvent", "analysis": analysis, "quality": quality_checks(analysis)}))
+    assert plot_repeat(tmp_path).stat().st_size > 10000
+
+
 def _volumes_of_replicas(spec, pos, box, n_replicas: int = 5, iterations: int = 40) -> list[int]:
     """Advance ``n_replicas`` configurations in turn in one worker's Context without exchange and
     count the distinct volumes each one took."""
