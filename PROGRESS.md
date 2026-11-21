@@ -39,17 +39,18 @@ In progress: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` (th
 restraint from the protein-ligand interactions of unrestrained MD, to become the default
 `restraints.selection`); steps 1 to 13 of 14: `interactions` is the default. Tested on the CPU
 with trajectories made by hand and on a GPU with the trajectories on both backends. The whole
-diff was reviewed by a reader who did not write it: no input found for which a wrong number
-passes every check; its four P2 and four P3 findings are fixed. Left: one run of each example
-(step 14).
+diff was reviewed twice by readers who did not write it (an independent review and, on the
+owner's order, Codex): their findings are fixed, each after it was reproduced, or answered on
+PR #6. Both examples ran once with the image of commit 0f3aa32 (below); step 14 ends with one
+run of each with the image of the reviewed code.
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 634 passed (2026-11-21, commit 0f3aa32 of PR #6 in the image `cufep:dev` with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`; `main` in that image: 565) |
+| Unit tests (CPU) | 645 passed (2026-11-21, commit fce6929 of PR #6 in the image `cufep:dev` with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`; `main` in that image: 565) |
 | GPU tests | 23 passed (2026-11-21, one GPU, the same image and commit, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`; `main`: 17) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
-| TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). In the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation with the same settings: -8.94 ± 0.77 |
-| A2A example (4e, experiment -12.07 kcal/mol) | in the full A2A run: -18.91 ± 0.52 kcal/mol (complex leg 44.68); one earlier calculation with the same settings: -11.95 ± 0.73 (complex leg 37.61) |
+| TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). In the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation with the same settings: -8.94 ± 0.77. With the default `restraints.selection: interactions` (one calculation, image of commit 0f3aa32, 4 GPUs, PR #6): -10.85 ± 0.65 kcal/mol; lowest overlap 0.159 and 0.151; a window with fewer than 50 independent samples in both legs; restraint from the hinge hydrogen bond of VAL 981 (672 of 800 frames), all four trajectories on the plugin |
+| A2A example (4e, experiment -12.07 kcal/mol) | in the full A2A run: -18.91 ± 0.52 kcal/mol (complex leg 44.68); one earlier calculation with the same settings: -11.95 ± 0.73 (complex leg 37.61). With the default `interactions` (one calculation, image of commit 0f3aa32, 4 GPUs, PR #6): -12.14 ± 0.49 kcal/mol (complex leg 38.71); lowest overlap 0.102 and 0.178; a window with fewer than 50 independent samples in the complex leg; restraint from the hydrogen bond with ALA 59 (773 of 800 frames), all four trajectories on the plugin |
 | Benchmarks | full sets run once with the settings of the examples, commit 3b45bfe (PR #4; `benchmarks/results/`, `docs/wiki/Accuracy.md`). TYK2 16/16: mean signed error -0.62, RMSE after removing the mean error 1.74, Kendall tau 0.12 (FEP+ 0.00, 0.47, 0.81). A2A 17/17: -4.12, 2.26, 0.38 (FEP+ -0.16, 1.08, 0.59). No result NOT RELIABLE; all legs ALS 0.18; a window with fewer than 50 independent samples in 12/16 and 16/17 ligands. Felis (arXiv:2603.22274 v3), same sets: TYK2 RMSE after offset 0.82, tau 0.68; A2A 1.16, 0.65 (issue #5) |
 | Accuracy cross-check against OpenFE | stopped (plan of 2026-11-18, step 11) |
 | Official image | built locally from `docker/Dockerfile`; not published |
@@ -59,9 +60,9 @@ Open items:
 - The wiki pages of PR #4 (`docs/wiki/`) are not yet on the GitHub Wiki: it has no page
   (checked 2026-11-21; the owner creates its first page). Issue #5: the differences from Felis
   and the measurements that would separate the causes of cuFEP's larger errors; nothing decided.
-- The benchmarks and both example results above were made with `restraints.selection: auto`,
-  the default until 2026-11-21. With the default `interactions` neither example has a result
-  yet (step 14 of the plan); a rerun of the benchmarks is not part of that plan.
+- The benchmarks were made with `restraints.selection: auto`, the default until 2026-11-21; a
+  rerun with the default `interactions` is not part of the plan. One calculation per example
+  says nothing about a difference in accuracy (the spread between runs is about 1.5 kcal/mol).
 - `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
   5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
   decision (`.claude/rules/fep-invariants.md`).
@@ -69,6 +70,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [amendment] Second review (Codex) of the restraint from interactions: fixes
+- What: 26 findings by reading (11 P1), each reproduced before it was changed. The nearest image in a
+  skewed cell; the six coordinates of a restraint in the image its force measures in; the start held
+  to the rules of one configuration; OpenFE's flat-angle rule with the force constants that
+  `force_constants: auto` gives (all three selections); a candidate without reference values passed
+  over; a fraction of the frames rounded down as written; whole numbers of records compared exactly;
+  a restraint tied to its pre-equilibration; residues named as the input names them. Three findings
+  not changed (reasons on the PR): a threshold of no frame stays a refusal by the owner's decision.
+- Why: the owner's order of 2026-11-21 (a review by Codex after the push).
+- Refs: PR #6 (review 6003453011; commits b4b26e6, 9b0f8fd), the plan (its last section)
 
 ### 2026-11-21 — [amendment] Review of the restraint from interactions; plain MD in the precision asked
 - What: an independent review of `main..f5a77ce` found no input with a wrong number that passes
