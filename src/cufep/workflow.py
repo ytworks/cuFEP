@@ -392,6 +392,8 @@ def check_equil_file(eq, equil_file: Path, cfg: Config, leg: str, in_membrane: b
     current = equil_made_with(cfg, leg, in_membrane, seed)
     if stored is not None and "platform" not in stored:
         current.pop("platform")                  # a file of a version that did not record its platform
+        log(f"the pre-equilibration in {equil_file} was written by a version that did not record its platform: "
+            f"whether it ran on {cfg.backend.platform} is not known, and it is used as it is")
     recorded = check_made_from("the pre-equilibration of this leg", equil_file, stored, current, log,
                                contradictions=equil_contradictions(eq, cfg, leg, in_membrane))
     if "simulated_ns" in eq.files:
@@ -1360,6 +1362,7 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
     in_degrees = lambda v: [float(v[0]), *[float(np.degrees(x)) for x in v[1:]]]             # noqa: E731
     info = {
         "selection": "interactions", "force_constants": rc.force_constants, "fluctuations": fluctuations,
+        "flat_angle_rule": FLAT_ANGLE_RULE,
         "method": choice.method,
         "anchors": {"host": [atom_label(atoms, i, names) for i in choice.host],
                     "guest": [atom_label(atoms, i, names) for i in choice.guest]},
@@ -1392,7 +1395,7 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
         "stable_structure_fraction": [{"residue": int(r), "residue_name": residue_label(r), "fraction": float(x)}
                                       for r, x in sorted(stable.items())
                                       if r in {c.residue for ranked in choice.ranked.values() for c in ranked}
-                                      | {int(entry["residue"]) for entry in rows}],
+                                      | {int(entry["residue"]) for entry in (*rows, *by_residue)}],
         "method": choice.method,
         "candidates": {method: [described(c) for c in ranked[:200]] for method, ranked in choice.ranked.items()},
         "candidates_in_all": {method: len(ranked) for method, ranked in choice.ranked.items()},
@@ -2028,6 +2031,7 @@ def run_leg(job: LegJob) -> dict:
                     frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
                     simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
                     backend=eq.backend,               # what ran the unrestrained MD (made_with: what was asked)
+                    backend_precision=_precision(cfg, eq.backend),                   # and in which precision
                     pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
                     made_with=json.dumps(equil_from), membrane_drift=json.dumps(eq.drift))
         timed("pre_equilibration", t0)
@@ -2081,6 +2085,7 @@ def run_leg(job: LegJob) -> dict:
                                         frame_boxes_nm=eq["frame_boxes"], input_box_nm=prep["box"],
                                         host_max_distance_nm=rc.host_max_distance_nm)
                 info = {"selection": "manual", "force_constants": rc.force_constants, "fluctuations": fluctuations,
+                        "flat_angle_rule": FLAT_ANGLE_RULE,
                         "ligand_rmsd_A": 10 * rmsd, "ligand_rmsd_reference": "input pose", "notes": []}
                 log(f"restraint (manual anchors): r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * rmsd:.2f} A")
             elif rc.selection == "interactions":
@@ -2115,6 +2120,7 @@ def run_leg(job: LegJob) -> dict:
                 if rc.force_constants == "auto":
                     restraint = with_force_constants_from_fluctuations(restraint, found.fluctuations, T)
                 info = {"selection": "auto", "force_constants": rc.force_constants, "score": found.score,
+                        "flat_angle_rule": FLAT_ANGLE_RULE,
                         "fluctuations": found.fluctuations,
                         "ligand_rmsd_A": 10 * found.ligand_rmsd_nm, "ligand_rmsd_reference": "input pose",
                         "candidates_tested": found.n_candidates, "notes": found.notes}
@@ -2779,6 +2785,10 @@ def restraint_release_of(leg_dir: Path, attrs: dict, temperature_K: float) -> tu
         return 0.0, 0.0
     stored = _read_json(found) or {}
     equil = leg_files(leg_dir)["equil.npz"]
+    if equil is None and (stored.get("info") or {}).get("start") is not None:
+        raise WorkflowError(f"the restraint in {found} was chosen from MD that started from the pre-equilibration of "
+                            "its leg, and equil.npz is not there: that the restraint is the one of these samples "
+                            "cannot be checked")
     if equil is not None:
         # a restraint chosen from interactions belongs to the pre-equilibration its MD started from: the run of
         # a leg refuses another one, and so does every reading of its samples (review of 877ab88: cufep analyze

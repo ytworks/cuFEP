@@ -149,7 +149,7 @@ def _is_of_the_restraint(report_file: Path, restraint_file: Path) -> bool:
         of_restraint = [stored["restraint"]["r0"], *np.degrees([stored["restraint"]["theta_a0"],
                                                                 stored["restraint"]["theta_b0"]])]
         return (stored["info"].get("selection") == "interactions"
-                and stored["info"].get("start") == report.get("start")
+                and (report.get("start") is None or stored["info"].get("start") == report.get("start"))
                 and bool(np.allclose(reference, of_restraint, atol=1e-6))
                 and [int(i) for i in stored["restraint"]["host_atoms"]] == [int(i) for i in chosen["host_atoms"]]
                 and [int(i) for i in stored["restraint"]["guest_atoms"]] == [int(i) for i in chosen["guest_atoms"]])

@@ -363,6 +363,9 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     assert len(report["coordinates"]["r"]) == 20 and report["made_with"]["selection"] == "interactions"
     assert {"residue": hinge(topology), "residue_name": "VAL981"} in [
         {key: row[key] for key in ("residue", "residue_name")} for row in report["stable_structure_fraction"]]
+    # ... of every residue the report names, not of the candidates alone
+    assert {row["residue"] for row in report["residues"]} | {row["residue"] for row in report["interactions"]} \
+        <= {row["residue"] for row in report["stable_structure_fraction"]}
     table = (leg_dir / "interactions.csv").read_text().splitlines()
     assert table[0] == "ligand_atom,residue,interaction,frames,fraction,kept,frames_of_trajectory_0," \
                        "frames_of_trajectory_1"
@@ -666,6 +669,19 @@ def test_stored_trajectories_are_checked_before_any_job_of_a_run(tyk2, tmp_path,
     (leg_dir / "restraint.json").write_text(json.dumps({"restraint": {}, "info": {"selection": "interactions"},
                                                         "made_with": workflow.restraint_made_with(cfg)}))
     workflow.check_leg_reuse(cfg, lig_dir, "complex", 0, prep_info, 5.0)
+    # a restraint that names the start of its MD, without the pre-equilibration it started from: the start cannot
+    # be checked, and a pre-equilibration that is made again is another one. Refused before any job (the third
+    # review by Codex: this was only tested with the restraint gone too, where the trajectories refuse it)
+    of_a_start = {"restraint": {}, "info": {"selection": "interactions", "start": "the digest of a start"},
+                  "made_with": workflow.restraint_made_with(cfg)}
+    (leg_dir / "restraint.json").write_text(json.dumps(of_a_start))
+    kept = (leg_dir / "equil.npz").read_bytes()
+    (leg_dir / "equil.npz").unlink()
+    with pytest.raises(workflow.WorkflowError, match="was chosen from MD that started from the pre-equilibration"):
+        workflow.check_leg_reuse(cfg, lig_dir, "complex", 0, prep_info, 5.0)
+    with pytest.raises(workflow.WorkflowError, match="cannot be checked"):
+        workflow.restraint_release_of(leg_dir, {"states": [{"lambda_restraints": 0.0}]}, 298.15)
+    (leg_dir / "equil.npz").write_bytes(kept)
     (leg_dir / "restraint.json").unlink()
     (leg_dir / "equil.npz").unlink()
     with pytest.raises(workflow.WorkflowError, match="which it started from, is not there"):

@@ -29,7 +29,7 @@ def main(leg_dir: str) -> int:
     from openff.toolkit import Molecule
 
     from cufep.alchemy.interaction_anchors import LigandGraph
-    from cufep.alchemy.restraints import backbone_hosts, ligand_next_to_protein
+    from cufep.alchemy.restraints import ligand_next_to_protein
     from cufep.analysis.interactions import INTERACTIONS, VICINITY_CUTOFF_A, protein_atoms_of, with_rdkit_aromaticity
     from cufep.sampling.restraint_md import read_trajectories
     from cufep.workflow import load_prepared
@@ -42,8 +42,8 @@ def main(leg_dir: str) -> int:
     analysed = read_trajectories(leg, int(settings["trajectories"])).after(float(settings["discard_ns"]))
     frame_atoms = np.asarray(analysed.frame_atoms, dtype=int)
     row = {int(a): i for i, a in enumerate(frame_atoms)}
-    c_alpha = [row[trio[1]] for trio in backbone_hosts(topology).values() if trio[1] in row]
-    xyz = ligand_next_to_protein(analysed.frames, np.array([row[i] for i in ligand]), np.array(c_alpha),
+    protein_rows = np.array([row[int(i)] for i in protein_atoms_of(topology, among=row)])
+    xyz = ligand_next_to_protein(analysed.frames, np.array([row[i] for i in ligand]), protein_rows,
                                  np.asarray(analysed.boxes, dtype=float))
     n = xyz.shape[0]
     whole = np.zeros((n, topology.getNumAtoms(), 3), dtype=np.float32)

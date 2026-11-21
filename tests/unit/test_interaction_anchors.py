@@ -1,5 +1,7 @@
 """The Boresch restraint of restraints.selection: interactions: its reference values, the rules
 its anchors are held to, and what the rule reads of the protein."""
+import json
+
 import numpy as np
 import pytest
 
@@ -814,4 +816,66 @@ def test_what_the_choice_of_a_leg_records_of_the_distance_method_and_of_what_it_
     with pytest.raises(WorkflowError, match="6 frame.s. are analysed and fallback_frame_fraction = 0.15 of them is "
                                             "less than one frame"):
         workflow.interaction_restraint(*leg_of(few, [[] for _ in range(6)], monkeypatch), 298.15)
+
+
+@pytest.mark.needs("rdkit", "prolif", "MDAnalysis")
+def test_the_choice_of_a_leg_asks_the_flat_angle_rule_once_with_what_the_restraint_gets(monkeypatch):
+    """The third review by Codex: the tests of the rule of the flat angle gave the functions their arguments
+    themselves, so that a choice which went back to asking it with the configured constants, or of the frames
+    alone, passed them. Through the choice of a leg with ``restraints.force_constants: auto``: no candidate is
+    measured with a margin of its own (the configured constants), and the rule is asked of every candidate
+    with the constants its fluctuations give it, of the frames, the start and its own reference angles."""
+    from cufep import workflow
+
+    n = 200
+    theta = np.where(np.arange(n + 1) % 2 == 0, 60.0, 120.0)
+    theta[-1] = 30.0
+    world = World(n + 1).residue(0, alpha=90.0, theta=theta).residue(1, alpha=90.0, theta=90.0, distance=0.45)
+    records = world.records((0, "HBAcceptor", range(n)), (1, "HBAcceptor", range(100)))[:n]
+    margins, asked = [], []
+    measure, rule = restraints.measure_anchors, restraints.flat_rule_problem
+
+    def measured(*args, **kwargs):
+        margins.append(args[6])
+        return measure(*args, **kwargs)
+
+    def flat_rule(k_theta_a, k_theta_b, held, temperature_K, *more):
+        asked.append((k_theta_a, k_theta_b, np.array(held)))
+        return rule(k_theta_a, k_theta_b, held, temperature_K, *more)
+
+    monkeypatch.setattr(restraints, "measure_anchors", measured)
+    monkeypatch.setattr(restraints, "flat_rule_problem", flat_rule)
+    restraint, info, _report = workflow.interaction_restraint(
+        *leg_of(world, records, monkeypatch, force_constants="auto"), 298.15)
+    assert margins and set(margins) == {None}
+    k_a, k_b, held = asked[-1]                                     # the judgement of the candidate that was taken
+    assert (k_a, k_b) == (restraint.k_theta_a, restraint.k_theta_b) and held.shape == (n + 2, 2)
+    assert held[-1].tolist() == [restraint.theta_a0, restraint.theta_b0]         # its reference angles
+    assert np.degrees(held[-2]).tolist() == pytest.approx([info["start_values"]["theta_A"],
+                                                           info["start_values"]["theta_B"]])
+    assert info["flat_angle_rule"] == workflow.FLAT_ANGLE_RULE and info["candidates_refused"] >= 1
+    # the restraint that was written is one this version uses again (the third review: no restraint said by which
+    # rule its anchors were held, and a leg with constants from fluctuations refused its own restraint)
+    from cufep.workflow import check_restraint_file, restraint_made_with
+
+    cfg = leg_of(world, records, monkeypatch, force_constants="auto")[0]
+    stored = {"restraint": restraint.to_dict(), "info": info, "made_with": restraint_made_with(cfg)}
+    assert check_restraint_file(json.loads(json.dumps(stored)), "restraint.json", cfg, lambda line: None) is True
+
+
+def test_given_anchors_are_held_to_the_rule_in_the_pose_the_pre_equilibration_started_from():
+    """The third review by Codex: the test of given anchors with constants from fluctuations had the angle of
+    30 degrees among the frames. Here it is in the prepared pose alone: frames at 60 and 120 degrees give
+    20 kcal/mol/rad^2 (margin 44 degrees) and pass by themselves; with the pose the leg gives, they are refused."""
+    from cufep.workflow import WorkflowError, manual_boresch_restraint
+
+    frames = np.array([chain(60.0 if f % 2 == 0 else 120.0) for f in range(20)])
+    eq = {"frames": frames, "frame_atoms": np.arange(7), "frame_boxes": np.repeat(BOX[None], 20, axis=0),
+          "positions": frames[-1], "box": BOX}
+    k_r, k_80 = 10.0 * 4.184 * 100.0, 80.0 * 4.184
+    alone, _fluctuations = manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 7, k_r, k_80, force_constants="auto")
+    assert alone.k_theta_a == pytest.approx(20.0 * 4.184)
+    with pytest.raises(WorkflowError, match="with the force constants of their fluctuations .*30.0 to 120.0"):
+        manual_boresch_restraint(HOST, GUEST, LIGAND, eq, 7, k_r, k_80, force_constants="auto",
+                                 input_pose=chain(30.0), input_box=BOX)
 
