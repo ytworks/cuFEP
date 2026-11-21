@@ -77,6 +77,17 @@ Open items:
 
 ## Change Log
 
+### 2026-11-21 — [progress] The start of adaptive lambda scheduling can be given as lambda values
+- What: `lambda_schedule.adaptive.initial_windows` takes per stage a number of evenly spaced
+  windows, as before, or the lambda values, which need not be evenly spaced and must be candidates;
+  the start is written to `schedule.yaml` (`initial_lambda`). A start the precalculation cannot use
+  (a value that is no candidate, a number that does not fit on the candidates, more windows than
+  `max_windows`) is refused when the configuration is read; a number that did not fit used to stop
+  the leg after its pre-equilibration. Defaults unchanged. In the image: unit tests 663 passed,
+  GPU tests 25 passed (one GPU).
+- Why: the owner's hypothesis (2026-11-21): more initial windows, not evenly spaced; step 3 of the plan.
+- Refs: PR #7, `docs/configuration.md` (`initial_windows`), `src/cufep/alchemy/candidates.py`
+
 ### 2026-11-21 — [design] `lambda_schedule.adaptive.max_windows` is 100 in both legs
 - What: the largest number of lambda windows of a leg in adaptive lambda scheduling goes from 48
   (complex) and 32 (solvent) to 100. Nothing else changes: with the threshold 0.18 the legs of

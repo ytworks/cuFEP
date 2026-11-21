@@ -35,6 +35,10 @@ Adaptive mode: adaptive lambda scheduling (ALS)
     another distinct candidate is skipped; the precalculation stops with a warning when no
     section can be refined or when the leg has ``max_windows`` windows; the overlap matrix
     uses the data of the windows currently in the schedule.
+
+    cuFEP's own: the start of a stage can also be given as lambda values, which need not be
+    evenly spaced (:mod:`cufep.alchemy.candidates`). They are candidates, and like every start
+    they are the smallest schedule: the rule adds windows to them and never removes one.
 """
 from __future__ import annotations
 
@@ -44,6 +48,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from cufep.alchemy.candidates import initial_indices, initial_window_indices
 from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS
 from cufep.sampling.states import (
     R_GAS,
@@ -57,8 +62,8 @@ from cufep.sampling.states import (
 )
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
-           "bad_sections", "choose_section", "redistribute", "als_step", "adaptive_schedule", "run_window",
-           "STAGE_ALIASES"]
+           "initial_window_indices", "bad_sections", "choose_section", "redistribute", "als_step",
+           "adaptive_schedule", "run_window", "STAGE_ALIASES"]
 
 
 # ============================================================================ the schedule
@@ -196,18 +201,8 @@ def fixed_schedule(stages: list[str], n_per_stage: dict[str, int], rest2_scale: 
 
 
 # ============================================================================ ALS: the rule
-def initial_indices(n_windows: int, n_candidates: int = 101) -> list[int]:
-    """Candidate indices of ``n_windows`` evenly spaced windows (halves go to the even candidate)."""
-    if n_windows < 2:
-        raise ValueError("at least two windows are needed")
-    top = n_candidates - 1
-    idx = [int(round(i * top / (n_windows - 1))) for i in range(n_windows)]    # round() rounds halves to even
-    idx[0], idx[-1] = 0, top
-    if len(set(idx)) != len(idx):
-        raise ValueError(f"{n_windows} windows do not fit on {n_candidates} candidates")
-    return idx
-
-
+# The windows a stage starts with (initial_indices, initial_window_indices) are in
+# cufep.alchemy.candidates, where the check of the configuration finds them as well.
 def bad_sections(superdiagonal, threshold: float) -> list[tuple[int, int]]:
     """Maximal runs of deficient neighbouring pairs, as (first window, last window) positions.
 
@@ -284,6 +279,8 @@ def als_step(windows: list[int], superdiagonal, threshold: float, room: int = 1)
 class AlsSettings:
     overlap_threshold: float = 0.18             # the owner's choice of 2026-11-20 (the paper: 0.04)
     candidates: int = 101
+    #: per stage the windows of the first iteration: a number of evenly spaced windows, or the
+    #: lambda values (candidates, not necessarily evenly spaced)
     initial_windows: dict = field(default_factory=lambda: {"restrain": 3, "discharge": 5, "vanish": 9})
     window_ps: float = 50.0
     #: MD in a new window before its energies are recorded
@@ -404,7 +401,9 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     def state_of(nd: tuple[int, int]) -> AlchemicalState:
         return stage_state(stages[nd[0]], nd[1] / top, stages, s.rest2_scale)
 
-    windows = {k: initial_indices(int(s.initial_windows.get(name, 3)), s.candidates) for k, name in enumerate(stages)}
+    windows = {k: initial_window_indices(s.initial_windows.get(name, 3), s.candidates)
+               for k, name in enumerate(stages)}
+    first = {k: list(v) for k, v in windows.items()}        # the start: the rule only adds to it
     runs: dict[tuple[int, int], dict] = {}
     start = _snapshot(context)
 
@@ -486,7 +485,10 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                                      "window_ps_integrated": n_samples * steps_per_sample * float(timestep_fs) / 1000.0,
                                      "equilibration_ps_integrated": equilibration_steps * float(timestep_fs) / 1000.0,
                                      "windows_run_concurrently": pool is not None,
-                                     "initial_windows": {n: int(s.initial_windows.get(n, 3)) for n in stages},
+                                     # the start, as a number per stage and as its lambda values
+                                     "initial_windows": {n: len(first[k]) for k, n in enumerate(stages)},
+                                     "initial_lambda": {n: [round(i / top, 6) for i in first[k]]
+                                                        for k, n in enumerate(stages)},
                                      "windows_simulated": len(runs), "iterations": records})
     configs = []
     for k, _name in enumerate(stages):

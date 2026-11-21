@@ -18,6 +18,7 @@ from cufep.alchemy.schedule import (
     choose_section,
     fixed_schedule,
     initial_indices,
+    initial_window_indices,
     redistribute,
     run_window,
     schedule_from_windows,
@@ -90,6 +91,19 @@ def test_nine_initial_windows_on_101_candidates():
     assert initial_indices(3, 101) == [0, 50, 100] and initial_indices(5, 101) == [0, 25, 50, 75, 100]
     with pytest.raises(ValueError):
         initial_indices(1)
+
+
+def test_a_stage_starts_from_a_number_of_windows_or_from_given_candidates():
+    assert initial_window_indices(5, 21) == initial_indices(5, 21) == [0, 5, 10, 15, 20]
+    assert initial_window_indices([0.0, 0.5, 0.8, 0.9, 1.0], 21) == [0, 10, 16, 18, 20]      # not evenly spaced
+    assert initial_window_indices([0.0, 0.29, 0.58, 1.0], 101) == [0, 29, 58, 100]            # 0.29 * 100 = 28.99...
+    for bad, why in (([0.0, 0.125, 1.0], "0.125 is not one of the 101 candidate lambda values"),
+                     ([0.0, 0.5], "increase from 0.0"), ([0.5, 1.0], "increase from 0.0"),
+                     ([0.0, 0.5, 0.5, 1.0], "increase from 0.0"), ([0.0], "increase from 0.0")):
+        with pytest.raises(ValueError, match=why):
+            initial_window_indices(bad, 101)
+    with pytest.raises(ValueError, match="12 windows do not fit on 11 candidates"):
+        initial_window_indices(12, 11)
 
 
 def test_a_pair_is_deficient_at_or_below_the_threshold():
@@ -227,6 +241,30 @@ def test_precalculation_on_a_small_system(water_ligand_system):
     for p, b, v in configs:
         assert np.all(np.isfinite(p)) and np.all(np.isfinite(v)) and b.shape == (3, 3)
     assert any("lambda schedule" in m for m in messages)
+
+
+def test_precalculation_from_given_lambda_values(water_ligand_system):
+    """The start of a stage given as lambda values: those windows are run first, and the rule adds
+    to them without removing one."""
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+    integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+    integ.setRandomNumberSeed(13)
+    ctx = mm.Context(alch.system, integ, mm.Platform.getPlatformByName("CPU"))
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300.0, 4)
+    start = [0.0, 0.5, 0.8, 0.9, 1.0]
+    settings = AlsSettings(overlap_threshold=0.04, candidates=21, initial_windows={"discharge": 2, "vanish": start},
+                           window_ps=0.2, sample_interval_ps=0.02, max_windows=9)
+    schedule, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings, lambda m: None)
+    prov = schedule.provenance
+    assert prov["initial_windows"] == {"discharge": 2, "vanish": 5}
+    assert prov["initial_lambda"] == {"discharge": [0.0, 1.0], "vanish": start}
+    first = next(rec for rec in prov["iterations"] if rec["stage"] == "vanish")
+    assert first["iteration"] == 1 and first["lambda"] == start
+    assert set(start) <= set(schedule.windows()["vanish"])
+    assert len(configs) == len(schedule.states) <= 9
 
 
 def test_precalculation_with_the_windows_of_an_iteration_run_by_a_pool(water_ligand_system):

@@ -301,7 +301,9 @@ lambda coordinate and runs the precalculation for the ligand in solution only. I
 every stage of every leg is treated as one such coordinate, with its own candidates, overlap
 matrix and bad sections; at most one window is added per stage and iteration. The start
 (`initial_windows`) is 3 windows for restrain, 5 for discharge and 9 for vanish; since windows
-are never removed, this is also the smallest schedule.
+are never removed, this is also the smallest schedule. A stage can also be given the lambda
+values of its start. They must be candidates and need not be evenly spaced (cuFEP's own: the
+paper starts from evenly spaced windows); the rule then adds windows to them as to any start.
 
 Points the paper does not specify, and cuFEP's rule for each:
 
@@ -315,8 +317,9 @@ Points the paper does not specify, and cuFEP's rule for each:
 | energy samples per window | every `sample_interval_ps` (0.5 ps): 100 per window in the solvent leg, 1000 in the complex leg |
 | start of a new window | last configuration of the nearest window that has been run |
 
-The windows, the threshold and one record per iteration (windows, overlaps, the chosen
-section, the new lambda values) are written to `schedule.yaml` in the leg directory. The
+The windows, the start (`initial_windows` as numbers, `initial_lambda` as values), the
+threshold and one record per iteration (windows, overlaps, the chosen section, the new lambda
+values) are written to `schedule.yaml` in the leg directory. The
 last configuration of each window is the start of its replica; replica exchange then runs
 its own equilibration before the production.
 
@@ -327,7 +330,7 @@ its own equilibration before the production.
 | when the windows are chosen | in a precalculation before the production: "Once converged, all results from the ALS are discarded, and the converged bespoke λ schedule is used in a production run" | the same. No window is added during the equilibration or the production of the replica-exchange run |
 | rule and values | threshold 0.04 (0.03 and 0.05 also tested), 101 candidates, one window per iteration into the longest bad section | the same rule and 101 candidates; threshold 0.18 by default (the owner's choice of 2026-11-20, configuration.md) |
 | MD per new window of the precalculation | 50 ps | solvent leg: 50 ps. Complex leg: 500 ps recorded after 500 ps of equilibration, because the pocket adapts to a partly decoupled ligand over hundreds of picoseconds ("What was measured on TYK2") |
-| initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
+| initial windows | 9 evenly spaced ones, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9, evenly spaced; a stage can instead be given the lambda values of its start, not necessarily evenly spaced |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
 | after the production | not part of the method | the analysis checks the overlap and the number of independent samples, the levels of the literature, and shows the forward and reverse series and the halves without a verdict ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |

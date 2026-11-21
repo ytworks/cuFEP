@@ -1999,6 +1999,7 @@ def run_leg(job: LegJob) -> dict:
     import openmm as mm
     import openmm.unit as u
 
+    from cufep.alchemy.candidates import initial_window_indices
     from cufep.alchemy.restraints import (
         BoreschRestraint,
         RestraintSearchSettings,
@@ -2300,7 +2301,8 @@ def run_leg(job: LegJob) -> dict:
                                   max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent,
                                   rest2_scale=rest2.scale)
                 # the windows of an iteration run at the same time on the GPUs the scheduler grants
-                n_first = sum(als.initial_windows[st] for st in stages) - (len(stages) - 1)
+                n_first = sum(len(initial_window_indices(als.initial_windows[st], als.candidates))
+                              for st in stages) - (len(stages) - 1)
                 devices = list(job.devices)
                 if job.control is not None:
                     work = md_work(als.window_ps + als.equilibration_ps, alch.system.getNumParticles(),

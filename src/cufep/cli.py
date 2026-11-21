@@ -104,7 +104,10 @@ def lambda_window_table(cfg) -> str:
             + ";",
             "  start: "
             + "; ".join(
-                f"{leg} leg " + ", ".join(f"{k} {v}" for k, v in a.initial_windows.for_leg(leg).items())
+                f"{leg} leg " + ", ".join(
+                    # a number of evenly spaced windows, or the lambda values that were given
+                    f"{k} {v}" if isinstance(v, int) else f"{k} {len(v)} ({' '.join(f'{x:g}' for x in v)})"
+                    for k, v in a.initial_windows.for_leg(leg).items())
                 for leg in ("complex", "solvent")
             )
             + f"; at most {a.max_windows.complex} (complex) / {a.max_windows.solvent} (solvent) windows.",

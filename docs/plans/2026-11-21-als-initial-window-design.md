@@ -1,5 +1,5 @@
 # adaptive lambda scheduling の初期 window を設計し直す (max_windows 100、3 案を TYK2 example で評価)
-Status: In progress (手順 1〜2 済み: 計画と draft PR #7、`max_windows` 100)
+Status: In progress (手順 1〜3 済み: 計画と draft PR #7、`max_windows` 100、初期 window を数または値の列で)
 Refs: this pull request; issue #5; `docs/protocol.md` ("Adaptive lambda scheduling"); `docs/configuration.md` (`lambda_schedule`)
 
 ## Context

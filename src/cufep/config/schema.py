@@ -229,23 +229,29 @@ class WindowsConfig(_Section):
 
 
 class ComplexInitialWindows(_Section):
-    restrain: int = Field(default=3, ge=2)
-    discharge: int = Field(default=5, ge=2)
-    vanish: int = Field(default=9, ge=2)
+    restrain: StageWindows = 3
+    discharge: StageWindows = 5
+    vanish: StageWindows = 9
+
+    _check = field_validator("restrain", "discharge", "vanish")(_check_stage)
 
 
 class SolventInitialWindows(_Section):
-    discharge: int = Field(default=5, ge=2)
-    vanish: int = Field(default=9, ge=2)
+    discharge: StageWindows = 5
+    vanish: StageWindows = 9
+
+    _check = field_validator("discharge", "vanish")(_check_stage)
 
 
 class InitialWindows(_Section):
-    """Equally spaced windows per leg and stage with which adaptive lambda scheduling starts."""
+    """Windows per leg and stage with which adaptive lambda scheduling starts: a number of evenly
+    spaced windows (the start of the paper), or the lambda values, which need not be evenly
+    spaced and must be candidates (cuFEP's own)."""
 
     complex: ComplexInitialWindows = Field(default_factory=ComplexInitialWindows)
     solvent: SolventInitialWindows = Field(default_factory=SolventInitialWindows)
 
-    def for_leg(self, leg: str) -> dict[str, int]:
+    def for_leg(self, leg: str) -> dict[str, StageWindows]:
         section = self.complex if leg == "complex" else self.solvent
         return {name: getattr(section, name) for name in type(section).model_fields}
 
@@ -277,7 +283,8 @@ class AdaptiveConfig(_Section):
     overlap_threshold: float = Field(default=0.18, gt=0.0, lt=0.5)
     #: number of equally spaced candidate lambda values per stage
     candidates: int = Field(default=101, ge=3)
-    #: windows per leg and stage in the first iteration (the schedule never gets smaller than this)
+    #: windows per leg and stage in the first iteration (the schedule never gets smaller than this):
+    #: a number of evenly spaced windows, or the lambda values
     initial_windows: InitialWindows = Field(default_factory=InitialWindows)
     #: MD per new window in the precalculation during which energies are recorded: one number
     #: for both legs, or one per leg. The solvent leg has the paper's 50 ps. A complex leg needs
@@ -553,6 +560,7 @@ def configuration_problems(cfg: "Config") -> list[str]:
     water = water_problem(cfg.forcefield.water, membrane=bool(cfg.membrane.enabled))
     if water:
         problems.append(water)
+    problems += initial_window_problems(cfg)
     if cfg.restraints.selection == "interactions":
         # the thresholds of the rule are numbers of frames, rounded down: none of them may be no frame
         n = analysed_frames(cfg)
@@ -565,6 +573,35 @@ def configuration_problems(cfg: "Config") -> list[str]:
                     f"{ri.length_ns:g} ns, the first {ri.discard_ns:g} ns left out, a frame every "
                     f"{ri.frame_interval_ps:g} ps) and {name} = {fraction:g} of them is less than one frame: an "
                     "interaction in no frame would be kept. Run longer trajectories or keep frames more often")
+    return problems
+
+
+def initial_window_problems(cfg: "Config") -> list[str]:
+    """Why adaptive lambda scheduling could not start from ``initial_windows``: the windows of a
+    stage are candidates (a number of them must fit on the candidates, given values must be
+    candidates), and a leg does not start with more windows than ``max_windows``. Asked of the
+    rule the precalculation starts with, and only if the configuration runs a precalculation."""
+    from cufep.alchemy.candidates import initial_window_indices
+
+    ls = cfg.lambda_schedule
+    if ls.mode != "adaptive" or ls.file is not None:
+        return []
+    a, problems = ls.adaptive, []
+    for leg in ("complex", "solvent"):
+        total, stages = 0, a.initial_windows.for_leg(leg)
+        for stage, spec in stages.items():
+            try:
+                total += len(initial_window_indices(spec, a.candidates))
+            except ValueError as exc:
+                problems.append(f"lambda_schedule.adaptive.initial_windows.{leg}.{stage}: {exc} "
+                                f"(lambda_schedule.adaptive.candidates = {a.candidates})")
+                total = None
+                break
+        limit = getattr(a.max_windows, leg)
+        if total is not None and total - (len(stages) - 1) > limit:
+            problems.append(f"lambda_schedule.adaptive.initial_windows.{leg} gives the {leg} leg "
+                            f"{total - (len(stages) - 1)} lambda windows to start with (windows at stage boundaries "
+                            f"are shared), more than lambda_schedule.adaptive.max_windows.{leg} = {limit}")
     return problems
 
 
