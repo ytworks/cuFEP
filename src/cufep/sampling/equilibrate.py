@@ -9,6 +9,11 @@ OpenMM and the fact is recorded.
 
 Time step: 4 fs with hydrogen mass repartitioning by default. If the run blows up it is
 repeated once from the minimised structure at 2 fs and the fact is recorded.
+
+Every unrestrained MD of the fully interacting system goes through :func:`unrestrained_md` (the
+backend of the leg and the repeat on stock OpenMM) and :func:`with_time_step_recovery` (the
+repeat at 2 fs), so that the pre-equilibration and the MD from which a restraint is chosen
+(:mod:`cufep.sampling.restraint_md`) choose their backend and recover by one rule.
 """
 from __future__ import annotations
 
@@ -73,20 +78,25 @@ class EquilibrationResult:
     pocket_waters: np.ndarray | None = None  # waters within 0.6 nm of the ligand per frame
     #: membrane systems: how the bilayer area and the pocket hydration changed at the end (membrane_drift)
     drift: dict | None = None
+    #: the backend that ran the unrestrained MD: the one of the leg, or stock OpenMM after a recovery
+    backend: str = "openmm"
 
 
 def _context(system: mm.System, backend, settings: EquilibrationSettings, dt_fs: float, device, barostat: bool,
-             restraint_reference: np.ndarray | None, seed: int):
+             restraint_reference: np.ndarray | None, seed: int, barostat_seed: int | None = None):
+    """A Context of ``backend`` for one part of the MD. ``seed`` is that of the integrator; the
+    barostat takes ``barostat_seed``, or the next number."""
     prepared = backend.prepare_system(system)
     temperature = settings.temperature_K * u.kelvin
     if barostat:
         pressure = settings.pressure_bar * u.bar
+        barostat_seed = seed + 1 if barostat_seed is None else int(barostat_seed)
         if settings.barostat == "membrane":
             prepared.addForce(backend.make_membrane_barostat(pressure, temperature, settings.barostat_frequency,
-                                                              seed=seed + 1))
+                                                              seed=barostat_seed))
         else:
             prepared.addForce(backend.make_isotropic_barostat(pressure, temperature, settings.barostat_frequency,
-                                                              seed=seed + 1))
+                                                              seed=barostat_seed))
     if restraint_reference is not None and settings.restrained_atoms:
         force = mm.CustomExternalForce("0.5*k_posres*periodicdistance(x,y,z,x0,y0,z0)^2")
         force.addGlobalParameter("k_posres", settings.restraint_k)
@@ -153,27 +163,42 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
     del ctx, integ
 
     # ---- production (no position restraints), frames for the restraint search -----------
-    start = (pos, vel, bx)
+    return unrestrained_md(system, (pos, vel, bx), frame_atoms, settings, dt_fs, device, log)
+
+
+def unrestrained_md(system, start, frame_atoms, settings: EquilibrationSettings, dt_fs: float, device, log,
+                    what: str = "pre-equilibration MD", seed: int | None = None,
+                    barostat_seed: int | None = None) -> EquilibrationResult:
+    """An unrestrained NPT run of the fully interacting system from ``start`` (positions,
+    velocities, box) on the backend of the leg, ``settings.md_backend``.
+
+    If that backend cannot run the System, stock OpenMM runs it; if the run fails on that backend,
+    it is repeated from ``start`` on stock OpenMM, and the log and the notes of the result say so.
+    ``what`` names the MD in those lines. The result records the backend that ran it.
+    """
+    stock = get_backend("openmm", precision=settings.precision, platform=settings.platform)
     notes: list[str] = []
-    md_backend = backend
+    md_backend = stock
     if settings.md_backend != "openmm":
         try:
             md_backend = get_backend(settings.md_backend, precision=settings.precision, platform=settings.platform)
             if hasattr(md_backend, "check_system"):
                 probe = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
-                probe.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in bx])
+                probe.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in start[2]])
                 md_backend.check_system(probe)
         except Exception as exc:  # noqa: BLE001 - any reason the backend cannot run this system
-            log(f"pre-equilibration MD on stock OpenMM ({settings.md_backend} cannot run it: {str(exc)[:150]})")
-            md_backend = backend
+            log(f"{what} on stock OpenMM ({settings.md_backend} cannot run it: {str(exc)[:150]})")
+            md_backend = stock
     try:
-        return _production(system, md_backend, start, frame_atoms, settings, dt_fs, device, log, notes)
+        return _production(system, md_backend, start, frame_atoms, settings, dt_fs, device, log, notes, seed,
+                           barostat_seed)
     except (mm.OpenMMException, EquilibrationError) as exc:
-        if md_backend is backend:
+        if md_backend is stock:
             raise
-        log(f"pre-equilibration MD failed on {settings.md_backend} ({str(exc)[:150]}); repeating it on stock OpenMM")
-        notes.append(f"the pre-equilibration MD failed on {settings.md_backend} and was repeated on stock OpenMM")
-        return _production(system, backend, start, frame_atoms, settings, dt_fs, device, log, notes)
+        log(f"{what} failed on {settings.md_backend} ({str(exc)[:150]}); repeating it on stock OpenMM")
+        notes.append(f"the {what} failed on {settings.md_backend} and was repeated on stock OpenMM")
+        return _production(system, stock, start, frame_atoms, settings, dt_fs, device, log, notes, seed,
+                           barostat_seed)
 
 
 #: how the note of earlier versions about a bilayer that had not settled began (a verdict with levels of
@@ -199,10 +224,14 @@ def membrane_drift(areas, waters) -> dict:
 
 
 def _production(system, backend, start, frame_atoms, settings: EquilibrationSettings, dt_fs: float, device, log,
-                notes: list[str]) -> EquilibrationResult:
-    """The unrestrained NPT run after NVT and NPT; its frames are used for the restraint search."""
+                notes: list[str], seed: int | None = None, barostat_seed: int | None = None) -> EquilibrationResult:
+    """An unrestrained NPT run of ``settings.production_ns`` on ``backend`` with a frame after
+    every ``settings.frame_interval_ps`` and one at its end: the one after NVT and NPT, and each
+    trajectory from which a restraint is chosen. ``seed`` and ``barostat_seed`` are those of the
+    integrator and of the barostat (by default the ones of the pre-equilibration)."""
     pos, vel, bx = start
-    ctx, integ = _context(system, backend, settings, dt_fs, device, True, None, settings.seed + 200)
+    ctx, integ = _context(system, backend, settings, dt_fs, device, True, None,
+                          settings.seed + 200 if seed is None else int(seed), barostat_seed)
     _load(ctx, pos, bx, vel)
     from cufep.steps import md_steps
 
@@ -259,7 +288,8 @@ def _production(system, backend, start, frame_atoms, settings: EquilibrationSett
                                frame_atoms=list(frame_atoms), timestep_fs=dt_fs, notes=notes,
                                mean_volume_nm3=float(np.mean(volumes[half:])),
                                mean_box=boxes_arr[half:].mean(axis=0).astype(float), simulated_ns=simulated_ns,
-                               area_nm2=np.asarray(areas), pocket_waters=np.asarray(waters), drift=drift)
+                               area_nm2=np.asarray(areas), pocket_waters=np.asarray(waters), drift=drift,
+                               backend=str(getattr(backend, "name", "openmm")))
 
 
 def pre_equilibrate(system: mm.System, positions, box, frame_atoms: list[int],
@@ -267,17 +297,26 @@ def pre_equilibrate(system: mm.System, positions, box, frame_atoms: list[int],
                     log=print) -> EquilibrationResult:
     """Minimise and equilibrate the fully interacting system (see the module docstring)."""
     settings = settings or EquilibrationSettings()
-    first = float(settings.timestep_fs or 4.0)
+    return with_time_step_recovery(
+        lambda dt: _run_once(system, positions, box, frame_atoms, settings, dt, device, log),
+        float(settings.timestep_fs or 4.0), log)
+
+
+def with_time_step_recovery(run, first_fs: float, log, what: str = "pre-equilibration") -> EquilibrationResult:
+    """``run(time step in fs)`` at ``first_fs`` and, if that fails and is above 2 fs, once more at
+    2 fs from its start; the notes of the result say that the time step was lowered. ``what``
+    names the MD in the log and in the error of a run that fails at every time step."""
+    first = float(first_fs)
     attempts = [first] + ([2.0] if first > 2.0 else [])
     last: Exception | None = None
     for i, dt in enumerate(attempts):
         try:
-            result = _run_once(system, positions, box, frame_atoms, settings, float(dt), device, log)
+            result = run(float(dt))
             if i > 0:
                 result.notes.append(f"time step lowered automatically to {dt:g} fs after an unstable run at "
                                     f"{attempts[0]:g} fs")
             return result
         except (mm.OpenMMException, EquilibrationError, FloatingPointError, ValueError) as exc:
             last = exc
-            log(f"pre-equilibration at {dt:g} fs failed: {str(exc)[:200]}")
-    raise EquilibrationError(f"pre-equilibration failed at every time step tried ({attempts}): {last}")
+            log(f"{what} at {dt:g} fs failed: {str(exc)[:200]}")
+    raise EquilibrationError(f"{what} failed at every time step tried ({attempts}): {last}")

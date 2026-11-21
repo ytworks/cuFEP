@@ -1,0 +1,148 @@
+"""The unrestrained MD of the fully interacting system: which backend runs it and how it recovers."""
+import numpy as np
+import openmm as mm
+import pytest
+
+from cufep.backends.base import BackendError
+from cufep.backends.openmm_stock import StockBackend
+from cufep.sampling import equilibrate
+
+
+def small_system(n=8, edge=3.0):
+    """Eight Lennard-Jones particles in a periodic box, with their positions and box (nm)."""
+    system = mm.System()
+    system.setDefaultPeriodicBoxVectors(mm.Vec3(edge, 0, 0), mm.Vec3(0, edge, 0), mm.Vec3(0, 0, edge))
+    nonbonded = mm.NonbondedForce()
+    nonbonded.setNonbondedMethod(mm.NonbondedForce.CutoffPeriodic)
+    nonbonded.setCutoffDistance(1.0)
+    for _ in range(n):
+        system.addParticle(40.0)
+        nonbonded.addParticle(0.0, 0.3, 0.5)
+    system.addForce(nonbonded)
+    positions = np.array([[0.7 * (i % 2), 0.7 * ((i // 2) % 2), 0.7 * (i // 4)] for i in range(n)]) + 0.5
+    return system, positions, edge * np.eye(3)
+
+
+def settings(**changes):
+    values = dict(nvt_ns=0.0001, npt_ns=0.0001, production_ns=0.0004, frame_interval_ps=0.1, platform="Reference",
+                  precision="double", timestep_fs=4.0, seed=3, md_backend="cupotential", minimize_iterations=20)
+    values.update(changes)
+    return equilibrate.EquilibrationSettings(**values)
+
+
+class OtherBackend(StockBackend):
+    """A second backend that is stock OpenMM underneath: it counts the Contexts it makes and can be
+    told to refuse a System or to fail when it makes one."""
+
+    name = "cupotential"
+    refuse = False
+    fail = False
+    contexts = 0
+
+    def check_system(self, system):
+        if type(self).refuse:
+            raise BackendError("this System is not for the plugin")
+
+    def make_context(self, system, integrator, device_index=None):
+        if type(self).fail:
+            raise mm.OpenMMException("the plugin stopped")
+        type(self).contexts += 1
+        return super().make_context(system, integrator, device_index)
+
+
+@pytest.fixture
+def other_backend(monkeypatch):
+    """``get_backend`` gives :class:`OtherBackend` for cupotential and counts what it gives."""
+    OtherBackend.refuse, OtherBackend.fail, OtherBackend.contexts = False, False, 0
+    asked = []
+    made = equilibrate.get_backend
+
+    def get(name, **kwargs):
+        asked.append(name)
+        if name == "cupotential":
+            return OtherBackend(**kwargs)
+        return made(name, **kwargs)
+
+    monkeypatch.setattr(equilibrate, "get_backend", get)
+    return asked
+
+
+def test_the_unrestrained_md_runs_on_the_backend_of_the_leg(other_backend):
+    """Minimisation, NVT and NPT run on stock OpenMM; the unrestrained MD, and only it, on the backend
+    that the configuration names."""
+    system, positions, box = small_system()
+    lines = []
+    result = equilibrate.pre_equilibrate(system, positions, box, list(range(8)), settings(), None, lines.append)
+    assert OtherBackend.contexts == 1                       # the Context of the unrestrained MD
+    assert set(other_backend) == {"openmm", "cupotential"}
+    assert result.notes == [] and result.timestep_fs == 4.0
+    assert result.frames.shape == (4, 8, 3) and result.simulated_ns == pytest.approx(0.0004)
+    assert not [line for line in lines if "stock OpenMM" in line]
+
+
+def test_a_backend_that_cannot_run_the_system_leaves_the_md_to_stock_openmm(other_backend):
+    system, positions, box = small_system()
+    OtherBackend.refuse = True
+    lines = []
+    result = equilibrate.pre_equilibrate(system, positions, box, list(range(8)), settings(), None, lines.append)
+    assert OtherBackend.contexts == 0 and result.frames.shape[0] == 4
+    assert lines == ["pre-equilibration MD on stock OpenMM (cupotential cannot run it: this System is not for the "
+                     "plugin)"]
+
+
+def test_an_md_that_fails_on_the_backend_is_repeated_on_stock_openmm_and_says_so(other_backend):
+    system, positions, box = small_system()
+    OtherBackend.fail = True
+    lines = []
+    result = equilibrate.pre_equilibrate(system, positions, box, list(range(8)), settings(), None, lines.append)
+    assert result.frames.shape[0] == 4 and result.timestep_fs == 4.0
+    assert result.notes == ["the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM"]
+    assert lines == ["pre-equilibration MD failed on cupotential (the plugin stopped); repeating it on stock OpenMM"]
+
+
+def test_an_unstable_md_is_repeated_once_at_2_fs_and_says_so(monkeypatch):
+    """A run that fails at the time step of the configuration is made again from the start at 2 fs;
+    one that fails there too is an error that names both."""
+    system, positions, box = small_system()
+    run = equilibrate._production
+    failing = {4.0}
+
+    def production(system, backend, start, frame_atoms, settings, dt_fs, *args, **kwargs):
+        if dt_fs in failing:
+            raise equilibrate.EquilibrationError("energy became non-finite during the pre-equilibration MD")
+        return run(system, backend, start, frame_atoms, settings, dt_fs, *args, **kwargs)
+
+    monkeypatch.setattr(equilibrate, "_production", production)
+    lines = []
+    result = equilibrate.pre_equilibrate(system, positions, box, list(range(8)), settings(md_backend="openmm"), None,
+                                         lines.append)
+    assert result.timestep_fs == 2.0
+    assert result.notes == ["time step lowered automatically to 2 fs after an unstable run at 4 fs"]
+    assert lines == ["pre-equilibration at 4 fs failed: energy became non-finite during the pre-equilibration MD"]
+    failing.add(2.0)
+    with pytest.raises(equilibrate.EquilibrationError, match=r"failed at every time step tried \(\[4.0, 2.0\]\)"):
+        equilibrate.pre_equilibrate(system, positions, box, list(range(8)), settings(md_backend="openmm"), None,
+                                    lines.append)
+
+
+def test_the_plain_md_of_a_leg_takes_its_settings_from_the_configuration():
+    """Temperature, pressure, friction, the frequency of the barostat, the backend, its platform and
+    its precision are those of the YAML for every plain MD of a leg; single precision runs as mixed."""
+    from cufep.config.schema import Config
+    from cufep.workflow import plain_md_settings
+
+    cfg = Config.model_validate({
+        "system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+        "thermodynamics": {"temperature_K": 310.0, "pressure_bar": 2.0},
+        "dynamics": {"friction_per_ps": 0.5, "barostat_frequency": 50},
+        "backend": {"name": "openmm", "platform": "CPU", "precision": "double"}})
+    made = plain_md_settings(cfg, 3.0, "membrane", 17, production_ns=1.5, frame_interval_ps=10.0)
+    assert (made.temperature_K, made.pressure_bar) == (310.0, 2.0)
+    assert (made.friction_per_ps, made.barostat_frequency) == (0.5, 50)
+    assert (made.md_backend, made.platform, made.precision) == ("openmm", "CPU", "double")
+    assert (made.timestep_fs, made.barostat, made.seed, made.production_ns, made.frame_interval_ps) == \
+        (3.0, "membrane", 17, 1.5, 10.0)
+    single = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
+                                    "backend": {"precision": "single"}})
+    assert plain_md_settings(single, 4.0, "isotropic", 1).precision == "mixed"
+    assert plain_md_settings(single, 4.0, "isotropic", 1).md_backend == "cupotential"

@@ -1382,6 +1382,25 @@ def _choose_backend(cfg: Config, system, log) -> tuple[str, list[str]]:
     return name, notes
 
 
+def plain_md_settings(cfg: Config, timestep_fs: float, barostat: str, seed: int, **parts):
+    """The settings of a plain MD of the fully interacting system as the configuration gives them:
+    temperature and pressure (``thermodynamics``), friction and the frequency of the barostat
+    (``dynamics``), the backend, its platform and precision (``backend``). ``timestep_fs`` is the
+    time step to begin with, ``barostat`` that of the leg (isotropic | membrane); ``parts`` are the
+    lengths and the atoms that only one kind of MD has. The pre-equilibration and the MD from which
+    a restraint is chosen take their settings here, so that neither can differ from the YAML.
+
+    Single precision is not used for plain MD: it runs in mixed precision then."""
+    from cufep.sampling.equilibrate import EquilibrationSettings
+
+    return EquilibrationSettings(
+        temperature_K=cfg.thermodynamics.temperature_K, pressure_bar=cfg.thermodynamics.pressure_bar,
+        friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs, barostat=barostat,
+        barostat_frequency=cfg.dynamics.barostat_frequency, platform=cfg.backend.platform,
+        precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
+        md_backend=cfg.backend.name, **parts)
+
+
 def _precision(cfg: Config, backend: str) -> str:
     if backend == "cupotential" and cfg.backend.precision == "double":
         return "mixed"
@@ -1403,7 +1422,7 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
-    from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
+    from cufep.sampling.equilibrate import pre_equilibrate
     from cufep.sampling.hrex import ReplicaExchangeSampler, WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
     from cufep.sampling.storage import read_samples, stored_backend, stored_conditions
@@ -1467,13 +1486,9 @@ def run_leg(job: LegJob) -> dict:
             production = max(production, cfg.membrane.equilibration_ns)
             atoms = list(prep["topology"].atoms())
             restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
-        settings = EquilibrationSettings(
-            temperature_K=T, pressure_bar=cfg.thermodynamics.pressure_bar, friction_per_ps=cfg.dynamics.friction_per_ps,
-            timestep_fs=timestep_cfg, nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns,
-            production_ns=production, barostat=barostat, barostat_frequency=cfg.dynamics.barostat_frequency,
-            platform=cfg.backend.platform,
-            precision="mixed" if cfg.backend.precision == "single" else cfg.backend.precision, seed=seed,
-            md_backend=cfg.backend.name,
+        settings = plain_md_settings(
+            cfg, timestep_cfg, barostat, seed,
+            nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns, production_ns=production,
             restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half, wall_centre_nm=0.0,
             ligand_atoms=prep["ligand"] if in_membrane else [],
             water_oxygens=[a.index for a in prep["topology"].atoms()
