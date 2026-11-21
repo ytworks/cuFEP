@@ -704,3 +704,114 @@ def test_the_result_names_the_frames_of_the_interaction_it_names(monkeypatch):
     assert {(row["interaction"], row["frames"]) for row in report["interactions"]} == {("HBAcceptor", 300),
                                                                                        ("Anionic", 200)}
 
+
+# ---- review of 877ab88 (Codex) ----------------------------------------------------------------------------
+
+def test_the_rule_of_the_flat_angle_is_asked_once_with_the_constants_and_the_reference_of_the_restraint():
+    """Review of 877ab88 (P1), three cases at 298.15 K.
+
+    * Constants from fluctuations that are stronger: theta_A at 90 degrees in every frame and at 18 where the
+      run starts gets 320 kcal/mol/rad^2 (the upper limit), whose margin is 11.03 degrees: 18 degrees is 26.7 kT
+      from a straight line. The anchors were refused all the same, by the margin of the configured 80 (22.05).
+    * The reference angle: with 10 kcal/mol/rad^2 (margin 62.37 degrees) theta_A at 62.8 degrees in every frame
+      passes, and its reference is the centre of the bin from 54 to 63, 58.5 degrees: 8.8 kT. The reference
+      angles are held to the rule too.
+    * The last frame is not the reference of a restraint whose values come from histograms: anchors on a line
+      in that one frame were refused, and not with the same frame anywhere else."""
+    k_80 = 80.0 * 4.184
+    boxes = np.repeat(BOX[None], 8, axis=0)
+    frames = np.repeat(chain(90.0)[None], 8, axis=0)
+    start = np.zeros((20, 3))
+    start[:7] = chain(18.0)
+    m = restraints.measure_anchors(HOST, GUEST, LIGAND, frames, np.arange(7), boxes, None, start=start,
+                                   start_box=BOX, start_among_frames=True)
+    assert m.problem is None and np.degrees(m.held_theta[-1, 0]) == pytest.approx(18.0)
+    trial = restraints.BoreschRestraint(HOST, GUEST, 0, 0, 0, 0, 0, 0)
+    stronger, problem = restraints.constants_from_fluctuations(trial, m.values, m.held_theta, 298.15)
+    assert stronger.k_theta_a == pytest.approx(4 * k_80) and problem is None
+    assert np.degrees(restraints.flat_margin_of(4 * k_80, 298.15)) == pytest.approx(11.03, abs=0.01)
+    assert "within 22 degrees" in restraints.flat_rule_problem(k_80, k_80, m.held_theta, 298.15)
+
+    k_10 = 10.0 * 4.184
+    assert np.degrees(restraints.flat_margin_of(k_10, 298.15)) == pytest.approx(62.37, abs=0.01)
+    observed = coordinates(100, theta_a=62.8, theta_b=90.0)
+    reference = restraints.reference_values_from_histograms(observed)
+    assert np.degrees(reference[1]) == pytest.approx(58.5)
+    assert restraints.flat_rule_problem(k_10, k_10, observed[:, 1:3], 298.15) is None
+    with_reference = np.concatenate([observed[:, 1:3], [reference[1:3]]])
+    assert "58.5 to 62.8 degrees" in restraints.flat_rule_problem(k_10, k_10, with_reference, 298.15)
+    assert 0.5 * k_10 * np.radians(58.5) ** 2 / (restraints.R_GAS * 298.15) == pytest.approx(8.80, abs=0.01)
+
+    straight = chain()
+    straight[4] = straight[3] + [0.0, 0.15, 0.0]
+    straight[5] = straight[3] + [0.0, 0.30, 0.0]
+    for where in (0, 7):
+        some = frames.copy()
+        some[where] = straight
+        from_histograms = restraints.measure_anchors(HOST, GUEST, LIGAND, some, np.arange(7), boxes, None,
+                                                     start=frames[1], start_box=BOX, start_among_frames=True)
+        assert from_histograms.problem is None, where
+    last = frames.copy()
+    last[7] = straight
+    of_the_last_frame = restraints.measure_anchors(HOST, GUEST, LIGAND, last, np.arange(7), boxes, None)
+    assert "exactly on a line in the last frame" in of_the_last_frame.problem
+
+
+@pytest_rdkit
+def test_a_frame_whose_nearest_backbone_atom_is_of_a_cap_is_a_frame_of_no_host():
+    """Review of 877ab88 (P1). The source of the method looks for the nearest pair among every atom named N, CA
+    or C of the protein, the C of an acetyl cap among them, and leaves out the residues without three such
+    atoms afterwards. With the hosts alone, the six frames in which the cap is nearest (0.30 nm) went to the
+    host that comes next (0.45 nm), which then had ten of ten frames."""
+    world = World(10).residue(0, distance=0.45).residue(1, distance=np.where(np.arange(10) < 6, 0.30, 1.5))
+    settings = world.ia.InteractionSettings()
+    frames = world.frames()
+    assert {r: len(where) for r, (_l1, where) in world.ia.contacts(frames, world.graph, settings).items()} == \
+        {0: 4, 1: 6}                                                # two hosts: each has its frames
+    capped = world.frames()
+    capped.hosts.pop(1)
+    capped.other_backbone = {1: world.host(1)[:1]}                  # residue 1 is a cap with one such atom
+    found = world.ia.contacts(capped, world.graph, settings)
+    assert {r: len(where) for r, (_l1, where) in found.items()} == {0: 4}
+
+
+@pytest.mark.needs("rdkit", "prolif", "MDAnalysis")
+def test_what_the_choice_of_a_leg_records_of_the_distance_method_and_of_what_it_tested(monkeypatch):
+    """Review of 877ab88. A contact of the distance method is no interaction of ProLIF: the record said
+    ``kept_types: {}`` and 800 frames "with any kept type". ``candidates_tested`` held the number of candidates
+    that were ranked (32 in the TYK2 example, of which one was held to the rules): it is the number that were,
+    and ``candidates_ranked`` the other. A candidate without reference values is asked for them (the choice
+    stops there otherwise, review of eb6f89f). And the thresholds are of the frames there are: an MD that was
+    repeated at 2 fs can keep fewer than were planned, and a threshold of no frame is refused then too."""
+    from cufep import workflow
+    from cufep.workflow import WorkflowError
+
+    n = 100
+    world = World(n + 1).residue(0).residue(1, alpha=60.0, distance=0.6)
+    nothing = [[] for _ in range(n)]
+    _restraint, info, report = workflow.interaction_restraint(*leg_of(world, nothing, monkeypatch), 298.15)
+    assert info["method"] == "distance"
+    assert info["interaction"] == {"residue": "GLY100", "type": "contact", "frames": n, "of_frames": n,
+                                   "frames_with_any_kept_type": None, "kept_types": None}
+    assert info["candidates_tested"] == info["candidates_refused"] + 1 == 1
+    assert info["candidates_ranked"] == report["candidates_in_all"]["distance"] > 1
+    assert report["start"] == info["start"] if "start" in info else "start" not in report
+
+    asked = []
+    passes = restraints.reference_values_problem
+
+    def no_reference_for_the_first(values, angle_range_deg=(45.0, 135.0)):
+        asked.append(len(values))
+        return "in no frame do both anchor angles lie in range" if len(asked) == 1 else passes(values, angle_range_deg)
+
+    monkeypatch.setattr(restraints, "reference_values_problem", no_reference_for_the_first)
+    _restraint, info, report = workflow.interaction_restraint(*leg_of(world, nothing, monkeypatch), 298.15)
+    assert info["candidates_refused"] == 1 and info["candidates_tested"] == 2
+    assert report["refused_candidates"][0]["refused"] == "in no frame do both anchor angles lie in range"
+    monkeypatch.setattr(restraints, "reference_values_problem", passes)
+
+    few = World(6 + 1).residue(0)
+    with pytest.raises(WorkflowError, match="6 frame.s. are analysed and fallback_frame_fraction = 0.15 of them is "
+                                            "less than one frame"):
+        workflow.interaction_restraint(*leg_of(few, [[] for _ in range(6)], monkeypatch), 298.15)
+

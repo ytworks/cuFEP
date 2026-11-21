@@ -573,3 +573,52 @@ def test_the_reference_distance_of_a_restraint_is_the_one_its_force_measures():
         moved[3:] += shift
         again = measure_anchors((0, 1, 2), (3, 4, 5), [3, 4, 5], moved[None], np.arange(6), box[None], 0.3)
         assert np.allclose(again.values, measured.values, atol=1e-9), name
+
+
+# ---- review of 877ab88 (Codex): the six coordinates as the force of the restraint measures them ------------
+
+def test_the_six_coordinates_of_a_restraint_are_those_its_force_measures_in_any_cell():
+    """Review of 877ab88 (P1). The force of the restraint is periodic: OpenMM takes every displacement between
+    two of its particles by its formula for the minimum image. (1) In the rhombic dodecahedron of 4 nm that is
+    2.935 nm for H0 to G0 of (0.1, 0.2, 1.5) nm, where the nearest image, which the reference was taken from,
+    is 1.517 nm: thousands of kJ/mol at its own reference. (2) Given host anchors need not be bonded: H0 to H1
+    of 2.5 nm in a cube of 4 nm is -1.5 nm for the force, and theta_A is 120 degrees where the written
+    coordinates give 60: 184 kJ/mol. The anchors are laid out as the force sees them, each from the one before."""
+    from cufep.alchemy.restraints import measure_anchors
+
+    skewed = np.array([[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [2.0, 2.0, 2.0 * np.sqrt(2.0)]])
+    h0 = np.array([1.0, 1.0, 0.2])
+    g0 = h0 + [0.1, 0.2, 1.5]             # no component on the edge of a cell, where the formula has a tie
+    far = np.array([h0, h0 + [0.15, 0.0, 0.0], h0 + [0.15, 0.15, 0.0], g0, g0 + [0.0, 0.15, 0.0],
+                    g0 + [0.15, 0.15, 0.15]])
+    s3 = 0.3 * np.sqrt(3.0)
+    apart = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0], [2.5, 0.0, 0.15], [0.3, s3, 0.0], [0.3, s3, 0.15],
+                      [0.45, s3, 0.15]])
+    as_the_force = float(np.linalg.norm([0.1 - 2.0, 0.2 - 2.0, 1.5 - 2.0 * np.sqrt(2.0)]))
+    assert as_the_force == pytest.approx(2.935, abs=1e-3) and np.linalg.norm([0.1, 0.2, 1.5]) < 1.52
+    for positions, box, r, theta_a in ((far, skewed, as_the_force, None), (apart, CUBE * 0.8, 0.6, 120.0)):
+        measured = measure_anchors((0, 1, 2), (3, 4, 5), [3, 4, 5], positions[None], np.arange(6), box[None], None)
+        assert measured.problem is None
+        assert measured.values[0, 0] == pytest.approx(r, abs=1e-6)
+        if theta_a is not None:
+            assert np.degrees(measured.values[0, 1]) == pytest.approx(theta_a, abs=1e-6)
+        restraint = BoreschRestraint((0, 1, 2), (3, 4, 5), *[float(x) for x in measured.values[0]], K_R, K_A, K_A,
+                                     K_A, K_A, K_A)
+        assert restraint_energy(restraint, positions, box) == pytest.approx(0.0, abs=1e-5)
+
+
+def test_the_ligand_is_next_to_its_nearest_protein_atom_whatever_atom_that_is():
+    """Review of 877ab88 (P1). A cell of 8 nm, one protein that is not wrapped: an acceptor of a side chain at
+    x = 7.82 nm whose C-alpha is at 7.35, a C-alpha of the far surface at 0.65, and the ligand at 8.10, in a
+    hydrogen bond of 0.28 nm with the acceptor. Among the C-alpha atoms alone the nearest is the one of the far
+    surface across the boundary (0.55 nm): the ligand was moved to 0.10 nm and ProLIF saw the acceptor 7.72 nm
+    away. The choice from interactions gives every atom of the protein."""
+    from cufep.alchemy.restraints import ligand_next_to_protein
+
+    box = np.eye(3) * 8.0
+    positions = np.array([[7.35, 0.0, 0.0], [7.82, 0.0, 0.0], [0.65, 0.0, 0.0], [8.10, 0.0, 0.0]])
+    ligand = np.array([3])
+    by_c_alpha = ligand_next_to_protein(positions, ligand, np.array([0, 2]), box)
+    assert by_c_alpha[3, 0] == pytest.approx(0.10) and abs(by_c_alpha[3, 0] - positions[1, 0]) == pytest.approx(7.72)
+    by_every_atom = ligand_next_to_protein(positions, ligand, np.array([0, 1, 2]), box)
+    assert np.allclose(by_every_atom, positions) and by_every_atom[3, 0] - positions[1, 0] == pytest.approx(0.28)

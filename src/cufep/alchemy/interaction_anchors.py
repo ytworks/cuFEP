@@ -182,6 +182,8 @@ class Frames:
     stable_fraction: dict[int, float] = field(default_factory=dict)
     boxes: np.ndarray | None = None            # frames x 3 x 3, for the distance method
     trajectory: np.ndarray | None = None       # which trajectory every frame is of
+    #: residue -> the atoms named N, CA or C of a protein residue that is no host (a cap), for the distance method
+    other_backbone: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.atoms = np.asarray(self.atoms, dtype=int)
@@ -429,6 +431,11 @@ def contacts(frames: Frames, graph: LigandGraph, settings: InteractionSettings) 
     backbone = [(atom, residue) for residue, trio in sorted(frames.hosts.items()) for atom in trio]
     if not selected or not backbone:
         return {}
+    # the backbone atoms of residues that cannot hold anchors (a cap has a C or an N and no three of them) are
+    # looked at too, as in the source, which takes every atom named N, CA or C of the protein and drops the
+    # residues without anchors afterwards: a frame in which such an atom is the nearest is a frame of no host,
+    # not of the host that comes next (review of 877ab88)
+    backbone += [(atom, None) for _residue, atoms in sorted(frames.other_backbone.items()) for atom in atoms]
     lig = np.stack([frames.of(frames.ligand[a]) for a in selected], axis=1)           # frames x ligand atoms x 3
     bb = np.stack([frames.of(atom) for atom, _residue in backbone], axis=1)            # frames x backbone x 3
     nearest: list[tuple[int, int, int]] = []                                           # frame, L1, residue
@@ -438,7 +445,7 @@ def contacts(frames: Frames, graph: LigandGraph, settings: InteractionSettings) 
             delta = nearest_image(delta, np.asarray(frames.boxes[f], dtype=float))
         dist = np.sqrt((delta * delta).sum(axis=1))
         k = int(np.argmin(dist))
-        if dist[k] <= settings.fallback_cutoff_nm:
+        if dist[k] <= settings.fallback_cutoff_nm and backbone[k % len(backbone)][1] is not None:
             nearest.append((f, selected[k // len(backbone)], backbone[k % len(backbone)][1]))
     counts: dict[int, dict[int, int]] = {}
     where: dict[int, list[int]] = {}
@@ -506,8 +513,11 @@ def choose_anchors(frames: Frames, graph: LigandGraph, records, settings: Intera
             if candidate.refused is None:
                 return AnchorChoice(candidate.host, candidate.guest, method, candidate, table, ranked)
     tried = ", ".join(f"{len(v)} of the {k}" for k, v in ranked.items())
+    # the reasons of the first ones (the leg ends here and writes no interactions.json to read them in)
+    first = [c for candidates in ranked.values() for c in candidates if c.refused][:3]
+    why = "".join(f"; host {list(c.host)} guest {list(c.guest)}: {c.refused}" for c in first)
     raise RestraintError(
         "no Boresch anchors can be chosen from the interactions of the MD: no interaction of the ligand with a "
         f"residue is kept in {table.needed} of {frames.n} frames with anchors at usable angles, and neither does the "
-        f"backbone nearest to the ligand give any ({tried} candidates, each refused). Give the anchors "
+        f"backbone nearest to the ligand give any ({tried} candidates, each refused{why}). Give the anchors "
         "(restraints.selection: manual) or use restraints.selection: auto")

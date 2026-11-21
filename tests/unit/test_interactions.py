@@ -385,8 +385,24 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     given = dict(stored["restraint"], guest_atoms=[ligand[0], ligand[1], ligand[2]])
     (leg_dir / "restraint.json").write_text(json.dumps({"restraint": given, "info": {"selection": "manual"}}))
     assert plot_interactions(leg_dir) is None and not figure.exists()
+    # the same anchors chosen from another start are another analysis (review of 877ab88: two runs of the TYK2
+    # example chose the same six atoms, with 672 and 717 frames of the hydrogen bond and other reference values)
+    (leg_dir / "restraint.json").write_text(json.dumps({"restraint": stored["restraint"],
+                                                        "info": dict(info, start="of another start")}))
+    assert plot_interactions(leg_dir) is None and report["start"] == info["start"]
     (leg_dir / "restraint.json").write_text(json.dumps(stored))
     assert plot_interactions(leg_dir) == figure
+    # ... and every reading of the samples of a leg asks whether its restraint is of its pre-equilibration
+    # (review of 877ab88: cufep analyze gave the release of a restraint of another repeat)
+    from cufep.workflow import restraint_release_of
+
+    np.savez(leg_dir / "equil.npz", positions=eq["positions"], velocities=eq["velocities"], box=eq["box"])
+    states = {"states": [{"lambda_restraints": 0.0}, {"lambda_restraints": 1.0}]}
+    assert restraint_release_of(leg_dir, states, 298.15)[0] != 0.0
+    np.savez(leg_dir / "equil.npz", positions=eq["positions"] + 0.001, velocities=eq["velocities"], box=eq["box"])
+    with pytest.raises(WorkflowError, match="chosen from MD that started from another configuration"):
+        restraint_release_of(leg_dir, states, 298.15)
+    (leg_dir / "equil.npz").unlink()
     (leg_dir / "interactions.json").rename(leg_dir / "interactions.kept")
     assert plot_interactions(leg_dir) is None and not figure.exists()
 
@@ -423,9 +439,12 @@ def test_residues_that_would_share_a_name_are_named_with_the_chain_of_the_input(
     # two pieces of one chain of the input have no residue in common: no chain is written
     pieces = topology(("A", [59]), ("B", [278]))
     assert [residue_names(pieces, {"A": "A", "B": "A"})[i] for i in (0, 2)] == ["VAL59", "VAL278"]
-    # chains that the input does not tell apart, or a preparation that recorded none: their number
-    assert list(residue_names(dimer, {"A": "", "B": ""}).values())[::2][:2] == ["VAL981.1", "VAL981.2"]
-    assert list(residue_names(topology(("A", [981]), ("A", [981]))).values())[::2][:2] == ["VAL981.1", "VAL981.2"]
+    # chains that the input does not tell apart: also the number of the piece, behind a sign no chain id has
+    # (review of 877ab88: behind a dot, the pieces X, X and 1 read VAL981.1, VAL981.2 and VAL981.1)
+    assert list(residue_names(dimer, {"A": "", "B": ""}).values())[::2][:2] == ["VAL981#1", "VAL981#2"]
+    three = topology(("A", [981]), ("B", [981]), ("C", [981]))
+    assert list(residue_names(three, {"A": "X", "B": "X", "C": "1"}).values())[::2][:3] == [
+        "VAL981.X#1", "VAL981.X#2", "VAL981.1"]
     assert list(residue_names(dimer).values())[::2][:2] == ["VAL981.A", "VAL981.B"]
 
 

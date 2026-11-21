@@ -757,6 +757,26 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     np.savez(tmp_path / "whole.npz", timestep_fs=4.0, simulated_ns=0.04,
              made_with=json.dumps(equil_made_with(whole, "solvent", False, seed)))
     assert check_equil_file(np.load(tmp_path / "whole.npz"), tmp_path / "whole.npz", whole, "solvent", False, seed)
+    # the platform is part of the record (review of eb6f89f: a pre-equilibration on the Reference platform was used
+    # by a run on the CPU platform). A file of a version that recorded none says nothing of its platform and is
+    # used as before, on whatever platform (review of 877ab88: it was taken for one of CUDA)
+    on_reference = config(sampling={"pre_equilibration": {"solvent": {"md_ns": 0.04}}},
+                          backend={"name": "openmm", "platform": "Reference"})
+    on_cpu = config(sampling={"pre_equilibration": {"solvent": {"md_ns": 0.04}}},
+                    backend={"name": "openmm", "platform": "CPU"})
+    record = equil_made_with(on_reference, "solvent", False, seed)
+    assert record["platform"] == "Reference"
+    np.savez(tmp_path / "reference.npz", timestep_fs=4.0, simulated_ns=0.04, made_with=json.dumps(record))
+    assert check_equil_file(np.load(tmp_path / "reference.npz"), tmp_path / "reference.npz", on_reference, "solvent",
+                            False, seed)
+    with pytest.raises(WorkflowError, match="platform: Reference -> CPU"):
+        check_equil_file(np.load(tmp_path / "reference.npz"), tmp_path / "reference.npz", on_cpu, "solvent", False,
+                         seed)
+    earlier = {key: value for key, value in record.items() if key != "platform"}
+    np.savez(tmp_path / "earlier.npz", timestep_fs=4.0, simulated_ns=0.04, made_with=json.dumps(earlier))
+    for cfg_now in (on_reference, on_cpu):
+        assert check_equil_file(np.load(tmp_path / "earlier.npz"), tmp_path / "earlier.npz", cfg_now, "solvent", False,
+                                seed)
     # the restraint of such a version: all six force constants it holds (kJ/mol/nm^2 and kJ/mol/rad^2)
     angles = {key: 80.0 * 4.184 for key in ("k_theta_a", "k_theta_b", "k_phi_a", "k_phi_b", "k_phi_c")}
     old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0,
@@ -782,15 +802,18 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     assert restraint_made_with(from_md)["interactions"] == {
         "trajectories": 4, "length_ns": 3.0, "discard_ns": 1.0, "frame_interval_ps": 10.0, "min_frame_fraction": 0.4,
         "angle_range_deg": [45.0, 135.0], "stable_structure_fraction": 0.5, "second_interaction_ratio": 0.6,
-        "fallback_frame_fraction": 0.15, "fallback_cutoff_nm": 1.0, "frames_needed": [320, 120]}
-    # the thresholds are recorded as the frames they are, and whole numbers of a record are compared exactly
-    # (review of eb6f89f: 0.3999999999 and 0.4 were one setting, 319 and 320 frames; the seeds 1000000000 and
-    # 1000000001 were one seed, and the trajectories of both were used together)
-    nearly = config(restraints={"interactions": {"min_frame_fraction": 0.3999999999}})
-    assert settings_differences(restraint_made_with(nearly), restraint_made_with(from_md)) == [
-        "interactions.frames_needed: [319, 120] -> [320, 120]"]
+        "fallback_frame_fraction": 0.15, "fallback_cutoff_nm": 1.0}
+    # the settings of a record are compared as they are (reviews of eb6f89f and 877ab88: with a tolerance of
+    # 1e-9, 0.3999999999 and 0.4 were one setting, which is 319 and 320 frames; a rank that turns over at
+    # stable_structure_fraction 0.5 and not at 0.4999999999; a frame every 2500 and every 2501 steps; and the
+    # seeds 1000000000 and 1000000001 were one seed, whose trajectories were used together)
+    for section, key, one, other in (("interactions", "min_frame_fraction", 0.3999999999, 0.4),
+                                     ("interactions", "stable_structure_fraction", 0.4999999999, 0.5),
+                                     ("interactions", "frame_interval_ps", 10.0019999999, 10.0020000001)):
+        records = [restraint_made_with(config(restraints={section: {key: value}})) for value in (one, other)]
+        assert settings_differences(*records) == [f"{section}.{key}: {one} -> {other}"]
     assert settings_differences({"seed": 1000000000}, {"seed": 1000000001}) == ["seed: 1000000000 -> 1000000001"]
-    assert settings_differences({"k": 334.72}, {"k": 334.72 * (1 + 1e-12)}) == []
+    assert settings_differences({"k": 4, "range": [45.0, 135]}, {"k": 4.0, "range": (45, 135.0)}) == []
     assert restraint_contradictions(old_restraint, from_md) == ["restraints.selection: auto -> interactions"]
     with pytest.raises(WorkflowError, match="selection: auto -> interactions"):
         check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(searched()),
@@ -838,11 +861,20 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         check_restraint_file(of_64751ca, tmp_path / "restraint.json", manual_auto)
     with pytest.raises(WorkflowError, match="did not record what it was made from"):
         check_restraint_file(manual, tmp_path / "restraint.json", manual_auto)   # without a record: as before
-    # a file of today records its constants: used, and no contradiction is made up for it
+    # a file of today records its constants and the rule its anchors were held to: used, and no contradiction is
+    # made up for it
+    from cufep.workflow import FLAT_ANGLE_RULE
+
     today = {"restraint": dict(old_restraint["restraint"]), "made_with": restraint_made_with(manual_auto),
-             "info": {"selection": "manual", "force_constants": "auto"}}
+             "info": {"selection": "manual", "force_constants": "auto", "flat_angle_rule": FLAT_ANGLE_RULE}}
     assert check_restraint_file(today, tmp_path / "restraint.json", manual_auto) is True
     assert restraint_contradictions(today, manual_auto) == []
+    # one with constants from fluctuations of a version that asked OpenFE's rule of the flat angle with the
+    # configured constants (review of 877ab88: theta_A at 30 degrees passed with 80 kcal/mol/rad^2, the restraint
+    # got 20, 4.6 kT from a straight line, and a later version went on to sample with it)
+    before = dict(today, info={"selection": "manual", "force_constants": "auto"})
+    with pytest.raises(WorkflowError, match="held the anchors to OpenFE's rule of the flat angle with the configured"):
+        check_restraint_file(before, tmp_path / "restraint.json", manual_auto)
     manual_openfe = config(restraints={"selection": "manual", "host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6]})
     assert check_restraint_file(dict(manual, made_with=restraint_made_with(manual_openfe)), tmp_path / "restraint.json",
                                 manual_openfe) is True                            # the configured constants were asked
@@ -887,7 +919,7 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     # the Reference platform was used again by a run on the CPU platform. A record without it is one of CUDA
     on_cpu = equil_made_with(config(backend={"name": "openmm", "platform": "CPU"}), "complex", False, 7)
     reference = equil_made_with(config(backend={"name": "openmm", "platform": "Reference"}), "complex", False, 7)
-    assert settings_differences(reference, on_cpu) == ["platform: Reference -> CPU"] and "platform" not in eq
+    assert settings_differences(reference, on_cpu) == ["platform: Reference -> CPU"] and eq["platform"] == "CUDA"
     stiff = restraint_made_with(config(restraints={"k_r_kcal_per_A2": 20.0}))
     assert settings_differences(restraint_made_with(cfg), stiff) == ["k_r_kcal_per_A2: 10.0 -> 20.0"]
 

@@ -141,8 +141,16 @@ def _is_of_the_restraint(report_file: Path, restraint_file: Path) -> bool:
     was never used (review of eb6f89f)."""
     try:
         stored = json.loads(restraint_file.read_text())
-        chosen = json.loads(report_file.read_text())["chosen"]
+        report = json.loads(report_file.read_text())
+        chosen = report["chosen"]
+        # the same anchors can be chosen from two analyses (of another start): the record of the start tells them
+        # apart, and so do the reference values, which the restraint has from this analysis
+        reference = [report["reference_values"][name] for name in ("r", "theta_A", "theta_B")]
+        of_restraint = [stored["restraint"]["r0"], *np.degrees([stored["restraint"]["theta_a0"],
+                                                                stored["restraint"]["theta_b0"]])]
         return (stored["info"].get("selection") == "interactions"
+                and stored["info"].get("start") == report.get("start")
+                and bool(np.allclose(reference, of_restraint, atol=1e-6))
                 and [int(i) for i in stored["restraint"]["host_atoms"]] == [int(i) for i in chosen["host_atoms"]]
                 and [int(i) for i in stored["restraint"]["guest_atoms"]] == [int(i) for i in chosen["guest_atoms"]])
     except (OSError, ValueError, KeyError, TypeError):

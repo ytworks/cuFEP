@@ -260,7 +260,9 @@ cufep benchmark run tyk2 --tier smoke
 2 つの example は lambda window あたり 5 ns の production を設定しています (既定は 10 ns)。それ以外の
 設定は既定値です。各 example のリガンドはそのベンチマークセットに入っており、全セットのベンチマーク
 計算では TYK2 ejm_31 が -9.84 ± 0.33 kcal/mol、A2A 4e が -18.91 ± 0.52 kcal/mol でした (1 回の計算
-の標準誤差。[benchmarks/results](benchmarks/results/README.md))。以前のコミットで同じ設定で各 example を
+の標準誤差。[benchmarks/results](benchmarks/results/README.md))。これらの計算と次の 2 つは、拘束を
+`restraints.selection: auto` (当時の既定) で選んでいます。上のコマンドは現在、相互作用から選びます
+(`interactions`)。その設定での example の結果は [PROGRESS.md](PROGRESS.md) にあります。以前のコミットで同じ設定で各 example を
 1 回計算したときは -8.94 ± 0.77 と -11.95 ± 0.73 でした ([docs/configuration.md](docs/configuration.md)
 の `sampling.rest2.region`)。complex leg を繰り返し計算した値どうしは、1 回の計算の標準誤差より
 大きく違います ([protocol: REST2](docs/protocol.md#rest2))。

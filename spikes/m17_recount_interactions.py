@@ -9,7 +9,10 @@ frame from an MDAnalysis universe, as its ``Fingerprint.run`` does, with the lig
 perceived by MDAnalysis and not taken from the prepared molecule. Printed: for every ligand atom
 L1, residue and type of interaction the frames in which it is there by both counts and the number
 of frames that only one of the two counts has, and the largest such number (a count per residue
-and type alone would not see two ligand atoms or two sets of frames that changed places).
+and type alone would not see two ligand atoms or two sets of frames that changed places). The
+ligand atom that ProLIF names is given its L1 by the rule of the leg (``LigandGraph.anchor_atom``):
+the count is a second one of the interactions and of their frames, not of that rule, which the
+unit tests hold to known molecules.
 The frames are those the leg analysed (later than ``discard_ns`` of its record), with the ligand
 in the periodic image next to the protein.
 """

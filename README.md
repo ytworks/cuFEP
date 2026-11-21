@@ -265,7 +265,10 @@ cufep benchmark run tyk2 --tier smoke
 Both examples set 5 ns of production per lambda window (the default is 10 ns); every other
 setting is the default. The ligand of each example is in its benchmark set, and the full benchmark
 runs gave -9.84 ± 0.33 kcal/mol for TYK2 ejm_31 and -18.91 ± 0.52 kcal/mol for A2A 4e (standard
-errors of the one calculation; [benchmarks/results](benchmarks/results/README.md)). One calculation
+errors of the one calculation; [benchmarks/results](benchmarks/results/README.md)). Those runs,
+and the two below, chose the restraint with `restraints.selection: auto`, the default at that
+time; the commands above now choose it from interactions (`interactions`), and what the examples
+gave with it is in [PROGRESS.md](PROGRESS.md). One calculation
 of each example with the same settings on an earlier commit gave -8.94 ± 0.77 and -11.95 ± 0.73
 ([docs/configuration.md](docs/configuration.md), `sampling.rest2.region`): runs of a complex leg
 differ among themselves by more than the standard error of one run

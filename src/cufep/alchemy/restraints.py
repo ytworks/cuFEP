@@ -293,7 +293,8 @@ def flat_angle_problem(theta: np.ndarray, margins) -> str | None:
 
 
 def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, flat_margin,
-                            trajectory: bool = True, reference_copies=()) -> str | None:
+                            trajectory: bool = True, reference_copies=(),
+                            last_frame_is_reference: bool = True) -> str | None:
     """Why the anchors of ``restraint`` are refused over ``frames`` (positions with the ligand in the
     periodic image nearest the host), or None. The rules are two of OpenFE's (EvaluateBoreschAtoms in
     openfe.protocols.restraint_utils.geometry.boresch.host) and nothing of cuFEP's own (the owner,
@@ -323,14 +324,19 @@ def anchor_geometry_problem(restraint: "BoreschRestraint", frames: np.ndarray, f
     frames = np.asarray(frames, dtype=float)
     if frames.ndim == 2:
         frames = frames[None]
-    flat = flat_angle_problem(np.atleast_2d(anchor_angles(restraint, frames))[:, 1:3], flat_margin)
+    # flat_margin None: the rule of the flat angle is asked by the caller, with the force constants and the
+    # reference angles the restraint gets (flat_rule_problem)
+    flat = None if flat_margin is None else \
+        flat_angle_problem(np.atleast_2d(anchor_angles(restraint, frames))[:, 1:3], flat_margin)
     if flat or not trajectory:
         return flat
     if bool(np.all(collinear_frames(restraint, frames))):
         return ("the six anchors H2-H1-H0-G0-G1-G2 are on a straight line in every frame (three in a row with "
                 f"|cos| above {COLLINEAR_THRESHOLD:g}, OpenFE's is_collinear): the dihedral angles of the restraint "
                 "are not defined there")
-    for copy in (frames[-1], *reference_copies):
+    # the last frame where the reference values are its values (the search, given anchors); for reference values
+    # from histograms no frame is one, and which frame comes last decides nothing
+    for copy in ((frames[-1], *reference_copies) if last_frame_is_reference else tuple(reference_copies)):
         flat = undefined_dihedral_planes(restraint, copy)
         if flat:
             return (f"the anchors {', '.join(flat)} are exactly on a line in the last frame, from which the reference "
@@ -350,20 +356,23 @@ class AnchorMeasurement:
     held_theta: np.ndarray | None = None
 
 
-def measure_anchors(host_atoms, guest_atoms, ligand_atoms, frames, frame_atoms, frame_boxes, flat_margin: float,
-                    start=None, start_box=None, start_among_frames: bool = False) -> AnchorMeasurement:
+def measure_anchors(host_atoms, guest_atoms, ligand_atoms, frames, frame_atoms, frame_boxes,
+                    flat_margin: float | None, start=None, start_box=None,
+                    start_among_frames: bool = False) -> AnchorMeasurement:
     """The six coordinates of the anchors over ``frames`` and whether the anchors can be used: one
     measurement for anchors that are given (``restraints.selection: manual``) and for anchors
     chosen from interactions (``interactions``).
 
     ``frames`` (frames x frame atoms x 3, nm) are the positions of the atoms ``frame_atoms`` (their
     numbers in the System), whole molecules that are not wrapped into the box. The force of the
-    restraint measures across the periodic boundary, so every frame is taken with the ligand in
-    the periodic image in which its first anchor G0 is nearest to the first host anchor H0, which
-    is the distance the force restrains (from the raw coordinates a ligand one cell away gave
-    r0 = 5.4 nm in a 5 nm cell, review of PR 1; with the image nearest to the centre of the three
-    host anchors, H0 at 0 and G0 at 2.1 nm in a cell of 4 nm gave r = 2.1 nm where the force
-    measures 1.9 nm, review of eb6f89f).
+    restraint measures across the periodic boundary, so the six anchors of every frame are laid
+    out as the force sees them (:func:`as_the_force_measures`; from the raw coordinates a ligand
+    one cell away gave r0 = 5.4 nm in a 5 nm cell, review of PR 1; with the ligand in the image
+    nearest to the centre of the host anchors, H0 at 0 and G0 at 2.1 nm in a cell of 4 nm gave
+    r = 2.1 nm where the force measures 1.9 nm, review of eb6f89f). ``ligand_atoms`` is not read
+    any more. ``flat_margin`` None leaves OpenFE's rule of the flat angle to the caller, who asks
+    it with the force constants and the reference angles of the restraint
+    (:func:`flat_rule_problem` on ``held_theta``).
 
     ``start`` (the positions of the whole System, with ``start_box``) is the configuration the
     alchemical run starts from. The dihedral angles of the anchors must be defined there
@@ -375,31 +384,60 @@ def measure_anchors(host_atoms, guest_atoms, ligand_atoms, frames, frame_atoms, 
     """
     frame_atoms = np.asarray(frame_atoms, dtype=int)
     host, guest = [int(i) for i in host_atoms], [int(i) for i in guest_atoms]
-    ligand = [int(i) for i in ligand_atoms]
-    # only the anchors and the ligand are read: the frames of a whole protein are not copied
-    needed = sorted(set(host) | set(guest) | set(ligand))
     row = {int(a): i for i, a in enumerate(frame_atoms)}
-    column = {a: i for i, a in enumerate(needed)}
-    local_host, local_guest = [column[a] for a in host], [column[a] for a in guest]
-    local_ligand = np.array([column[a] for a in ligand], dtype=int)
-    xyz = np.asarray(frames)[:, [row[a] for a in needed], :].astype(float)
-    xyz = ligand_in_the_image_of(xyz, local_ligand, local_guest[:1], xyz[:, local_host[0], :],
-                                 np.asarray(frame_boxes, dtype=float))
-    probe = BoreschRestraint(tuple(local_host), tuple(local_guest), 0, 0, 0, 0, 0, 0)
+    chain = [*reversed(host), *guest]                         # H2, H1, H0, G0, G1, G2: the particles of the force
+    xyz = as_the_force_measures(np.asarray(frames)[:, [row[a] for a in chain], :], frame_boxes)
+    probe = BoreschRestraint((2, 1, 0), (3, 4, 5), 0, 0, 0, 0, 0, 0)
     copies, begin = [], None
     if start is not None:
-        begin = np.asarray(start, dtype=float)[needed]
+        begin = np.asarray(start, dtype=float)[chain]
         if start_box is not None:
-            begin = ligand_in_the_image_of(begin, local_ligand, local_guest[:1], begin[local_host[0]],
-                                           np.asarray(start_box, dtype=float))
+            begin = as_the_force_measures(begin[None], np.asarray(start_box, dtype=float)[None])[0]
         copies.append(begin)
-    problem = anchor_geometry_problem(probe, xyz, flat_margin, reference_copies=copies)
+    problem = anchor_geometry_problem(probe, xyz, flat_margin, reference_copies=copies,
+                                      last_frame_is_reference=not start_among_frames)
     held = xyz
     if start_among_frames and begin is not None:
         held = np.concatenate([xyz, begin[None]])
-        problem = problem or anchor_geometry_problem(probe, begin, flat_margin, trajectory=False)
+        if flat_margin is not None:
+            problem = problem or anchor_geometry_problem(probe, begin, flat_margin, trajectory=False)
     return AnchorMeasurement(problem, probe.values(xyz), None if begin is None else probe.values(begin),
                              np.atleast_2d(anchor_angles(probe, held))[:, 1:3])
+
+
+def as_the_force_measures(chain_nm: np.ndarray, boxes_nm) -> np.ndarray:
+    """The six anchors H2, H1, H0, G0, G1, G2 (``chain_nm``: frames x 6 x 3) laid out as the force
+    of the restraint sees them: each from the one before it by the periodic displacement OpenMM
+    computes (:func:`cufep.alchemy.lrc.minimum_image`; the force is periodic). The distance, the
+    two angles and the three dihedral angles of the result are the ones the force restrains, in
+    any cell and whatever images the atoms are written in.
+
+    That is not the nearest image where a displacement is longer than half the smallest height of
+    a skewed cell: H0 to G0 of (0, 0, 1.5) nm in the rhombic dodecahedron of 4 nm is 3.125 nm for
+    the force, and a reference of 1.5 nm would cost 5523 kJ/mol there; and anchors of one molecule
+    need not be bonded neighbours: H0 to H1 of 2.5 nm in a cube of 4 nm is -1.5 nm for the force,
+    and theta_A is 120 degrees where the written coordinates give 60 (review of 877ab88)."""
+    from cufep.alchemy.lrc import minimum_image
+
+    written = np.asarray(chain_nm, dtype=float)
+    boxes = np.asarray(boxes_nm, dtype=float).reshape(-1, 3, 3)
+    out = np.empty_like(written)
+    out[:, 0] = written[:, 0]
+    for f in range(written.shape[0]):
+        steps = minimum_image(written[f, 1:] - written[f, :-1], boxes[min(f, len(boxes) - 1)])
+        out[f, 1:] = written[f, 0] + np.cumsum(steps, axis=0)
+    return out
+
+
+def flat_rule_problem(k_theta_a: float, k_theta_b: float, theta: np.ndarray, temperature_K: float,
+                      flat_angle_energy_kt: float = 10.0) -> str | None:
+    """OpenFE's check_angle_not_flat for a restraint with these force constants (kJ/mol/rad^2) on
+    theta_A and theta_B: ``theta`` (configurations x 2, radians) holds every angle that must be
+    10 kT from 0 and pi: those of the frames, of the configuration the run starts from and the
+    reference angles of the restraint itself."""
+    margins = (flat_margin_of(k_theta_a, temperature_K, flat_angle_energy_kt),
+               flat_margin_of(k_theta_b, temperature_K, flat_angle_energy_kt))
+    return flat_angle_problem(theta, margins)
 
 
 def constants_from_fluctuations(restraint: "BoreschRestraint", values: np.ndarray, held_theta: np.ndarray,
@@ -412,9 +450,7 @@ def constants_from_fluctuations(restraint: "BoreschRestraint", values: np.ndarra
     configuration held to the rule) are asked again with the constants the restraint gets
     (review of eb6f89f: a start at 30 degrees passed, 4.6 kT from a straight line)."""
     out = with_force_constants_from_fluctuations(restraint, coordinate_fluctuations(values), temperature_K)
-    margins = (flat_margin_of(out.k_theta_a, temperature_K, flat_angle_energy_kt),
-               flat_margin_of(out.k_theta_b, temperature_K, flat_angle_energy_kt))
-    return out, flat_angle_problem(held_theta, margins)
+    return out, flat_rule_problem(out.k_theta_a, out.k_theta_b, held_theta, temperature_K, flat_angle_energy_kt)
 
 
 def reference_values_problem(values: np.ndarray, angle_range_deg=(45.0, 135.0)) -> str | None:
@@ -460,6 +496,8 @@ def reference_values_from_histograms(values: np.ndarray, angle_range_deg=(45.0, 
         raise RestraintError(none)
 
     def fullest(x, span):
+        if span is None and float(np.ptp(x)) < 1.0e-9:
+            return float(np.mean(x))                 # a distance that does not vary has no range to divide into bins
         counts, edges = np.histogram(x, bins=int(bins), range=span)
         k = int(np.argmax(counts))
         return 0.5 * (edges[k] + edges[k + 1])
@@ -846,7 +884,8 @@ def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[i
                     r = BoreschRestraint((h0, h1, h2), (g0, g1, g2), 0, 0, 0, 0, 0, 0)
                     # OpenFE's rules: theta_A and theta_B away from 0 and pi, the anchors not on a line; and
                     # the dihedral angles defined where the run starts
-                    if anchor_geometry_problem(r, aligned, flat_margin, reference_copies=copies) is not None:
+                    if anchor_geometry_problem(r, aligned, None if s.constants_from_fluctuations else flat_margin,
+                                               reference_copies=copies) is not None:
                         continue
                     v = r.values(aligned)                                           # (frames, 6)
                     if s.constants_from_fluctuations and constants_from_fluctuations(

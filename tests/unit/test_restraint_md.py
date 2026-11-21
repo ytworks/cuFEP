@@ -330,3 +330,19 @@ def test_a_trajectory_of_a_bilayer_system_has_the_membrane_barostat_and_no_restr
     seed, barostat_seed = restraint_md.trajectory_seeds(11, 0)
     assert integrator.getRandomNumberSeed() == seed and barostat.getRandomNumberSeed() == barostat_seed
     assert lines == []
+
+
+def test_the_length_of_a_stored_trajectory_is_compared_in_whole_steps(tmp_path):
+    """Review of 877ab88 (P2). 0.400002 ns at 4 fs is 100000.5 steps, which the MD rounds to 100000: the file it
+    wrote holds 0.39999999999999997 ns, and the check of a stored trajectory, which compared the two times with
+    half a step of tolerance, refused it for holding less than was asked. Both are counted in steps."""
+    from cufep.workflow import WorkflowError, check_restraint_md_file
+
+    made_with = {"length_ns": 0.400002, "timestep_fs": 4.0, "trajectory": 0}
+    np.savez(tmp_path / "t.npz", made_with=json.dumps(made_with), simulated_ns=100000 * 4.0 * 1.0e-6, timestep_fs=4.0)
+    check_restraint_md_file(tmp_path / "t.npz", 0, made_with, lambda line: None)
+    np.savez(tmp_path / "short.npz", made_with=json.dumps(made_with), simulated_ns=99999 * 4.0 * 1.0e-6,
+             timestep_fs=4.0)
+    with pytest.raises(WorkflowError, match="holds 399.996 ps where 400.002 ps are asked for"):
+        check_restraint_md_file(tmp_path / "short.npz", 0, made_with, lambda line: None)
+
