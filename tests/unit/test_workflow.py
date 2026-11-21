@@ -721,22 +721,30 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
              pocket_waters=np.zeros(0), notes="[]")
     old_eq = np.load(tmp_path / "old_equil.npz")
     assert equil_in_membrane(old_eq) is False
-    assert equil_contradictions(old_eq, cfg, "complex", False) == []                  # 2 fs used, 4 fs configured
-    assert equil_contradictions(old_eq, config(dynamics={"timestep_fs": 1.0}), "complex", False) \
+
+    def searched_then(**sections):
+        """The selection of those versions (the search), whose pre-equilibration ends with free MD."""
+        return config(restraints={"selection": "auto"}, **sections)
+
+    # under the default of today the pre-equilibration of a complex leg holds the pose that was given and has
+    # no free MD: a file of free MD is not one of it
+    assert equil_contradictions(old_eq, cfg, "complex", False) == ["length of the MD: 5 ns -> 0 ns"]
+    assert equil_contradictions(old_eq, searched_then(), "complex", False) == []     # 2 fs used, 4 fs configured
+    assert equil_contradictions(old_eq, searched_then(dynamics={"timestep_fs": 1.0}), "complex", False) \
         == ["time step: 2 fs -> 1 fs"]
-    assert equil_contradictions(old_eq, config(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}}),
+    assert equil_contradictions(old_eq, searched_then(sampling={"pre_equilibration": {"complex": {"md_ns": 1.0}}}),
                                 "complex", False) == ["length of the MD: 5 ns -> 1 ns"]
-    assert equil_contradictions(old_eq, config(membrane={"enabled": True}), "complex", True) \
+    assert equil_contradictions(old_eq, searched_then(membrane={"enabled": True}), "complex", True) \
         == ["length of the MD: 5 ns -> 10 ns", "bilayer: no -> yes"]
     np.savez(tmp_path / "old_membrane.npz", timestep_fs=4.0, simulated_ns=15.0, area_nm2=np.full(40, 66.0),
              pocket_waters=np.full(40, 6.0))
     old_membrane = np.load(tmp_path / "old_membrane.npz")
     assert equil_in_membrane(old_membrane) is True
-    assert equil_contradictions(old_membrane, config(membrane={"enabled": True}), "complex", True) == []   # extended
-    assert "bilayer: yes -> no" in equil_contradictions(old_membrane, cfg, "complex", False)
+    assert equil_contradictions(old_membrane, searched_then(membrane={"enabled": True}), "complex", True) == []
+    assert "bilayer: yes -> no" in equil_contradictions(old_membrane, searched_then(), "complex", False)
     np.savez(tmp_path / "older.npz", timestep_fs=4.0, simulated_ns=5.0)          # a file that does not tell
     assert equil_in_membrane(np.load(tmp_path / "older.npz")) is None
-    assert equil_contradictions(np.load(tmp_path / "older.npz"), cfg, "complex", False) == []
+    assert equil_contradictions(np.load(tmp_path / "older.npz"), searched_then(), "complex", False) == []
     # review of 037bdf1 (P2): versions before revision 15 integrated whole frame intervals of 20 ps and recorded the
     # length asked for. A file of 50 ps holds 40 ps and is refused whatever its record says; one of today holds 50 ps
     from cufep.workflow import check_equil_file, leg_seed

@@ -408,8 +408,8 @@ def test_plan_says_how_the_restraint_is_chosen():
     from cufep.cli import restraint_selection_lines
 
     said = restraint_selection_lines(Config.model_validate(BASE))
-    assert "4 trajectories of 3 ns from the end of the pre-equilibration, a frame every 10 ps, the first 1 ns of " \
-           "each left out: 800 frames" in said
+    assert "4 trajectories of 3 ns from the pose that was given (held while the solvent settles), a frame every " \
+           "10 ps, the first 1 ns of each left out: 800 frames" in said
     assert "on the backend of the leg (cupotential, fallback openmm)" in said
     assert "kept in 320 frames or more (0.4), anchor angles within 45 to 135 degrees" in said
     assert "within 1 nm of the ligand in 120 frames or more (0.15)" in said

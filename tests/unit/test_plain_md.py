@@ -194,3 +194,61 @@ def test_the_backend_is_asked_about_the_box_the_md_starts_in_and_gets_the_system
     cfg = Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"},
                                  "resources": {"cpu_threads_per_worker": 4}})
     assert plain_md_settings(cfg, 4.0, "isotropic", 1).cpu_threads == 4
+
+
+def test_a_pre_equilibration_can_hold_the_solute_where_it_was_given(monkeypatch):
+    """``restraints.selection: interactions`` chooses the restraint from MD that starts from the pose that was
+    given, as the method of Ding et al. starts it from the minimised input (the owner's decision of 2026-11-21:
+    after 10 ns of free MD two runs of the A2A example had the ligand in two states and chose two restraints).
+    The pre-equilibration of such a leg holds the solute through NVT and NPT and ends there; that of a bilayer
+    goes on with the solute still held, without the wall of the first two parts. The other selections are as
+    they were: free MD after NVT and NPT."""
+    from cufep.config.schema import Config
+    from cufep.workflow import equil_made_with, pre_equilibration_parts, settings_differences
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": "protein.pdb", "ligand": "ligand.sdf"}, **sections})
+
+    default, searched = config(), config(restraints={"selection": "auto"})
+    assert pre_equilibration_parts(default, "complex", False) == (0.0, True)
+    assert pre_equilibration_parts(default, "complex", True) == (10.0, True)
+    assert pre_equilibration_parts(default, "solvent", False) == (0.5, False)
+    assert pre_equilibration_parts(searched, "complex", False) == (5.0, False)
+    assert pre_equilibration_parts(searched, "complex", True) == (10.0, False)
+    # the two are different pre-equilibrations, and a file of an earlier version is one of free MD
+    held, free = equil_made_with(default, "complex", False, 7), equil_made_with(searched, "complex", False, 7)
+    assert settings_differences(free, held) == ["solute_held: not recorded -> True"]
+    assert "solute_held" not in equil_made_with(default, "solvent", False, 7)
+
+    system, positions, box = lj_particles()
+    made = []
+    context = equilibrate._context
+
+    def seen(system, backend, settings, dt_fs, device, barostat, restraint_reference, seed, barostat_seed=None,
+             wall=True):
+        made.append((barostat, restraint_reference is not None, wall))
+        return context(system, backend, settings, dt_fs, device, barostat, restraint_reference, seed, barostat_seed,
+                       wall)
+
+    monkeypatch.setattr(equilibrate, "_context", seen)
+    held_atoms = [0, 1, 2, 3]
+    # no MD after the NPT: the result is its end, with the one frame of it
+    ends = equilibrate.pre_equilibrate(system, positions, box, list(range(8)),
+                                       settings(md_backend="openmm", production_ns=0.0, hold_solute=True,
+                                                restrained_atoms=held_atoms), None, lambda line: None)
+    assert made == [(False, True, True), (True, True, True)]                  # NVT and NPT, both with the solute held
+    assert ends.simulated_ns == 0.0 and ends.frames.shape == (1, 8, 3) and ends.backend == "openmm"
+    assert np.allclose(ends.frames[0], ends.positions[list(range(8))], atol=1e-6) and ends.notes == []
+    moved = np.linalg.norm(ends.positions - np.asarray(positions), axis=1)
+    assert moved[held_atoms].max() < 0.12 and np.all(np.isfinite(ends.velocities))
+    # MD after the NPT with the solute held: its Context has the position restraints and no wall
+    made.clear()
+    goes_on = equilibrate.pre_equilibrate(system, positions, box, list(range(8)),
+                                          settings(md_backend="openmm", hold_solute=True, restrained_atoms=held_atoms),
+                                          None, lambda line: None)
+    assert made[-1] == (True, True, False) and goes_on.simulated_ns == pytest.approx(0.0004)
+    made.clear()
+    equilibrate.pre_equilibrate(system, positions, box, list(range(8)),
+                                settings(md_backend="openmm", restrained_atoms=held_atoms), None, lambda line: None)
+    assert made[-1] == (True, False, False)                                   # the free MD of the other selections
+

@@ -128,7 +128,16 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
 
 1. Pre-equilibration: minimise, 0.25 ns NVT and 0.5 ns NPT on stock OpenMM, then 5 ns NPT
    on the backend of the leg (solvent leg: 0.1, 0.2 and 0.5 ns), with a frame every 20 ps
-   and one at the end. If that backend cannot run the system, or the run fails on it, stock
+   and one at the end. A complex leg whose restraint is chosen from interactions
+   (`restraints.selection: interactions`, the default) keeps the pose that was given
+   instead: the heavy atoms of protein and ligand are held by position restraints through
+   NVT and NPT while the solvent and the box settle, and no free MD follows, because the
+   trajectories of step 2 are that MD and start from the pose that was given, as in the
+   method they come from. A bilayer that was just built still runs
+   `membrane.equilibration_ns` to close around the protein, with the solute held (the
+   owner's decision of 2026-11-21: after 10 ns of free MD two runs of the A2A example had
+   the ligand in two states and chose two restraints). The alchemical run starts where the
+   pre-equilibration ends, in every case. If that backend cannot run the system, or the run fails on it, stock
    OpenMM runs it from the same start and the log and the result say so; with
    `backend.fallback: none` it does not, and the leg stops with the reason, as its alchemical
    run does. This MD and the MD from which a restraint is chosen run in the precision of
@@ -177,7 +186,8 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    between protein and ligand in unrestrained MD of the complex, the method of Ding et al.
    (arXiv:2603.22274 v3, sec. 2.1 and 2.4; `docs/configuration.md` quotes its rules and says
    which numbers are those of its published source and what is cuFEP's own):
-   - Four NPT trajectories of 3 ns start from the end of the pre-equilibration and differ by
+   - Four NPT trajectories of 3 ns start from the end of the pre-equilibration, which for
+     this selection is the pose that was given in settled surroundings (step 1), and differ by
      their random numbers only. Each is a plain MD of the leg: it runs by the settings of the
      YAML and on the backend of the leg, with the recoveries of step 1 (stock OpenMM, 2 fs),
      and the result names the backend that ran each. With several GPUs they run at the same

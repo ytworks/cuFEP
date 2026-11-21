@@ -746,7 +746,8 @@ def binding_site_frames(topology, frames_nm: np.ndarray, ligand: np.ndarray, lig
 
 
 def pose_rmsd_in_site(topology, aligned: np.ndarray, site: np.ndarray, ligand: np.ndarray, ligand_heavy: np.ndarray,
-                      rdmol, input_pose_nm: np.ndarray | None = None, input_box_nm: np.ndarray | None = None) -> float:
+                      rdmol, input_pose_nm: np.ndarray | None = None, input_box_nm: np.ndarray | None = None,
+                      second_half: bool = True) -> float:
     """The heavy-atom RMSD of the ligand from its input pose (from the first frame if none is given)
     over the second half of the frames ``aligned`` on the binding site (:func:`binding_site_frames`).
 
@@ -765,19 +766,22 @@ def pose_rmsd_in_site(topology, aligned: np.ndarray, site: np.ndarray, ligand: n
     for perm in heavy_atom_symmetries(rdmol):
         d = np.sqrt(((aligned[:, ligand_heavy[perm], :] - reference) ** 2).sum(axis=2).mean(axis=1))
         rmsd = d if rmsd is None else np.minimum(rmsd, d)
-    return float(rmsd[len(rmsd) // 2:].mean())
+    # of the second half of one trajectory (the pre-equilibration); of all frames where they are the analysed
+    # part of several (the MD from which a restraint is chosen)
+    return float(rmsd[len(rmsd) // 2 if second_half else 0:].mean())
 
 
 def ligand_pose_rmsd(topology, frames_nm: np.ndarray, ligand_atoms, rdmol, input_pose_nm: np.ndarray,
                      frame_boxes_nm: np.ndarray | None = None, input_box_nm: np.ndarray | None = None,
-                     host_max_distance_nm: float = RestraintSearchSettings.host_max_distance_nm) -> float:
+                     host_max_distance_nm: float = RestraintSearchSettings.host_max_distance_nm,
+                     second_half: bool = True) -> float:
     """How far the ligand of the frames is from its input pose (nm): the measure of the restraint
     search (:func:`binding_site_frames`, :func:`pose_rmsd_in_site`), for anchors that were not
     chosen by it (review of PR 1: with manual anchors a ligand that left the site gave no warning)."""
     lig = np.asarray(ligand_atoms, dtype=int)
     heavy = lig[[i for i, a in enumerate(rdmol.GetAtoms()) if a.GetAtomicNum() > 1]]
     _frames, aligned, site = binding_site_frames(topology, frames_nm, lig, heavy, host_max_distance_nm, frame_boxes_nm)
-    return pose_rmsd_in_site(topology, aligned, site, lig, heavy, rdmol, input_pose_nm, input_box_nm)
+    return pose_rmsd_in_site(topology, aligned, site, lig, heavy, rdmol, input_pose_nm, input_box_nm, second_half)
 
 
 def find_boresch_restraint(topology, frames_nm: np.ndarray, ligand_atoms: list[int], rdmol,

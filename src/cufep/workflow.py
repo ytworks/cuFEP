@@ -366,6 +366,26 @@ def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape:
     return [f"{key}: {info[key]} -> {value}" for key, value in expected.items() if key in info and info[key] != value]
 
 
+def pre_equilibration_parts(cfg: Config, leg: str, in_membrane: bool) -> tuple[float, bool]:
+    """``(the MD in ns that follows NVT and NPT in the pre-equilibration of a leg, whether the solute
+    is held by position restraints through all of it)``.
+
+    The MD is ``sampling.pre_equilibration.<leg>.md_ns``, and for a bilayer at least
+    ``membrane.equilibration_ns``; nothing is held in it. A complex leg whose restraint is chosen
+    from interactions (``restraints.selection: interactions``) is different: its trajectories
+    start from the pose that was given, as in the method of Ding et al., which starts them from
+    the minimised input. The heavy atoms of protein and ligand are held through NVT and NPT while
+    the solvent and the box settle, and no free MD follows: the four trajectories are that MD. A
+    bilayer that was just built still needs ``membrane.equilibration_ns`` to close around the
+    protein, and the solute is held through it (the owner's decision of 2026-11-21, after two runs
+    of the A2A example chose their restraints from two different states the ligand had reached in
+    10 ns of free MD)."""
+    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
+    if leg == "complex" and cfg.restraints.selection == "interactions":
+        return (float(cfg.membrane.equilibration_ns) if in_membrane else 0.0), True
+    return float(max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns), False
+
+
 def equil_lengths(eq, cfg: Config, leg: str, in_membrane: bool) -> tuple[float, float, float]:
     """(asked, integrated, tolerance) in ns of the unrestrained MD of a stored pre-equilibration:
     the length this run asks for, the MD the file holds, and half an MD step. A file of a version
@@ -374,8 +394,7 @@ def equil_lengths(eq, cfg: Config, leg: str, in_membrane: bool) -> tuple[float, 
     from cufep.sampling.equilibrate import EquilibrationSettings
     from cufep.steps import integrated_before_revision_15_ps
 
-    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
-    asked = max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns
+    asked = pre_equilibration_parts(cfg, leg, in_membrane)[0]
     files = set(eq.files)
     done = float(eq["simulated_ns"])
     dt = float(eq["timestep_fs"]) if "timestep_fs" in files else float(cfg.dynamics.timestep_fs)
@@ -953,6 +972,10 @@ def equil_made_with(cfg: Config, leg: str, in_membrane: bool, seed: int) -> dict
     # the platform, as the trajectories for a restraint record it. Earlier versions recorded none: of such a
     # file the platform is not known, and it is used as it was before (check_equil_file)
     out["platform"] = cfg.backend.platform
+    # a pre-equilibration that holds the solute in the pose that was given (pre_equilibration_parts) is another
+    # one than the free MD of the other selections and of every earlier version, whose records have no such key
+    if pre_equilibration_parts(cfg, leg, in_membrane)[1]:
+        out["solute_held"] = True
     return out
 
 
@@ -1432,13 +1455,15 @@ def restraint_from_interactions(cfg: Config, job: "LegJob", leg_dir: Path, prep:
     md_seconds = time.perf_counter() - t_md
     restraint, info, report = interaction_restraint(cfg, prep, rdmol, eq, trajectories,
                                                     cfg.thermodynamics.temperature_K)
-    # how far the ligand moved from the pose it was given, measured as for every selection: over the
-    # frames of the pre-equilibration
-    full = np.zeros((np.asarray(eq["frames"]).shape[0], int(n_atoms), 3))
-    full[:, np.asarray(eq["frame_atoms"], dtype=int), :] = eq["frames"]
+    # how far the ligand moved from the pose it was given, measured as for every selection, over the free MD
+    # of this one: the analysed frames of the trajectories (at most 200 of them, evenly spaced, as whole systems)
+    analysed = trajectories.after(cfg.restraints.interactions.discard_ns)
+    some = np.unique(np.linspace(0, analysed.frames.shape[0] - 1, min(200, analysed.frames.shape[0])).astype(int))
+    full = np.zeros((len(some), int(n_atoms), 3), dtype=np.float32)
+    full[:, np.asarray(analysed.frame_atoms, dtype=int), :] = analysed.frames[some]
     rmsd = ligand_pose_rmsd(prep["topology"], full, prep["ligand"], rdmol, prep["positions"],
-                            frame_boxes_nm=eq["frame_boxes"], input_box_nm=prep["box"],
-                            host_max_distance_nm=cfg.restraints.host_max_distance_nm)
+                            frame_boxes_nm=np.asarray(analysed.boxes)[some], input_box_nm=prep["box"],
+                            host_max_distance_nm=cfg.restraints.host_max_distance_nm, second_half=False)
     del full
     from cufep.sampling.restraint_md import start_digest
 
@@ -1987,8 +2012,11 @@ def run_leg(job: LegJob) -> dict:
     in_membrane = is_complex and barostat == "membrane"
     equil_from = equil_made_with(cfg, job.leg, in_membrane, seed)
     if not equil_file.exists():
-        production = pre.md_ns
+        production, held = pre_equilibration_parts(cfg, job.leg, in_membrane)
         restrained: list[int] = []
+        if held:
+            atoms = list(prep["topology"].atoms())
+            restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
         wall_atoms: list[int] = []
         wall_half = 0.0
         if in_membrane:
@@ -2005,15 +2033,16 @@ def run_leg(job: LegJob) -> dict:
                         xyz = prep["positions"][a_.index]
                         if abs(xyz[2]) > wall_half and tree.query(xyz)[0] > 0.6:
                             wall_atoms.append(a_.index)
-            # A freshly built bilayer needs longer: hold the protein and ligand heavy atoms while the
-            # lipids and water settle (NVT, NPT), then run unrestrained for membrane.equilibration_ns.
-            production = max(production, cfg.membrane.equilibration_ns)
+            # A freshly built bilayer needs longer: hold the protein and ligand heavy atoms while the lipids and
+            # water settle (NVT, NPT), then run for membrane.equilibration_ns (free, or with the solute still held:
+            # pre_equilibration_parts).
             atoms = list(prep["topology"].atoms())
             restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
         settings = plain_md_settings(
             cfg, timestep_cfg, barostat, seed,
             nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns, production_ns=production,
-            restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half, wall_centre_nm=0.0,
+            hold_solute=held, restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half,
+            wall_centre_nm=0.0,
             ligand_atoms=prep["ligand"] if in_membrane else [],
             water_oxygens=[a.index for a in prep["topology"].atoms()
                            if a.residue.name == "HOH" and a.element is not None and a.element.symbol == "O"]

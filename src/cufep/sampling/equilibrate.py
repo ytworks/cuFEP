@@ -54,6 +54,11 @@ class EquilibrationSettings:
     fallback: str = "openmm"
     #: threads of a Context of the CPU platform (resources.cpu_threads_per_worker); None: OpenMM's own number
     cpu_threads: int | None = None
+    #: the MD after NVT and NPT keeps the position restraints of ``restrained_atoms`` (not the wall): the solute
+    #: stays in the pose that was given while its surroundings settle (restraints.selection: interactions, whose
+    #: trajectories start from that pose). With ``production_ns`` 0 there is no such MD and the pre-equilibration
+    #: ends with the NPT
+    hold_solute: bool = False
     #: heavy atoms held by harmonic position restraints during NVT/NPT (released for production)
     restrained_atoms: list[int] = field(default_factory=list)
     restraint_k: float = 1000.0            # kJ/mol/nm^2
@@ -92,7 +97,8 @@ class EquilibrationResult:
 
 
 def _context(system: mm.System, backend, settings: EquilibrationSettings, dt_fs: float, device, barostat: bool,
-             restraint_reference: np.ndarray | None, seed: int, barostat_seed: int | None = None):
+             restraint_reference: np.ndarray | None, seed: int, barostat_seed: int | None = None,
+             wall: bool = True):
     """A Context of ``backend`` for one part of the MD. ``seed`` is that of the integrator; the
     barostat takes ``barostat_seed``, or the next number."""
     prepared = backend.prepare_system(system)
@@ -114,7 +120,7 @@ def _context(system: mm.System, backend, settings: EquilibrationSettings, dt_fs:
         for i in settings.restrained_atoms:
             force.addParticle(int(i), [float(v) for v in restraint_reference[i]])
         prepared.addForce(force)
-    if restraint_reference is not None and settings.wall_atoms and settings.wall_half_width_nm > 0:
+    if wall and restraint_reference is not None and settings.wall_atoms and settings.wall_half_width_nm > 0:
         wall = mm.CustomExternalForce(
             "k_wall*step(wall_d-dz)*(wall_d-dz)^2; dz=periodicdistance(x,y,z,x,y,wall_z)")
         wall.addGlobalParameter("k_wall", settings.wall_k)
@@ -172,13 +178,22 @@ def _run_once(system, positions, box, frame_atoms, settings: EquilibrationSettin
     pos, vel, bx = _state_arrays(ctx)
     del ctx, integ
 
-    # ---- production (no position restraints), frames for the restraint search -----------
-    return unrestrained_md(system, (pos, vel, bx), frame_atoms, settings, dt_fs, device, log)
+    if settings.production_ns <= 0:
+        # no MD after the NPT: its end is the end of the pre-equilibration, and its one frame
+        atoms = [int(i) for i in frame_atoms]
+        return EquilibrationResult(
+            positions=pos, velocities=vel, box=bx, frames=pos[atoms][None].astype(np.float32),
+            frame_boxes=np.asarray(bx, dtype=float)[None], frame_atoms=atoms, timestep_fs=dt_fs, notes=[],
+            mean_volume_nm3=float(abs(np.linalg.det(bx))), mean_box=np.asarray(bx, dtype=float), simulated_ns=0.0,
+            area_nm2=np.array([float(bx[0][0] * bx[1][1])]), pocket_waters=np.array([]), drift=None, backend="openmm")
+    # ---- production: frames for the restraint search; the solute free, or held where it was given ----
+    return unrestrained_md(system, (pos, vel, bx), frame_atoms, settings, dt_fs, device, log,
+                           held_at=np.asarray(positions) if settings.hold_solute else None)
 
 
 def unrestrained_md(system, start, frame_atoms, settings: EquilibrationSettings, dt_fs: float, device, log,
                     what: str = "pre-equilibration MD", seed: int | None = None,
-                    barostat_seed: int | None = None) -> EquilibrationResult:
+                    barostat_seed: int | None = None, held_at: np.ndarray | None = None) -> EquilibrationResult:
     """An unrestrained NPT run of the fully interacting system from ``start`` (positions,
     velocities, box) on the backend of the leg, ``settings.md_backend``.
 
@@ -216,7 +231,7 @@ def unrestrained_md(system, start, frame_atoms, settings: EquilibrationSettings,
             md_backend = stock
     try:
         return _production(system, md_backend, start, frame_atoms, settings, dt_fs, device, log, notes, seed,
-                           barostat_seed)
+                           barostat_seed, held_at)
     except (mm.OpenMMException, EquilibrationError) as exc:
         if md_backend is stock:
             raise
@@ -227,7 +242,7 @@ def unrestrained_md(system, start, frame_atoms, settings: EquilibrationSettings,
         log(f"{what} failed on {settings.md_backend} ({str(exc)[:150]}); repeating it on stock OpenMM")
         notes.append(f"the {what} failed on {settings.md_backend} and was repeated on stock OpenMM")
         return _production(system, stock, start, frame_atoms, settings, dt_fs, device, log, notes, seed,
-                           barostat_seed)
+                           barostat_seed, held_at)
 
 
 #: how the note of earlier versions about a bilayer that had not settled began (a verdict with levels of
@@ -253,14 +268,17 @@ def membrane_drift(areas, waters) -> dict:
 
 
 def _production(system, backend, start, frame_atoms, settings: EquilibrationSettings, dt_fs: float, device, log,
-                notes: list[str], seed: int | None = None, barostat_seed: int | None = None) -> EquilibrationResult:
+                notes: list[str], seed: int | None = None, barostat_seed: int | None = None,
+                held_at: np.ndarray | None = None) -> EquilibrationResult:
     """An unrestrained NPT run of ``settings.production_ns`` on ``backend`` with a frame after
     every ``settings.frame_interval_ps`` and one at its end: the one after NVT and NPT, and each
     trajectory from which a restraint is chosen. ``seed`` and ``barostat_seed`` are those of the
     integrator and of the barostat (by default the ones of the pre-equilibration)."""
     pos, vel, bx = start
-    ctx, integ = _context(system, backend, settings, dt_fs, device, True, None,
-                          settings.seed + 200 if seed is None else int(seed), barostat_seed)
+    # held_at: the positions at which ``settings.restrained_atoms`` are held (the solute of a pre-equilibration
+    # that keeps the pose that was given); None: nothing is held
+    ctx, integ = _context(system, backend, settings, dt_fs, device, True, held_at,
+                          settings.seed + 200 if seed is None else int(seed), barostat_seed, wall=False)
     _load(ctx, pos, bx, vel)
     from cufep.steps import md_steps
 

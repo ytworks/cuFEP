@@ -151,7 +151,8 @@ def restraint_selection_lines(cfg) -> str:
         n = analysed_frames(cfg)
         lines += [
             "selection interactions: the anchors are chosen from the protein-ligand interactions of unrestrained MD.",
-            f"  {ri.trajectories} trajectories of {ri.length_ns:g} ns from the end of the pre-equilibration, a frame "
+            f"  {ri.trajectories} trajectories of {ri.length_ns:g} ns from the pose that was given (held while the "
+            "solvent settles), a frame "
             f"every {ri.frame_interval_ps:g} ps, the first {ri.discard_ns:g} ns of each left out: {n} frames;",
             f"  on the backend of the leg ({cfg.backend.name}, fallback {cfg.backend.fallback});",
             f"  an interaction is kept in {frames_needed(n, ri.min_frame_fraction)} frames or more "

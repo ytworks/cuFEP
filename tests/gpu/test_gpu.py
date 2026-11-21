@@ -445,3 +445,28 @@ def test_the_pre_equilibration_of_a_leg_runs_in_single_precision_where_it_is_ask
     assert result.frames.shape == (4, len(solute), 3) and np.all(np.isfinite(result.positions))
     assert np.all(np.isfinite(result.velocities)) and np.abs(result.box - box).max() < 0.2
     assert not [line for line in lines if "stock OpenMM" in line or "2 fs" in line]
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_a_pre_equilibration_that_holds_the_solute_runs_on_the_backend_of_the_leg(backend):
+    """``restraints.selection: interactions`` holds the heavy atoms of the solute where they were given while
+    the surroundings settle; for a bilayer the MD after NVT and NPT runs with them held, on the backend of the
+    leg. Without a fallback: the plugin runs it with the position restraints, and the held atoms stay."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling.equilibrate import EquilibrationSettings, pre_equilibrate
+
+    system, top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    atoms = list(top.atoms())
+    heavy = [i for i in sorted(ligand + other) if atoms[i].element.symbol != "H"]
+    settings = EquilibrationSettings(nvt_ns=0.002, npt_ns=0.002, production_ns=0.02, frame_interval_ps=5.0,
+                                     minimize_iterations=200, platform="CUDA", timestep_fs=2.0, seed=3,
+                                     md_backend=backend, fallback="none", restrained_atoms=heavy, hold_solute=True)
+    held = pre_equilibrate(system, pos, box, sorted(ligand + other), settings, 0, lambda line: None)
+    assert held.backend == backend and held.notes == [] and held.frames.shape[0] == 4
+    assert np.linalg.norm(held.positions[heavy] - pos[heavy], axis=1).max() < 0.1
+    free = pre_equilibrate(system, pos, box, sorted(ligand + other),
+                           EquilibrationSettings(**{**settings.__dict__, "hold_solute": False}), 0, lambda line: None)
+    assert np.linalg.norm(free.positions[heavy] - pos[heavy], axis=1).max() > 0.1
+
