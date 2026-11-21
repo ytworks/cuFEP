@@ -356,3 +356,49 @@ def test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends(
         del ctx
     diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
     assert np.max(np.abs(diff)) < 0.1, diff
+
+
+# ------------------------------------------------------------------- MD for the restraint
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_the_trajectories_for_a_restraint_run_on_the_backend_of_the_leg(backend, tmp_path):
+    """The unrestrained NPT trajectories from which ``restraints.selection: interactions`` chooses a
+    restraint run on the backend that is configured, two processes at a time on one GPU and in the
+    process of the job alike, and each file records that backend. No fallback is allowed here: a
+    plugin that is configured and not used fails the test instead of passing on stock OpenMM."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling import restraint_md
+    from cufep.sampling.equilibrate import EquilibrationSettings
+
+    system, _top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    solute = sorted(ligand + other)
+    settings = EquilibrationSettings(production_ns=0.002, frame_interval_ps=0.5, platform="CUDA", precision="mixed",
+                                     timestep_fs=2.0, seed=5, md_backend=backend, fallback="none",
+                                     temperature_K=300.0, pressure_bar=1.0, barostat_frequency=25)
+
+    def tasks(directory, n):
+        xml = mm.XmlSerializer.serialize(system)
+        return [restraint_md.TrajectoryTask(
+            index=k, path=str(restraint_md.trajectory_file(directory, k)), system_xml=xml, positions=pos,
+            velocities=np.zeros_like(pos), box=box, frame_atoms=solute, settings=settings, timestep_fs=2.0,
+            made_with={"trajectory": k}) for k in range(n)]
+
+    lines = []
+    summaries = restraint_md.run_trajectories(tasks(tmp_path / "processes", 3), [0, 0], lines.append)
+    assert [(s["index"], s["backend"], s["frames"], s["notes"]) for s in summaries] == \
+        [(k, backend, 4, []) for k in range(3)]
+    assert not [line for line in lines if "stock OpenMM" in line]
+    read = restraint_md.read_trajectories(tmp_path / "processes", 3)
+    assert read.backends == [backend] * 3 and read.timesteps_fs == [2.0] * 3 and read.notes == []
+    assert read.frames.shape == (12, len(solute), 3) and np.all(np.isfinite(read.frames))
+    assert read.time_ps.tolist() == pytest.approx([0.5, 1.0, 1.5, 2.0] * 3)
+    firsts = [read.frames[read.trajectory == k][-1] for k in range(3)]
+    assert not np.allclose(firsts[0], firsts[1], atol=1e-4) and not np.allclose(firsts[1], firsts[2], atol=1e-4)
+    # NPT: the box moves, and the solute stays what it was (no atom flew off)
+    assert not np.allclose(read.boxes, read.boxes[0]) and np.abs(read.boxes - box).max() < 0.2
+    assert np.abs(read.frames - pos[solute]).max() < 1.5
+
+    inline = restraint_md.run_trajectories(tasks(tmp_path / "inline", 2), [0], lines.append, inline=True)
+    assert [s["backend"] for s in inline] == [backend] * 2
+    assert restraint_md.read_trajectories(tmp_path / "inline", 2).frames.shape == (8, len(solute), 3)
