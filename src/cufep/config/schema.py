@@ -229,30 +229,42 @@ class WindowsConfig(_Section):
 
 
 class ComplexInitialWindows(_Section):
-    restrain: int = Field(default=3, ge=2)
-    discharge: int = Field(default=5, ge=2)
-    vanish: int = Field(default=9, ge=2)
+    restrain: StageWindows = 3
+    discharge: StageWindows = 5
+    vanish: StageWindows = 9
+
+    _check = field_validator("restrain", "discharge", "vanish")(_check_stage)
 
 
 class SolventInitialWindows(_Section):
-    discharge: int = Field(default=5, ge=2)
-    vanish: int = Field(default=9, ge=2)
+    discharge: StageWindows = 5
+    vanish: StageWindows = 9
+
+    _check = field_validator("discharge", "vanish")(_check_stage)
 
 
 class InitialWindows(_Section):
-    """Equally spaced windows per leg and stage with which adaptive lambda scheduling starts."""
+    """Windows per leg and stage with which adaptive lambda scheduling starts: a number of evenly
+    spaced windows (the start of the paper), or the lambda values, which need not be evenly
+    spaced and must be candidates (cuFEP's own)."""
 
     complex: ComplexInitialWindows = Field(default_factory=ComplexInitialWindows)
     solvent: SolventInitialWindows = Field(default_factory=SolventInitialWindows)
 
-    def for_leg(self, leg: str) -> dict[str, int]:
+    def for_leg(self, leg: str) -> dict[str, StageWindows]:
         section = self.complex if leg == "complex" else self.solvent
         return {name: getattr(section, name) for name in type(section).model_fields}
 
 
 class WindowLimits(_Section):
-    complex: int = 48
-    solvent: int = 32
+    """Largest number of lambda windows of a leg in adaptive lambda scheduling.
+
+    100 in both legs is the owner's choice of 2026-11-21 (48 and 32 until then; the paper gives
+    no limit).
+    """
+
+    complex: int = 100
+    solvent: int = 100
 
 
 class PrecalculationLengths(_Section):
@@ -262,16 +274,61 @@ class PrecalculationLengths(_Section):
     solvent: float = Field(ge=0.0)
 
 
+class LegThresholds(_Section):
+    """An overlap threshold of adaptive lambda scheduling for each leg."""
+
+    complex: float = Field(gt=0.0, lt=0.5)
+    solvent: float = Field(gt=0.0, lt=0.5)
+
+
+class LegOverlapMatrices(_Section):
+    """The overlap matrix that adaptive lambda scheduling reads, for each leg."""
+
+    complex: Literal["stage", "pair"]
+    solvent: Literal["stage", "pair"]
+
+
+class LegCandidates(_Section):
+    """A number of candidate lambda values per stage for each leg."""
+
+    complex: int = Field(ge=3)
+    solvent: int = Field(ge=3)
+
+
+class LegModes(_Section):
+    """How the lambda windows are chosen, for each leg."""
+
+    complex: Literal["adaptive", "fixed"]
+    solvent: Literal["adaptive", "fixed"]
+
+
+def _of_leg(value, leg: str):
+    """The value of a setting that is given once for both legs or once per leg."""
+    return getattr(value, leg) if isinstance(value, _Section) else value
+
+
 class AdaptiveConfig(_Section):
-    """Adaptive lambda scheduling (Midgley et al., J. Chem. Inf. Model. 2025, 65, 512)."""
+    """Adaptive lambda scheduling (Midgley et al., J. Chem. Inf. Model. 2025, 65, 512).
+
+    ``overlap_threshold``, ``overlap_matrix`` and ``candidates`` are one value for both legs or
+    one per leg (``{complex: ..., solvent: ...}``), as the lengths of the precalculation are;
+    ``initial_windows`` and ``max_windows`` are always given per leg.
+    """
 
     #: a pair of neighbouring windows is deficient if its overlap is at or below this value. 0.18 is
     #: the owner's choice of 2026-11-20 from the examples at 5 ns (the paper: 0.04; at 0.20 the
-    #: precalculation of the TYK2 solvent leg did not converge before max_windows)
-    overlap_threshold: float = Field(default=0.18, gt=0.0, lt=0.5)
+    #: precalculation of the TYK2 solvent leg did not converge before max_windows, 32 then)
+    overlap_threshold: float | LegThresholds = 0.18
+    #: the overlap matrix whose element is that overlap. stage: the matrix of all windows of the
+    #: stage (the paper). pair: the matrix of the two neighbouring windows alone (cuFEP's own, the
+    #: owner's decision of 2026-11-21). An element of the stage matrix is shared among all
+    #: windows that overlap, so it falls when windows get closer and windows that are close
+    #: enough read as deficient; the overlap of a pair alone rises to 0.5 as its windows meet
+    overlap_matrix: Literal["stage", "pair"] | LegOverlapMatrices = "stage"
     #: number of equally spaced candidate lambda values per stage
-    candidates: int = Field(default=101, ge=3)
-    #: windows per leg and stage in the first iteration (the schedule never gets smaller than this)
+    candidates: int | LegCandidates = 101
+    #: windows per leg and stage in the first iteration (the schedule never gets smaller than this):
+    #: a number of evenly spaced windows, or the lambda values
     initial_windows: InitialWindows = Field(default_factory=InitialWindows)
     #: MD per new window in the precalculation during which energies are recorded: one number
     #: for both legs, or one per leg. The solvent leg has the paper's 50 ps. A complex leg needs
@@ -289,6 +346,33 @@ class AdaptiveConfig(_Section):
     walk_ps: float = Field(default=5.0, gt=0.0)
     #: largest number of windows per leg; reaching it ends the precalculation with a warning
     max_windows: WindowLimits = Field(default_factory=WindowLimits)
+
+    @field_validator("overlap_threshold")
+    @classmethod
+    def _threshold_is_an_overlap(cls, v):
+        # the overlap of two windows lies between 0 and 0.5 (the limits of a leg are in LegThresholds)
+        if not isinstance(v, LegThresholds) and not 0.0 < v < 0.5:
+            raise ValueError("overlap_threshold must be above 0 and below 0.5")
+        return v
+
+    @field_validator("candidates")
+    @classmethod
+    def _a_stage_has_candidates_between_its_ends(cls, v):
+        if not isinstance(v, LegCandidates) and v < 3:
+            raise ValueError("candidates must be at least 3")
+        return v
+
+    def threshold(self, leg: str) -> float:
+        """The overlap at or below which a pair of neighbouring windows of this leg is deficient."""
+        return float(_of_leg(self.overlap_threshold, leg))
+
+    def matrix(self, leg: str) -> str:
+        """The overlap matrix read in this leg: ``stage`` or ``pair``."""
+        return str(_of_leg(self.overlap_matrix, leg))
+
+    def candidates_of(self, leg: str) -> int:
+        """The number of candidate lambda values per stage of this leg."""
+        return int(_of_leg(self.candidates, leg))
 
     @field_validator("window_ps")
     @classmethod
@@ -318,8 +402,9 @@ class AdaptiveConfig(_Section):
 
 class LambdaScheduleConfig(_Section):
     #: adaptive: the precalculation decides the number and the values of the lambda windows;
-    #: fixed: the windows below are used as they are
-    mode: Literal["adaptive", "fixed"] = "adaptive"
+    #: fixed: the windows below are used as they are. One value for both legs, or one per leg
+    #: (``{complex: adaptive, solvent: fixed}``)
+    mode: Literal["adaptive", "fixed"] | LegModes = "adaptive"
     windows: WindowsConfig = Field(default_factory=WindowsConfig)
     adaptive: AdaptiveConfig = Field(default_factory=AdaptiveConfig)
     #: fixed mode: MD in each window, one window after the other, that gives the replicas their
@@ -328,6 +413,16 @@ class LambdaScheduleConfig(_Section):
     #: a schedule.yaml written by an earlier run (or a directory of them, as written by
     #: `cufep benchmark freeze`); if given it is used as it is, whatever the mode
     file: Path | None = None
+
+    def mode_of(self, leg: str) -> str:
+        """How the windows of this leg are chosen: ``adaptive`` or ``fixed``."""
+        return str(_of_leg(self.mode, leg))
+
+    def precalculated_legs(self) -> list[str]:
+        """The legs whose windows a precalculation of adaptive lambda scheduling decides."""
+        if self.file is not None:
+            return []
+        return [leg for leg in ("complex", "solvent") if self.mode_of(leg) == "adaptive"]
 
 
 class PreEquilibrationLeg(_Section):
@@ -497,18 +592,17 @@ def md_segments(cfg: "Config") -> list[tuple[str, int]]:
             md_steps(cfg.sampling.time_per_iteration_ps, dt))]
     # the walks through the windows (fixed_walk_ps, adaptive.walk_ps) are one trajectory that goes from
     # window to window: no other configuration shares its Context, so it is not listed here
-    if ls.mode == "adaptive" and ls.file is None:
-        a = ls.adaptive
-        for leg in ("complex", "solvent"):
-            eq_steps, n_samples, per_sample = precalculation_steps(a.window(leg), a.equilibration(leg),
-                                                                   a.sample_interval_ps, dt)
-            out.append(
-                (
-                    f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
-                    "the precalculation, which starts from a configuration of its own)",
-                    eq_steps + n_samples * per_sample,
-                )
+    a = ls.adaptive
+    for leg in ls.precalculated_legs():
+        eq_steps, n_samples, per_sample = precalculation_steps(a.window(leg), a.equilibration(leg),
+                                                               a.sample_interval_ps, dt)
+        out.append(
+            (
+                f"lambda_schedule.adaptive.window_ps + equilibration_ps of the {leg} leg (one window of "
+                "the precalculation, which starts from a configuration of its own)",
+                eq_steps + n_samples * per_sample,
             )
+        )
     return out
 
 
@@ -547,6 +641,7 @@ def configuration_problems(cfg: "Config") -> list[str]:
     water = water_problem(cfg.forcefield.water, membrane=bool(cfg.membrane.enabled))
     if water:
         problems.append(water)
+    problems += initial_window_problems(cfg)
     if cfg.restraints.selection == "interactions":
         # the thresholds of the rule are numbers of frames, rounded down: none of them may be no frame
         n = analysed_frames(cfg)
@@ -559,6 +654,33 @@ def configuration_problems(cfg: "Config") -> list[str]:
                     f"{ri.length_ns:g} ns, the first {ri.discard_ns:g} ns left out, a frame every "
                     f"{ri.frame_interval_ps:g} ps) and {name} = {fraction:g} of them is less than one frame: an "
                     "interaction in no frame would be kept. Run longer trajectories or keep frames more often")
+    return problems
+
+
+def initial_window_problems(cfg: "Config") -> list[str]:
+    """Why adaptive lambda scheduling could not start from ``initial_windows``: the windows of a
+    stage are candidates (a number of them must fit on the candidates, given values must be
+    candidates), and a leg does not start with more windows than ``max_windows``. Asked of the
+    rule the precalculation starts with, and only of the legs that run a precalculation."""
+    from cufep.alchemy.candidates import initial_window_indices
+
+    ls = cfg.lambda_schedule
+    a, problems = ls.adaptive, []
+    for leg in ls.precalculated_legs():
+        total, stages = 0, a.initial_windows.for_leg(leg)
+        for stage, spec in stages.items():
+            try:
+                total += len(initial_window_indices(spec, a.candidates_of(leg)))
+            except ValueError as exc:
+                problems.append(f"lambda_schedule.adaptive.initial_windows.{leg}.{stage}: {exc} "
+                                f"(lambda_schedule.adaptive.candidates = {a.candidates_of(leg)})")
+                total = None
+                break
+        limit = getattr(a.max_windows, leg)
+        if total is not None and total - (len(stages) - 1) > limit:
+            problems.append(f"lambda_schedule.adaptive.initial_windows.{leg} gives the {leg} leg "
+                            f"{total - (len(stages) - 1)} lambda windows to start with (windows at stage boundaries "
+                            f"are shared), more than lambda_schedule.adaptive.max_windows.{leg} = {limit}")
     return problems
 
 

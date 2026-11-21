@@ -84,7 +84,7 @@ restraints:
 alchemy:
   softcore_alpha: 0.5
 lambda_schedule:
-  mode: adaptive                  # adaptive | fixed
+  mode: adaptive                  # adaptive | fixed; one value, or one per leg: {complex: adaptive, solvent: fixed}
   windows:                        # per stage: a number of lambda windows, or the lambda values
     complex:
       restrain: 6
@@ -94,9 +94,10 @@ lambda_schedule:
       discharge: 5
       vanish: [0.0, 0.12, 0.24, 0.36, 0.48, 0.6, 0.7, 0.77, 0.85, 1.0]
   adaptive:
-    overlap_threshold: 0.18
-    candidates: 101
-    initial_windows:
+    overlap_threshold: 0.18       # one value, or one per leg: {complex: ..., solvent: ...}
+    overlap_matrix: stage         # stage | pair: the overlap matrix the threshold is compared with; one value, or one per leg
+    candidates: 101               # one value, or one per leg
+    initial_windows:              # per stage: a number of evenly spaced windows, or the lambda values (candidates)
       complex:
         restrain: 3
         discharge: 5
@@ -113,8 +114,8 @@ lambda_schedule:
     sample_interval_ps: 0.5
     walk_ps: 5.0
     max_windows:
-      complex: 48
-      solvent: 32
+      complex: 100
+      solvent: 100
   fixed_walk_ps: 50.0             # fixed mode: MD in each window that gives the replicas their start configurations
   file: null                      # a schedule.yaml of an earlier run of the same leg (or a directory of them), used as it is
 sampling:
@@ -184,6 +185,47 @@ windows; `lambda_schedule.adaptive` holds its parameters. The rule is described 
 `schedule.yaml` in the leg directory; copying them into `lambda_schedule.windows` reproduces
 the schedule in fixed mode.
 
+The precalculation starts from `lambda_schedule.adaptive.initial_windows`. Each stage is given
+either as a number of evenly spaced windows or as its lambda values, an increasing list from
+0.0 to 1.0. The values need not be evenly spaced, and each must be one of the `candidates`
+(a multiple of 0.01 with 101 candidates). The schedule never has fewer windows than this
+start. Where the rule adds a window it spaces the windows of that bad section evenly again, so
+values of the start inside a bad section move; those outside every bad section stay as given.
+A start the precalculation could not use is refused when the configuration is read: a value
+that is no candidate, a number of windows that does not fit on the candidates, more windows
+than `max_windows`.
+
+```yaml
+lambda_schedule:
+  adaptive:
+    initial_windows:
+      complex: {restrain: 3, discharge: 5, vanish: [0.0, 0.25, 0.5, 0.7, 0.8, 0.9, 1.0]}
+```
+
+`lambda_schedule.adaptive.overlap_matrix` says which overlap the rule compares with
+`overlap_threshold`. `stage`, the default, is the element of the overlap matrix of all windows
+of the stage, as in the paper. `pair` is the element of the overlap matrix of the two
+neighbouring windows alone: it lies between 0 and 0.5 and rises as the two windows get closer,
+whatever other windows the stage has. A threshold means different spacings under the two: the
+table of the basis below gives both for harmonic windows. The analysis of a result always
+checks the matrix of all windows (`analysis.min_overlap`).
+
+The complex leg and the solvent leg can run different window settings. `initial_windows`,
+`max_windows`, `windows` and the two lengths of the precalculation have a value for each leg.
+`mode`, `overlap_threshold`, `overlap_matrix` and `candidates` are one value for both legs, or
+one for each leg (both legs must then be named):
+
+```yaml
+lambda_schedule:
+  mode: {complex: adaptive, solvent: fixed}
+  adaptive:
+    overlap_threshold: {complex: 0.30, solvent: 0.18}
+    overlap_matrix: {complex: pair, solvent: stage}
+```
+
+A leg keeps the `schedule.yaml` it has: after a change of these settings the precalculation of
+a leg that was already scheduled runs again only with `cufep run --reschedule`.
+
 ## Basis of the recommended values
 
 | settings | recommended value | basis |
@@ -205,10 +247,11 @@ the schedule in fixed mode.
 | `sampling.rest2.residues` | none | named as in the input PDB: residue number, with the chain of the input and the insertion code where needed (`"B:898A"`). The preparation gives every peptide segment a chain of its own (A, B, ... in order) and records which chain of the input it came from (`input_chains` in `prep/prep.json`); a number that two chains of the input have must be given with its chain. Prepared systems of an earlier version have no such record and are refused when residues are named |
 | `sampling.rest2.region` | pocket | the owner's choice (2026-11-20), for both examples too. The hot region of the complex leg holds the ligand and the protein residues with a heavy atom within `pocket_cutoff_nm` (0.4 nm, cuFEP's own choice) of a heavy atom of the ligand in the prepared structure; the default of SOMD2 is the ligand alone (`ligand`). One calculation of each example with it (ALS threshold 0.18, 5 ns of production per window) gave -8.94 ± 0.77 kcal/mol for TYK2 ejm_31 (experiment -9.54) and -11.95 ± 0.73 for A2A 4e (experiment -12.07); one run each, and runs of a complex leg differ among themselves by more than these errors (protocol.md, "REST2"): the full benchmark runs with the same settings gave -9.84 ± 0.33 and -18.91 ± 0.52 (`benchmarks/results/`) |
 | `lambda_schedule.windows` | complex 30 windows, solvent 14 | default lambda values of OpenFE's ABFE protocol, which uses the same soft-core form and replica exchange |
-| `lambda_schedule.adaptive.overlap_threshold`, `candidates` | 0.18, 101 | The method and `candidates`: Midgley et al., J. Chem. Inf. Model. 2025, 65, 512, whose threshold is 0.04. 0.18 is the owner's choice (2026-11-20): with 0.04 the production of the TYK2 and A2A complex legs had neighbouring windows below the overlap of 0.03 of Klimovich et al. (0.024 at vanish 0.75-0.88, which the precalculation had read as 0.096 and 0.073); with 0.10 to 0.18 the lowest overlap in their production was 0.065 to 0.147. The threshold cannot go much higher: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. With 0.20 TYK2 legs added windows until `max_windows` (see protocol.md) |
+| `lambda_schedule.adaptive.overlap_threshold`, `candidates` | 0.18, 101 | The method and `candidates`: Midgley et al., J. Chem. Inf. Model. 2025, 65, 512, whose threshold is 0.04. 0.18 is the owner's choice (2026-11-20): with 0.04 the production of the TYK2 and A2A complex legs had neighbouring windows below the overlap of 0.03 of Klimovich et al. (0.024 at vanish 0.75-0.88, which the precalculation had read as 0.096 and 0.073); with 0.10 to 0.18 the lowest overlap in their production was 0.065 to 0.147. The threshold cannot go much higher: an element of the overlap matrix is shared among all windows that overlap, so windows that are close have elements near 1 / (their number) and no added window can raise them. With 0.20 TYK2 legs added windows until `max_windows`, 48 and 32 then (see protocol.md). Each of the two is one value for both legs or one per leg |
+| `lambda_schedule.adaptive.overlap_matrix` | stage | `stage`: the paper's rule, which reads the overlap matrix of the current windows. `pair`: the overlap matrix of the two neighbouring windows alone, cuFEP's own and the owner's decision (2026-11-21), for a start with more windows and a threshold above what an element of the matrix of a stage can reach. For unit-width harmonic windows d apart the element in the matrix of the stage is d exp(-d^2/4) / (2 sqrt(pi)) once windows are close: at most 0.242, at d = sqrt(2), and 0.22, 0.13, 0.07 at d = 1, 0.5, 0.25. That of the pair alone is 0.22, 0.40, 0.47, 0.49 at d = 2, 1, 0.5, 0.25, and 0.5 where the windows meet (measured: `test_the_overlap_of_a_pair_alone_rises_as_windows_get_closer_and_the_matrix_of_the_stage_falls`). With 21 such windows 1.5 apart and a threshold of 0.33 the rule ends with every pair above the threshold when it reads the pair, and adds windows until `max_windows` when it reads the stage (`test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_a_pair_alone`). The default stays `stage` until the candidates of plan `docs/plans/2026-11-21-als-initial-window-design.md` have been run |
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent leg: 50 ps, no equilibration; complex leg: 500 ps after 500 ps of equilibration | Solvent leg: the paper's value, set there for a ligand in solution. Complex leg: cuFEP's own values. The pocket adapts to a partly decoupled ligand over hundreds of picoseconds, and a 50 ps precalculation read the overlap of the affected windows several times too high (protocol.md, "What was measured on TYK2") |
-| `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 in both legs | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer (cuFEP's own choice for these two) |
-| `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 48 and 32 | cuFEP's own choice; the paper does not give them |
+| `lambda_schedule.adaptive.initial_windows` | restrain 3, discharge 5, vanish 9 in both legs | 9 is the paper's number for one lambda coordinate; the restrain and discharge energies are linear and quadratic in lambda and start with fewer (cuFEP's own choice for these two). A stage can also be given the lambda values of its start, which need not be evenly spaced: cuFEP's own, the owner's order of 2026-11-21 (the paper starts from evenly spaced windows) |
+| `lambda_schedule.adaptive.sample_interval_ps`, `max_windows` | 0.5 ps; 100 in both legs | The paper gives neither. The interval is cuFEP's own choice. The limit is the owner's choice (2026-11-21; 48 and 32 until then). With the threshold 0.18 no leg of the two full benchmark runs came near it: 17 to 30 windows in the complex legs, 16 to 21 in the solvent legs. A leg whose precalculation does not reach the threshold grows to the limit, and ends there with a warning |
 | `lambda_schedule.fixed_walk_ps` | 50 ps | cuFEP's own choice: in fixed mode the replicas get their start configurations from a walk through the windows with this much MD in each |
 | `analysis.min_overlap` | 0.03 | Klimovich, Shirts and Mobley 2015, section 3.5: "values as low as 0.03 [seem] to be tolerable to yield a reliable free energy estimate"; below it the estimate "will likely be substantially incorrect". Also the level of Mey et al. 2020. The first condition for a usable result |
 | `analysis.min_effective_samples` | 50 | Mey et al., Best Practices for Alchemical Free Energy Calculations, 2020, section 8.2: "it is recommended that the effective number of uncorrelated samples Neff >= ~50 if the BAR or MBAR estimators ... are used". Counted for each lambda window from the statistical inefficiency of its energy difference to the next window (Klimovich, Shirts and Mobley 2015, section 2.5; alchemlyb's default) |

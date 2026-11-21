@@ -62,8 +62,11 @@ Open items:
   and the measurements that would separate the causes of cuFEP's larger errors; nothing decided.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
-  0.9; the restraint does not explain it and no cause is established). It was not looked into in
-  PR #6; a plan of its own waits for the owner's decision.
+  0.9; the restraint does not explain it and no cause is established). Plan
+  `docs/plans/2026-11-21-als-initial-window-design.md` (in progress, draft PR #7: the settings are
+  implemented, the defaults unchanged except `max_windows` 100; the nine runs not started) tests
+  the owner's hypothesis: more initial windows of adaptive lambda scheduling, placed where the
+  sampling is slow.
 - The benchmarks were made with `restraints.selection: auto`, the default until 2026-11-21; a
   rerun with the default `interactions` is not part of the plan. One calculation per example
   says nothing about a difference in accuracy (the spread between runs: the item above).
@@ -74,6 +77,50 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [progress] The overlap of a pair alone for adaptive lambda scheduling; settings per leg
+- What: `lambda_schedule.adaptive.overlap_matrix`: `stage` (the paper's matrix of all windows of a
+  stage; the default until the candidates of the plan have run) or `pair` (the two neighbouring
+  windows alone; cuFEP's own, the owner's decision). `mode`, `overlap_threshold`, `overlap_matrix`
+  and `candidates` take one value or one per leg. `schedule.yaml` keeps the matrix and, with `pair`,
+  the overlap of each pair beside the element of the stage. The documents now say that the rule
+  spaces a bad section evenly again, so given start values inside one move (the commit of the entry
+  below said none is removed). In the image: unit tests 674 passed, GPU tests 25 passed.
+- Why: an element of the stage matrix falls when windows get close (harmonic windows: at most
+  0.242), so many initial windows or a higher threshold run to `max_windows`; legs set separately.
+- Refs: PR #7, the plan, `docs/configuration.md`, `docs/protocol.md` (adaptive lambda scheduling)
+
+### 2026-11-21 — [progress] The start of adaptive lambda scheduling can be given as lambda values
+- What: `lambda_schedule.adaptive.initial_windows` takes per stage a number of evenly spaced
+  windows, as before, or the lambda values, which need not be evenly spaced and must be candidates;
+  the start is written to `schedule.yaml` (`initial_lambda`). A start the precalculation cannot use
+  (a value that is no candidate, a number that does not fit on the candidates, more windows than
+  `max_windows`) is refused when the configuration is read; a number that did not fit used to stop
+  the leg after its pre-equilibration. Defaults unchanged. In the image: unit tests 663 passed,
+  GPU tests 25 passed (one GPU).
+- Why: the owner's hypothesis (2026-11-21): more initial windows, not evenly spaced; step 3 of the plan.
+- Refs: PR #7, `docs/configuration.md` (`initial_windows`), `src/cufep/alchemy/candidates.py`
+
+### 2026-11-21 — [design] `lambda_schedule.adaptive.max_windows` is 100 in both legs
+- What: the largest number of lambda windows of a leg in adaptive lambda scheduling goes from 48
+  (complex) and 32 (solvent) to 100. Nothing else changes: with the threshold 0.18 the legs of
+  the two full benchmark runs had 16 to 30 windows. A leg whose precalculation does not reach the
+  threshold now grows to 100 before it ends with its warning.
+  Unit tests in the image: 654 passed; GPU tests not run (they set the limit themselves).
+- Why: the owner's order (2026-11-21); step 2 of the plan, whose candidates start from more windows.
+- Refs: PR #7, `docs/plans/2026-11-21-als-initial-window-design.md`, `docs/configuration.md`
+  (`max_windows`)
+
+### 2026-11-21 — [design] Plan: the initial windows of adaptive lambda scheduling, three candidates
+- What: the owner's decisions: `max_windows` 100; ALS stays on and starts from more windows that
+  need not be evenly spaced; a higher threshold, for which a deficient pair is read from the overlap
+  of the two neighbouring windows alone (cuFEP's own; the paper's matrix stays a setting); every
+  window setting per leg in the YAML. Three candidates for the complex leg (OpenFE's values; a
+  layout by where ALS put windows times the square root of the statistical inefficiency; that
+  layout doubled), three runs of the TYK2 example each. Defaults change after the owner picks.
+- Why: the complex leg differs between runs (standard deviation 1.9 kcal/mol); in the stored
+  benchmark legs 31 of the 41 windows with fewer than 50 independent samples lie at vanish 0.7-1.0.
+- Refs: `docs/plans/2026-11-21-als-initial-window-design.md` (not implemented yet), issue #5
 
 ### 2026-11-21 — [progress] PR #6 merged on the owner's order: the restraint from interactions
 - What: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` is done (14 steps, an
@@ -93,58 +140,3 @@ Open items:
   end. Within one run the 1 ns blocks of the complex leg range over 5 kcal/mol.
 - Why: to measure the spread between runs of the method as it is (issue #5). No cause is established.
 - Refs: PR #6, the plan (its section on these runs), `runs/tyk2_spread_1b770da_{1,2,3}` (untracked)
-
-### 2026-11-21 — [progress] Step 14: both examples from the pose that was given
-- What: one calculation each with the image of 720cdb1 (4 GPUs, 5 ns of production per window,
-  the default `interactions`). TYK2 ejm_31: -12.16 ± 0.32 kcal/mol (experiment -9.54), restraint
-  on VAL 981 as in the four earlier runs. A2A 4e: -15.47 ± 1.00 (experiment -12.07), restraint on
-  GLU 169; the hydrogen bonds with ASN 253 of the input pose are kept in the MD (648 and 462 of
-  800 frames). Overlap criterion met in all legs; a window with fewer than 50 independent
-  samples in one leg of each. The same commands again computed nothing again.
-- Why: the last step of the plan. With one calculation each and a spread between runs of 2.7
-  kcal/mol (TYK2), the runs do not say whether the change of the start moved the values.
-- Refs: PR #6, the plan (its section on these runs), `runs/*_interactions_720cdb1` (untracked)
-
-### 2026-11-21 — [amendment] Confirmation passes of Codex (third to fifth): fixes
-- What: three passes that confirm the fixes (reviews 6004258602, 6004435142, 6004511116 on PR #6;
-  read only). After the last two: the record of a pre-equilibration that holds the solute has no
-  `md_ns` (a change of that setting, which such a leg does not read, had refused the run), and the
-  files of the two commits that recorded it (720cdb1, 48213b7: the example runs) stay usable;
-  `equil.npz` names the precision of the platform where the platform has its own; the documents
-  give the lengths with a bilayer and "at most 200 frames" for the RMSD. Not changed, reasons on
-  the PR: 4, 16, 19, 29, 30 and two new points about a refusal after a changed setting.
-- Why: the owner's order (a review by Codex after fixes; only what needs fixing is fixed).
-- Refs: PR #6, the plan (its last section)
-
-### 2026-11-21 — [design] The MD for the restraint starts from the pose that was given
-- What: a complex leg with `restraints.selection: interactions` holds the heavy atoms of protein and
-  ligand through NVT and NPT (and through `membrane.equilibration_ns` for a bilayer) and runs no
-  free MD before its four trajectories; the alchemical run starts from the same configuration.
-  `auto`, `manual` and the solvent leg are unchanged. The distance force constant stays 10
-  kcal/mol/A^2, also the owner's decision (it is 0.1 to 0.2 of the 1.5 to 2.5 kcal/mol the restraint costs).
-- Why: the owner's decision. After 10 ns of free MD two runs of the A2A example had the ligand in
-  two states and chose two restraints (ALA 59, ASN 253; -12.14 and -16.85 kcal/mol); the method
-  starts its trajectories from the minimised input.
-- Refs: PR #6, the plan (its last section), `docs/protocol.md` (steps 1 and 2)
-
-### 2026-11-21 — [amendment] Re-review by Codex: fixes; two runs of the TYK2 example 5 kcal/mol apart
-- What: 36 findings by reading, each reproduced before it was changed (88965b8); seven not changed
-  (reasons on the PR). The six coordinates of a restraint are measured as its force measures them
-  (OpenMM's periodic rule for every displacement); OpenFE's flat-angle rule is asked once, with the
-  constants the restraint gets, of the frames, the start and the reference angles; settings of
-  records are compared without a tolerance. The TYK2 example ran twice with `interactions`: -10.85
-  ± 0.65 (image 0f3aa32) and -5.83 ± 0.75 kcal/mol (fce6929): same anchors and force constants,
-  the difference in the vanish stage; code of the alchemical run and analysis unchanged between them.
-- Why: the owner's order (a review by Codex after fixes; only what needs fixing is fixed).
-- Refs: PR #6 (review 6003995828), the plan (its last two sections), issue #5
-
-### 2026-11-21 — [amendment] Second review (Codex) of the restraint from interactions: fixes
-- What: 26 findings by reading (11 P1), each reproduced before it was changed. The nearest image in a
-  skewed cell; the six coordinates of a restraint in the image its force measures in; the start held
-  to the rules of one configuration; OpenFE's flat-angle rule with the force constants that
-  `force_constants: auto` gives (all three selections); a candidate without reference values passed
-  over; a fraction of the frames rounded down as written; whole numbers of records compared exactly;
-  a restraint tied to its pre-equilibration; residues named as the input names them. Three findings
-  not changed (reasons on the PR): a threshold of no frame stays a refusal by the owner's decision.
-- Why: the owner's order of 2026-11-21 (a review by Codex after the push).
-- Refs: PR #6 (review 6003453011; commits b4b26e6, 9b0f8fd), the plan (its last section)

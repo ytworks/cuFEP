@@ -263,7 +263,9 @@ its data are not used for the free energy.
 Definitions. Lambda can take `candidates` (101) equally spaced values. The windows of a
 stage are ordered by lambda. A pair of neighbouring windows is *deficient* if its element
 of the overlap matrix (the superdiagonal) is at or below `overlap_threshold` (0.18 by default,
-the owner's choice; the paper uses 0.04: configuration.md). A *bad
+the owner's choice; the paper uses 0.04: configuration.md). The matrix is that of all windows
+of the stage, or by `overlap_matrix: pair` that of the two windows of the pair alone ("Why the
+threshold cannot go much higher"). A *bad
 section* is a run of consecutive deficient pairs that cannot be extended; its length is its
 number of pairs.
 
@@ -301,7 +303,11 @@ lambda coordinate and runs the precalculation for the ligand in solution only. I
 every stage of every leg is treated as one such coordinate, with its own candidates, overlap
 matrix and bad sections; at most one window is added per stage and iteration. The start
 (`initial_windows`) is 3 windows for restrain, 5 for discharge and 9 for vanish; since windows
-are never removed, this is also the smallest schedule.
+are never removed, this is also the smallest schedule. A stage can also be given the lambda
+values of its start. They must be candidates and need not be evenly spaced (cuFEP's own: the
+paper starts from evenly spaced windows). The rule treats them as any start: where it adds a
+window, step 5 spaces the windows of that bad section evenly, so given values inside a bad
+section move, and those outside every bad section stay.
 
 Points the paper does not specify, and cuFEP's rule for each:
 
@@ -309,14 +315,18 @@ Points the paper does not specify, and cuFEP's rule for each:
 |---|---|
 | an evenly spaced value that is not a candidate | rounded to the nearest candidate, a half to the even one (0.125 becomes 0.12, the value that appears in the paper) |
 | a bad section whose windows are already one candidate apart | skipped; if no section can be refined the precalculation ends with a warning |
-| upper limit of the number of windows | `max_windows`; reaching it ends the precalculation with a warning |
+| upper limit of the number of windows | `max_windows` (100 per leg by default); reaching it ends the precalculation with a warning |
 | a pair exactly at the threshold | deficient (as in the analysis scripts published with the paper) |
-| data used for the overlap matrix | the windows currently in the schedule |
+| data used for the overlap matrix | the windows currently in the schedule (`overlap_matrix: stage`, the default); with `overlap_matrix: pair` the two windows of each pair alone |
 | energy samples per window | every `sample_interval_ps` (0.5 ps): 100 per window in the solvent leg, 1000 in the complex leg |
 | start of a new window | last configuration of the nearest window that has been run |
 
-The windows, the threshold and one record per iteration (windows, overlaps, the chosen
-section, the new lambda values) are written to `schedule.yaml` in the leg directory. The
+The windows, the start (`initial_windows` as numbers, `initial_lambda` as values), the
+threshold, the matrix it was compared with and one record per iteration (windows, overlaps, the
+chosen section, the new lambda values) are written to `schedule.yaml` in the leg directory. A
+record always holds the elements of the matrix of the stage (`superdiagonal`), the quantity the
+analysis of the production checks, and with `overlap_matrix: pair` also the overlap of each
+pair alone (`pair_overlap`), which the rule read. The
 last configuration of each window is the start of its replica; replica exchange then runs
 its own equilibration before the production.
 
@@ -326,8 +336,10 @@ its own equilibration before the production.
 |---|---|---|
 | when the windows are chosen | in a precalculation before the production: "Once converged, all results from the ALS are discarded, and the converged bespoke λ schedule is used in a production run" | the same. No window is added during the equilibration or the production of the replica-exchange run |
 | rule and values | threshold 0.04 (0.03 and 0.05 also tested), 101 candidates, one window per iteration into the longest bad section | the same rule and 101 candidates; threshold 0.18 by default (the owner's choice of 2026-11-20, configuration.md) |
+| the overlap compared with the threshold | the element of the overlap matrix of the current windows | the same by default (`overlap_matrix: stage`); by a setting the overlap of the two windows of a pair alone (`overlap_matrix: pair`, cuFEP's own, the owner's decision of 2026-11-21) |
+| settings of the two legs | one precalculation, for the ligand in solution | each leg has its settings: every window setting can be given per leg (configuration.md) |
 | MD per new window of the precalculation | 50 ps | solvent leg: 50 ps. Complex leg: 500 ps recorded after 500 ps of equilibration, because the pocket adapts to a partly decoupled ligand over hundreds of picoseconds ("What was measured on TYK2") |
-| initial windows | 9, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9 |
+| initial windows | 9 evenly spaced ones, for the one lambda coordinate of a relative transformation | per stage: restrain 3, discharge 5, vanish 9, evenly spaced; a stage can instead be given the lambda values of its start, not necessarily evenly spaced |
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
 | after the production | not part of the method | the analysis checks the overlap and the number of independent samples, the levels of the literature, and shows the forward and reverse series and the halves without a verdict ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
@@ -394,9 +406,20 @@ all windows that overlap. Windows that are close to each other therefore have su
 elements near 1 / (number of such windows), however close they are: eleven discharge
 windows of toluene, which has almost no charge, read 0.065 each. Above that level a
 threshold cannot be met and each added window lowers the overlaps further: with a threshold
-of 0.20 the TYK2 complex leg grew to `max_windows` (measured while 0.04 was the default), and
-with 5 ns of production the TYK2 solvent leg grew to 32 windows (2026-11-20). The default of
-0.18 is the owner's choice from those runs.
+of 0.20 the TYK2 complex leg grew to `max_windows`, 48 then (measured while 0.04 was the
+default), and with 5 ns of production the TYK2 solvent leg grew to 32 windows, its limit then
+(2026-11-20). The default of 0.18 is the owner's choice from those runs.
+
+For the same reason a start with many windows reads as deficient where its windows are closer
+than they need to be, and the rule then adds windows there. `overlap_matrix: pair` (the
+owner's decision of 2026-11-21, cuFEP's own) lets the rule read the overlap of a pair from the
+overlap matrix of its two windows alone. That number lies between 0 and 0.5 and rises as the
+two windows get closer, whatever other windows the stage has, so a start with many windows and
+a threshold above 0.2 end with every pair above the threshold. For unit-width harmonic windows
+the two numbers are, by the distance of neighbours in widths: 2: 0.21 and 0.22; 1: 0.22 and
+0.40; 0.5: 0.13 and 0.47; 0.25: 0.07 and 0.49 (matrix of the stage, pair alone; measured in the
+unit tests). The same threshold therefore asks for another spacing under the two matrices. The
+analysis of a result keeps the matrix of all windows and its level of 0.03.
 
 *What windows do not cure.* Runs of TYK2 ejm_31 differ by the same amount with 13 to 34
 windows per leg. In the solvent leg the free energy follows the orientation of the ligand's
