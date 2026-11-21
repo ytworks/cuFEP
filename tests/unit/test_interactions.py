@@ -283,6 +283,7 @@ def test_the_restraint_of_a_leg_is_chosen_from_the_interactions_of_its_trajector
     assert info["ligand_rmsd_reference"] == "input pose" and 0.0 < info["ligand_rmsd_A"] < 1.0
     assert set(info["versions"]) == {"prolif", "MDAnalysis", "rdkit"}
     assert restraint_choice(info)["anchors"] == info["anchors"] and restraint_choice({"selection": "auto"}) is None
+    assert json.loads(json.dumps(info)) == info                 # as restraint.json holds it
     # the reference values: the histograms of the analysed frames (those later than 0.1 ns of both trajectories)
     from cufep.sampling.restraint_md import read_trajectories
 

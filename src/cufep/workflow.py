@@ -1135,8 +1135,9 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
     absent = [i for i in ligand if i not in row]
     if absent:
         raise WorkflowError(f"the MD for the restraint kept no positions of the ligand atoms {absent[:5]}")
-    c_alpha = [row[a.index] for a in atoms if a.name == "CA" and a.index in row and a.index not in set(ligand)
-               and a.residue.index in backbone_hosts(topology)]
+    # the residues that can hold host anchors, among the atoms of the frames
+    hosts = {r: trio for r, trio in backbone_hosts(topology).items() if all(a in row for a in trio)}
+    c_alpha = [row[trio[1]] for trio in hosts.values()]
     if len(c_alpha) < 1:
         raise WorkflowError("the frames of the MD for the restraint hold no protein backbone")
     # whole molecules with the ligand in the image next to the protein: ProLIF and the angles of the rule know no box
@@ -1144,7 +1145,6 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
                                   np.asarray(analysed.frames, dtype=float)[:, c_alpha, :].mean(axis=1),
                                   np.asarray(analysed.boxes, dtype=float))
     records = interactions_of_frames(topology, xyz, frame_atoms, ligand, rdmol)
-    hosts = {r: trio for r, trio in backbone_hosts(topology).items() if all(a in row for a in trio)}
     stable = stable_structure_fractions(topology, xyz, frame_atoms)
     frames = rule.Frames(xyz=xyz, atoms=frame_atoms, ligand=ligand, hosts=hosts, stable_fraction=stable,
                          boxes=np.asarray(analysed.boxes, dtype=float), trajectory=analysed.trajectory)
