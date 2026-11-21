@@ -25,6 +25,12 @@ For a first look that finishes in minutes, shorten the sampling on the command l
 cufep run examples/kinase_tyk2/config.yaml --production-ns 0.2 -o runs/tyk2_try
 ```
 
+Everything a configuration does not name is a default. Among the defaults, the Boresch restraint
+of the complex leg is chosen from the interactions between protein and ligand in four short
+unrestrained trajectories of the complex (`restraints.selection: interactions`,
+`docs/configuration.md`); they run before the lambda windows are chosen, also in the short first
+look above.
+
 The A2A configuration switches the membrane on with `membrane: {enabled: true}`. cuFEP then
 orients the complex, builds a POPC bilayer around it and hydrates the pocket. Without that
 line a system is always simulated in water.

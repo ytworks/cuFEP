@@ -143,8 +143,10 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    within 0.6 nm of the ligand between the last two quarters. The run is never made longer for
    it. In the A2A example the area was still shrinking after 10 ns, by 1.5 % between the last
    two quarters.
-2. Complex leg only: choose the Boresch restraint (`restraints.selection`). With `auto`, from
-   the trajectory of the pre-equilibration. Ligand anchor:
+2. Complex leg only: choose the Boresch restraint (`restraints.selection`). By default
+   (`interactions`) the anchors come from the interactions between protein and ligand in
+   unrestrained MD of the complex, as described further down. With `auto` they come from
+   the trajectory of the pre-equilibration, as in OpenFE's protocol. Ligand anchor:
    three bonded atoms of an aromatic ring near the centre of the molecule. Protein anchor:
    three bonded backbone atoms in stable secondary structure, RMSF below 0.1 nm, 0.5-1.5 nm
    from the ligand anchor. Candidates are held to two rules of OpenFE's `EvaluateBoreschAtoms`
@@ -165,8 +167,8 @@ inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A liga
    for manual anchors. The RMSD and the drift of the centre of the ligand in the coupled state
    during the production are numbers of the result too (`structure`).
 
-   With `restraints.selection: interactions` the anchors come from the interactions between
-   protein and ligand in unrestrained MD of the complex, the method of Ding et al.
+   With `restraints.selection: interactions`, the default, the anchors come from the interactions
+   between protein and ligand in unrestrained MD of the complex, the method of Ding et al.
    (arXiv:2603.22274 v3, sec. 2.1 and 2.4; `docs/configuration.md` quotes its rules and says
    which numbers are those of its published source and what is cuFEP's own):
    - Four NPT trajectories of 3 ns start from the end of the pre-equilibration and differ by
@@ -1044,7 +1046,7 @@ The absolute binding protocol of OpenFE, from its documentation and source code 
 | a calculation that is not good enough | left to the user | the user runs the leg concerned again, longer or with more lambda windows |
 | replica exchange | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
 | MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns |
-| restraint | Boresch, atoms chosen automatically, fixed force constants | as OpenFE (`restraints.selection: auto`); from the interactions of unrestrained MD with `interactions` |
+| restraint | Boresch, atoms chosen automatically, fixed force constants | from the interactions of unrestrained MD of the complex by default (`restraints.selection: interactions`); as OpenFE with `auto` |
 | water sampling | none | none |
 | GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
 | membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |

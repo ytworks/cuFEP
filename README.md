@@ -42,7 +42,8 @@ compute backend; stock OpenMM is the second backend and is always available.
   basis, and can be changed in YAML.
 - **Soluble and membrane proteins.** With `membrane: {enabled: true}` the complex is oriented and
   embedded in a POPC bilayer. cuFEP never decides this by itself.
-- **An established protocol.** Double decoupling with Boresch restraints chosen automatically,
+- **An established protocol.** Double decoupling with Boresch restraints chosen automatically
+  from the interactions between protein and ligand in MD of the complex,
   Hamiltonian replica exchange with REST2 on the ligand and its pocket, and MBAR. Defaults and
   terms follow the literature and published open methods, and the documentation gives the source
   of each default.
@@ -70,7 +71,10 @@ from the protein (complex leg) and from water (solvent leg).
    [Systems](docs/protocol.md#systems)).
 2. **Pre-equilibration** of the fully interacting system (minimisation, NVT, NPT, then 5 ns of
    MD in the complex leg).
-3. **Boresch restraint** chosen from that trajectory with the rules of OpenFE
+3. **Boresch restraint.** Four unrestrained trajectories of the complex (3 ns each) are analysed
+   with ProLIF, and the anchors are chosen from the interactions between protein and ligand
+   that last (Ding et al. 2026). With `restraints.selection: auto` they are chosen from the
+   trajectory of step 2 with the rules of OpenFE instead
    ([Steps of one leg](docs/protocol.md#steps-of-one-leg)).
 4. **Lambda windows** chosen by adaptive lambda scheduling: a short precalculation inserts
    windows until neighbouring windows overlap enough
@@ -146,7 +150,7 @@ RESULT ejm_31: dG_bind = ... ± ... kcal/mol (standard error from time blocks, 1
 | `protein_prepared.pdb` | the protein as simulated |
 | `summary.csv`, `summary.json` | binding free energies, uncertainties, messages |
 | `timing.json` | time per phase and job, GPU utilisation |
-| `<ligand>/repeat_<n>/<leg>/` | restraint, lambda windows (`schedule.yaml`), samples, result (`result.json`) and log of the leg |
+| `<ligand>/repeat_<n>/<leg>/` | restraint, lambda windows (`schedule.yaml`), samples, result (`result.json`) and log of the leg; in the complex leg also the trajectories the restraint was chosen from (`restraint_md/`) and their interactions (`interactions.json`, `interactions.csv`, `interactions.png`) |
 | `<ligand>/repeat_<n>/analysis.png` | forward and reverse series, halves and blocks of the production, and the overlap matrix of both legs |
 
 One calculation per ligand is run by default. Its uncertainty is the
@@ -353,6 +357,9 @@ on:
   replica exchange with solute tempering (REST2)", J. Phys. Chem. B 2011, 115, 9431.
 - Shirts and Chodera, "Statistically optimal analysis of samples from multiple equilibrium
   states", J. Chem. Phys. 2008, 129, 124105 (MBAR).
+- Ding, Liu, Wang, Xia, Wang and Yan, "Development and large-scale benchmarks of a
+  protein-ligand absolute binding free energy toolkit", arXiv:2603.22274 (the anchors of the
+  restraint from the interactions of an MD).
 - Midgley, Bariami, Habgood and Mackey, "Adaptive Lambda Scheduling: A Method for Computational
   Efficiency in Free Energy Perturbation Simulations", J. Chem. Inf. Model. 2025, 65, 512.
 - Klimovich, Shirts and Mobley, "Guidelines for the analysis of free energy calculations",

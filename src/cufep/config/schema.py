@@ -156,10 +156,10 @@ class InteractionsConfig(_Section):
 
 class RestraintConfig(_Section):
     type: Literal["boresch"] = "boresch"
-    #: auto: anchors with the smallest fluctuations in the pre-equilibration (the search of OpenFE);
     #: interactions: anchors from the protein-ligand interactions of unrestrained MD of the complex
-    #: (the section ``interactions``); manual: host_atoms and guest_atoms
-    selection: Literal["auto", "interactions", "manual"] = "auto"
+    #: (the section ``interactions``); auto: anchors with the smallest fluctuations in the
+    #: pre-equilibration (the search of OpenFE); manual: host_atoms and guest_atoms
+    selection: Literal["interactions", "auto", "manual"] = "interactions"
     #: openfe or custom: the two values below; auto: kT / sigma^2 of each restrained coordinate in
     #: the pre-equilibration, kept within 0.25-4 times the two values' defaults
     force_constants: Literal["openfe", "auto", "custom"] = "openfe"

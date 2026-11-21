@@ -762,14 +762,20 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
     old_restraint = {"restraint": {"host_atoms": [1, 2, 3], "guest_atoms": [4, 5, 6], "k_r": 10.0 * 4.184 * 100.0,
                                    **angles},
                      "info": {"selection": "auto", "force_constants": "openfe"}}
-    assert restraint_contradictions(old_restraint, cfg) == []
-    assert restraint_contradictions(old_restraint, config(restraints={"force_constants": "auto"})) \
+
+    def searched(**settings):
+        """A configuration with the selection of those versions, the search (the default until 2026-11-21)."""
+        return config(restraints={"selection": "auto", **settings})
+
+    assert restraint_contradictions(old_restraint, searched()) == []
+    assert restraint_contradictions(old_restraint, searched(force_constants="auto")) \
         == ["restraints.force_constants: openfe -> auto"]
     # the selection "interactions" came later, with settings of its own. The record of a restraint of another
     # selection is what it was before (commit cda6965), so that the restraints of earlier runs stay usable; a
     # restraint of the search is not one of a run that chooses from interactions, recorded or not
-    from_md = config(restraints={"selection": "interactions"})
-    assert restraint_made_with(cfg) == {
+    from_md = config()
+    assert from_md.restraints.selection == "interactions"
+    assert restraint_made_with(searched()) == {
         "type": "boresch", "selection": "auto", "force_constants": "openfe", "k_r_kcal_per_A2": 10.0,
         "k_angle_kcal_per_rad2": 80.0, "host_atoms": None, "guest_atoms": None, "rmsf_cutoff_nm": 0.1,
         "host_min_distance_nm": 0.5, "host_max_distance_nm": 1.5, "dssp_filter": True}
@@ -779,7 +785,7 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         "fallback_frame_fraction": 0.15, "fallback_cutoff_nm": 1.0}
     assert restraint_contradictions(old_restraint, from_md) == ["restraints.selection: auto -> interactions"]
     with pytest.raises(WorkflowError, match="selection: auto -> interactions"):
-        check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(cfg),
+        check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(searched()),
                         restraint_made_with(from_md))
     assert check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(from_md),
                            restraint_made_with(config(restraints={"selection": "interactions"})))
@@ -787,15 +793,15 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
         check_made_from("the restraint of this leg", tmp_path / "restraint.json", restraint_made_with(from_md),
                         restraint_made_with(config(restraints={"selection": "interactions",
                                                                "interactions": {"length_ns": 2.0}})))
-    assert restraint_contradictions(old_restraint, config(restraints={"k_r_kcal_per_A2": 20.0})) \
+    assert restraint_contradictions(old_restraint, searched(k_r_kcal_per_A2=20.0)) \
         == ["restraints.k_r_kcal_per_A2: 10 -> 20"]
     # review of PR 1: the distance constant kept and the angle constant changed from 80 to 20 went through
-    assert restraint_contradictions(old_restraint, config(restraints={"k_angle_kcal_per_rad2": 20.0})) == [
+    assert restraint_contradictions(old_restraint, searched(k_angle_kcal_per_rad2=20.0)) == [
         "restraints.k_angle_kcal_per_rad2: k_theta_a 80, k_theta_b 80, k_phi_a 80, k_phi_b 80, k_phi_c 80 -> 20"]
     one_differs = {"restraint": dict(old_restraint["restraint"], k_phi_b=40.0 * 4.184), "info": old_restraint["info"]}
-    assert restraint_contradictions(one_differs, cfg) == ["restraints.k_angle_kcal_per_rad2: k_phi_b 40 -> 80"]
+    assert restraint_contradictions(one_differs, searched()) == ["restraints.k_angle_kcal_per_rad2: k_phi_b 40 -> 80"]
     only_distance = {"restraint": {"k_r": 10.0 * 4.184 * 100.0}, "info": old_restraint["info"]}
-    assert restraint_contradictions(only_distance, config(restraints={"k_angle_kcal_per_rad2": 20.0})) == []
+    assert restraint_contradictions(only_distance, searched(k_angle_kcal_per_rad2=20.0)) == []
     assert restraint_contradictions(old_restraint, config(restraints={
         "selection": "manual", "host_atoms": [1, 2, 9], "guest_atoms": [4, 5, 6]})) \
         == ["restraints.selection: auto -> manual", "restraints.host_atoms: [1, 2, 3] -> [1, 2, 9]"]

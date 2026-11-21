@@ -63,7 +63,7 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
     configuration but the input files, which are the set's, the selection of ligands and the
     output directory. So a set runs as its example runs, and the example's ligand is one of the
     set's. ``full`` runs every ligand, ``subset`` five; ``smoke`` runs one and also shortens the
-    sampling (never lengthens a setting of the example).
+    sampling and the MD from which a restraint is chosen (never lengthens a setting of the example).
     """
     from cufep.config.schema import load_config
 
@@ -80,7 +80,9 @@ def benchmark_config(name: str, tier: str, out_dir: str | Path | None = None) ->
     if tier == "smoke":
         _shorten(data, {"sampling": SMOKE_SAMPLING,
                         "lambda_schedule": {"adaptive": {"window_ps": 10, "equilibration_ps": 0}},
-                        "membrane": {"equilibration_ns": 0.5}})
+                        "membrane": {"equilibration_ns": 0.5},
+                        # the MD from which a restraint is chosen (restraints.selection: interactions)
+                        "restraints": {"interactions": {"length_ns": 0.3, "discard_ns": 0.1}}})
     return Config.model_validate(data)
 
 

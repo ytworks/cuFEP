@@ -9,18 +9,18 @@ Older Change Log entries: `docs/progress/archive/change-log.md`.
 OpenMM, on all GPUs of a machine, from two files.
 
 - Inputs: a protein PDB and a ligand SDF with the ligand placed in the pocket. Every other
-  setting has a recommended default with its basis and can be set in YAML
-  (`docs/configuration.md`).
+  setting has a recommended default with its basis and can be set in YAML.
 - Backends: NVIDIA's cuPotential plugin for OpenMM by default, stock OpenMM as the second
   backend and the fallback. cuPotential is a compute backend, not a force field; the force
   fields are ff14SB, TIP3P, Lipid21 and OpenFF 2.2.1 with AM1-BCC charges.
 - Soluble proteins in water; membrane proteins in a POPC bilayer when `membrane.enabled` is set
   (never detected).
-- Protocol: double decoupling with Boresch restraints chosen as OpenFE chooses them,
-  Hamiltonian replica exchange with REST2 on the ligand and its pocket, adaptive lambda
-  scheduling (Midgley et al. 2025), MBAR with the checks of the literature. Defaults and terms
-  follow the literature and published open methods (`docs/configuration.md`); one calculation per
-  ligand.
+- Protocol: double decoupling with Boresch restraints chosen from the protein-ligand
+  interactions of unrestrained MD of the complex (Ding et al., arXiv:2603.22274; as OpenFE
+  chooses them with `restraints.selection: auto`), Hamiltonian replica exchange with REST2 on
+  the ligand and its pocket, adaptive lambda scheduling (Midgley et al. 2025), MBAR with the
+  checks of the literature. Defaults and terms follow the literature and published open methods
+  (`docs/configuration.md`); one calculation per ligand.
 - Speed is a requirement: replicas spread over all GPUs in proportion to the work, several
   workers per GPU through NVIDIA MPS.
 - Benchmarks against experiment and the FEP+ predictions of the Schrödinger public binding free
@@ -37,9 +37,9 @@ and ruff; PR #4, plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.m
 with the settings of the examples, the full sets, an accuracy wiki). Analysis version 10.
 In progress: plan `docs/plans/2026-11-21-restraints-from-md-interactions.md` (the Boresch
 restraint from the protein-ligand interactions of unrestrained MD, to become the default
-`restraints.selection`); steps 1 to 9 of 14: `restraints.selection: interactions` can be chosen
-and is tested on the CPU with trajectories made by hand; the default is still `auto`. Not run
-on a GPU yet; no example run yet.
+`restraints.selection`); steps 1 to 12 of 14: `interactions` is the default. Tested on the CPU
+with trajectories made by hand and on a GPU with the trajectories on both backends. Left: the
+review of the whole diff and one run of each example (steps 13 and 14).
 
 | item | status |
 |---|---|
@@ -57,9 +57,9 @@ Open items:
 - The wiki pages of PR #4 (`docs/wiki/`) are not yet on the GitHub Wiki: it has no page
   (checked 2026-11-21; the owner creates its first page). Issue #5: the differences from Felis
   and the measurements that would separate the causes of cuFEP's larger errors; nothing decided.
-- The benchmarks and both example results above were made with `restraints.selection: auto`.
-  The plan of 2026-11-21 changes the default at its step 12; a rerun of the benchmarks is not
-  part of that plan.
+- The benchmarks and both example results above were made with `restraints.selection: auto`,
+  the default until 2026-11-21. With the default `interactions` neither example has a result
+  yet (step 14 of the plan); a rerun of the benchmarks is not part of that plan.
 - `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
   5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
   decision (`.claude/rules/fep-invariants.md`).
@@ -67,6 +67,16 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-21 — [design] The default `restraints.selection` is `interactions`
+- What: a configuration that names no selection chooses the Boresch restraint from the
+  protein-ligand interactions of four unrestrained trajectories of the complex; `auto` (the
+  search of OpenFE's protocol, the default until now) and `manual` are selectable. Both
+  examples and with them both benchmark sets run so; the smoke tier of a benchmark shortens
+  those trajectories. A restraint made with `auto` is refused by a run of the default (another
+  selection): give `restraints.selection: auto` to go on with such a directory.
+- Why: the owner's decision of 2026-11-21.
+- Refs: PR #6, `docs/configuration.md` (`restraints.selection`), `docs/protocol.md` (step 2)
 
 ### 2026-11-21 — [progress] `restraints.selection: interactions` can be chosen
 - What: the complex leg can choose its Boresch restraint from four unrestrained NPT trajectories
