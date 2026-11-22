@@ -5,7 +5,7 @@ writes only under spikes/out/m24/. Numbers only.
 
     scripts/in_docker.sh python spikes/m24_relocation_feasibility.py RUN LIGAND [--window last|INDEX]
             [--from start|checkpoint] [--moves 200] [--trials 16,128,1024,4096] [--seed 1]
-            [--choice uniform|biased]
+            [--choice uniform|biased] [--exact]
 
 The move is the one of Ding et al. (arXiv:2603.22274 v3, RelocationMC) in the form a program without
 their kernel can run: a water molecule is taken out of one of two regions, the sphere around the
@@ -32,8 +32,15 @@ parameters in a window with lambda 1 of both stages and not at all in the last w
 windows are refused). So the numbers say how often such a move would pass ITS FIRST test with
 this stand-in; a second test with the energy of the simulation would follow.
 
+``--exact`` (needs a GPU) makes that second test as well, as the paper's rule has it: r is
+multiplied by exp(-(dU - (u_C - u_D)) / kT), dU the change of the potential energy of the
+simulation when the water is put at the chosen pose (the System the leg sampled, in the state of
+the window, in a Context made as a worker of the run makes its own), u_C - u_D the same change
+by the stand-in. Every move is tried from the stored configuration; none is carried out.
+
 Printed per direction and number of trial poses: the mean acceptance over the moves, the share of
-moves with r above 0.01 and above 1, and the numbers of water molecules in the two regions.
+moves with r above 0.01 and above 1, and the numbers of water molecules in the two regions; with
+``--exact`` also the mean acceptance of both tests together and what the stand-in misses.
 """
 from __future__ import annotations
 
@@ -100,6 +107,7 @@ def main() -> None:
         raise SystemExit(__doc__)
     run, ligand = Path(args[0]).resolve(), args[1]
     window, source, n_moves, trials, seed, choice = "last", "start", 200, [16, 128, 1024, 4096], 1, "uniform"
+    exact = False
     rest = args[2:]
     while rest:
         a = rest.pop(0)
@@ -115,6 +123,8 @@ def main() -> None:
             seed = int(rest.pop(0))
         elif a == "--choice":
             choice = rest.pop(0)
+        elif a == "--exact":
+            exact = True
         else:
             raise SystemExit(f"unknown argument {a}")
     import openmm as mm
@@ -200,6 +210,39 @@ def main() -> None:
 
     if choice not in ("uniform", "biased"):
         raise SystemExit(__doc__)
+    potential = None
+    if exact:
+        # the Context of a worker of the leg, in the state of the window: the energy of the simulation
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from m22_decoupled_end_md import load_leg
+
+        from cufep.sampling.states import set_state
+        from cufep.sampling.storage import conditions_differences, stored_backend, stored_conditions
+        from cufep.sampling.worker import ReplicaWorker, worker_environment
+        from cufep.workflow import alchemical_leg, leg_spec
+
+        _cfg, _leg, info, _prep, eq, restraint, schedule = load_leg(run, ligand)
+        built = alchemical_leg(cfg, mm.XmlSerializer.deserialize(prep["system_xml"]), prep, eq["box"], restraint, True)
+        spec = leg_spec(cfg, built, [s.to_dict() for s in schedule.states], info["complex_barostat"],
+                        float(eq["timestep_fs"]), stored_backend(leg / "hrex"), int(cfg.sampling.seed) + 9201)
+        differing = conditions_differences(stored_conditions(leg / "hrex")[1], spec.conditions())
+        if differing:
+            raise SystemExit("the System built here is not the one the leg sampled: " + "; ".join(differing))
+        worker_environment(int(cfg.resources.cpu_threads_per_worker))
+        worker = ReplicaWorker(spec, 0, None)
+        set_state(worker.context, worker.states[k])
+        worker.context.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])
+        print(f"  the energy of the simulation: {worker.describe()}", flush=True)
+
+        def potential(x: np.ndarray) -> float:
+            worker.context.setPositions(x)
+            energy = worker.context.getState(getEnergy=True).getPotentialEnergy()
+            return float(energy.value_in_unit(u.kilojoule_per_mole))
+
+        base = potential(positions)
+        again = potential(positions)
+        print(f"  potential energy of the configuration {base:.2f} kJ/mol (computed again: {again - base:+.3f})",
+              flush=True)
     scores = None
     if choice == "biased":                      # the energy of every water molecule with everything else
         scores = np.array([env.energy(positions[w], q_w, sig_o, eps_o, leave_out=w) for w in waters])
@@ -217,6 +260,7 @@ def main() -> None:
             print(f"  {label}: no water molecule to take")
             continue
         log_r = {n: [] for n in trials}
+        residual = {n: [] for n in trials}       # (energy of the simulation - stand-in) of the move, in kT
         others = np.flatnonzero(~inside if from_inside else inside)
         for _ in range(n_moves):
             if scores is None:
@@ -226,22 +270,27 @@ def main() -> None:
                 picked = rng.choice(pool, p=weights / weights.sum())
             molecule = waters[picked]
             u_own = env.energy(positions[molecule], q_w, sig_o, eps_o, leave_out=molecule)
-            forward = np.array([env.energy(p, q_w, sig_o, eps_o, leave_out=molecule)
-                                for p in poses(molecule, not from_inside, k_max)])
+            candidates = poses(molecule, not from_inside, k_max)
+            forward = np.array([env.energy(p, q_w, sig_o, eps_o, leave_out=molecule) for p in candidates])
             back = np.array([env.energy(p, q_w, sig_o, eps_o, leave_out=molecule)
                              for p in poses(molecule, from_inside, k_max - 1)])
             for n in trials:
                 wf = np.logaddexp.reduce(-forward[:n] / KT)
                 wr = np.logaddexp.reduce(np.append(-back[:n - 1] / KT, -u_own / KT))
+                w = np.exp(-(forward[:n] - forward[:n].min()) / KT)
+                chosen = int(rng.choice(n, p=w / w.sum()))
+                u_new = forward[chosen]
                 if scores is None:
                     selection = np.log(n_s / (n_t + 1.0))
                 else:
-                    w = np.exp(-(forward[:n] - forward[:n].min()) / KT)
-                    u_new = forward[rng.choice(n, p=w / w.sum())]
                     z_s = np.logaddexp.reduce(scores[pool] / KT)
                     z_t = np.logaddexp.reduce(np.append(scores[others] / KT, u_new / KT))
                     selection = z_s - z_t + (u_new - u_own) / KT
                 log_r[n].append(selection + np.log(v_t / v_s) + wf - wr)
+                if potential is not None:
+                    moved = positions.copy()
+                    moved[molecule] = candidates[chosen]
+                    residual[n].append(((potential(moved) - base) - (u_new - u_own)) / KT)
         result["directions"][label] = {}
         for n in trials:
             x = np.array(log_r[n])
@@ -252,8 +301,20 @@ def main() -> None:
             print(f"  {label}, {n:5d} trial poses, {n_moves} moves: mean acceptance {acceptance:.4f}, r above 0.01 in "
                   f"{row['share_r_above_0.01']:.3f}, above 1 in {row['share_r_above_1']:.3f}, median ln r "
                   f"{row['median_log_r']:+.1f}", flush=True)
+            if potential is not None:
+                # the second test: r times exp(-(energy of the simulation - stand-in) / kT) of the move
+                res = np.array(residual[n])
+                y = x - res
+                both = float(np.mean(np.minimum(1.0, np.exp(np.minimum(y, 0.0)))))
+                row.update(mean_acceptance_with_the_energy_of_the_simulation=both,
+                           median_residual_kT=float(np.median(res)), sd_residual_kT=float(res.std(ddof=1)),
+                           median_log_r_with_the_energy_of_the_simulation=float(np.median(y)))
+                print(f"      with the energy of the simulation: mean acceptance {both:.4f}, median ln r "
+                      f"{np.median(y):+.1f}; energy of the simulation minus stand-in, of the move: median "
+                      f"{np.median(res):+.1f} kT, SD {res.std(ddof=1):.1f} kT", flush=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f"{ligand}_window{k}_{source}_{choice}.json").write_text(json.dumps(result, indent=1))
+    name = f"{ligand}_window{k}_{source}_{choice}" + ("_exact" if exact else "")
+    (OUT / f"{name}.json").write_text(json.dumps(result, indent=1))
 
 
 if __name__ == "__main__":

@@ -6,8 +6,11 @@ spikes/out/m21/. Numbers only: nothing here decides anything.
     scripts/in_docker.sh python spikes/m21_stored_run_measurements.py stages [--jobs 16]
     scripts/in_docker.sh python spikes/m21_stored_run_measurements.py pocket [--jobs 4] [--set a2a]
     scripts/in_docker.sh python spikes/m21_stored_run_measurements.py bilayer
+    scripts/in_docker.sh python spikes/m21_stored_run_measurements.py detect [--jobs 4]
 
-paths    how the start configurations of each leg were made (schedule.yaml), the signed error, the
+detect   where automatic equilibration detection puts the start of the production of every leg,
+         what the leg gives from there on, and the statistics of a set with it
+paths   how the start configurations of each leg were made (schedule.yaml), the signed error, the
          parts of the binding free energy and their change from the earlier run
 stages   the free energy of each stage from parts of the production (halves, fifths, the last 3
          and 4 ns), the pairs of windows with sterics 0.5 to 0.2, and the statistics of a set if a
@@ -344,6 +347,81 @@ def stages(jobs: int) -> None:
     (OUT / "stages.json").write_text(json.dumps(result, indent=1, default=float))
 
 
+# ------------------------------------------------------------------------------------ detect
+def leg_detected(args) -> dict:
+    """Where automatic equilibration detection (cufep.analysis.mbar.detect_equilibration) puts the
+    start of the production of a stored leg, and the MBAR part of the leg from there on."""
+    run, ligand, leg = args
+    import warnings
+
+    from cufep.analysis.mbar import detect_equilibration
+    from cufep.sampling.storage import read_samples
+
+    warnings.filterwarnings("ignore")
+    directory = leg_dir(Path(run), ligand, leg)
+    res = read_json(directory / "result.json")
+    samples = read_samples(directory / "hrex")
+    n_eq, total = int(res["n_equilibration_iterations"]), int(samples["u"].shape[0])
+    temperature, iteration_ps = float(res["temperature_K"]), float(samples["attrs"]["iteration_ps"])
+    found = detect_equilibration(samples["u"][n_eq:], samples["states"][n_eq:])
+    t = 0 if found is None else int(found["iterations"])
+    whole = part_free_energies(samples, n_eq, total, temperature)
+    after = part_free_energies(samples, n_eq + t, total, temperature)
+    return {"ligand": ligand, "leg": leg, "iterations": t, "ns": t * iteration_ps / 1000.0,
+            "production_ns": (total - n_eq) * iteration_ps / 1000.0,
+            "statistical_inefficiency": None if found is None else found["statistical_inefficiency"],
+            "effective_samples": None if found is None else found["effective_samples"],
+            "whole": None if whole is None else float(whole[-1]), "after": None if after is None else float(after[-1])}
+
+
+def detect(jobs: int) -> None:
+    from cufep.benchmarks.stats import metrics
+
+    tasks = [(str(runs["new"]), lig, leg) for runs in RUNS.values() for lig in report(runs["new"])
+             for leg in ("complex", "solvent")]
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        done = list(pool.map(leg_detected, tasks))
+    by = {(Path(t[0]).name, r["ligand"], r["leg"]): r for t, r in zip(tasks, done)}
+    result = {}
+    for name, runs in RUNS.items():
+        table = report(runs["new"])
+        order = sorted(table, key=lambda k: table[k]["error"])
+        rows = {lig: {leg: by[(runs["new"].name, lig, leg)] for leg in ("complex", "solvent")} for lig in order}
+        result[name] = rows
+        print(f"\n===== {name}: automatic equilibration detection on the production of the stored legs (the MBAR "
+              "part of both legs from the detected start; the tail correction and the release of the restraint as "
+              "reported), kcal/mol =====")
+        print("ligand   error | complex: left out ns, g, change of the leg | solvent: left out ns, g, change of the "
+              "leg | error with the detection")
+        pred, left = [], {"complex": [], "solvent": []}
+        for lig in order:
+            c, s = rows[lig]["complex"], rows[lig]["solvent"]
+            cells, shift = [], 0.0
+            for leg, sign in ((c, 1.0), (s, -1.0)):
+                d = np.nan if leg["whole"] is None or leg["after"] is None else leg["after"] - leg["whole"]
+                shift += sign * d
+                left[leg["leg"]].append(leg["ns"])
+                g = np.nan if leg["statistical_inefficiency"] is None else leg["statistical_inefficiency"]
+                cells.append(f"{leg['ns']:5.2f} {g:6.1f} {d:+6.2f}")
+            pred.append(table[lig]["dg"] - shift)
+            print(f"{lig:7s} {table[lig]['error']:+6.2f} | {cells[0]} | {cells[1]} | "
+                  f"{pred[-1] - table[lig]['exp']:+6.2f}")
+        exp, pred = np.array([table[lig]["exp"] for lig in order]), np.array(pred)
+        ok = np.isfinite(pred)
+        reported = np.array([table[lig]["dg"] for lig in order])
+        for label, values in (("as reported", reported), ("with the detection", pred)):
+            m = metrics(values[ok], exp[ok])
+            print(f"  {label:18s}: n {int(ok.sum())}, mean signed error {m['mean_signed_error']:+.2f}, RMSE after "
+                  f"removing it {m['centred_rmse']:.2f}, Kendall tau {m['kendall_tau']:+.2f}, "
+                  f"Pearson r {m['pearson_r']:+.2f}")
+        for leg, values in left.items():
+            x = np.array(values)
+            print(f"  {leg} leg: left out {x.mean():.2f} ns on average (least {x.min():.2f}, most {x.max():.2f}) of "
+                  f"{rows[order[0]][leg]['production_ns']:g} ns")
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "detect.json").write_text(json.dumps(result, indent=1, default=float))
+
+
 # ------------------------------------------------------------------------------------ pocket
 def lengths_angles(boxes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     a, b, c = boxes[:, 0], boxes[:, 1], boxes[:, 2]
@@ -579,7 +657,7 @@ def bilayer() -> None:
 
 def main() -> None:
     args = sys.argv[1:]
-    if not args or args[0] not in ("paths", "stages", "pocket", "bilayer"):
+    if not args or args[0] not in ("paths", "stages", "detect", "pocket", "bilayer"):
         raise SystemExit(__doc__)
     jobs, only = (16 if args[0] == "stages" else 4), list(RUNS)
     rest = args[1:]
@@ -595,6 +673,8 @@ def main() -> None:
         paths()
     elif args[0] == "stages":
         stages(jobs)
+    elif args[0] == "detect":
+        detect(jobs)
     elif args[0] == "pocket":
         pocket(jobs, only)
     else:
