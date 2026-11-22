@@ -199,7 +199,7 @@ converged: a slow change that does not occur during the run is invisible in it.
 cufep run config.yaml --ligand ejm_31 --leg complex --production-ns 20
 
 # more lambda windows: change lambda_schedule in config.yaml (for example
-# adaptive.initial_windows.complex.vanish: 13), then start that leg anew
+# adaptive.initial_windows.complex.vanish: 21), then start that leg anew
 cufep run config.yaml --ligand ejm_31 --leg complex --reschedule
 
 # look at a leg while it is being sampled (up to its last checkpoint)
@@ -267,9 +267,11 @@ Both examples set 5 ns of production per lambda window (the default is 10 ns); e
 setting is the default. The ligand of each example is in its benchmark set, and the full benchmark
 runs gave -9.84 ± 0.33 kcal/mol for TYK2 ejm_31 and -18.91 ± 0.52 kcal/mol for A2A 4e (standard
 errors of the one calculation; [benchmarks/results](benchmarks/results/README.md)). Those runs,
-and the two below, chose the restraint with `restraints.selection: auto`, the default at that
-time; the commands above now choose it from interactions (`interactions`), and what the examples
-gave with it is in [PROGRESS.md](PROGRESS.md). One calculation
+and the two below, chose the restraint with `restraints.selection: auto` and started adaptive
+lambda scheduling of the complex leg from 15 windows, the defaults at that time; the commands
+above now choose the restraint from interactions (`interactions`) and start that leg from 30
+windows ([docs/configuration.md](docs/configuration.md)), and what the examples gave since is in
+[PROGRESS.md](PROGRESS.md). One calculation
 of each example with the same settings on an earlier commit gave -8.94 ± 0.77 and -11.95 ± 0.73
 ([docs/configuration.md](docs/configuration.md), `sampling.rest2.region`): runs of a complex leg
 differ among themselves by more than the standard error of one run
@@ -302,7 +304,7 @@ the raw errors (cuFEP only) from the like-for-like statistics. Every ligand with
 compared, NOT RELIABLE ones included; the report also compares the NOT RELIABLE ligands and the
 others apart and says where each NOT RELIABLE leg is below the level of overlap.
 
-The full sets were run once, with the settings of the examples: TYK2 16 of 16 ligands, A2A 17 of
+The full sets were run once, with the settings the examples had at that time: TYK2 16 of 16 ligands, A2A 17 of
 17 compounds, no result NOT RELIABLE. The RMSE after removing the mean error is 1.74 kcal/mol for
 TYK2 and 2.26 for A2A (FEP+ 0.47 and 1.08), Kendall tau 0.12 and 0.38 (FEP+ 0.81 and 0.59), and
 the mean signed error -0.62 and -4.12. The results are in

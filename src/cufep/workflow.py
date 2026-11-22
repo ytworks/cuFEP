@@ -1999,6 +1999,7 @@ def run_leg(job: LegJob) -> dict:
     import openmm as mm
     import openmm.unit as u
 
+    from cufep.alchemy.candidates import initial_window_indices
     from cufep.alchemy.restraints import (
         BoreschRestraint,
         RestraintSearchSettings,
@@ -2006,7 +2007,7 @@ def run_leg(job: LegJob) -> dict:
         ligand_symmetry_number,
         with_force_constants_from_fluctuations,
     )
-    from cufep.alchemy.schedule import AlsSettings, Schedule, adaptive_schedule, schedule_from_windows
+    from cufep.alchemy.schedule import Schedule, adaptive_schedule, schedule_from_windows
     from cufep.backends import get_backend
     from cufep.mps import thread_percentage
     from cufep.sampling.equilibrate import pre_equilibrate
@@ -2267,6 +2268,10 @@ def run_leg(job: LegJob) -> dict:
             schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
             start = np.load(start_file)
             configs = (start["positions"], start["boxes"], start["velocities"])
+            # said every time: a change of lambda_schedule in the YAML does not reach a leg that has its windows
+            log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has "
+                "(schedule.yaml); the settings of lambda_schedule are not applied to them, "
+                "cufep run --reschedule determines the windows again")
         else:
             backend = get_backend(backend_name, precision=_precision(cfg, backend_name), platform=cfg.backend.platform)
             prepared = backend.prepare_system(alch.system)
@@ -2283,7 +2288,7 @@ def run_leg(job: LegJob) -> dict:
             ctx.setPositions(eq["positions"])
             ctx.setVelocities(eq["velocities"])
             t0 = time.perf_counter()
-            if sched_file.exists() or ls.mode == "fixed":
+            if sched_file.exists() or ls.mode_of(job.leg) == "fixed":
                 # the windows are given: only make a start configuration for each of them
                 if sched_file.exists():
                     schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
@@ -2292,15 +2297,10 @@ def run_leg(job: LegJob) -> dict:
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
             else:
-                a_ = ls.adaptive
-                als = AlsSettings(overlap_threshold=a_.overlap_threshold, candidates=a_.candidates,
-                                  initial_windows=a_.initial_windows.for_leg(job.leg), window_ps=a_.window(job.leg),
-                                  equilibration_ps=a_.equilibration(job.leg), sample_interval_ps=a_.sample_interval_ps,
-                                  walk_ps=a_.walk_ps,
-                                  max_windows=a_.max_windows.complex if is_complex else a_.max_windows.solvent,
-                                  rest2_scale=rest2.scale)
+                als = als_settings(cfg, job.leg, rest2.scale)
                 # the windows of an iteration run at the same time on the GPUs the scheduler grants
-                n_first = sum(als.initial_windows[st] for st in stages) - (len(stages) - 1)
+                n_first = sum(len(initial_window_indices(als.initial_windows[st], als.candidates))
+                              for st in stages) - (len(stages) - 1)
                 devices = list(job.devices)
                 if job.control is not None:
                     work = md_work(als.window_ps + als.equilibration_ps, alch.system.getNumParticles(),
@@ -2543,6 +2543,20 @@ def rest2_region(rest2, topology, positions_nm, ligand, protein,
     names = [f"{protein_residues[k].name}{protein_residues[k].id}"
              f"{(getattr(protein_residues[k], 'insertionCode', '') or '').strip()}" for k in sorted(chosen)]
     return hot, names
+
+
+def als_settings(cfg, leg: str, rest2_scale: float = 1.0):
+    """The settings of the precalculation of adaptive lambda scheduling for one leg, from
+    ``lambda_schedule.adaptive``: a setting that is given per leg is taken for this leg. The one
+    place where the configuration becomes what the precalculation is run with."""
+    from cufep.alchemy.schedule import AlsSettings
+
+    a = cfg.lambda_schedule.adaptive
+    return AlsSettings(overlap_threshold=a.threshold(leg), overlap_matrix=a.matrix(leg),
+                       candidates=a.candidates_of(leg), initial_windows=a.initial_windows.for_leg(leg),
+                       window_ps=a.window(leg), equilibration_ps=a.equilibration(leg),
+                       sample_interval_ps=a.sample_interval_ps, walk_ps=a.walk_ps,
+                       max_windows=int(getattr(a.max_windows, leg)), rest2_scale=float(rest2_scale))
 
 
 def _schedule_of_this_leg(path: Path, leg: str, stages: list[str]):

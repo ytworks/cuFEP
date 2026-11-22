@@ -86,7 +86,7 @@ def main() -> None:
         equilibration_ps=args.equilibration_ps,
         sample_interval_ps=args.sample_interval_ps,
         initial_windows={"restrain": r, "discharge": d, "vanish": v},
-        max_windows=48 if args.leg == "complex" else 32,
+        max_windows=getattr(cfg.lambda_schedule.adaptive.max_windows, args.leg),   # the limit of that run
     )
     t0 = time.perf_counter()
     if args.serial:

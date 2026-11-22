@@ -65,7 +65,7 @@ method is in [docs/protocol.md](https://github.com/ytworks/cuFEP/blob/main/docs/
 | force fields | ff14SB (protein), TIP3P (water), OpenFF 2.2.1 with AM1-BCC charges (ligand), Lipid21 POPC (the A2A bilayer) |
 | conditions | 298.15 K, 1 bar, ionic strength 0.15 M; time step 4 fs with hydrogen mass repartitioning (3 amu) |
 | before the alchemical run | complex leg 0.25 ns NVT, 0.5 ns NPT and 5 ns of MD; solvent leg 0.1, 0.2 and 0.5 ns; A2A: 10 ns of equilibration of the bilayer |
-| lambda windows | adaptive lambda scheduling (Midgley et al. 2025), threshold 0.18 |
+| lambda windows | adaptive lambda scheduling (Midgley et al. 2025), threshold 0.18 of the overlap matrix of a stage; the complex leg from 3, 5 and 9 windows, the solvent leg from 5 and 9 (the defaults when these calculations were made; the complex leg now starts from 30 windows and reads the overlap of a pair alone with the threshold 0.30) |
 | sampling | Hamiltonian replica exchange, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it, scale 1.5 |
 | per lambda window | 1 ns of equilibration and 5 ns of production (the default of cuFEP is 10 ns; the examples and the benchmarks set 5 ns) |
 | analysis | MBAR minus the long-range dispersion correction; standard error from blocks of time, not below the analytical one (the analytical one where too few samples allow no blocks); version 10 of the analysis |

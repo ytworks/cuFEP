@@ -1,0 +1,23 @@
+# Candidate A of plan docs/plans/2026-11-21-als-initial-window-design.md, on the TYK2 example
+# (examples/kinase_tyk2/config.yaml: ligand ejm_31, 5 ns of production per lambda window).
+# Complex leg: adaptive lambda scheduling starts from the recommended lambda values of OpenFE's
+# ABFE protocol (30 windows; the windows of mode fixed) and reads the overlap of each pair of
+# neighbouring windows alone, with a threshold of 0.30.
+# Solvent leg: as the example (the defaults: 5 and 9 evenly spaced windows, threshold 0.18 in the
+# overlap matrix of the stage).
+system:
+  protein: ../../examples/kinase_tyk2/protein.pdb
+  ligand: ../../examples/kinase_tyk2/ligand.sdf
+sampling:
+  production_ns: 5.0
+lambda_schedule:
+  adaptive:
+    overlap_threshold: {complex: 0.30, solvent: 0.18}
+    overlap_matrix: {complex: pair, solvent: stage}
+    initial_windows:
+      complex:
+        restrain: 6
+        discharge: 11
+        vanish: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+output:
+  dir: runs/tyk2_windows_a

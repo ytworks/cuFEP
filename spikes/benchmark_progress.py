@@ -34,7 +34,9 @@ def schedule_of(leg_dir: Path) -> str:
     if not path.exists():
         return "-"
     data = yaml.safe_load(path.read_text()) or {}
-    return f"{data.get('mode', '?')} {(data.get('provenance') or {}).get('overlap_threshold')}"
+    provenance = data.get("provenance") or {}
+    matrix = provenance.get("overlap_matrix")                  # which overlap the threshold was compared with
+    return f"{data.get('mode', '?')} {provenance.get('overlap_threshold')}" + (f" ({matrix})" if matrix else "")
 
 
 def last_states(run: Path) -> dict[tuple[str, str], str]:
