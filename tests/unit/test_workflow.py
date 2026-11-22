@@ -2064,3 +2064,91 @@ def test_validate_takes_the_lock_of_the_output_directory(tmp_path, monkeypatch):
             validation.validate(cfg, None, 0, lambda m: None)
     finally:
         held.close()
+
+
+def test_a_result_says_how_the_windows_of_its_leg_were_started(tmp_path):
+    """The result of a leg names how its lambda windows got the configurations the replicas started
+    from: the record written with the start configurations, or for a leg of an earlier version
+    what its adaptive schedule implies (one worker: each window from the end of the one before it;
+    several: a walk through the windows). Until 2026-11-22 neither file said it, and the same
+    YAML gave either by the number of workers a leg happened to get."""
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.workflow import start_configurations_of
+
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 3})
+    schedule.mode = "adaptive"
+    schedule.provenance = {"windows_run_concurrently": False}
+    assert start_configurations_of(tmp_path, schedule) == "sequential"
+    schedule.provenance = {"windows_run_concurrently": True}
+    assert start_configurations_of(tmp_path, schedule) == "walk"
+    schedule.provenance = {}
+    assert start_configurations_of(tmp_path, schedule) is None
+    # the record that is written with the start configurations is the one that counts
+    np.savez(tmp_path / "start_configs.npz", positions=np.zeros((1, 1, 3)),
+             made_with=json.dumps({"start_configurations": "walk", "walk_ps": 5.0}))
+    schedule.provenance = {"windows_run_concurrently": False}
+    assert start_configurations_of(tmp_path, schedule) == "walk, 5 ps in each window"
+    np.savez(tmp_path / "start_configs.npz", positions=np.zeros((1, 1, 3)),
+             made_with=json.dumps({"start_configurations": "sequential"}))
+    assert start_configurations_of(tmp_path, schedule) == "sequential"
+    # start configurations of an earlier version carry no record: the schedule is asked
+    np.savez(tmp_path / "start_configs.npz", positions=np.zeros((1, 1, 3)))
+    schedule.provenance = {"windows_run_concurrently": True}
+    assert start_configurations_of(tmp_path, schedule) == "walk"
+    # given windows of an earlier version: nothing says it
+    schedule.mode = "fixed"
+    assert start_configurations_of(tmp_path, schedule) is None
+
+
+def test_legs_with_and_without_annihilated_electrostatics_are_not_combined(tmp_path):
+    """``alchemy.annihilate_electrostatics`` changes the end a ligand is decoupled to: with the
+    electrostatics inside it kept, or without them. A complex leg and a solvent leg are legs of one
+    cycle only if both end in the same one, so a ligand whose legs differ in it gets no binding
+    free energy. A result of an earlier version, which does not record the setting, was made with
+    the electrostatics kept (there was nothing else): it is compared as that, not left uncompared
+    (a leg with annihilated electrostatics and such a result would else be combined with a warning)."""
+    def write(lig, leg, **fields):
+        d = lig / "repeat_0" / leg
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "result.json").write_text(json.dumps(dict(_leg_result(160.0 if leg == "complex" else 80.0, leg=leg),
+                                                       temperature_K=298.15, lrc_method="isotropic", **fields)))
+
+    gone, kept = {"annihilate_electrostatics": True}, {"annihilate_electrostatics": False}
+    for name, complex_leg, solvent_leg in (("one", gone, kept), ("old", gone, {})):
+        write(tmp_path / name, "complex", **complex_leg)
+        write(tmp_path / name, "solvent", **solvent_leg)
+        out = combine_ligand(tmp_path / name, "lig", 1)
+        assert "dg_bind" not in out
+        assert out["inconsistent_legs"] == [
+            "electrostatics inside the ligand annihilated: complex leg True, solvent leg False"]
+    for name, fields in (("both", {"annihilate_electrostatics": True}), ("kept", {"annihilate_electrostatics": False}),
+                         ("earlier", {})):
+        write(tmp_path / name, "complex", **fields)
+        write(tmp_path / name, "solvent", **fields)
+        out = combine_ligand(tmp_path / name, "lig", 1)
+        assert "dg_bind" in out and out["inconsistent_legs"] == []
+        assert not any("electrostatics" in item for item in out["not_compared"])
+
+
+def test_alchemy_settings_added_later_leave_the_record_of_earlier_samples_as_it_was():
+    """The conditions of the samples record the ``alchemy`` section. A setting that was added to it
+    later is written only when it is not at the value that gives the System of the samples made
+    before it existed: a run with the defaults records what every earlier run recorded and so
+    continues and analyses their samples; a run that changes the setting records it, and differs
+    from samples that do not have it."""
+    from cufep.config.schema import Config
+    from cufep.workflow import electrostatics_annihilated, samples_settings, settings_differences
+
+    base = {"system": {"protein": "p.pdb", "ligand": "l.sdf"}}
+    default = samples_settings(Config.model_validate(base))
+    assert default["alchemy"] == {"softcore_alpha": 0.5}                    # what stored samples hold
+    changed = samples_settings(Config.model_validate(dict(base, alchemy={"annihilate_electrostatics": True,
+                                                                         "softcore_b": 2, "softcore_alpha": 1.0})))
+    assert changed["alchemy"] == {"softcore_alpha": 1.0, "softcore_b": 2, "annihilate_electrostatics": True}
+    assert settings_differences(default, default) == []
+    assert settings_differences(default, changed) == [
+        "alchemy.annihilate_electrostatics: not recorded -> True", "alchemy.softcore_alpha: 0.5 -> 1.0",
+        "alchemy.softcore_b: not recorded -> 2"]
+    assert settings_differences(changed, default)[0] == "alchemy.annihilate_electrostatics: True -> not given"
+    assert not electrostatics_annihilated({"settings": default}) and electrostatics_annihilated({"settings": changed})
+    assert not electrostatics_annihilated({}) and not electrostatics_annihilated(None)

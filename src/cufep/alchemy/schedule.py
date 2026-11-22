@@ -284,6 +284,20 @@ def als_step(windows: list[int], superdiagonal, threshold: float, room: int = 1)
 
 
 # ============================================================================ ALS: the precalculation
+#: how the windows of the first iteration of the precalculation get their start configurations
+START_CONFIGURATIONS = ("walk", "sequential")
+
+
+def recorded_start_configurations(provenance: dict) -> str | None:
+    """How the first windows of an adaptive schedule were started, from its record: what the
+    record says, or for a schedule written before it said so, what followed from whether a pool
+    ran its windows ("walk" with one, "sequential" without); None if the record has neither."""
+    if provenance.get("start_configurations") in START_CONFIGURATIONS:
+        return str(provenance["start_configurations"])
+    concurrent = provenance.get("windows_run_concurrently")
+    return None if concurrent is None else ("walk" if concurrent else "sequential")
+
+
 @dataclass
 class AlsSettings:
     """The settings of the precalculation of one leg. A run takes them from the configuration,
@@ -302,8 +316,12 @@ class AlsSettings:
     #: MD in a new window before its energies are recorded
     equilibration_ps: float = 0.0
     sample_interval_ps: float = 0.5
-    #: when the windows are run at the same time by a pool of workers: MD per window of the walk
-    #: through the initial windows that gives each of them a start configuration
+    #: how the windows of the first iteration get their start configurations (START_CONFIGURATIONS):
+    #: "walk", a walk through them in order with ``walk_ps`` of MD in each, after which every window
+    #: runs from its own; or "sequential", each window from the last configuration of the one before
+    #: it. Neither depends on whether a pool of workers runs the windows
+    start_configurations: str = "walk"
+    #: MD per window of that walk
     walk_ps: float = 5.0
     max_windows: int = 100
     #: REST2: temperature scale of the hot region in the middle of the leg (1 = no REST2). The
@@ -397,11 +415,16 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                       settings: AlsSettings | None = None, log=print, pool=None):
     """Adaptive lambda scheduling for one leg, starting from the Context's current configuration.
 
-    Without ``pool`` the windows are run one after another in ``context``, each starting from
-    the end of the nearest window that has been run. With ``pool`` (an object whose
-    ``run(tasks)`` executes :func:`run_window` tasks concurrently, e.g. on several GPUs) the
-    new windows of an iteration run at the same time; for the first iteration a short walk
-    through the windows in ``context`` provides their start configurations.
+    The windows of the first iteration get their start configurations as
+    ``settings.start_configurations`` says: from a walk through them in ``context`` (``walk_ps``
+    of MD in each, in order), or each from the last configuration of the window before it. A
+    window that a later iteration adds starts from the last configuration of the nearest window
+    that had been run before that iteration. With ``pool`` (an object whose ``run(tasks)``
+    executes :func:`run_window` tasks concurrently, e.g. on several GPUs) windows that have their
+    start configurations run at the same time; without it they run one after another in
+    ``context``. What a window starts from and how much MD it gets is the same either way (until
+    2026-11-22 a leg without a pool made every window start from the end of the one before it,
+    so that the number of workers a leg happened to get decided how its windows were started).
 
     Returns ``(schedule, configurations)`` with one ``(positions_nm, box_nm, velocities)``
     tuple per window: the last configuration of that window's precalculation run.
@@ -410,6 +433,9 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     s = settings or AlsSettings()
     if s.overlap_matrix not in ("stage", "pair"):
         raise ValueError(f"overlap_matrix is 'stage' or 'pair', not {s.overlap_matrix!r}")
+    if s.start_configurations not in START_CONFIGURATIONS:
+        raise ValueError(f"start_configurations is one of {', '.join(START_CONFIGURATIONS)}, "
+                         f"not {s.start_configurations!r}")
     by_pair = s.overlap_matrix == "pair"
     params = context.getParameters()
     present = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS}
@@ -447,22 +473,29 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     def nearest(nd: tuple[int, int]):
         return runs[min(runs, key=lambda other: abs(path(other) - path(nd)))]["config"] if runs else start
 
+    def run_from(todo: list[tuple[int, int]], starts: list) -> None:
+        """Run windows whose start configurations are known: at the same time, or one by one."""
+        tasks = [task_for(nd, config) for nd, config in zip(todo, starts)]
+        results = pool.run(tasks) if pool is not None else [run_window(context, integrator, t) for t in tasks]
+        for nd, result in zip(todo, results):
+            runs[nd] = result
+
     def run_all(todo: list[tuple[int, int]]) -> None:
-        if pool is None:
-            for nd in todo:                               # one after another, each from its neighbour
-                runs[nd] = run_window(context, integrator, task_for(nd, nearest(nd)))
-            return
-        if runs:
-            starts = [nearest(nd) for nd in todo]
-        else:                                             # first iteration: a short walk gives the starts
+        if runs:                                          # a later iteration: from what had been run before it
+            run_from(todo, [nearest(nd) for nd in todo])
+        elif s.start_configurations == "walk":            # first iteration: a short walk gives the starts
             starts, walk_steps = [], md_steps(s.walk_ps, timestep_fs)
             _load(context, start)
             for nd in todo:
                 set_state(context, state_of(nd))
                 integrator.step(walk_steps)
                 starts.append(_snapshot(context))
-        for nd, result in zip(todo, pool.run([task_for(nd, cfg) for nd, cfg in zip(todo, starts)])):
-            runs[nd] = result
+            run_from(todo, starts)
+        else:                                             # first iteration: each from the end of the one before
+            config = start
+            for nd in todo:
+                runs[nd] = run_window(context, integrator, task_for(nd, config))
+                config = runs[nd]["config"]
 
     def total_windows() -> int:
         return len({node(k, i) for k in windows for i in windows[k]})
@@ -526,6 +559,11 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                                      # nearest to window_ps (precalculation_steps), and its equilibration
                                      "window_ps_integrated": n_samples * steps_per_sample * float(timestep_fs) / 1000.0,
                                      "equilibration_ps_integrated": equilibration_steps * float(timestep_fs) / 1000.0,
+                                     # how the windows of the first iteration were started, and
+                                     # whether windows ran at the same time (which changes nothing
+                                     # of what a window starts from)
+                                     "start_configurations": s.start_configurations,
+                                     **({"walk_ps": s.walk_ps} if s.start_configurations == "walk" else {}),
                                      "windows_run_concurrently": pool is not None,
                                      # the start, as a number per stage and as its lambda values
                                      "initial_windows": {n: len(first[k]) for k, n in enumerate(stages)},

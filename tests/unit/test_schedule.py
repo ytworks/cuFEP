@@ -371,7 +371,7 @@ def test_precalculation_on_a_small_system(water_ligand_system):
     ctx.setVelocitiesToTemperature(300.0, 2)
     messages = []
     settings = AlsSettings(overlap_threshold=0.04, candidates=21, initial_windows={"discharge": 2, "vanish": 3},
-                           window_ps=0.4, sample_interval_ps=0.02, max_windows=9)
+                           window_ps=0.4, sample_interval_ps=0.02, walk_ps=0.02, max_windows=9)
     schedule, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings, messages.append)
     assert schedule.mode == "adaptive" and schedule.stages == ["discharge", "vanish"]
     assert len(configs) == len(schedule.states) <= 9
@@ -413,7 +413,7 @@ def test_precalculation_from_given_lambda_values(water_ligand_system):
     ctx.setVelocitiesToTemperature(300.0, 4)
     start = [0.0, 0.5, 0.8, 0.9, 1.0]
     settings = AlsSettings(overlap_threshold=0.04, candidates=21, initial_windows={"discharge": 2, "vanish": start},
-                           window_ps=0.2, sample_interval_ps=0.02, max_windows=9)
+                           window_ps=0.2, sample_interval_ps=0.02, walk_ps=0.02, max_windows=9)
     schedule, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings, lambda m: None)
     prov = schedule.provenance
     assert prov["initial_windows"] == {"discharge": 2, "vanish": 5}
@@ -466,6 +466,117 @@ def test_precalculation_with_the_windows_of_an_iteration_run_by_a_pool(water_lig
     assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(
         1.0, 0.0, 0.0
     )
+
+
+@pytest.mark.parametrize("start", ["walk", "sequential"])
+def test_what_a_window_starts_from_does_not_depend_on_a_pool(water_ligand_system, start):
+    """The windows that are chosen, their overlaps and the configuration each replica starts from
+    are the same whether a pool runs the windows of an iteration or they run one after another
+    in the Context of the leg.
+
+    Until 2026-11-22 a leg without a pool started every window from the end of the one before
+    it and a leg with a pool from a walk through the windows, so the number of workers a leg
+    happened to get decided how its windows were started: in the full benchmark runs of e77a6c5
+    4 of the 16 complex legs of TYK2 and 7 of the 17 of A2A had one worker.
+
+    The pool of this test runs its tasks one after another in the Context of its leg, so both
+    runs integrate the same steps with the same random numbers (CPU platform, one thread,
+    deterministic forces), and the comparison is exact. The threshold makes the rule add windows
+    in several iterations, so that windows of later iterations are compared too."""
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+
+    def make():
+        integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+        integ.setRandomNumberSeed(31)
+        ctx = mm.Context(alch.system, integ, mm.Platform.getPlatformByName("CPU"),
+                         {"Threads": "1", "DeterministicForces": "true"})
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        ctx.setVelocitiesToTemperature(300.0, 32)
+        return ctx, integ
+
+    settings = AlsSettings(overlap_threshold=0.25, candidates=21, initial_windows={"discharge": 2, "vanish": 3},
+                           window_ps=0.2, equilibration_ps=0.02, sample_interval_ps=0.02, walk_ps=0.02, max_windows=8,
+                           start_configurations=start)
+    alone = adaptive_schedule(*make(), ["discharge", "vanish"], 300.0, 2.0, settings, lambda m: None)
+
+    leg = make()
+
+    class Pool:
+        def run(self, tasks):
+            return [run_window(*leg, t) for t in tasks]
+
+    pooled = adaptive_schedule(*leg, ["discharge", "vanish"], 300.0, 2.0, settings, lambda m: None, pool=Pool())
+
+    (a, configs_a), (b, configs_b) = alone, pooled
+    assert a.provenance["start_configurations"] == b.provenance["start_configurations"] == start
+    assert a.provenance["windows_run_concurrently"] is False and b.provenance["windows_run_concurrently"] is True
+    assert sum(rec["status"] == "inserted" for rec in a.provenance["iterations"]) >= 2
+    assert a.windows() == b.windows()
+    assert a.provenance["iterations"] == b.provenance["iterations"]
+    assert len(configs_a) == len(configs_b) == len(a.states)
+    for (pa, ba, va), (pb, bb, vb) in zip(configs_a, configs_b):
+        assert np.array_equal(pa, pb) and np.array_equal(ba, bb) and np.array_equal(va, vb)
+
+
+def test_the_two_ways_of_starting_the_first_windows(water_ligand_system):
+    """walk: every window of the first iteration starts from the configuration a walk through the
+    windows left it. sequential: each starts from the last configuration of the window before it.
+    Seen in what the windows are handed (the configuration a task starts from)."""
+    import cufep.alchemy.schedule as module
+
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+    handed: dict[str, list] = {}
+
+    def run(start):
+        integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+        integ.setRandomNumberSeed(41)
+        ctx = mm.Context(alch.system, integ, mm.Platform.getPlatformByName("CPU"),
+                         {"Threads": "1", "DeterministicForces": "true"})
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        ctx.setVelocitiesToTemperature(300.0, 42)
+        settings = AlsSettings(overlap_threshold=0.001, candidates=21, initial_windows={"vanish": 4}, window_ps=0.1,
+                               sample_interval_ps=0.02, walk_ps=0.02, max_windows=4, start_configurations=start)
+        original = module.run_window
+        tasks, results = [], []
+
+        def recording(context, integrator, task):
+            tasks.append(np.array(task["config"][0]))
+            results.append(original(context, integrator, task))
+            return results[-1]
+
+        module.run_window = recording
+        try:
+            adaptive_schedule(ctx, integ, ["vanish"], 300.0, 2.0, settings, lambda m: None)
+        finally:
+            module.run_window = original
+        handed[start] = tasks
+        return tasks, [np.array(r["config"][0]) for r in results]
+
+    starts, ends = run("sequential")
+    assert len(starts) == 4 and np.allclose(starts[0], pos, atol=1e-5)          # the first from where the leg is
+    assert all(np.array_equal(starts[k], ends[k - 1]) for k in range(1, 4))     # the others from the one before
+    starts, ends = run("walk")
+    assert len(starts) == 4
+    assert not any(np.array_equal(starts[k], ends[k - 1]) for k in range(1, 4))
+    assert not any(np.array_equal(starts[k], starts[k - 1]) for k in range(1, 4))   # the walk moved on between them
+    with pytest.raises(ValueError, match="start_configurations"):
+        adaptive_schedule(None, None, ["vanish"], 300.0, 2.0, AlsSettings(start_configurations="chain"))
+
+
+def test_a_schedule_of_an_earlier_version_says_how_its_windows_were_started():
+    """A schedule written before the record existed implies it: its windows ran at the same time
+    only after a walk, and one after another each from the end of the one before."""
+    from cufep.alchemy.schedule import recorded_start_configurations
+
+    assert recorded_start_configurations({"start_configurations": "sequential", "windows_run_concurrently": True}) \
+        == "sequential"
+    assert recorded_start_configurations({"windows_run_concurrently": True}) == "walk"
+    assert recorded_start_configurations({"windows_run_concurrently": False}) == "sequential"
+    assert recorded_start_configurations({}) is None
 
 
 def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):

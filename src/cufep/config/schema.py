@@ -194,7 +194,18 @@ class RestraintConfig(_Section):
 
 
 class AlchemyConfig(_Section):
+    #: the soft-core of the Lennard-Jones interactions of the ligand with its environment, in the
+    #: names of openmmtools (Pham and Shirts 2011, eq. 13, with a = 1 and c = 6):
+    #: U = lambda 4 eps x (x - 1), x = 1 / (alpha (1 - lambda)^b + (r / sigma)^6)
     softcore_alpha: float = 0.5
+    #: b of that form. 1: as OpenFE's protocols run it. 2: the radius of Ding et al.
+    #: (arXiv:2603.22274 v3), r_eff^6 = r^6 + alpha (1 - lambda)^2 sigma^6, who use alpha = 1
+    softcore_b: Literal[1, 2] = 1
+    #: whether the electrostatics inside the ligand are switched off with the charges of the
+    #: ligand (annihilated), as openmmtools does with exact PME and OpenFE's ABFE protocol runs,
+    #: or kept at every lambda (decoupled), as cuFEP always did. The Lennard-Jones interactions
+    #: inside the ligand are kept either way. Both legs of a ligand must use the same
+    annihilate_electrostatics: bool = False
 
 
 class ComplexWindows(_Section):
@@ -364,8 +375,13 @@ class AdaptiveConfig(_Section):
         default_factory=lambda: PrecalculationLengths(complex=500.0, solvent=0.0))
     #: interval at which energies are recorded during that MD
     sample_interval_ps: float = Field(default=0.5, gt=0.0)
-    #: the windows of an iteration run at the same time on the available GPUs; before the first
-    #: iteration a walk through the windows with this much MD each gives them start configurations
+    #: how the windows of the first iteration get their start configurations. walk: a walk through
+    #: them in order from the end of the pre-equilibration, ``walk_ps`` of MD in each, after which
+    #: every window runs from its own. sequential: each window starts from the last configuration
+    #: of the window before it. The windows of an iteration run at the same time on the available
+    #: GPUs where they can; what a window starts from does not depend on that
+    start_configurations: Literal["walk", "sequential"] = "walk"
+    #: MD in each window of that walk
     walk_ps: float = Field(default=5.0, gt=0.0)
     #: largest number of windows per leg; reaching it ends the precalculation with a warning
     max_windows: WindowLimits = Field(default_factory=WindowLimits)

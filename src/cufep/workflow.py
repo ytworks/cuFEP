@@ -581,11 +581,37 @@ def leg_seed(cfg: Config, repeat: int, leg: str) -> int:
     return int(cfg.sampling.seed) + 7919 * int(repeat) + (0 if leg == "complex" else 104729)
 
 
+#: settings of ``alchemy`` that were added after samples were first recorded, with the value that
+#: gives the System those samples were made with. A setting at that value is not written to the
+#: conditions of the samples, so that the samples of every earlier run are still continued and
+#: analysed (recorded whole, the alchemy section would differ from theirs by a key, and every
+#: stored leg would be refused); at another value it is written, and differs from samples that
+#: do not have it.
+ALCHEMY_SETTINGS_ADDED = {"softcore_b": 1, "annihilate_electrostatics": False}
+
+
+def alchemy_record(cfg: Config) -> dict:
+    """The ``alchemy`` section as the conditions of samples record it (ALCHEMY_SETTINGS_ADDED)."""
+    record = cfg.alchemy.model_dump(mode="json")
+    return {key: value for key, value in record.items()
+            if key not in ALCHEMY_SETTINGS_ADDED or value != ALCHEMY_SETTINGS_ADDED[key]}
+
+
+def electrostatics_annihilated(conditions: dict | None) -> bool:
+    """Whether samples with these recorded conditions were made with the electrostatics inside
+    the ligand annihilated (``alchemy.annihilate_electrostatics``); samples that do not say so
+    were made with them kept, the only treatment there was."""
+    settings = (conditions or {}).get("settings")
+    alchemy = settings.get("alchemy") if isinstance(settings, dict) else None
+    return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
+
+
 def samples_settings(cfg: Config) -> dict:
     """The settings that the samples of a leg depend on and that their other recorded conditions
     (states, temperature, pressure, dynamics, System checksum) do not name in the words of the
-    configuration: the soft-core, REST2, the length of an iteration and the tail correction."""
-    return {"alchemy": cfg.alchemy.model_dump(mode="json"), "rest2": cfg.sampling.rest2.model_dump(mode="json"),
+    configuration: the soft-core and the electrostatics inside the ligand, REST2, the length of an
+    iteration and the tail correction."""
+    return {"alchemy": alchemy_record(cfg), "rest2": cfg.sampling.rest2.model_dump(mode="json"),
             "time_per_iteration_ps": float(cfg.sampling.time_per_iteration_ps),
             "tail": None if cfg.analysis.lrc == "none" else {"cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}}
 
@@ -620,7 +646,9 @@ def alchemical_leg(cfg: Config, system, prep: dict, box, restraint, is_complex: 
                                                prep["protein"], prep.get("input_chains"))
     alch = make_alchemical_system(system, prep["ligand"], cfg.alchemy.softcore_alpha, rest2=rest2_on,
                                   rest2_atoms=hot_atoms,
-                                  bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()])
+                                  bonds=[(b[0].index, b[1].index) for b in prep["topology"].bonds()],
+                                  annihilate_electrostatics=cfg.alchemy.annihilate_electrostatics,
+                                  softcore_b=cfg.alchemy.softcore_b)
     if restraint is not None:
         alch.system.addForce(restraint.create_force())
     xml = mm.XmlSerializer.serialize(alch.system)
@@ -2008,13 +2036,12 @@ def run_leg(job: LegJob) -> dict:
         with_force_constants_from_fluctuations,
     )
     from cufep.alchemy.schedule import Schedule, adaptive_schedule, schedule_from_windows
-    from cufep.backends import get_backend
     from cufep.mps import thread_percentage
     from cufep.sampling.equilibrate import pre_equilibrate
     from cufep.sampling.hrex import ReplicaExchangeSampler, WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
     from cufep.sampling.storage import read_samples, stored_backend, stored_conditions
-    from cufep.sampling.worker import LegSpec
+    from cufep.sampling.worker import LegSpec, backend_of
 
     cfg = Config.model_validate(job.config)
     leg_dir = job.leg_dir
@@ -2273,7 +2300,30 @@ def run_leg(job: LegJob) -> dict:
                 "(schedule.yaml); the settings of lambda_schedule are not applied to them, "
                 "cufep run --reschedule determines the windows again")
         else:
-            backend = get_backend(backend_name, precision=_precision(cfg, backend_name), platform=cfg.backend.platform)
+            # what a Context of this leg is made with, for the workers of the precalculation and for
+            # the Context of this process, which walks through the windows and runs them itself
+            # when the leg has no workers for that
+            pool_spec = LegSpec(
+                name=job.tag,
+                system_xml=alch_xml,
+                states=[stage_state(stages[0], 0.0).to_dict(), stage_state(stages[-1], 1.0).to_dict()],
+                n_atoms=alch.system.getNumParticles(),
+                backend=backend_name,
+                precision=_precision(cfg, backend_name),
+                platform=cfg.backend.platform,
+                temperature_K=T,
+                pressure_bar=pressure,
+                barostat=barostat,
+                barostat_frequency=cfg.dynamics.barostat_frequency,
+                friction_per_ps=cfg.dynamics.friction_per_ps,
+                timestep_fs=timestep_fs,
+                steps_per_iteration=steps_per_iteration,
+                seed=seed + 23,
+                cpu_threads=cfg.resources.cpu_threads_per_worker,
+                box_safety=1.3 if barostat == "membrane" else None,
+                mps_thread_percentage=thread_percentage(job.oversubscription),
+            )
+            backend = backend_of(pool_spec)
             prepared = backend.prepare_system(alch.system)
             if barostat == "membrane":
                 prepared.addForce(backend.make_membrane_barostat(pressure * u.bar, T * u.kelvin,
@@ -2296,6 +2346,7 @@ def run_leg(job: LegJob) -> dict:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
+                made_with = {"start_configurations": "walk of the given windows", "walk_ps": float(ls.fixed_walk_ps)}
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
                 # the windows of an iteration run at the same time on the GPUs the scheduler grants
@@ -2309,41 +2360,34 @@ def run_leg(job: LegJob) -> dict:
                         n_first, n_first * work / max(1, job.oversubscription), pinned=True,
                         what=f"the precalculation of the lambda schedule ({n_first} lambda windows)")
                     devices = granted or devices
+                # with workers the windows that have their start configurations run at the same time,
+                # without them one after another in this process: the same windows from the same
+                # start configurations either way (adaptive_schedule)
                 if job.inline or len(devices) < 2:
                     schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log)
                 else:
-                    pool_spec = LegSpec(
-                        name=job.tag,
-                        system_xml=alch_xml,
-                        states=[stage_state(stages[0], 0.0).to_dict(), stage_state(stages[-1], 1.0).to_dict()],
-                        n_atoms=alch.system.getNumParticles(),
-                        backend=backend_name,
-                        precision=_precision(cfg, backend_name),
-                        platform=cfg.backend.platform,
-                        temperature_K=T,
-                        pressure_bar=pressure,
-                        barostat=barostat,
-                        barostat_frequency=cfg.dynamics.barostat_frequency,
-                        friction_per_ps=cfg.dynamics.friction_per_ps,
-                        timestep_fs=timestep_fs,
-                        steps_per_iteration=steps_per_iteration,
-                        seed=seed + 23,
-                        cpu_threads=cfg.resources.cpu_threads_per_worker,
-                        box_safety=1.3 if barostat == "membrane" else None,
-                        mps_thread_percentage=thread_percentage(job.oversubscription),
-                    )
                     with WindowPool(pool_spec, devices[:n_first], log) as pool:
                         schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, pool=pool)
-            schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
-                          backend=backend_name)
+                made_with = {"start_configurations": als.start_configurations,
+                             **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {})}
             del ctx, integ
             configs = (np.array([c[0] for c in cfgs]), np.array([c[1] for c in cfgs]), np.array([c[2] for c in cfgs]))
-            publish_npz(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2])
+            # the start configurations first, with how they were made, then the schedule: a leg that
+            # has a schedule of its own has the start configurations that were made with it. (Written
+            # the other way round, a leg that was stopped between the two had its windows and made
+            # their start configurations anew by the walk of given windows, under a schedule that
+            # recorded another way.)
+            publish_npz(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2],
+                        made_with=json.dumps(made_with))
+            schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
+                          backend=backend_name)
             timed("lambda_schedule", t0)
             log(
                 f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows "
                 f"in {time.perf_counter() - t0:.0f} s: "
                 + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items())
+                + f"; start configurations: {made_with['start_configurations']}"
+                + (f" ({made_with['walk_ps']:g} ps in each window)" if "walk_ps" in made_with else "")
             )
 
         if abs(schedule.rest2_scale - (rest2.scale if rest2_on else 1.0)) > 1e-9:
@@ -2555,7 +2599,8 @@ def als_settings(cfg, leg: str, rest2_scale: float = 1.0):
     return AlsSettings(overlap_threshold=a.threshold(leg), overlap_matrix=a.matrix(leg),
                        candidates=a.candidates_of(leg), initial_windows=a.initial_windows.for_leg(leg),
                        window_ps=a.window(leg), equilibration_ps=a.equilibration(leg),
-                       sample_interval_ps=a.sample_interval_ps, walk_ps=a.walk_ps,
+                       sample_interval_ps=a.sample_interval_ps,
+                       start_configurations=a.start_configurations, walk_ps=a.walk_ps,
                        max_windows=int(getattr(a.max_windows, leg)), rest2_scale=float(rest2_scale))
 
 
@@ -3040,6 +3085,8 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "bilayer": file_numbers["bilayer"], "ligand_rmsd_from_input_A": file_numbers["ligand_rmsd_from_input_A"],
         "restraint_choice": file_numbers["restraint_choice"],
         "restraint_release": release, "restraint_release_analytical": release_analytical,
+        # the end the ligand is decoupled to: with the electrostatics inside it kept, or annihilated
+        "annihilate_electrostatics": electrostatics_annihilated(conditions),
         "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
         "analysis_record": analysis_record(settings), "run": run,
     }
@@ -3059,8 +3106,34 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     result["lambda_windows_added"] = (
         {name: len(values) - int(start[name]) for name, values in schedule.windows().items() if name in start}
         if start else None)
+    # how the windows got the configurations their replicas started from (None: the files do not say)
+    result["start_configurations"] = start_configurations_of(leg_dir, schedule)
     result["rest2"] = run.get("rest2")
     return result
+
+
+def start_configurations_of(leg_dir: Path, schedule=None) -> str | None:
+    """How the lambda windows of a leg got the configurations its replicas started from, as the
+    files of the leg say it: the record that is written with the start configurations
+    (``start_configs.npz``), or, for a leg of an earlier version, what the record of its adaptive
+    schedule implies (:func:`cufep.alchemy.schedule.recorded_start_configurations`: a leg that had
+    one worker for its precalculation started every window from the end of the one before it, a
+    leg with several from a walk). None if neither says it."""
+    from cufep.alchemy.schedule import recorded_start_configurations
+
+    file = Path(leg_dir) / "start_configs.npz"
+    if file.exists():
+        try:
+            with np.load(file) as data:
+                if "made_with" in data.files:
+                    made = json.loads(str(data["made_with"]))
+                    walk = f", {made['walk_ps']:g} ps in each window" if "walk_ps" in made else ""
+                    return f"{made['start_configurations']}{walk}"
+        except (OSError, ValueError, KeyError):
+            pass
+    if schedule is not None and schedule.mode == "adaptive":
+        return recorded_start_configurations(schedule.provenance)
+    return None
 
 
 def overlap_below_level(result: dict, cfg) -> list[dict]:
@@ -3177,12 +3250,20 @@ def run_leg_safe(job: LegJob) -> dict:
 #: What the legs of a binding free energy must have in common: the key in a leg's result and how
 #: a message names it. A complex and a solvent leg, and the repeats of a ligand, are legs of one
 #: thermodynamic cycle only under the same temperature and with the same correction for the
-#: dispersion tail. Backend, time step, number of lambda windows, lengths, REST2 and the kind of
-#: barostat may differ between the legs and are not listed.
+#: dispersion tail, and only if the ligand they decouple ends as the same molecule: with the
+#: electrostatics inside it kept in both, or annihilated in both. Backend, time step, number of
+#: lambda windows, lengths, REST2, the soft-core (which acts between the ends only) and the kind
+#: of barostat may differ between the legs and are not listed.
 CYCLE_CONDITIONS = (("temperature_K", "temperature (K)"), ("pressure_bar", "pressure (bar)"),
                     ("prepared_systems_sha256", "prepared systems (input, force field, solvation)"),
                     ("lrc_method", "correction for the dispersion tail"),
-                    ("lrc_long_cutoff_nm", "outer radius of the tail correction (nm)"))
+                    ("lrc_long_cutoff_nm", "outer radius of the tail correction (nm)"),
+                    ("annihilate_electrostatics", "electrostatics inside the ligand annihilated"))
+#: what a result that does not record a condition was made with: the only treatment there was
+#: before the condition existed. Such a result is compared by it, not left uncompared (a leg
+#: with annihilated electrostatics and an earlier result of the other leg would else be combined
+#: with a warning)
+CYCLE_CONDITION_DEFAULTS = {"annihilate_electrostatics": False}
 #: conditions that count only for some legs: the outer radius enters the correction by
 #: reweighting alone (the isotropic correction and no correction do not depend on it)
 CYCLE_CONDITION_APPLIES = {"lrc_long_cutoff_nm": lambda result: result.get("lrc_method") == "reweight"}
@@ -3290,7 +3371,8 @@ def combined_record(leg_dir: Path, data: dict, cfg: Config) -> tuple[dict, list[
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
     record = {key: data.get(key) for key, _name in CYCLE_CONDITIONS}
     record.update(temperature_K=attrs.get("temperature_K"), pressure_bar=conditions.get("pressure_bar"),
-                  lrc_method=cfg.analysis.lrc, lrc_long_cutoff_nm=recorded_tail_radius(attrs))
+                  lrc_method=cfg.analysis.lrc, lrc_long_cutoff_nm=recorded_tail_radius(attrs),
+                  annihilate_electrostatics=electrostatics_annihilated(conditions))
     return record, samples_analysis_problems(leg_dir, cfg)
 
 
@@ -3313,6 +3395,7 @@ def check_partner_legs(lig_dir: Path, ligand_name: str, selected: set, repeats: 
         "prepared_systems_sha256": record_digest((prep_info or {}).get("made_from")),
         "lrc_method": cfg.analysis.lrc,
         "lrc_long_cutoff_nm": float(cfg.analysis.lrc_cutoff_nm),
+        "annihilate_electrostatics": bool(cfg.alchemy.annihilate_electrostatics),
     }
     legs, differing = [("the legs this run samples", own)], []
     for r in range(repeats):
@@ -3357,8 +3440,10 @@ def cycle_differences(legs: list[tuple[str, dict]]) -> tuple[list[str], list[str
     for key, name in CYCLE_CONDITIONS:
         applies = CYCLE_CONDITION_APPLIES.get(key, lambda _result: True)
         concerned = [(where, result) for where, result in legs if applies(result)]
-        known = [(where, result[key]) for where, result in concerned if result.get(key) is not None]
-        missing = [where for where, result in concerned if result.get(key) is None]
+        values = [(where, result.get(key) if result.get(key) is not None else CYCLE_CONDITION_DEFAULTS.get(key))
+                  for where, result in concerned]
+        known = [(where, value) for where, value in values if value is not None]
+        missing = [where for where, value in values if value is None]
         if any(not _same(value, known[0][1]) for _where, value in known[1:]):
             differing.append(f"{name}: " + ", ".join(f"{where} {value}" for where, value in known))
         if missing:
