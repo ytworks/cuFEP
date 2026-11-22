@@ -21,11 +21,13 @@ Every argument ``label=run`` is one run. For each of them, from the stored sampl
 Everything is read from the samples and the checkpoint of the leg, by the functions of the
 analysis, so a leg that is still being sampled is shown too, up to its last checkpoint and with
 the number of its iterations, and so is a leg of an earlier version. For a finished leg of this
-version the acceptances and the round trips are those of its result. Samples of earlier versions
-do not record the exchanges: their acceptances are not shown (their results hold another number
-under that name, the share of the iterations with a move between the two windows). A leg without
-an exchange of the production, or whose samples cannot be read, is named with the reason and
-left out.
+version the acceptances and the round trips are those of its result. Samples that do not record
+the exchanges (those of the first versions) give no acceptances, and the script says so: the
+results of such legs hold another number under that name, the share of the iterations with a
+move between the two windows. A leg of whose production no two consecutive placements can be
+read (nothing but the first iteration is stored), or whose samples cannot be read, is named with
+the reason and left out; a leg that ran without exchanges is shown, with its replicas where
+they were.
 
 ``--out``: a figure. The colour of a cell is on a logarithmic scale from 0.001 to 1, a move that
 is rarer has the colour of 0.001, and a cell without a move has the colour of the surface; thin
@@ -72,7 +74,7 @@ def moves_of(run: Path, ligand: str, leg: str) -> dict | str:
     after = after_the_last_exchange(leg_dir, len(stored))
     rows = states if after is None else np.vstack([states, after[None, :]])
     if len(states) == 0 or len(rows) < 2:
-        return "no exchange of its production is stored yet"
+        return "no two consecutive iterations of its production are stored yet"
     k = len(attrs["states"])
     counts = np.zeros((k, k))
     np.add.at(counts, (rows[:-1].ravel(), rows[1:].ravel()), 1.0)
@@ -81,7 +83,7 @@ def moves_of(run: Path, ligand: str, leg: str) -> dict | str:
     stages = [bounds[stage][1] - bounds[stage][0] + 1 for stage in STAGES[leg] if stage in bounds]
     names = [stage for stage in STAGES[leg] if stage in bounds]
     tags = "".join(stage[0].upper() * (n if s == 0 else n - 1) for s, (stage, n) in enumerate(zip(names, stages)))
-    acceptance = swap_acceptance(samples, first, len(states))         # None: samples of an earlier version
+    acceptance = swap_acceptance(samples, first, len(states))         # None: the samples do not record them
     planned = attrs.get("n_planned_iterations")
     visits = counts.sum(axis=1, keepdims=True)
     return {"matrix": counts / np.where(visits > 0, visits, 1.0), "k": k, "stages": stages, "tags": tags.ljust(k, "?"),
@@ -140,7 +142,7 @@ def print_text(data: list[tuple[str, dict]], width: int) -> None:
                               for part, (_l, _d, rows) in zip(line, group)).rstrip())
         for label, d, _rows in group:
             accepted = d["acceptance"]
-            print(f"{label} acc% " + ("not recorded (samples of an earlier version)" if accepted is None else
+            print(f"{label} acc% " + ("not recorded in these samples" if accepted is None else
                                      " ".join("-" if math.isnan(v) else f"{round(100 * v):d}" for v in accepted)))
         print()
 
@@ -199,7 +201,7 @@ def write_figure(data: list[tuple[str, dict]], ligand: str, leg: str, columns: i
         low = fig.add_subplot(grid[2 * r + 1, c], sharex=ax)
         lowest = lowest_of(d)
         if d["acceptance"] is None:
-            low.text(0.99, 0.97, "acceptances not recorded (samples of an earlier version)",
+            low.text(0.99, 0.97, "acceptances not recorded in these samples",
                      transform=low.transAxes, ha="right", va="top", fontsize=8, color=INK_2)
         if lowest is not None:
             x = np.arange(len(d["acceptance"])) + 0.5

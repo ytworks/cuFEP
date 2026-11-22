@@ -410,6 +410,11 @@ Codex の review (push のあと、head d5f9c3f、PR の review 6007410417、P2 
   として出していた、`lambda_windows` のない結果で止まる、production が 1 iteration の leg を
   省く、の 3 件は、script がすべてをサンプルと checkpoint から読むようにして直した (受理率は
   交換の記録があるときだけ出す)。4 件目は上の項の言い方。
+- Codex の 2 回目の確認 (head e1da1f7): 上の 5 件はすべて fixed。新しい P2 が 3 件で、どれも
+  言い方: stage の行列の要素は、近い window が少ない pair なら stage の内側でも 0.30 を超える
+  (A2A の 4f の vanish、0.75 と 0.78 の pair で 0.3545)。`docs/configuration.md` の行を、要素の上限を
+  言わない書き方に直した。script の docstring 2 か所 (受理率が出ないのは交換の記録がない
+  サンプルで、以前の版すべてではない。交換なしで走った leg は省かれずに出る) を直した。
 
 確かめたこと (2026-11-22、イメージ `cufep:dev`、作業ツリーのコード):
 
