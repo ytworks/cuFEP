@@ -5,6 +5,30 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-22 — [progress] TYK2 full with the present defaults: 16 of 16 ligands
+- What: one calculation per ligand, image of e77a6c5, eight GPUs, exit 0; recorded as the run
+  wrote it in `benchmarks/results/tyk2/` (the record of 3b45bfe is in the tree of cda6965).
+  kcal/mol: mean signed error -1.20 [-1.83, -0.60], RMSE after removing the mean error 1.25
+  [0.75, 1.62], Kendall tau 0.47 [0.12, 0.75] (FEP+ 0.00, 0.47, 0.81; the run of 3b45bfe -0.62,
+  1.74, 0.12; Felis, three calculations averaged: offset 0.04, RMSE after offset 0.82, tau 0.68).
+  No result NOT RELIABLE (lowest overlap 0.140); a window with fewer than 50 independent samples
+  in 12/16. Every restraint by `interactions` (VAL 981); complex legs 31 to 36 windows from 30.
+  Seen in the run: how the precalculation holds workers (Open items). A2A is being calculated.
+- Why: the owner's order (2026-11-22); step 3 and 4 of the plan.
+- Refs: PR #8, `benchmarks/results/README.md`, `spikes/benchmark_progress.py` (Felis rows)
+
+### 2026-11-22 — [progress] Plan started: both full benchmark sets once with the present defaults
+- What: plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (in progress).
+  TYK2 (16 ligands), then A2A (17 compounds): tier full, one calculation per ligand, eight GPUs,
+  in the image built from e77a6c5 (`main` after PR #7; its conda environment is the layer of the
+  image of 5e2cf33). No file of the code, the examples or the benchmarks changes: they follow the
+  defaults (`restraints.selection: interactions`; the complex leg from 30 windows, the overlap of
+  a pair alone, 0.30). The results will replace `benchmarks/results/` and the numbers of
+  `docs/wiki/Accuracy.md`. By the owner's order no unit tests, GPU tests or reviews are run for
+  this plan. No result yet.
+- Why: the owner's order (2026-11-22).
+- Refs: the plan, its pull request
+
 ### 2026-11-22 — [progress] PR #7 merged on the owner's order: the start of the complex leg
 - What: plan `docs/plans/2026-11-21-als-initial-window-design.md` is done (10 steps, two
   independent reviews, six passes of Codex, the last without a finding; nine runs of the TYK2
