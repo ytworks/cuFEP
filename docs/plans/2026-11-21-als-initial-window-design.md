@@ -1,5 +1,5 @@
 # adaptive lambda scheduling の初期 window を設計し直す (max_windows 100、3 案を TYK2 example で評価)
-Status: Done (PR #7: 手順 1〜10 済み。オーナーの決定 2026-11-22 で案 A が complex leg の既定値。merge はオーナーの指示を待つ)
+Status: Done (PR #7; merged on the owner's order of 2026-11-22。手順 1〜10 済み、案 A が complex leg の既定値)
 Refs: this pull request; issue #5; `docs/protocol.md` ("Adaptive lambda scheduling"); `docs/configuration.md` (`lambda_schedule`)
 
 ## Context
@@ -415,6 +415,8 @@ Codex の review (push のあと、head d5f9c3f、PR の review 6007410417、P2 
   (A2A の 4f の vanish、0.75 と 0.78 の pair で 0.3545)。`docs/configuration.md` の行を、要素の上限を
   言わない書き方に直した。script の docstring 2 か所 (受理率が出ないのは交換の記録がない
   サンプルで、以前の版すべてではない。交換なしで走った leg は省かれずに出る) を直した。
+- Codex の 3 回目の確認 (head 67be323、review 6009792603): 上の 3 件はすべて fixed、新しい指摘は
+  ない。オーナーの指示 (2026-11-22) で pull request を merge する。
 
 確かめたこと (2026-11-22、イメージ `cufep:dev`、作業ツリーのコード):
 

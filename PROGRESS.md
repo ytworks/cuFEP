@@ -34,20 +34,23 @@ OpenMM, on all GPUs of a machine, from two files.
 Snapshot date: 2026-11-22. `main` holds PR #1 (the engine of plan
 `docs/plans/2026-11-18-abfe-engine.md`), PR #2 (the README and the harness), PR #3 (wording fixes
 and ruff), PR #4 (plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`: benchmarks
-with the settings of the examples, the full sets, an accuracy wiki) and PR #6, merged on the
-owner's order of 2026-11-21 (plan `docs/plans/2026-11-21-restraints-from-md-interactions.md`,
-done: the Boresch restraint from the protein-ligand interactions of unrestrained MD, the default
-`restraints.selection`). Analysis version 10. PR #6 was tested
-on the CPU with trajectories made by hand and on a GPU with the trajectories on both backends.
-The whole diff was reviewed by readers who did not write it (an independent review and, on the
-owner's order, Codex, whose later passes confirm the fixes): their findings are fixed, each
-after it was reproduced, or answered on PR #6. Both examples ran once with the image of commit
-720cdb1, in which the MD for the restraint starts from the pose that was given (below).
+with the settings of the examples, the full sets, an accuracy wiki), PR #6 (plan
+`docs/plans/2026-11-21-restraints-from-md-interactions.md`, done: the Boresch restraint from the
+protein-ligand interactions of unrestrained MD, the default `restraints.selection`) and PR #7,
+merged on the owner's order of 2026-11-22 (plan
+`docs/plans/2026-11-21-als-initial-window-design.md`, done: adaptive lambda scheduling of the
+complex leg starts from 30 windows and reads the overlap of a pair alone, window settings per
+leg, `max_windows` 100). Analysis version 10. The whole diff of PR #7 was reviewed by readers
+who did not write it (two independent reviews and six passes of Codex, the last without a
+finding): their findings are fixed, each after it was reproduced, or answered on PR #7. Both
+examples ran once with the image of commit 720cdb1, in which the MD for the restraint starts
+from the pose that was given, and the TYK2 example three times with the present defaults of the
+complex leg (below).
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 680 passed (2026-11-22, the branch of PR #7 with the defaults of that day in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`); `main`: 654 passed (the head of PR #6 in that image, with ProLIF 2.2.3 and MDAnalysis 2.11.0) |
-| GPU tests | 25 passed (2026-11-22, one GPU, the branch of PR #7 with the defaults of that day in the same image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); `main`: 25 passed |
+| Unit tests (CPU) | 680 passed (2026-11-22, PR #7 at da052f6 in the image `cufep:dev`, with ProLIF 2.2.3 and MDAnalysis 2.11.0, `scripts/in_docker.sh python -m pytest`; its later commits change documents and a script of `spikes/` only) |
+| GPU tests | 25 passed (2026-11-22, one GPU, PR #7 at d5f9c3f with the fixes of its independent review, in the same image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`; its later commits do not touch what these tests cover) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7 |
 | Starts of the complex leg (plan `docs/plans/2026-11-21-als-initial-window-design.md`, PR #7) | A is the default since 2026-11-22 (the owner's choice), so its three runs are runs of the TYK2 example as it is now. TYK2 example, three starts of the complex leg, three calculations each with the same YAML and seed (image of 5e2cf33, 4 GPUs each; the overlap of a pair alone, threshold 0.30; solvent leg as the default), kcal/mol. A (30 windows, those of mode fixed): -9.36 ± 0.56, -9.63 ± 0.37, -9.33 ± 0.51; mean -9.44, standard deviation 0.17. B (30 windows, denser at vanish 0.7 to 0.9): -10.01 ± 0.34, -9.64 ± 0.52, -11.71 ± 0.53; -10.45, 1.11. C (59 windows placed as B): -11.43 ± 0.46, -6.41 ± 0.59, -7.64 ± 0.43; -8.50, 2.62. The four runs of the row above: -10.39, 2.09. Complex leg, standard deviation: 0.20, 1.23, 2.20 (1.86). Lowest overlap 0.141 to 0.153 (A), 0.128 to 0.129 (B), 0.081 to 0.085 (C); a window with fewer than 50 independent samples in the complex leg of 2, 1 and 1 of the three runs; 0 or 1 round trip in the complex leg of every run. Three runs give a standard deviation only roughly. Tables: the plan (`spikes/m19_window_runs.py`) |
@@ -64,7 +67,7 @@ Open items:
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
-  `docs/plans/2026-11-21-als-initial-window-design.md` (done, PR #7, not merged) tested the
+  `docs/plans/2026-11-21-als-initial-window-design.md` (done, PR #7) tested the
   owner's hypothesis, more initial windows of adaptive lambda scheduling, placed by design (the
   row "Starts of the complex leg"). Start A is the default of the complex leg since 2026-11-22:
   its three runs differ by 0.30 kcal/mol at most; B and C, with as many and more windows, by
@@ -88,6 +91,16 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-22 — [progress] PR #7 merged on the owner's order: the start of the complex leg
+- What: plan `docs/plans/2026-11-21-als-initial-window-design.md` is done (10 steps, two
+  independent reviews, six passes of Codex, the last without a finding; nine runs of the TYK2
+  example) and its pull request is merged into `main`: there adaptive lambda scheduling of the
+  complex leg starts from 30 windows and reads the overlap of a pair alone (threshold 0.30),
+  `max_windows` is 100 and the window settings can differ between the legs. Not run with these
+  defaults: the A2A example, the subset and full benchmarks.
+- Why: the owner's order (2026-11-22).
+- Refs: PR #7
 
 ### 2026-11-22 — [amendment] Review by Codex of the new defaults: fixes and a correction
 - What: review 6007410417 (seven P2), each reproduced. Correction of `docs/configuration.md` and
