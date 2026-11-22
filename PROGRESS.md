@@ -73,7 +73,9 @@ Open items:
   its three runs differ by 0.30 kcal/mol at most; B and C, with as many and more windows, by
   2.07 and 5.02, and that is not explained (C is not investigated, the owner's order).
 - Not run with the defaults of 2026-11-22: the A2A example, the subset and full benchmarks.
-  `benchmarks/results/` and `docs/wiki/Accuracy.md` are of the defaults before.
+  `benchmarks/results/` and `docs/wiki/Accuracy.md` are of the defaults before. Plan
+  `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (in progress): both full
+  sets once with the present defaults, in the image of e77a6c5; no result yet.
 - Windows much closer than they need to be read low in the overlap matrix of a leg, which the
   analysis checks: 81 unit-width harmonic windows 0.05 widths apart overlap by 0.50 as pairs and
   read 0.016, below the level of 0.03, so such a result is `NOT RELIABLE` although its free
@@ -91,6 +93,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-22 — [progress] Plan started: both full benchmark sets once with the present defaults
+- What: plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (in progress).
+  TYK2 (16 ligands), then A2A (17 compounds): tier full, one calculation per ligand, eight GPUs,
+  in the image built from e77a6c5 (`main` after PR #7; its conda environment is the layer of the
+  image of 5e2cf33). No file of the code, the examples or the benchmarks changes: they follow the
+  defaults (`restraints.selection: interactions`; the complex leg from 30 windows, the overlap of
+  a pair alone, 0.30). The results will replace `benchmarks/results/` and the numbers of
+  `docs/wiki/Accuracy.md`. By the owner's order no unit tests, GPU tests or reviews are run for
+  this plan. No result yet.
+- Why: the owner's order (2026-11-22).
+- Refs: the plan, its pull request
 
 ### 2026-11-22 — [progress] PR #7 merged on the owner's order: the start of the complex leg
 - What: plan `docs/plans/2026-11-21-als-initial-window-design.md` is done (10 steps, two
