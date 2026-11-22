@@ -65,12 +65,13 @@ Open items:
 - The wiki pages (`docs/wiki/`, rewritten in PR #8) are not yet on the GitHub Wiki: it has no
   page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
   and the measurements that would separate the causes of cuFEP's larger errors.
-- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, its pull request): every
-  remedy proposed for the errors gets a treatment (implemented as a setting, measured on the stored
-  runs, a run under a stated condition, or not done with the reason); defaults change only by the
-  owner's decision. Step 1 started 2026-11-22 (image of e77a6c5, `runs/acc_*`): ejm_49 twice and 4k
-  three times with the present defaults, ejm_49 once with REST2 off. No result yet; the
-  measurements on the stored runs, the MD at the decoupled end and the implementations: not started.
+- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, PR #9): every remedy
+  proposed for the errors gets a treatment (a setting, a measurement on the stored runs, a run under
+  a stated condition, or not done with the reason); defaults change only by the owner's decision.
+  Step 1 runs (image of e77a6c5, `runs/acc_*`): ejm_49 twice, 4k three times, ejm_49 once with REST2
+  off; the first of ejm_49 gave -8.92 ± 0.44 kcal/mol, the benchmark run of the same settings
+  -11.84 ± 0.57. Step 2 is measured but for the charges (the plan, "手順 2 の結果"). The MD of step 3
+  and two extensions to 10 ns start when those runs end. Implementations: the first is in work.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -110,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-22 — [progress] Accuracy plan, step 2: what the stored full runs say
+- What: from the files of the runs of e77a6c5 and 3b45bfe, no new calculation; kcal/mol
+  (`spikes/m21_stored_run_measurements.py`, reviewed by a reader who did not write it). A2A: the XY
+  area of the bilayer falls through all 10 ns of its equilibration (16 of 17 legs, -0.33 nm2/ns)
+  and on, from 69 to about 62 nm2 in 40 ns; in the 7 legs whose precalculation had one worker the
+  last windows start at 62.05 nm2 and the first at 66.05. Second minus first half of the
+  production, complex leg: TYK2 restrain +0.51, discharge +0.40, vanish -0.06; A2A +0.66, -0.11,
+  -0.97, with water entering the place of the ligand (+2.02 molecules, 16 of 17). The benchmark
+  inputs hold no crystal water. The entry below: -1.12, not -1.13 (unrounded errors).
+- Why: step 2 of the plan: what the stored runs decide needs no run.
+- Refs: the plan ("手順 2 の結果"), PR #9
 
 ### 2026-11-22 — [progress] Plan started: the causes of the errors measured, the remedies implemented
 - What: plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress). Step 1 runs in
