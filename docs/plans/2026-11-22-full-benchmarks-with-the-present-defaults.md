@@ -1,5 +1,5 @@
 # 現在の既定値でベンチマーク full を 1 回実行し、wiki に記載する
-Status: In progress (手順 1〜2 済み: イメージ e77a6c5、draft pull request; 手順 3: 計算中)
+Status: In progress (手順 1〜2 済み: イメージ e77a6c5、draft pull request; 手順 3〜4: TYK2 full は 16/16 で終了し `benchmarks/results/tyk2/` に記録、A2A full は計算中)
 Refs: this pull request; `benchmarks/results/`; `docs/wiki/Accuracy.md`, `docs/wiki/Accuracy-ja.md`; `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`
 
 ## Context

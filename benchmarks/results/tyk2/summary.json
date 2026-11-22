@@ -21,6 +21,7 @@
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -36,61 +37,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "6c15331164e23b43",
-   "0/solvent": "bb9324b84bb6b347"
+   "0/complex": "4d7dfaf789dc5a6a",
+   "0/solvent": "bfe9802d37c4bd65"
   },
-  "dg_bind": -9.604429683546176,
+  "dg_bind": -13.36457764289581,
   "dg_bind_std": null,
-  "dg_bind_error": 0.37389848961185196,
+  "dg_bind_error": 0.30243076529336277,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.24305320008171205,
-  "min_overlap": 0.14529485383067747,
-  "min_overlap_used": 0.14193925060849144,
+  "dg_bind_mbar_error": 0.2007415800535332,
+  "min_overlap": 0.17201841466775114,
+  "min_overlap_used": 0.17132175487461399,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -9.604429683546176,
-    "error": 0.37389848961185196,
-    "mbar_error": 0.24305320008171205,
+    "dg_bind": -13.36457764289581,
+    "error": 0.30243076529336277,
+    "mbar_error": 0.2007415800535332,
     "error_from_time_blocks": true,
-    "dg_complex": 39.37659595644701,
-    "dg_solvent": 20.496419040136477,
-    "restraint_release": -9.275747232764358,
-    "lrc_complex": -4.892084919058587,
-    "lrc_solvent": -3.0589579584726105,
+    "dg_complex": 43.9718232742569,
+    "dg_solvent": 20.107129730416236,
+    "restraint_release": -10.500115900944852,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 769,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 769,
+      "kept_types": {
+       "HBAcceptor": 769
+      }
+     },
+     "score": 107.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.897407053664679,
+    "lrc_solvent": -3.0563874152427255,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 303.86174630546157,
-     "discharge": 17.404803680486506,
-     "vanish": -286.78203894855966
+     "restrain": 305.88802903150577,
+     "discharge": 18.97723455666675,
+     "vanish": -285.7908473675803
     },
     "stage_solvent": {
-     "discharge": 92.29198529182035,
-     "vanish": -74.8545242101565
+     "discharge": 92.01711979775502,
+     "vanish": -74.9663774825815
     },
     "lambda_windows": {
-     "complex": 25,
-     "solvent": 17
+     "complex": 32,
+     "solvent": 19
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
+      "restrain": 0,
       "discharge": 0,
-      "vanish": 8
+      "vanish": 2
      },
      "solvent": {
-      "discharge": 1,
-      "vanish": 3
+      "discharge": 2,
+      "vanish": 4
      }
     },
     "min_overlap": {
-     "complex": 0.16813122901685915,
-     "solvent": 0.14529485383067747
+     "complex": 0.17201841466775114,
+     "solvent": 0.19257860902860172
     },
     "min_overlap_used": {
-     "complex": 0.16220658222632212,
-     "solvent": 0.14193925060849144
+     "complex": 0.17132175487461399,
+     "solvent": 0.19265027459531436
     },
     "production_ns": {
      "complex": 5.0,
@@ -133,6 +178,7 @@
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -148,61 +194,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "2bf3c1a1cd4c7e03",
-   "0/solvent": "623d57d770edbead"
+   "0/complex": "444bb168ea3af32c",
+   "0/solvent": "aa7d5ac9b06a6ac0"
   },
-  "dg_bind": -9.405430320300445,
+  "dg_bind": -11.437965564544525,
   "dg_bind_std": null,
-  "dg_bind_error": 0.30591903274626364,
+  "dg_bind_error": 0.4269862053822902,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.21519542222627594,
-  "min_overlap": 0.16760377357641595,
-  "min_overlap_used": 0.1656775040300676,
+  "dg_bind_mbar_error": 0.20247089362253795,
+  "min_overlap": 0.14594442947028288,
+  "min_overlap_used": 0.14762004654557778,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -9.405430320300445,
-    "error": 0.30591903274626364,
-    "mbar_error": 0.21519542222627594,
+    "dg_bind": -11.437965564544525,
+    "error": 0.4269862053822902,
+    "mbar_error": 0.20247089362253795,
     "error_from_time_blocks": true,
-    "dg_complex": 38.528095675208164,
-    "dg_solvent": 19.84937929139674,
-    "restraint_release": -9.273286063510982,
-    "lrc_complex": -5.050150794556659,
-    "lrc_solvent": -3.1649190282607607,
+    "dg_complex": 41.6631682822504,
+    "dg_solvent": 19.720892891576323,
+    "restraint_release": -10.504309826129553,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 770,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 770,
+      "kept_types": {
+       "HBAcceptor": 770
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.035385575439201,
+    "lrc_solvent": -3.1672537222302473,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 296.4602365450532,
-     "discharge": 13.995092453562746,
-     "vanish": -276.9773841179644
+     "restrain": 295.3139910647555,
+     "discharge": 14.283795817452345,
+     "vanish": -272.97000417539664
     },
     "stage_solvent": {
-     "discharge": 77.55026000939473,
-     "vanish": -60.86579974625876
+     "discharge": 77.4017591480359,
+     "vanish": -60.84811997868982
     },
     "lambda_windows": {
-     "complex": 27,
-     "solvent": 18
+     "complex": 35,
+     "solvent": 17
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 3,
-      "discharge": 1,
-      "vanish": 8
+      "restrain": 1,
+      "discharge": 0,
+      "vanish": 4
      },
      "solvent": {
       "discharge": 1,
-      "vanish": 4
+      "vanish": 3
      }
     },
     "min_overlap": {
-     "complex": 0.16760377357641595,
-     "solvent": 0.18078732116867613
+     "complex": 0.14594442947028288,
+     "solvent": 0.18194598597894948
     },
     "min_overlap_used": {
-     "complex": 0.1656775040300676,
-     "solvent": 0.18302288103397696
+     "complex": 0.14762004654557778,
+     "solvent": 0.18703919586224216
     },
     "production_ns": {
      "complex": 5.0,
@@ -229,10 +319,8 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 4 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 complex: few independent samples: lambda window 19 (vanish stage) has 26 and gives MBAR 26 samples (its energy difference to the previous window is correlated over 77 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
-   "repeat 0 complex: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 19 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 19 keeps 2 sample(s) there; 4 are needed for an estimate",
-   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 31 and gives MBAR 31 samples (its energy difference to the next window is correlated over 64 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)",
-   "repeat 0 solvent: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate"
+   "repeat 0 complex: few independent samples: lambda window 0 (restrain stage) has 30 and gives MBAR 31 samples (its energy difference to the next window is correlated over 66 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate"
   ],
   "analysis_versions": [
    10
@@ -246,12 +334,12 @@
   "not_reliable": [],
   "overlap_below_level": [],
   "few_samples": [
-   "complex leg",
-   "solvent leg"
+   "complex leg"
   ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -267,61 +355,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "404b9aad598f5311",
-   "0/solvent": "2ebf5f2f07b859bf"
+   "0/complex": "6f63caa487eed245",
+   "0/solvent": "9d8d4d33d2236545"
   },
-  "dg_bind": -11.070464324198653,
+  "dg_bind": -11.836700716201157,
   "dg_bind_std": null,
-  "dg_bind_error": 0.6025115552106258,
+  "dg_bind_error": 0.5708187718621943,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.3289172982756682,
-  "min_overlap": 0.13944334361063918,
-  "min_overlap_used": 0.14671987785348004,
+  "dg_bind_mbar_error": 0.2374231286590115,
+  "min_overlap": 0.15542072228507373,
+  "min_overlap_used": 0.15524142622885198,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -11.070464324198653,
-    "error": 0.6025115552106258,
-    "mbar_error": 0.3289172982756682,
+    "dg_bind": -11.836700716201157,
+    "error": 0.5708187718621943,
+    "mbar_error": 0.2374231286590115,
     "error_from_time_blocks": true,
-    "dg_complex": 41.41874066898632,
-    "dg_solvent": 21.07206899473445,
-    "restraint_release": -9.276207350053216,
-    "lrc_complex": -5.2778920972416685,
-    "lrc_solvent": -3.3284590940526697,
+    "dg_complex": 43.11683496824594,
+    "dg_solvent": 20.779641734284557,
+    "restraint_release": -10.500492517760224,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 758,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 758,
+      "kept_types": {
+       "HBAcceptor": 758
+      }
+     },
+     "score": 107.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.269233085538195,
+    "lrc_solvent": -3.328606930323829,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 237.36451621749578,
-     "discharge": 13.158986692038498,
-     "vanish": -214.3826543377896
+     "restrain": 237.24107711476543,
+     "discharge": 15.613350168438789,
+     "vanish": -215.0068254004965
     },
     "stage_solvent": {
-     "discharge": 76.2139887458721,
-     "vanish": -58.47037884519033
+     "discharge": 75.92414602836297,
+     "vanish": -58.473111224402246
     },
     "lambda_windows": {
-     "complex": 21,
-     "solvent": 17
+     "complex": 36,
+     "solvent": 18
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
+      "restrain": 1,
       "discharge": 0,
-      "vanish": 4
+      "vanish": 5
      },
      "solvent": {
-      "discharge": 1,
+      "discharge": 2,
       "vanish": 3
      }
     },
     "min_overlap": {
-     "complex": 0.13944334361063918,
-     "solvent": 0.14780850504129098
+     "complex": 0.15542072228507373,
+     "solvent": 0.19648218197056758
     },
     "min_overlap_used": {
-     "complex": 0.14671987785348004,
-     "solvent": 0.14724617896531927
+     "complex": 0.15524142622885198,
+     "solvent": 0.19723622780045313
     },
     "production_ns": {
      "complex": 5.0,
@@ -348,8 +480,8 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 complex: few independent samples: lambda window 0 (restrain stage) has 29 and gives MBAR 29 samples (its energy difference to the next window is correlated over 68 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
-   "repeat 0 complex: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 2 sample(s) there; 4 are needed for an estimate"
+   "repeat 0 complex: few independent samples: lambda window 28 (vanish stage) has 16 and gives MBAR 16 samples (its energy difference to the previous window is correlated over 127 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (7; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 28 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 28 keeps 1 sample(s) there; 4 are needed for an estimate; reverse point 0.20 (iterations 1600-2000 of the production): lambda window 28 keeps 3 sample(s) there; 4 are needed for an estimate; ..."
   ],
   "analysis_versions": [
    10
@@ -368,6 +500,7 @@
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -383,61 +516,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "186793cf874e79b0",
-   "0/solvent": "cf52c9ce2060c0fe"
+   "0/complex": "342d45bd00f5bd50",
+   "0/solvent": "3eb6cea9d7c43dda"
   },
-  "dg_bind": -9.835123831837167,
+  "dg_bind": -10.075622368900731,
   "dg_bind_std": null,
-  "dg_bind_error": 0.3274531295307423,
-  "dg_bind_error_from_time_blocks": false,
-  "dg_bind_mbar_error": 0.3134769804176445,
-  "min_overlap": 0.16490550125933567,
-  "min_overlap_used": 0.17375009528975674,
+  "dg_bind_error": 0.36764697222001,
+  "dg_bind_error_from_time_blocks": true,
+  "dg_bind_mbar_error": 0.19112088841538236,
+  "min_overlap": 0.15449005964824108,
+  "min_overlap_used": 0.1538756862215538,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -9.835123831837167,
-    "error": 0.3274531295307423,
-    "mbar_error": 0.3134769804176445,
-    "error_from_time_blocks": false,
-    "dg_complex": 39.19330539153086,
-    "dg_solvent": 20.13254383211002,
-    "restraint_release": -9.225637727583676,
-    "lrc_complex": -4.437645006640507,
-    "lrc_solvent": -2.7454571663795093,
+    "dg_bind": -10.075622368900731,
+    "error": 0.36764697222001,
+    "mbar_error": 0.19112088841538236,
+    "error_from_time_blocks": true,
+    "dg_complex": 40.42910324411007,
+    "dg_solvent": 19.792565343860552,
+    "restraint_release": -10.560915531348787,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 764,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 764,
+      "kept_types": {
+       "HBAcceptor": 764
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.444722510789789,
+    "lrc_solvent": -2.7456438764180167,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 244.02727413791507,
-     "discharge": 14.74100247810114,
-     "vanish": -224.0126162311259
+     "restrain": 243.08811879929007,
+     "discharge": 14.82076122472664,
+     "vanish": -221.92449929069645
     },
     "stage_solvent": {
-     "discharge": 85.7196013505562,
-     "vanish": -68.33251468482568
+     "discharge": 85.49153863979708,
+     "vanish": -68.44461717235455
     },
     "lambda_windows": {
-     "complex": 20,
-     "solvent": 19
+     "complex": 33,
+     "solvent": 18
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
+      "restrain": 0,
       "discharge": 0,
       "vanish": 3
      },
      "solvent": {
-      "discharge": 2,
+      "discharge": 1,
       "vanish": 4
      }
     },
     "min_overlap": {
-     "complex": 0.16490550125933567,
-     "solvent": 0.1916640545083543
+     "complex": 0.15449005964824108,
+     "solvent": 0.1887772499479836
     },
     "min_overlap_used": {
-     "complex": 0.17375009528975674,
-     "solvent": 0.1905797526152154
+     "complex": 0.1538756862215538,
+     "solvent": 0.1887915334377215
     },
     "production_ns": {
      "complex": 5.0,
@@ -464,8 +641,8 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 4 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 complex: few independent samples: lambda window 18 (vanish stage) has 12 and gives MBAR 13 samples (its energy difference to the previous window is correlated over 161 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
-   "repeat 0 complex: parts of the production without an estimate (9; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 18 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 18 keeps 1 sample(s) there; 4 are needed for an estimate; forward point 0.20 (iterations 0-400 of the production): lambda window 18 keeps 3 sample(s) there; 4 are needed for an estimate; ..."
+   "repeat 0 complex: few independent samples: lambda window 0 (restrain stage) has 14 and gives MBAR 14 samples (its energy difference to the next window is correlated over 147 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (9; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 0 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 1 sample(s) there; 4 are needed for an estimate; forward point 0.20 (iterations 0-400 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate; ..."
   ],
   "analysis_versions": [
    10
@@ -484,6 +661,7 @@
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -499,61 +677,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "893e6e424e3b7726",
-   "0/solvent": "63a2df62cb4b84a8"
+   "0/complex": "bfd8dce4c6272e38",
+   "0/solvent": "a934f0d186c675e8"
   },
-  "dg_bind": -10.432870995243373,
+  "dg_bind": -12.04118519048786,
   "dg_bind_std": null,
-  "dg_bind_error": 0.48185719461616416,
+  "dg_bind_error": 0.6108458997457411,
   "dg_bind_error_from_time_blocks": false,
-  "dg_bind_mbar_error": 0.2566053406437762,
-  "min_overlap": 0.16969511996450032,
-  "min_overlap_used": 0.17138442743252894,
+  "dg_bind_mbar_error": 0.2733762796174853,
+  "min_overlap": 0.15506981509735032,
+  "min_overlap_used": 0.1549762210995547,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -10.432870995243373,
-    "error": 0.48185719461616416,
-    "mbar_error": 0.2566053406437762,
+    "dg_bind": -12.04118519048786,
+    "error": 0.6108458997457411,
+    "mbar_error": 0.2733762796174853,
     "error_from_time_blocks": false,
-    "dg_complex": 39.54399239528669,
-    "dg_solvent": 19.82170408306667,
-    "restraint_release": -9.28941731697665,
-    "lrc_complex": -5.047141979174825,
-    "lrc_solvent": -3.166727747085116,
+    "dg_complex": 42.48946728775387,
+    "dg_solvent": 19.898892363824103,
+    "restraint_release": -10.549389733441902,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 767,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 767,
+      "kept_types": {
+       "HBAcceptor": 767
+      }
+     },
+     "score": 107.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.062434087397988,
+    "lrc_solvent": -3.1633453934326434,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 243.54350660813353,
-     "discharge": 15.095529164381999,
-     "vanish": -224.14218535640367
+     "restrain": 244.78105279623114,
+     "discharge": 16.00636002351989,
+     "vanish": -223.36037961939516
     },
     "stage_solvent": {
-     "discharge": 83.81728960346135,
-     "vanish": -67.16231326747979
+     "discharge": 83.7758284819671,
+     "vanish": -67.04028151157563
     },
     "lambda_windows": {
-     "complex": 22,
-     "solvent": 18
+     "complex": 33,
+     "solvent": 19
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 1,
-      "discharge": 2,
-      "vanish": 4
+      "restrain": 0,
+      "discharge": 0,
+      "vanish": 3
      },
      "solvent": {
       "discharge": 2,
-      "vanish": 3
+      "vanish": 4
      }
     },
     "min_overlap": {
-     "complex": 0.16969511996450032,
-     "solvent": 0.1933205539521282
+     "complex": 0.15506981509735032,
+     "solvent": 0.19156717610367616
     },
     "min_overlap_used": {
-     "complex": 0.17138442743252894,
-     "solvent": 0.19414010923069683
+     "complex": 0.1549762210995547,
+     "solvent": 0.19146256332098274
     },
     "production_ns": {
      "complex": 5.0,
@@ -579,7 +801,9 @@
   "units": "kcal/mol",
   "n_repeats": 1,
   "warnings": [
-   "repeat 0 complex: the ligand has 12 heavy-atom graph symmetries; no symmetry correction is applied"
+   "repeat 0 complex: the ligand has 12 heavy-atom graph symmetries; no symmetry correction is applied",
+   "repeat 0 complex: few independent samples: lambda window 28 (vanish stage) has 31 and gives MBAR 31 samples (its energy difference to the previous window is correlated over 64 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate"
   ],
   "analysis_versions": [
    10
@@ -592,10 +816,13 @@
   "old_analysis": [],
   "not_reliable": [],
   "overlap_below_level": [],
-  "few_samples": [],
+  "few_samples": [
+   "complex leg"
+  ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -611,61 +838,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "10370e11e1e962a2",
-   "0/solvent": "243b536b7d8af03c"
+   "0/complex": "51c67d6a9c386d26",
+   "0/solvent": "cc5aa9e28207380c"
   },
-  "dg_bind": -5.729385132391519,
+  "dg_bind": -8.721692695086444,
   "dg_bind_std": null,
-  "dg_bind_error": 0.3579953661135244,
+  "dg_bind_error": 0.4738521618346263,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.2386237222960198,
-  "min_overlap": 0.16179515205627368,
-  "min_overlap_used": 0.16179515221302537,
+  "dg_bind_mbar_error": 0.24632392663800115,
+  "min_overlap": 0.1531481019933581,
+  "min_overlap_used": 0.1533889695638117,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -5.729385132391519,
-    "error": 0.3579953661135244,
-    "mbar_error": 0.2386237222960198,
+    "dg_bind": -8.721692695086444,
+    "error": 0.4738521618346263,
+    "mbar_error": 0.24632392663800115,
     "error_from_time_blocks": true,
-    "dg_complex": 33.785554349702075,
-    "dg_solvent": 18.796753721211857,
-    "restraint_release": -9.259415496098699,
-    "lrc_complex": -5.129962453691223,
-    "lrc_solvent": -3.2077847417826506,
+    "dg_complex": 37.99493981174314,
+    "dg_solvent": 18.77275459889647,
+    "restraint_release": -10.500492517760224,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 736,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 736,
+      "kept_types": {
+       "HBAcceptor": 736
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.11901739313915,
+    "lrc_solvent": -3.2077770495143363,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 294.0585811253493,
-     "discharge": 11.784473597817728,
-     "vanish": -277.1874628271562
+     "restrain": 294.0455321755244,
+     "discharge": 14.05509037196674,
+     "vanish": -275.2247001288871
     },
     "stage_solvent": {
-     "discharge": 77.10624823421163,
-     "vanish": -61.517279254782416
+     "discharge": 77.108185504886,
+     "vanish": -61.543207955503874
     },
     "lambda_windows": {
-     "complex": 21,
-     "solvent": 20
+     "complex": 34,
+     "solvent": 17
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
+      "restrain": 1,
       "discharge": 0,
-      "vanish": 4
+      "vanish": 3
      },
      "solvent": {
-      "discharge": 2,
-      "vanish": 5
+      "discharge": 1,
+      "vanish": 3
      }
     },
     "min_overlap": {
-     "complex": 0.1659287896431884,
-     "solvent": 0.16179515205627368
+     "complex": 0.1531481019933581,
+     "solvent": 0.17365484355673508
     },
     "min_overlap_used": {
-     "complex": 0.18037827167129866,
-     "solvent": 0.16179515221302537
+     "complex": 0.1533889695638117,
+     "solvent": 0.1700310254585701
     },
     "production_ns": {
      "complex": 5.0,
@@ -692,7 +963,10 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 4 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 46 and gives MBAR 46 samples (its energy difference to the next window is correlated over 44 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)"
+   "repeat 0 complex: few independent samples: lambda window 0 (restrain stage) has 28 and gives MBAR 28 samples (its energy difference to the next window is correlated over 72 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate",
+   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 34 and gives MBAR 34 samples (its energy difference to the next window is correlated over 59 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)",
+   "repeat 0 solvent: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate"
   ],
   "analysis_versions": [
    10
@@ -706,11 +980,13 @@
   "not_reliable": [],
   "overlap_below_level": [],
   "few_samples": [
+   "complex leg",
    "solvent leg"
   ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -726,61 +1002,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "1e8a42c3b34e5721",
-   "0/solvent": "c71663b3a8f6eda0"
+   "0/complex": "fcc16511236f37b0",
+   "0/solvent": "466aa4d63f8725f7"
   },
-  "dg_bind": -8.208836211342495,
+  "dg_bind": -9.588001793049864,
   "dg_bind_std": null,
-  "dg_bind_error": 0.41211884414641,
-  "dg_bind_error_from_time_blocks": false,
-  "dg_bind_mbar_error": 0.27206522676552314,
-  "min_overlap": 0.16596642780685983,
-  "min_overlap_used": 0.16624616929653846,
+  "dg_bind_error": 0.4093896789259737,
+  "dg_bind_error_from_time_blocks": true,
+  "dg_bind_mbar_error": 0.22440237418601863,
+  "min_overlap": 0.14916639712715415,
+  "min_overlap_used": 0.14895017422883347,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -8.208836211342495,
-    "error": 0.41211884414641,
-    "mbar_error": 0.27206522676552314,
-    "error_from_time_blocks": false,
-    "dg_complex": 37.294921631064135,
-    "dg_solvent": 19.818908443665883,
-    "restraint_release": -9.267176976055756,
-    "lrc_complex": -4.898767728678797,
-    "lrc_solvent": -3.0559051228850023,
+    "dg_bind": -9.588001793049864,
+    "error": 0.4093896789259737,
+    "mbar_error": 0.22440237418601863,
+    "error_from_time_blocks": true,
+    "dg_complex": 39.403037527720436,
+    "dg_solvent": 19.333448559392497,
+    "restraint_release": -10.481587175278072,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 769,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 769,
+      "kept_types": {
+       "HBAcceptor": 769
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.882527805462005,
+    "lrc_solvent": -3.0552361145896088,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 294.8402622927207,
-     "discharge": 15.324677177736774,
-     "vanish": -277.76878556807213
+     "restrain": 296.65039668731634,
+     "discharge": 13.852278698858251,
+     "vanish": -275.9821656639162
     },
     "stage_solvent": {
-     "discharge": 79.38401517615674,
-     "vanish": -62.62101185537587
+     "discharge": 79.06072559119227,
+     "vanish": -62.78251314638936
     },
     "lambda_windows": {
-     "complex": 23,
+     "complex": 35,
      "solvent": 18
     },
     "lambda_windows_added": {
      "complex": {
       "restrain": 1,
-      "discharge": 3,
+      "discharge": 0,
       "vanish": 4
      },
      "solvent": {
-      "discharge": 2,
-      "vanish": 3
+      "discharge": 1,
+      "vanish": 4
      }
     },
     "min_overlap": {
-     "complex": 0.16596642780685983,
-     "solvent": 0.1955701644839682
+     "complex": 0.15454545809126558,
+     "solvent": 0.14916639712715415
     },
     "min_overlap_used": {
-     "complex": 0.16624616929653846,
-     "solvent": 0.19622493931416607
+     "complex": 0.1536761569224203,
+     "solvent": 0.14895017422883347
     },
     "production_ns": {
      "complex": 5.0,
@@ -807,7 +1127,7 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 complex: few independent samples: lambda window 17 (vanish stage) has 47 and gives MBAR 47 samples (its energy difference to the previous window is correlated over 43 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)"
+   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 40 and gives MBAR 40 samples (its energy difference to the next window is correlated over 51 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)"
   ],
   "analysis_versions": [
    10
@@ -821,11 +1141,12 @@
   "not_reliable": [],
   "overlap_below_level": [],
   "few_samples": [
-   "complex leg"
+   "solvent leg"
   ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -841,61 +1162,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "3d31bf08188a9e63",
-   "0/solvent": "42c910f8cfaf63e9"
+   "0/complex": "8320b28ca9cb2b08",
+   "0/solvent": "bf9893afb4968056"
   },
-  "dg_bind": -11.04231660627331,
+  "dg_bind": -9.083470103417355,
   "dg_bind_std": null,
-  "dg_bind_error": 0.536386920833161,
+  "dg_bind_error": 0.5431272513593136,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.2519290189978316,
-  "min_overlap": 0.18033730792592112,
-  "min_overlap_used": 0.17841965772049295,
+  "dg_bind_mbar_error": 0.21268110955190614,
+  "min_overlap": 0.16184005198644863,
+  "min_overlap_used": 0.1636647622470873,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -11.04231660627331,
-    "error": 0.536386920833161,
-    "mbar_error": 0.2519290189978316,
+    "dg_bind": -9.083470103417355,
+    "error": 0.5431272513593136,
+    "mbar_error": 0.21268110955190614,
     "error_from_time_blocks": true,
-    "dg_complex": 44.39219034038626,
-    "dg_solvent": 24.572665760207464,
-    "restraint_release": -8.777207973905488,
-    "lrc_complex": -4.542611074569451,
-    "lrc_solvent": -2.8352371956731934,
+    "dg_complex": 44.20839631798023,
+    "dg_solvent": 24.56401068321409,
+    "restraint_release": -10.560915531348787,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 773,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 773,
+      "kept_types": {
+       "HBAcceptor": 773
+      }
+     },
+     "score": 107.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.571067440524922,
+    "lrc_solvent": -2.8343741872154333,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 232.83178437919025,
-     "discharge": 17.834414287672065,
-     "vanish": -210.8166194010455
+     "restrain": 233.48223639707288,
+     "discharge": 18.04901318353359,
+     "vanish": -211.8939207031512
     },
     "stage_solvent": {
-     "discharge": 73.63314293292262,
-     "vanish": -51.89571436838835
+     "discharge": 73.72861852208855,
+     "vanish": -51.998982026089905
     },
     "lambda_windows": {
-     "complex": 21,
-     "solvent": 21
+     "complex": 33,
+     "solvent": 18
     },
     "lambda_windows_added": {
      "complex": {
       "restrain": 1,
-      "discharge": 1,
-      "vanish": 4
+      "discharge": 0,
+      "vanish": 2
      },
      "solvent": {
-      "discharge": 3,
-      "vanish": 5
+      "discharge": 2,
+      "vanish": 3
      }
     },
     "min_overlap": {
-     "complex": 0.18033730792592112,
-     "solvent": 0.1864932178161358
+     "complex": 0.16184005198644863,
+     "solvent": 0.178579138572009
     },
     "min_overlap_used": {
-     "complex": 0.17841965772049295,
-     "solvent": 0.18620408464611177
+     "complex": 0.1636647622470873,
+     "solvent": 0.18152899520671714
     },
     "production_ns": {
      "complex": 5.0,
@@ -921,9 +1286,7 @@
   "units": "kcal/mol",
   "n_repeats": 1,
   "warnings": [
-   "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 36 and gives MBAR 36 samples (its energy difference to the next window is correlated over 56 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)",
-   "repeat 0 solvent: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate"
+   "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied"
   ],
   "analysis_versions": [
    10
@@ -936,12 +1299,11 @@
   "old_analysis": [],
   "not_reliable": [],
   "overlap_below_level": [],
-  "few_samples": [
-   "solvent leg"
-  ],
+  "few_samples": [],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -957,61 +1319,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "2cd6f4c719d0016c",
-   "0/solvent": "55cb2594e2c637f2"
+   "0/complex": "cb07f4c9c555434f",
+   "0/solvent": "3614816c280c3cd1"
   },
-  "dg_bind": -11.965045773394046,
+  "dg_bind": -10.617433439244472,
   "dg_bind_std": null,
-  "dg_bind_error": 0.41200483109690345,
+  "dg_bind_error": 0.33831518362757457,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.2626608144506965,
-  "min_overlap": 0.13897891177279048,
-  "min_overlap_used": 0.12288489828649664,
+  "dg_bind_mbar_error": 0.2199843516111033,
+  "min_overlap": 0.15456166557661757,
+  "min_overlap_used": 0.15421386692964237,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -11.965045773394046,
-    "error": 0.41200483109690345,
-    "mbar_error": 0.2626608144506965,
+    "dg_bind": -10.617433439244472,
+    "error": 0.33831518362757457,
+    "mbar_error": 0.2199843516111033,
     "error_from_time_blocks": true,
-    "dg_complex": 41.60924092002818,
-    "dg_solvent": 20.409830290869728,
-    "restraint_release": -9.234364855764403,
-    "lrc_complex": -4.691337504349157,
-    "lrc_solvent": -2.8990723169444954,
+    "dg_complex": 41.121156643025785,
+    "dg_solvent": 19.96574892667931,
+    "restraint_release": -10.537974277101998,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 760,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 760,
+      "kept_types": {
+       "HBAcceptor": 760
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.671935324748415,
+    "lrc_solvent": -2.900493530980732,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 242.48684552055727,
-     "discharge": 15.654356949527923,
-     "vanish": -221.22329905440617
+     "restrain": 242.1322204502104,
+     "discharge": 15.395121747365286,
+     "vanish": -221.0781208792983
     },
     "stage_solvent": {
-     "discharge": 82.64019731263575,
-     "vanish": -65.12943933871051
+     "discharge": 82.32799913958807,
+     "vanish": -65.2627437438895
     },
     "lambda_windows": {
-     "complex": 21,
-     "solvent": 20
+     "complex": 33,
+     "solvent": 16
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
-      "discharge": 1,
+      "restrain": 0,
+      "discharge": 0,
       "vanish": 3
      },
      "solvent": {
-      "discharge": 2,
-      "vanish": 5
+      "discharge": 1,
+      "vanish": 2
      }
     },
     "min_overlap": {
-     "complex": 0.14289932958989657,
-     "solvent": 0.13897891177279048
+     "complex": 0.15456166557661757,
+     "solvent": 0.15802789331127476
     },
     "min_overlap_used": {
-     "complex": 0.14772316764035598,
-     "solvent": 0.12288489828649664
+     "complex": 0.15421386692964237,
+     "solvent": 0.15763040092971645
     },
     "production_ns": {
      "complex": 5.0,
@@ -1038,8 +1444,7 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 30 and gives MBAR 30 samples (its energy difference to the next window is correlated over 67 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)",
-   "repeat 0 solvent: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate"
+   "repeat 0 complex: few independent samples: lambda window 27 (vanish stage) has 49 and gives MBAR 49 samples (its energy difference to the previous window is correlated over 41 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)"
   ],
   "analysis_versions": [
    10
@@ -1053,11 +1458,12 @@
   "not_reliable": [],
   "overlap_below_level": [],
   "few_samples": [
-   "solvent leg"
+   "complex leg"
   ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -1073,48 +1479,92 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "6dd614c74c30d9ab",
-   "0/solvent": "3914bb4e8cdd106b"
+   "0/complex": "81e69b00aeffee75",
+   "0/solvent": "6202204e913addd6"
   },
-  "dg_bind": -10.23404275173756,
+  "dg_bind": -9.019799588350205,
   "dg_bind_std": null,
-  "dg_bind_error": 0.45779665954439713,
+  "dg_bind_error": 0.4513861294195067,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.316778840566731,
-  "min_overlap": 0.15600326115665855,
-  "min_overlap_used": 0.15773568538616037,
+  "dg_bind_mbar_error": 0.21668778754423673,
+  "min_overlap": 0.15308866128487697,
+  "min_overlap_used": 0.15311976017295284,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -10.23404275173756,
-    "error": 0.45779665954439713,
-    "mbar_error": 0.316778840566731,
+    "dg_bind": -9.019799588350205,
+    "error": 0.4513861294195067,
+    "mbar_error": 0.21668778754423673,
     "error_from_time_blocks": true,
-    "dg_complex": 38.529786568280954,
-    "dg_solvent": 19.106335036415423,
-    "restraint_release": -9.189408780127971,
-    "lrc_complex": -4.592770504376079,
-    "lrc_solvent": -2.8441629402519646,
+    "dg_complex": 39.0398891168489,
+    "dg_solvent": 19.4357827548534,
+    "restraint_release": -10.584306773645293,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 767,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 767,
+      "kept_types": {
+       "HBAcceptor": 767
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.598670111939695,
+    "lrc_solvent": -2.8424588709729495,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 245.98960827904708,
-     "discharge": 13.7855666625866,
-     "vanish": -225.83815887772877
+     "restrain": 246.07661601668067,
+     "discharge": 14.429185122424313,
+     "vanish": -226.0645821341958
     },
     "stage_solvent": {
-     "discharge": 86.94842064786954,
-     "vanish": -70.68624855170607
+     "discharge": 87.34545146303118,
+     "vanish": -70.75212757915072
     },
     "lambda_windows": {
-     "complex": 21,
+     "complex": 31,
      "solvent": 19
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 1,
+      "restrain": 0,
       "discharge": 0,
-      "vanish": 5
+      "vanish": 1
      },
      "solvent": {
       "discharge": 1,
@@ -1122,12 +1572,12 @@
      }
     },
     "min_overlap": {
-     "complex": 0.15600326115665855,
-     "solvent": 0.1582674337996183
+     "complex": 0.15308866128487697,
+     "solvent": 0.1625509378824437
     },
     "min_overlap_used": {
-     "complex": 0.1635698896045193,
-     "solvent": 0.15773568538616037
+     "complex": 0.15311976017295284,
+     "solvent": 0.156550063270478
     },
     "production_ns": {
      "complex": 5.0,
@@ -1153,7 +1603,9 @@
   "units": "kcal/mol",
   "n_repeats": 1,
   "warnings": [
-   "repeat 0 complex: the ligand has 4 heavy-atom graph symmetries; no symmetry correction is applied"
+   "repeat 0 complex: the ligand has 4 heavy-atom graph symmetries; no symmetry correction is applied",
+   "repeat 0 complex: few independent samples: lambda window 30 (vanish stage) has 11 and gives MBAR 11 samples (its energy difference to the previous window is correlated over 190 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (10; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 0 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 1 sample(s) there; 4 are needed for an estimate; forward point 0.20 (iterations 0-400 of the production): lambda window 30 keeps 3 sample(s) there; 4 are needed for an estimate; ..."
   ],
   "analysis_versions": [
    10
@@ -1166,10 +1618,13 @@
   "old_analysis": [],
   "not_reliable": [],
   "overlap_below_level": [],
-  "few_samples": [],
+  "few_samples": [
+   "complex leg"
+  ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -1185,48 +1640,92 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "29d06dc2ec9bd7f8",
-   "0/solvent": "063a8a4f6cf925ea"
+   "0/complex": "19ca9439314e250f",
+   "0/solvent": "a3ff9c2ee5e0a96b"
   },
-  "dg_bind": -10.720139540051322,
+  "dg_bind": -10.208903695001093,
   "dg_bind_std": null,
-  "dg_bind_error": 0.3591849809312788,
+  "dg_bind_error": 0.7379919393527428,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.2522105507824612,
-  "min_overlap": 0.16782602026794086,
-  "min_overlap_used": 0.1650635139204741,
+  "dg_bind_mbar_error": 0.22932963259529035,
+  "min_overlap": 0.15728872783527245,
+  "min_overlap_used": 0.15787167511237402,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -10.720139540051322,
-    "error": 0.3591849809312788,
-    "mbar_error": 0.2522105507824612,
+    "dg_bind": -10.208903695001093,
+    "error": 0.7379919393527428,
+    "mbar_error": 0.22932963259529035,
     "error_from_time_blocks": true,
-    "dg_complex": 39.629677506160434,
-    "dg_solvent": 19.986614714080154,
-    "restraint_release": -8.92292325202896,
-    "lrc_complex": -5.255014196234733,
-    "lrc_solvent": -3.3227368383296803,
+    "dg_complex": 41.33868894065719,
+    "dg_solvent": 20.61780394525662,
+    "restraint_release": -10.511981300399484,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 767,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 767,
+      "kept_types": {
+       "HBAcceptor": 767
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.238633016327959,
+    "lrc_solvent": -3.319197742034969,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 293.4641505935753,
-     "discharge": 14.683509364166357,
-     "vanish": -273.772996647816
+     "restrain": 294.6137648836007,
+     "discharge": 14.414953253175415,
+     "vanish": -272.9286622124469
     },
     "stage_solvent": {
-     "discharge": 76.51307948579233,
-     "vanish": -59.84920161004185
+     "discharge": 77.09838477495116,
+     "vanish": -59.79977857172952
     },
     "lambda_windows": {
-     "complex": 24,
+     "complex": 34,
      "solvent": 17
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 3,
-      "discharge": 2,
-      "vanish": 4
+      "restrain": 1,
+      "discharge": 0,
+      "vanish": 3
      },
      "solvent": {
       "discharge": 1,
@@ -1234,12 +1733,12 @@
      }
     },
     "min_overlap": {
-     "complex": 0.16782602026794086,
-     "solvent": 0.17510917335277837
+     "complex": 0.15728872783527245,
+     "solvent": 0.15759986241306037
     },
     "min_overlap_used": {
-     "complex": 0.1650635139204741,
-     "solvent": 0.18159207196803034
+     "complex": 0.15787167511237402,
+     "solvent": 0.15931898214184523
     },
     "production_ns": {
      "complex": 5.0,
@@ -1266,8 +1765,8 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 complex: few independent samples: lambda window 24 (vanish stage) has 18 and gives MBAR 18 samples (its energy difference to the previous window is correlated over 114 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
-   "repeat 0 complex: parts of the production without an estimate (5; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 24 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 24 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.20 (iterations 1600-2000 of the production): lambda window 24 keeps 3 sample(s) there; 4 are needed for an estimate; ..."
+   "repeat 0 complex: few independent samples: lambda window 30 (vanish stage) has 18 and gives MBAR 19 samples (its energy difference to the previous window is correlated over 109 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (3; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 30 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 30 keeps 2 sample(s) there; 4 are needed for an estimate; block 4 of 5 (iterations 1200-1600 of the production): lambda window 30 keeps 3 sample(s) there; 4 are needed for an estimate"
   ],
   "analysis_versions": [
    10
@@ -1286,6 +1785,7 @@
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -1301,61 +1801,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "d2de98f5d8fbe384",
-   "0/solvent": "d1ebc42f691716a7"
+   "0/complex": "6bb310599afbe7ac",
+   "0/solvent": "ea061c59a74ad49f"
   },
-  "dg_bind": -12.470269864864466,
+  "dg_bind": -13.508724652957289,
   "dg_bind_std": null,
-  "dg_bind_error": 0.5679882203731719,
+  "dg_bind_error": 0.3657427495981192,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.25369380906149935,
-  "min_overlap": 0.15480515155129074,
-  "min_overlap_used": 0.16106167785135747,
+  "dg_bind_mbar_error": 0.2674882822313171,
+  "min_overlap": 0.14288781191470776,
+  "min_overlap_used": 0.14532259718438223,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -12.470269864864466,
-    "error": 0.5679882203731719,
-    "mbar_error": 0.25369380906149935,
+    "dg_bind": -13.508724652957289,
+    "error": 0.3657427495981192,
+    "mbar_error": 0.2674882822313171,
     "error_from_time_blocks": true,
-    "dg_complex": 43.31833604446735,
-    "dg_solvent": 21.602326408789786,
-    "restraint_release": -9.245739770813097,
-    "lrc_complex": -4.800558224976811,
-    "lrc_solvent": -3.022761445454472,
+    "dg_complex": 45.46698808924058,
+    "dg_solvent": 21.39734790493451,
+    "restraint_release": -10.560915531348787,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 770,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 770,
+      "kept_types": {
+       "HBAcceptor": 770
+      }
+     },
+     "score": 107.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.846868639352495,
+    "lrc_solvent": -3.0211791526507534,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 254.09572525493328,
-     "discharge": 17.511151915351107,
-     "vanish": -233.08909935079384
+     "restrain": 255.2317867318122,
+     "discharge": 18.210216418520254,
+     "vanish": -232.82188370044437
     },
     "stage_solvent": {
-     "discharge": 91.91503889347702,
-     "vanish": -73.3354739301417
+     "discharge": 91.78980009835978,
+     "vanish": -73.41363134607603
     },
     "lambda_windows": {
-     "complex": 25,
-     "solvent": 18
+     "complex": 34,
+     "solvent": 21
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 1,
-      "discharge": 3,
-      "vanish": 6
+      "restrain": 0,
+      "discharge": 0,
+      "vanish": 4
      },
      "solvent": {
       "discharge": 2,
-      "vanish": 3
+      "vanish": 6
      }
     },
     "min_overlap": {
-     "complex": 0.15480515155129074,
-     "solvent": 0.1738468044057603
+     "complex": 0.14288781191470776,
+     "solvent": 0.18647538901636435
     },
     "min_overlap_used": {
-     "complex": 0.16106167785135747,
-     "solvent": 0.17385196199512312
+     "complex": 0.14532259718438223,
+     "solvent": 0.18739111438705064
     },
     "production_ns": {
      "complex": 5.0,
@@ -1381,9 +1925,7 @@
   "units": "kcal/mol",
   "n_repeats": 1,
   "warnings": [
-   "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 complex: few independent samples: lambda window 23 (vanish stage) has 9 and gives MBAR 9 samples (its energy difference to the previous window is correlated over 234 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
-   "repeat 0 complex: parts of the production without an estimate (12; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 23 keeps 1 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 23 keeps 1 sample(s) there; 4 are needed for an estimate; forward point 0.20 (iterations 0-400 of the production): lambda window 23 keeps 2 sample(s) there; 4 are needed for an estimate; ..."
+   "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied"
   ],
   "analysis_versions": [
    10
@@ -1396,12 +1938,11 @@
   "old_analysis": [],
   "not_reliable": [],
   "overlap_below_level": [],
-  "few_samples": [
-   "complex leg"
-  ],
+  "few_samples": [],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -1417,61 +1958,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "db02d3f542d5a4cb",
-   "0/solvent": "585933ce862868cc"
+   "0/complex": "1e4aa91100a9d124",
+   "0/solvent": "3e90dba9f1b0f82f"
   },
-  "dg_bind": -9.7594074832561,
+  "dg_bind": -10.387012394641491,
   "dg_bind_std": null,
-  "dg_bind_error": 0.3321531886790532,
-  "dg_bind_error_from_time_blocks": false,
-  "dg_bind_mbar_error": 0.33030505525972514,
-  "min_overlap": 0.13970509247370524,
-  "min_overlap_used": 0.14812013420258052,
+  "dg_bind_error": 0.6328735623255928,
+  "dg_bind_error_from_time_blocks": true,
+  "dg_bind_mbar_error": 0.23402266010202127,
+  "min_overlap": 0.14354978293427328,
+  "min_overlap_used": 0.14331369168187016,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -9.7594074832561,
-    "error": 0.3321531886790532,
-    "mbar_error": 0.33030505525972514,
-    "error_from_time_blocks": false,
-    "dg_complex": 38.37471487395228,
-    "dg_solvent": 19.323788443428736,
-    "restraint_release": -9.29151894726744,
-    "lrc_complex": -5.083765897974365,
-    "lrc_solvent": -3.166275504921073,
+    "dg_bind": -10.387012394641491,
+    "error": 0.6328735623255928,
+    "mbar_error": 0.23402266010202127,
+    "error_from_time_blocks": true,
+    "dg_complex": 40.30905768200035,
+    "dg_solvent": 19.39143809937397,
+    "restraint_release": -10.530607187984891,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 761,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 761,
+      "kept_types": {
+       "HBAcceptor": 761
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.046848948049739,
+    "lrc_solvent": -3.1667050488475508,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 300.5781858541247,
-     "discharge": 14.539351954143257,
-     "vanish": -281.82658883229004
+     "restrain": 299.66416292650996,
+     "discharge": 14.975661462337047,
+     "vanish": -279.3776156548964
     },
     "stage_solvent": {
-     "discharge": 83.92057787954596,
-     "vanish": -67.7630649410383
+     "discharge": 83.91537333518072,
+     "vanish": -67.6906402846543
     },
     "lambda_windows": {
-     "complex": 24,
-     "solvent": 17
+     "complex": 33,
+     "solvent": 19
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 3,
-      "discharge": 1,
-      "vanish": 5
+      "restrain": 0,
+      "discharge": 0,
+      "vanish": 3
      },
      "solvent": {
-      "discharge": 1,
-      "vanish": 3
+      "discharge": 2,
+      "vanish": 4
      }
     },
     "min_overlap": {
-     "complex": 0.13970509247370524,
-     "solvent": 0.15641616971430766
+     "complex": 0.15592026051780855,
+     "solvent": 0.14354978293427328
     },
     "min_overlap_used": {
-     "complex": 0.14812013420258052,
-     "solvent": 0.15641768482745222
+     "complex": 0.15659726886407732,
+     "solvent": 0.14331369168187016
     },
     "production_ns": {
      "complex": 5.0,
@@ -1498,7 +2083,8 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 21 and gives MBAR 21 samples (its energy difference to the next window is correlated over 96 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: few independent samples: lambda window 28 (vanish stage) has 39 and gives MBAR 39 samples (its energy difference to the next window is correlated over 51 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 20 and gives MBAR 21 samples (its energy difference to the next window is correlated over 98 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)",
    "repeat 0 solvent: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 2 sample(s) there; 4 are needed for an estimate"
   ],
   "analysis_versions": [
@@ -1513,11 +2099,13 @@
   "not_reliable": [],
   "overlap_below_level": [],
   "few_samples": [
+   "complex leg",
    "solvent leg"
   ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -1533,48 +2121,92 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "3bda380cf8f39278",
-   "0/solvent": "370488606a1b3f3a"
+   "0/complex": "43114b1cd44cac69",
+   "0/solvent": "707869fe3650f32f"
   },
-  "dg_bind": -9.481140782669566,
+  "dg_bind": -12.405049833665137,
   "dg_bind_std": null,
-  "dg_bind_error": 0.5202096069588792,
+  "dg_bind_error": 0.43471026850289485,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.3155828658279351,
-  "min_overlap": 0.15420830517089815,
-  "min_overlap_used": 0.15280400733422533,
+  "dg_bind_mbar_error": 0.2438735859158979,
+  "min_overlap": 0.1398218455043961,
+  "min_overlap_used": 0.13615814410360585,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -9.481140782669566,
-    "error": 0.5202096069588792,
-    "mbar_error": 0.3155828658279351,
+    "dg_bind": -12.405049833665137,
+    "error": 0.43471026850289485,
+    "mbar_error": 0.2438735859158979,
     "error_from_time_blocks": true,
-    "dg_complex": 38.798756708611585,
-    "dg_solvent": 20.051711127572375,
-    "restraint_release": -9.265904798369645,
-    "lrc_complex": -5.034521085056682,
-    "lrc_solvent": -3.15871655739748,
+    "dg_complex": 42.821742952071745,
+    "dg_solvent": 19.83238634476131,
+    "restraint_release": -10.584306773645293,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 773,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 773,
+      "kept_types": {
+       "HBAcceptor": 773
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.037275833513137,
+    "lrc_solvent": -3.1569290338371228,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 303.3554271469109,
-     "discharge": 15.903773111377507,
-     "vanish": -285.49496463473355
+     "restrain": 303.0126708123167,
+     "discharge": 16.684201712959847,
+     "vanish": -281.91240540671794
     },
     "stage_solvent": {
-     "discharge": 88.32789036463595,
-     "vanish": -71.43489579446106
+     "discharge": 88.12014208307306,
+     "vanish": -71.44468477214888
     },
     "lambda_windows": {
-     "complex": 25,
+     "complex": 33,
      "solvent": 17
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
-      "discharge": 1,
-      "vanish": 7
+      "restrain": 0,
+      "discharge": 0,
+      "vanish": 3
      },
      "solvent": {
       "discharge": 1,
@@ -1582,12 +2214,12 @@
      }
     },
     "min_overlap": {
-     "complex": 0.15420830517089815,
-     "solvent": 0.16059283520410517
+     "complex": 0.16046490240247324,
+     "solvent": 0.1398218455043961
     },
     "min_overlap_used": {
-     "complex": 0.157599236218372,
-     "solvent": 0.15280400733422533
+     "complex": 0.16062892922712985,
+     "solvent": 0.13615814410360585
     },
     "production_ns": {
      "complex": 5.0,
@@ -1614,7 +2246,9 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 2 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 37 and gives MBAR 38 samples (its energy difference to the next window is correlated over 54 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)"
+   "repeat 0 complex: few independent samples: lambda window 7 (discharge stage) has 19 and gives MBAR 19 samples (its energy difference to the next window is correlated over 105 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (4; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 7 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 7 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.20 (iterations 1600-2000 of the production): lambda window 7 keeps 3 sample(s) there; 4 are needed for an estimate; ...",
+   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 35 and gives MBAR 36 samples (its energy difference to the next window is correlated over 56 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)"
   ],
   "analysis_versions": [
    10
@@ -1628,11 +2262,13 @@
   "not_reliable": [],
   "overlap_below_level": [],
   "few_samples": [
+   "complex leg",
    "solvent leg"
   ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -1648,61 +2284,105 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "adc4e87e822ef022",
-   "0/solvent": "57abb1b0a73dd49f"
+   "0/complex": "022973e439d7a056",
+   "0/solvent": "452b52b685fbde28"
   },
-  "dg_bind": -14.691811490936132,
+  "dg_bind": -12.42197666852989,
   "dg_bind_std": null,
-  "dg_bind_error": 0.9102202738184821,
-  "dg_bind_error_from_time_blocks": false,
-  "dg_bind_mbar_error": 0.23421349983763434,
-  "min_overlap": 0.16440722147768047,
-  "min_overlap_used": 0.16497690868921874,
+  "dg_bind_error": 0.7870152070117917,
+  "dg_bind_error_from_time_blocks": true,
+  "dg_bind_mbar_error": 0.3124259795131852,
+  "min_overlap": 0.15903247997705397,
+  "min_overlap_used": 0.1621674169569197,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -14.691811490936132,
-    "error": 0.9102202738184821,
-    "mbar_error": 0.23421349983763434,
-    "error_from_time_blocks": false,
-    "dg_complex": 47.43448260331974,
-    "dg_solvent": 23.40956736971401,
-    "restraint_release": -9.333103742669598,
-    "lrc_complex": -5.201622109888996,
-    "lrc_solvent": -3.2780145009747055,
+    "dg_bind": -12.42197666852989,
+    "error": 0.7870152070117917,
+    "mbar_error": 0.3124259795131852,
+    "error_from_time_blocks": true,
+    "dg_complex": 46.404924740332966,
+    "dg_solvent": 23.39864129815778,
+    "restraint_release": -10.584306773645293,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 782,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 782,
+      "kept_types": {
+       "HBAcceptor": 782
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -5.210608435989254,
+    "lrc_solvent": -3.270069409914533,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 304.32512538179657,
-     "discharge": 19.97722096196337,
-     "vanish": -282.0694858503292
+     "restrain": 303.3289922102835,
+     "discharge": 18.994672486951867,
+     "vanish": -281.12934839289164
     },
     "stage_solvent": {
-     "discharge": 89.59716010730193,
-     "vanish": -69.46560723856263
+     "discharge": 89.5274185197666,
+     "vanish": -69.39884663152336
     },
     "lambda_windows": {
-     "complex": 30,
-     "solvent": 18
+     "complex": 35,
+     "solvent": 17
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
-      "discharge": 3,
-      "vanish": 10
+      "restrain": 1,
+      "discharge": 0,
+      "vanish": 4
      },
      "solvent": {
-      "discharge": 2,
+      "discharge": 1,
       "vanish": 3
      }
     },
     "min_overlap": {
-     "complex": 0.16440722147768047,
-     "solvent": 0.1887345554695482
+     "complex": 0.16166612442438585,
+     "solvent": 0.15903247997705397
     },
     "min_overlap_used": {
-     "complex": 0.16497690868921874,
-     "solvent": 0.1887512731820187
+     "complex": 0.1621674169569197,
+     "solvent": 0.18403007689380482
     },
     "production_ns": {
      "complex": 5.0,
@@ -1729,7 +2409,8 @@
   "n_repeats": 1,
   "warnings": [
    "repeat 0 complex: the ligand has 4 heavy-atom graph symmetries; no symmetry correction is applied",
-   "repeat 0 solvent: few independent samples: lambda window 0 (discharge stage) has 44 and gives MBAR 44 samples (its energy difference to the next window is correlated over 45 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg solvent --production-ns NS (or sampling.production_ns)"
+   "repeat 0 complex: few independent samples: lambda window 29 (vanish stage) has 12 and gives MBAR 13 samples (its energy difference to the previous window is correlated over 161 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep run CONFIG --ligand NAME --leg complex --production-ns NS (or sampling.production_ns)",
+   "repeat 0 complex: parts of the production without an estimate (9; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 29 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 29 keeps 1 sample(s) there; 4 are needed for an estimate; forward point 0.20 (iterations 0-400 of the production): lambda window 29 keeps 3 sample(s) there; 4 are needed for an estimate; ..."
   ],
   "analysis_versions": [
    10
@@ -1743,11 +2424,12 @@
   "not_reliable": [],
   "overlap_below_level": [],
   "few_samples": [
-   "solvent leg"
+   "complex leg"
   ],
   "repeats_planned": 1,
   "analysis_record": {
    "version": 10,
+   "structure": 2,
    "lrc": "reweight",
    "lrc_cutoff_nm": 2.0,
    "min_overlap": 0.03,
@@ -1763,48 +2445,92 @@
    "part_error_blocks": 5
   },
   "leg_digests": {
-   "0/complex": "ea90dafd821b9dcc",
-   "0/solvent": "65958351f1199d02"
+   "0/complex": "96ae43508187ceea",
+   "0/solvent": "4b8b799c00dca1d0"
   },
-  "dg_bind": -11.262492257515548,
+  "dg_bind": -10.400960277842316,
   "dg_bind_std": null,
-  "dg_bind_error": 0.48248399999735536,
+  "dg_bind_error": 0.4301370245469254,
   "dg_bind_error_from_time_blocks": true,
-  "dg_bind_mbar_error": 0.29558018898044053,
-  "min_overlap": 0.1581975951567463,
-  "min_overlap_used": 0.16068720474374304,
+  "dg_bind_mbar_error": 0.29049824708279576,
+  "min_overlap": 0.1532926654196796,
+  "min_overlap_used": 0.1539179340131376,
   "repeats": [
    {
     "repeat": 0,
-    "dg_bind": -11.262492257515548,
-    "error": 0.48248399999735536,
-    "mbar_error": 0.29558018898044053,
+    "dg_bind": -10.400960277842316,
+    "error": 0.4301370245469254,
+    "mbar_error": 0.29049824708279576,
     "error_from_time_blocks": true,
-    "dg_complex": 40.23703858705384,
-    "dg_solvent": 19.7491195199627,
-    "restraint_release": -9.225426809575586,
-    "lrc_complex": -4.795702635813806,
-    "lrc_solvent": -3.010203984670118,
+    "dg_complex": 40.6181138771834,
+    "dg_solvent": 19.652371246934898,
+    "restraint_release": -10.564782352406185,
+    "restraint_choice": {
+     "method": "interactions",
+     "anchors": {
+      "host": [
+       "VAL981:N",
+       "VAL981:CA",
+       "VAL981:C"
+      ],
+      "guest": [
+       "LIG0:N2x",
+       "LIG0:C7x",
+       "LIG0:C6x"
+      ]
+     },
+     "interaction": {
+      "residue": "VAL981",
+      "type": "HBAcceptor",
+      "frames": 767,
+      "of_frames": 800,
+      "frames_with_any_kept_type": 767,
+      "kept_types": {
+       "HBAcceptor": 767
+      }
+     },
+     "score": 100.6,
+     "candidates_tested": 1,
+     "candidates_refused": 0,
+     "md": {
+      "trajectories": 4,
+      "frames_analysed": 800,
+      "backends": [
+       "cupotential",
+       "cupotential",
+       "cupotential",
+       "cupotential"
+      ],
+      "timesteps_fs": [
+       4.0,
+       4.0,
+       4.0,
+       4.0
+      ]
+     }
+    },
+    "lrc_complex": -4.848763875862687,
+    "lrc_solvent": -3.01192266778332,
     "backend_complex": "cupotential",
     "backend_solvent": "cupotential",
     "stage_complex": {
-     "restrain": 249.05936407184842,
-     "discharge": 15.522325285287755,
-     "vanish": -229.14035340589615
+     "restrain": 249.4305569385261,
+     "discharge": 15.379473826357243,
+     "vanish": -229.04068076356265
     },
     "stage_solvent": {
-     "discharge": 85.56368362018159,
-     "vanish": -68.82476808488902
+     "discharge": 85.26987270124201,
+     "vanish": -68.62942412209043
     },
     "lambda_windows": {
-     "complex": 22,
+     "complex": 33,
      "solvent": 17
     },
     "lambda_windows_added": {
      "complex": {
-      "restrain": 2,
-      "discharge": 1,
-      "vanish": 4
+      "restrain": 0,
+      "discharge": 0,
+      "vanish": 3
      },
      "solvent": {
       "discharge": 1,
@@ -1812,12 +2538,12 @@
      }
     },
     "min_overlap": {
-     "complex": 0.1581975951567463,
-     "solvent": 0.17273635400127615
+     "complex": 0.1532926654196796,
+     "solvent": 0.18617697275575604
     },
     "min_overlap_used": {
-     "complex": 0.16068720474374304,
-     "solvent": 0.1616400902136966
+     "complex": 0.1539179340131376,
+     "solvent": 0.18329209671017888
     },
     "production_ns": {
      "complex": 5.0,

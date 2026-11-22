@@ -10,22 +10,22 @@ Every ligand with a binding free energy, NOT RELIABLE ones included (marked). St
 
 | ligand | experiment | cuFEP | standard error | SD over repeats | repeats | FEP+ | cuFEP - experiment | FEP+ - experiment |
 |---|---|---|---|---|---|---|---|---|
-| jmc_23 | -11.70 | -9.60 | 0.37 |  | 1 | -11.27 | +2.10 | +0.43 |
-| ejm_46 | -11.31 | -11.26 | 0.48 |  | 1 | -10.82 | +0.05 | +0.49 |
-| jmc_27 | -11.28 | -9.48 | 0.52 |  | 1 | -11.10 | +1.80 | +0.18 |
-| jmc_28 | -10.98 | -9.76 | 0.33 |  | 1 | -10.34 | +1.22 | +0.64 |
-| jmc_30 | -10.94 | -14.69 | 0.91 |  | 1 | -11.13 | -3.75 | -0.19 |
-| ejm_54 | -10.53 | -12.47 | 0.57 |  | 1 | -10.38 | -1.94 | +0.15 |
-| ejm_42 | -9.78 | -11.97 | 0.41 |  | 1 | -9.95 | -2.19 | -0.17 |
-| ejm_47 | -9.70 | -9.41 | 0.31 |  | 1 | -9.94 | +0.29 | -0.24 |
-| ejm_45 | -9.56 | -10.43 | 0.48 |  | 1 | -9.66 | -0.87 | -0.10 |
-| ejm_31 | -9.54 | -9.84 | 0.33 |  | 1 | -9.91 | -0.30 | -0.37 |
-| ejm_55 | -9.21 | -10.23 | 0.46 |  | 1 | -10.34 | -1.02 | -1.13 |
-| ejm_48 | -9.00 | -10.72 | 0.36 |  | 1 | -8.86 | -1.72 | +0.14 |
-| ejm_50 | -8.98 | -11.04 | 0.54 |  | 1 | -9.40 | -2.06 | -0.42 |
-| ejm_43 | -8.26 | -8.21 | 0.41 |  | 1 | -8.30 | +0.05 | -0.04 |
-| ejm_49 | -7.75 | -11.07 | 0.60 |  | 1 | -8.05 | -3.32 | -0.30 |
-| ejm_44 | -7.42 | -5.73 | 0.36 |  | 1 | -6.48 | +1.69 | +0.94 |
+| jmc_23 | -11.70 | -13.36 | 0.30 |  | 1 | -11.27 | -1.66 | +0.43 |
+| ejm_46 | -11.31 | -10.40 | 0.43 |  | 1 | -10.82 | +0.91 | +0.49 |
+| jmc_27 | -11.28 | -12.41 | 0.43 |  | 1 | -11.10 | -1.13 | +0.18 |
+| jmc_28 | -10.98 | -10.39 | 0.63 |  | 1 | -10.34 | +0.59 | +0.64 |
+| jmc_30 | -10.94 | -12.42 | 0.79 |  | 1 | -11.13 | -1.48 | -0.19 |
+| ejm_54 | -10.53 | -13.51 | 0.37 |  | 1 | -10.38 | -2.98 | +0.15 |
+| ejm_42 | -9.78 | -10.62 | 0.34 |  | 1 | -9.95 | -0.84 | -0.17 |
+| ejm_47 | -9.70 | -11.44 | 0.43 |  | 1 | -9.94 | -1.74 | -0.24 |
+| ejm_45 | -9.56 | -12.04 | 0.61 |  | 1 | -9.66 | -2.48 | -0.10 |
+| ejm_31 | -9.54 | -10.08 | 0.37 |  | 1 | -9.91 | -0.54 | -0.37 |
+| ejm_55 | -9.21 | -9.02 | 0.45 |  | 1 | -10.34 | +0.19 | -1.13 |
+| ejm_48 | -9.00 | -10.21 | 0.74 |  | 1 | -8.86 | -1.21 | +0.14 |
+| ejm_50 | -8.98 | -9.08 | 0.54 |  | 1 | -9.40 | -0.10 | -0.42 |
+| ejm_43 | -8.26 | -9.59 | 0.41 |  | 1 | -8.30 | -1.33 | -0.04 |
+| ejm_49 | -7.75 | -11.84 | 0.57 |  | 1 | -8.05 | -4.09 | -0.30 |
+| ejm_44 | -7.42 | -8.72 | 0.47 |  | 1 | -6.48 | -1.30 | +0.94 |
 
 ## Lambda windows and checks of the analysis
 
@@ -33,22 +33,22 @@ Windows per leg, how many of them adaptive lambda scheduling added to its start,
 
 | ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags | overlap below the level |
 |---|---|---|---|---|---|---|
-| jmc_23 | 25 (10) | 17 (4) | 0.145 | 0.142 |  |  |
-| ejm_46 | 22 (7) | 17 (4) | 0.158 | 0.161 | few independent samples: solvent leg |  |
-| jmc_27 | 25 (10) | 17 (4) | 0.154 | 0.153 | few independent samples: solvent leg |  |
-| jmc_28 | 24 (9) | 17 (4) | 0.140 | 0.148 | few independent samples: complex leg |  |
-| jmc_30 | 30 (15) | 18 (5) | 0.164 | 0.165 | few independent samples: solvent leg |  |
-| ejm_54 | 25 (10) | 18 (5) | 0.155 | 0.161 | few independent samples: complex leg |  |
-| ejm_42 | 21 (6) | 20 (7) | 0.139 | 0.123 | few independent samples: solvent leg |  |
-| ejm_47 | 27 (12) | 18 (5) | 0.168 | 0.166 |  |  |
-| ejm_45 | 22 (7) | 18 (5) | 0.170 | 0.171 | few independent samples: complex leg |  |
-| ejm_31 | 20 (5) | 19 (6) | 0.165 | 0.174 | few independent samples: complex leg |  |
-| ejm_55 | 21 (6) | 19 (6) | 0.156 | 0.158 | few independent samples: solvent leg |  |
-| ejm_48 | 24 (9) | 17 (4) | 0.168 | 0.165 |  |  |
-| ejm_50 | 21 (6) | 21 (8) | 0.180 | 0.178 | few independent samples: complex leg |  |
-| ejm_43 | 23 (8) | 18 (5) | 0.166 | 0.166 | few independent samples: solvent leg |  |
-| ejm_49 | 21 (6) | 17 (4) | 0.139 | 0.147 | few independent samples: complex leg, solvent leg |  |
-| ejm_44 | 21 (6) | 20 (7) | 0.162 | 0.162 |  |  |
+| jmc_23 | 32 (2) | 19 (6) | 0.172 | 0.171 |  |  |
+| ejm_46 | 33 (3) | 17 (4) | 0.153 | 0.154 | few independent samples: complex leg |  |
+| jmc_27 | 33 (3) | 17 (4) | 0.140 | 0.136 | few independent samples: complex leg, solvent leg |  |
+| jmc_28 | 33 (3) | 19 (6) | 0.144 | 0.143 |  |  |
+| jmc_30 | 35 (5) | 17 (4) | 0.159 | 0.162 | few independent samples: complex leg, solvent leg |  |
+| ejm_54 | 34 (4) | 21 (8) | 0.143 | 0.145 | few independent samples: complex leg |  |
+| ejm_42 | 33 (3) | 16 (3) | 0.155 | 0.154 |  |  |
+| ejm_47 | 35 (5) | 17 (4) | 0.146 | 0.148 |  |  |
+| ejm_45 | 33 (3) | 19 (6) | 0.155 | 0.155 | few independent samples: complex leg |  |
+| ejm_31 | 33 (3) | 18 (5) | 0.154 | 0.154 | few independent samples: complex leg |  |
+| ejm_55 | 31 (1) | 19 (6) | 0.153 | 0.153 | few independent samples: complex leg |  |
+| ejm_48 | 34 (4) | 17 (4) | 0.157 | 0.158 | few independent samples: complex leg |  |
+| ejm_50 | 33 (3) | 18 (5) | 0.162 | 0.164 | few independent samples: solvent leg |  |
+| ejm_43 | 35 (5) | 18 (5) | 0.149 | 0.149 | few independent samples: complex leg, solvent leg |  |
+| ejm_49 | 36 (6) | 18 (5) | 0.155 | 0.155 | few independent samples: complex leg |  |
+| ejm_44 | 34 (4) | 17 (4) | 0.153 | 0.153 | few independent samples: complex leg |  |
 
 Adaptive lambda scheduling added windows in 32 of 32 legs. 12 of 16 ligands have a flag.
 
@@ -58,15 +58,15 @@ Values in brackets are 95 % bootstrap intervals over ligands. All numbers are fo
 
 | statistic | cuFEP | FEP+ |
 |---|---|---|
-| mean signed error (kcal/mol) | -0.62 [-1.44, 0.29] | 0.00 [-0.23, 0.23] |
-| RMSE, raw (kcal/mol) | 1.85 [1.33, 2.34] | 0.47 [0.29, 0.65] |
-| MUE, raw (kcal/mol) | 1.52 [1.03, 2.05] | 0.37 [0.24, 0.53] |
-| RMSE after removing the mean error (kcal/mol) | 1.74 [1.22, 2.12] | 0.47 [0.28, 0.63] |
-| pairwise ddG RMSE (kcal/mol) | 2.55 [1.78, 3.10] | 0.69 [0.41, 0.92] |
-| Kendall tau | 0.12 [-0.36, 0.54] | 0.81 [0.61, 0.96] |
-| Spearman rho | 0.21 [-0.40, 0.69] | 0.93 [0.75, 0.99] |
-| Pearson r | 0.44 [-0.19, 0.77] | 0.93 [0.85, 0.98] |
-| Pearson R^2 | 0.19 [0.00, 0.59] | 0.86 [0.73, 0.96] |
+| mean signed error (kcal/mol) | -1.20 [-1.83, -0.60] | 0.00 [-0.23, 0.23] |
+| RMSE, raw (kcal/mol) | 1.73 [1.10, 2.30] | 0.47 [0.29, 0.65] |
+| MUE, raw (kcal/mol) | 1.41 [0.94, 1.93] | 0.37 [0.24, 0.53] |
+| RMSE after removing the mean error (kcal/mol) | 1.25 [0.75, 1.62] | 0.47 [0.28, 0.63] |
+| pairwise ddG RMSE (kcal/mol) | 1.83 [1.10, 2.36] | 0.69 [0.41, 0.92] |
+| Kendall tau | 0.47 [0.12, 0.75] | 0.81 [0.61, 0.96] |
+| Spearman rho | 0.65 [0.19, 0.90] | 0.93 [0.75, 0.99] |
+| Pearson r | 0.59 [0.15, 0.87] | 0.93 [0.85, 0.98] |
+| Pearson R^2 | 0.35 [0.03, 0.75] | 0.86 [0.73, 0.96] |
 
 ## Agreement with experiment by the check of overlap
 
