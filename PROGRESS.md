@@ -66,13 +66,13 @@ Open items:
   page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
   and the measurements that would separate the causes of cuFEP's larger errors.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, PR #9): every remedy
-  proposed for the errors gets a treatment; defaults change only by the owner's decision. Steps 1
-  to 3 are done (results in the plan): one calculation varies by a standard deviation of 1.57
-  kcal/mol for ejm_49 and 1.72 for 4k (three runs each); the bilayer of A2A needs about 70 ns to
-  stop shrinking. New settings, defaults unchanged: `lambda_schedule.adaptive.start_configurations`,
-  `alchemy.annihilate_electrostatics`, `alchemy.softcore_b`. Running: 4k with
-  `membrane.equilibration_ns: 100`. Not yet: one run per new setting; RelocationMC (how to go on
-  waits for the owner); equilibration detection as a setting.
+  proposed for the errors gets a treatment; defaults change only by the owner's decision. One
+  calculation varies by a standard deviation of 1.57 kcal/mol for ejm_49 and 1.72 for 4k (three
+  runs each); the bilayer of A2A needs about 70 ns to stop shrinking. New settings, defaults
+  unchanged: `lambda_schedule.adaptive.start_configurations`; one run each on ejm_49 (defaults:
+  -11.84, -8.92, -9.40) of `alchemy.annihilate_electrostatics` (-7.71 ± 0.41) and
+  `alchemy.softcore_b` 2 with alpha 1 (-8.78 ± 0.34). Running: 4k with 100 ns of bilayer
+  equilibration, the control of E3. Not yet: RelocationMC, equilibration detection as a setting.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,29 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [progress] Accuracy plan: equilibration detection on the stored legs, acceptance of water relocation
+- What: no run. Automatic equilibration detection (the rule of openmmtools) on the production of
+  the 66 stored legs of e77a6c5 leaves out 1.04 ns (TYK2) and 2.30 ns (A2A) of the complex leg on
+  average; kcal/mol: TYK2 mean signed error -1.20 to -1.29, RMSE after removing it 1.25 to 1.12,
+  Kendall tau 0.47 to 0.52; A2A -4.14 to -3.79, 2.68 to 2.73, 0.34 to 0.38. Water relocation
+  (Ding et al.) at the decoupled end of 4k, 200 trial moves each way, both tests of the rule (the
+  second with the energy of the simulation): accepted 0.012 into and 0.004 out of the sphere with
+  1024 trial poses, 0.046 and 0.010 with 4096. The control of E3 is defined and queued.
+- Why: steps 4e and 4d of the plan (measured before a setting is wired or a move implemented).
+- Refs: the plan ("手順 4e の評価と、E3 の対照の作り方"), `spikes/m21_*.py detect`, `spikes/m24_*.py`
+
+### 2026-11-23 — [amendment] Review of the three settings: windows are held to the System they were made for
+- What: independent review of dd075d6..0815fd4 (five findings, each reproduced), and a second
+  reader of the fix (none at that level; two lesser points closed). The start configurations
+  record the settings of the System (`alchemy`, `sampling.rest2`) and the windows they are of: a
+  run that gives other settings to a leg with windows and no samples is refused before it writes
+  anything; start configurations of other windows are made again. Correction of the entry below:
+  a leg of an earlier version has no `start_configurations` in its result. Settings of `alchemy`
+  added since no longer make the same YAML "another configuration". Unit tests 706 passed, GPU
+  tests 26 passed (the image `cufep:dev`).
+- Why: the review before the push (`.claude/rules/fep-invariants.md`).
+- Refs: PR #9, `docs/protocol.md` (adaptive lambda scheduling), `tests/unit/test_workflow.py`
 
 ### 2026-11-23 — [progress] Accuracy plan, steps 1 and 3: repeats, REST2 off, 10 ns, MD at the decoupled end
 - What: image of e77a6c5, the recorded settings of the full runs, kcal/mol. ejm_49 (experiment

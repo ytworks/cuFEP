@@ -355,9 +355,14 @@ last configuration of each window is the start of its replica; replica exchange 
 its own equilibration before the production. How the windows were started is written with the
 start configurations (`start_configs.npz`, which is written before `schedule.yaml`, so that a
 leg with a schedule of its own has the start configurations made with it), to the log, and to
-the result of the leg (`start_configurations`). A leg of an earlier version says what its
-schedule implies: a leg whose precalculation had one worker started every window from the end
-of the one before it, a leg with several from the walk.
+the result of the leg (`start_configurations`). With them are written the windows they are of
+and the settings of the System they were made with (`alchemy`, `sampling.rest2`): a run that
+gives other settings to a leg that has its windows is refused before it writes anything
+(`--reschedule` starts the leg anew), and start configurations of other windows than the leg
+has are made again. A leg of an earlier version has no such record: its result has no
+`start_configurations` (the record of its schedule tells whether the precalculation had workers,
+not whether the start configurations the leg has were made by it), and a run that samples such
+windows for the first time says in the result that their origin could not be checked.
 
 ### Where cuFEP follows the paper and where it differs
 

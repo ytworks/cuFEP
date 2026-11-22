@@ -244,6 +244,11 @@ def test_window_settings_are_one_value_or_one_per_leg_and_reach_the_precalculati
     assert c.initial_windows == default.lambda_schedule.windows.for_leg("complex")
     assert s.initial_windows == {"discharge": 5, "vanish": 9}
     assert default.lambda_schedule.precalculated_legs() == ["complex", "solvent"]
+    # how the first windows get their start configurations: a walk, or as the YAML says
+    assert (c.start_configurations, c.walk_ps, s.start_configurations) == ("walk", 5.0, "walk")
+    chained = load_config(write(tmp_path, {**BASE, "lambda_schedule": {"adaptive": {
+        "start_configurations": "sequential"}}}))
+    assert [als_settings(chained, leg).start_configurations for leg in ("complex", "solvent")] == ["sequential"] * 2
     assert ("  a window is added where the overlap of neighbouring windows is complex leg at or below 0.3 "
             "(the overlap of the two windows alone); solvent leg at or below 0.18;\n"
             "  101 candidate lambda values per stage; MD per new window: complex leg 500 ps after 500 ps of "

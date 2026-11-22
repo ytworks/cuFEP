@@ -14,6 +14,7 @@ from cufep.config.schema import Config, check_configuration, dump_config, read_s
 from cufep.files import publish_text, publish_with
 from cufep.scheduler import GpuMonitor, run_jobs
 from cufep.workflow import (
+    ALCHEMY_SETTINGS_ADDED,
     KCAL,
     LegJob,
     WorkflowError,
@@ -283,7 +284,14 @@ def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print
 
     If the directory holds the configuration of an earlier run that differs in more than the
     resources and the output directory, that file is kept as ``resolved_config.previous_<n>.yaml``:
-    results of the earlier run may still be there (legs this run does not sample).
+    results of the earlier run may still be there (legs this run does not sample). A setting of
+    ``alchemy`` that was added after the earlier record was written is read in it with the value
+    that gives what the version without it did (``ALCHEMY_SETTINGS_ADDED``): the same YAML run
+    again by a later version is then the same calculation (review of dd075d6: it was said to
+    differ by ``softcore_b`` and ``annihilate_electrostatics`` at their defaults). Any other
+    setting the earlier record lacks is a difference: its default now need not be what the
+    earlier version did (``lambda_schedule.adaptive.start_configurations``: a leg of an earlier
+    version started its windows by the number of workers it had).
     """
     path = out_dir / "resolved_config.yaml"
     new = resolved.model_dump(mode="json")
@@ -292,6 +300,8 @@ def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print
     def calculation(data: dict) -> dict:
         return {key: value for key, value in data.items() if key not in ("resources", "output")}
 
+    if earlier is not None and isinstance(earlier.get("alchemy"), dict):
+        earlier = dict(earlier, alchemy={**ALCHEMY_SETTINGS_ADDED, **earlier["alchemy"]})
     if earlier is not None and settings_differences(calculation(earlier), calculation(new)):
         n = 1
         while (out_dir / f"resolved_config.previous_{n}.yaml").exists():

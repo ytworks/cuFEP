@@ -567,18 +567,6 @@ def test_the_two_ways_of_starting_the_first_windows(water_ligand_system):
         adaptive_schedule(None, None, ["vanish"], 300.0, 2.0, AlsSettings(start_configurations="chain"))
 
 
-def test_a_schedule_of_an_earlier_version_says_how_its_windows_were_started():
-    """A schedule written before the record existed implies it: its windows ran at the same time
-    only after a walk, and one after another each from the end of the one before."""
-    from cufep.alchemy.schedule import recorded_start_configurations
-
-    assert recorded_start_configurations({"start_configurations": "sequential", "windows_run_concurrently": True}) \
-        == "sequential"
-    assert recorded_start_configurations({"windows_run_concurrently": True}) == "walk"
-    assert recorded_start_configurations({"windows_run_concurrently": False}) == "sequential"
-    assert recorded_start_configurations({}) is None
-
-
 def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):
     """Review of PR 1: a complex leg took the frozen schedule of a solvent leg and lost its restrain stage."""
     from dataclasses import replace

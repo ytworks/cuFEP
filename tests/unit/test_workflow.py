@@ -1036,6 +1036,43 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
     assert [f.name for f in out.glob("resolved_config.previous_*")] == ["resolved_config.previous_1.yaml"]
     assert read_settings(out / "resolved_config.previous_1.yaml")["sampling"]["production_ns"] == 10.0
     assert read_settings(out / "resolved_config.yaml")["sampling"]["production_ns"] == 20.0
+    # the record of an earlier version lacks the settings of alchemy added since. At the values that
+    # give what that version did, the same YAML run again by this version is the same calculation
+    # (review of dd075d6: softcore_b and annihilate_electrostatics at their defaults made it "differ",
+    # and the record was set aside); at another value it is a change
+    import yaml
+
+    def without(section, *keys):
+        old = read_settings(out / "resolved_config.yaml")
+        target = old
+        for name in section:
+            target = target[name]
+        for key in keys:
+            del target[key]
+        (out / "resolved_config.yaml").write_text(yaml.safe_dump(old))
+
+    def previous():
+        return sorted(f.name for f in out.glob("resolved_config.previous_*"))
+
+    longer = {"production_ns": 20.0}
+    without(["alchemy"], "softcore_b", "annihilate_electrostatics")
+    driver._run(config(sampling=longer), out, False, log.append)
+    assert previous() == ["resolved_config.previous_1.yaml"]
+    assert read_settings(out / "resolved_config.yaml")["alchemy"]["softcore_b"] == 1
+    without(["alchemy"], "softcore_b", "annihilate_electrostatics")
+    hrex.rename(hrex.parent / "kept")                # (its samples would refuse another soft-core)
+    driver._run(config(sampling=longer, alchemy={"softcore_b": 2}), out, False, log.append)
+    (hrex.parent / "kept").rename(hrex)
+    assert previous() == ["resolved_config.previous_1.yaml", "resolved_config.previous_2.yaml"]
+    assert "softcore_b" not in read_settings(out / "resolved_config.previous_2.yaml")["alchemy"]
+    # a setting the earlier record lacks and whose default is not what every earlier run did (a leg
+    # of an earlier version started its windows by the number of workers it had) is a difference
+    driver._run(config(sampling=longer), out, False, log.append)
+    without(["lambda_schedule", "adaptive"], "start_configurations")
+    driver._run(config(sampling=longer), out, False, log.append)
+    assert previous()[-1] == "resolved_config.previous_4.yaml"
+    assert "start_configurations" not in read_settings(out / "resolved_config.previous_4.yaml")["lambda_schedule"][
+        "adaptive"]
 
     # the checks of a leg, from its files alone
     prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())
@@ -1146,6 +1183,16 @@ def test_samples_without_a_record_of_their_settings_are_checked_before_anything_
     built = alchemical_leg(first, mm.XmlSerializer.deserialize(prep["system_xml"]), prep, box, None, False)
     assert hashlib.sha256(built.xml.encode()).hexdigest() == checksum and built.rest2_on and built.hot_atoms == []
     assert built.tail["long_cutoff_nm"] == 2.0                    # analysis.lrc: reweight is the default
+    # the settings of alchemy that came later reach the System of the leg from the configuration
+    # (review of dd075d6: no test passed them from a Config to what runs; without that the record
+    # of the samples would name a treatment the System did not have)
+    assert not built.alch.annihilate_electrostatics and built.alch.softcore_b == 1
+    for sections in ({"annihilate_electrostatics": True}, {"softcore_b": 2}):
+        changed = alchemical_leg(config(alchemy=sections), mm.XmlSerializer.deserialize(prep["system_xml"]), prep,
+                                 box, None, False)
+        assert changed.alch.annihilate_electrostatics is sections.get("annihilate_electrostatics", False)
+        assert changed.alch.softcore_b == sections.get("softcore_b", 1)
+        assert hashlib.sha256(changed.xml.encode()).hexdigest() != checksum
     spec = leg_spec(first, built, states, "isotropic", 2.0, "openmm", 7, name="a leg", frame_atoms=[1, 2])
     assert spec.name == "a leg" and spec.seed == 7 and spec.frame_atoms == [1, 2] and spec.steps_per_iteration == 1250
     assert spec.settings["alchemy"]["softcore_alpha"] == 0.5 and spec.conditions()["system_sha256"] == checksum
@@ -2068,36 +2115,42 @@ def test_validate_takes_the_lock_of_the_output_directory(tmp_path, monkeypatch):
 
 def test_a_result_says_how_the_windows_of_its_leg_were_started(tmp_path):
     """The result of a leg names how its lambda windows got the configurations the replicas started
-    from: the record written with the start configurations, or for a leg of an earlier version
-    what its adaptive schedule implies (one worker: each window from the end of the one before it;
-    several: a walk through the windows). Until 2026-11-22 neither file said it, and the same
-    YAML gave either by the number of workers a leg happened to get."""
-    from cufep.alchemy.schedule import fixed_schedule
-    from cufep.workflow import start_configurations_of
+    from, by the record written with the start configurations. Until 2026-11-22 no file said it,
+    and the same YAML gave a walk or a chain by the number of workers a leg happened to get.
 
-    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 3})
-    schedule.mode = "adaptive"
-    schedule.provenance = {"windows_run_concurrently": False}
-    assert start_configurations_of(tmp_path, schedule) == "sequential"
-    schedule.provenance = {"windows_run_concurrently": True}
-    assert start_configurations_of(tmp_path, schedule) == "walk"
-    schedule.provenance = {}
-    assert start_configurations_of(tmp_path, schedule) is None
-    # the record that is written with the start configurations is the one that counts
+    A leg of an earlier version has no such record and its result says none (review of dd075d6:
+    it was taken from the schedule, whose record tells whether its precalculation had workers. A
+    schedule frozen from another run keeps the record of that run, and the leg it was given to
+    made its start configurations by a walk through the given windows: such a leg was said to be
+    "walk" with ``windows_run_concurrently`` true and "sequential" with false)."""
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.config.schema import AnalysisConfig
+    from cufep.workflow import leg_result_from_samples, start_configurations_of
+
+    assert start_configurations_of(tmp_path) is None                      # no start configurations
     np.savez(tmp_path / "start_configs.npz", positions=np.zeros((1, 1, 3)),
              made_with=json.dumps({"start_configurations": "walk", "walk_ps": 5.0}))
-    schedule.provenance = {"windows_run_concurrently": False}
-    assert start_configurations_of(tmp_path, schedule) == "walk, 5 ps in each window"
+    assert start_configurations_of(tmp_path) == "walk, 5 ps in each window"
     np.savez(tmp_path / "start_configs.npz", positions=np.zeros((1, 1, 3)),
              made_with=json.dumps({"start_configurations": "sequential"}))
-    assert start_configurations_of(tmp_path, schedule) == "sequential"
-    # start configurations of an earlier version carry no record: the schedule is asked
-    np.savez(tmp_path / "start_configs.npz", positions=np.zeros((1, 1, 3)))
-    schedule.provenance = {"windows_run_concurrently": True}
-    assert start_configurations_of(tmp_path, schedule) == "walk"
-    # given windows of an earlier version: nothing says it
-    schedule.mode = "fixed"
-    assert start_configurations_of(tmp_path, schedule) is None
+    assert start_configurations_of(tmp_path) == "sequential"
+    # a leg of an earlier version with a frozen adaptive schedule: its files do not say it, whatever
+    # the schedule records of the run it was frozen from
+    leg = tmp_path / "repeat_0" / "solvent"
+    tail_leg(leg)
+    np.savez(leg / "start_configs.npz", positions=np.zeros((3, 1, 3)))
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 1})
+    schedule.mode = "adaptive"
+    for concurrent in (True, False):
+        schedule.provenance = {"method": "adaptive lambda scheduling", "windows_run_concurrently": concurrent}
+        schedule.save(leg / "schedule.yaml", leg="solvent")
+        result = leg_result_from_samples(leg, AnalysisConfig(), {"leg": "solvent"})
+        assert result["start_configurations"] is None and result["lambda_windows"]
+    # with the record of the run that made them, the result has it
+    np.savez(leg / "start_configs.npz", positions=np.zeros((3, 1, 3)),
+             made_with=json.dumps({"start_configurations": "walk of the given windows", "walk_ps": 50.0}))
+    result = leg_result_from_samples(leg, AnalysisConfig(), {"leg": "solvent"})
+    assert result["start_configurations"] == "walk of the given windows, 50 ps in each window"
 
 
 def test_legs_with_and_without_annihilated_electrostatics_are_not_combined(tmp_path):
@@ -2128,6 +2181,179 @@ def test_legs_with_and_without_annihilated_electrostatics_are_not_combined(tmp_p
         out = combine_ligand(tmp_path / name, "lig", 1)
         assert "dg_bind" in out and out["inconsistent_legs"] == []
         assert not any("electrostatics" in item for item in out["not_compared"])
+
+    # the same rule before a run, for the finished leg it will be combined with (check_partner_legs)
+    from cufep.config.schema import AnalysisConfig, Config
+    from cufep.sampling.storage import LegStorage
+    from cufep.workflow import WorkflowError, check_partner_legs, combined_record, leg_result_from_samples
+
+    base = {"system": {"protein": "p.pdb", "ligand": "l.sdf"}}
+    default = Config.model_validate(base)
+    annihilating = Config.model_validate(dict(base, alchemy={"annihilate_electrostatics": True}))
+
+    def finished(lig, **fields):
+        d = lig / "repeat_0" / "complex"
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps(dict(
+            _leg_result(160.0), temperature_K=298.15, pressure_bar=1.0, lrc_method=default.analysis.lrc,
+            lrc_long_cutoff_nm=float(default.analysis.lrc_cutoff_nm), **fields)))
+
+    refusal = "electrostatics inside the ligand annihilated: the legs this run samples {}, the complex leg of repeat 0"
+    for name, fields, cfg, refused in (("earlier, run with it", {}, annihilating, "True"),
+                                       ("with it, run without", gone, default, "False"),
+                                       ("earlier, run without", {}, default, None),
+                                       ("with it, run with it", gone, annihilating, None)):
+        finished(tmp_path / name, **fields)
+        if refused:
+            with pytest.raises(WorkflowError, match=refusal.format(refused)):
+                check_partner_legs(tmp_path / name, "lig", {(0, "solvent")}, 1, cfg)
+        else:
+            check_partner_legs(tmp_path / name, "lig", {(0, "solvent")}, 1, cfg)
+
+    # a result takes the treatment from the conditions of its samples, not from a configuration; so
+    # does what a finished leg will be combined as when its samples are analysed again
+    def sampled(leg_dir, alchemy):
+        rng = np.random.default_rng(4)
+        storage = LegStorage(leg_dir / "hrex", 3, 3)
+        storage.check_conditions({
+            "temperature_K": 298.15, "pressure_bar": 1.0, "barostat": "isotropic", "settings": {"alchemy": alchemy},
+            "lrc": {"cutoff_nm": 0.9, "long_cutoff_nm": 2.0, "n_ligand": 3, "n_environment": 30, "s6": 1.0, "s12": 1.0,
+                    "sha256": "x"}})
+        storage.set_meta(temperature_K=298.15, iteration_ps=2.5, backend="openmm", leg=leg_dir.name, lrc_s6=1.0,
+                         lrc_s12=1.0, lrc_cutoff_nm=0.9)
+        storage.set_plan(20, 120)
+        for it in range(120):
+            x = rng.normal(size=3)
+            storage.append(np.repeat((0.5 * x ** 2)[:, None], 3, axis=1), np.arange(3), np.ones(3))
+            if it % 4 == 0:
+                storage.append_record(it, {"lrc_du": -2.0 + 0.1 * rng.normal()})
+        storage.close()
+
+    stale = {"leg": "complex", "temperature_K": 298.15, "pressure_bar": 1.0, "delta_g_decouple": 1.0,
+             "delta_g_mbar_error": 0.1}                      # a result of another analysis, without the key
+    for name, alchemy, annihilated in (("samples with it", {"softcore_alpha": 0.5, "annihilate_electrostatics": True},
+                                        True), ("samples without", {"softcore_alpha": 0.5}, False)):
+        leg = tmp_path / name / "repeat_0" / "complex"
+        sampled(leg, alchemy)
+        assert leg_result_from_samples(leg, AnalysisConfig(), {"leg": "complex"})["annihilate_electrostatics"] \
+            is annihilated
+        (leg / "result.json").write_text(json.dumps(stale))
+        record, problems = combined_record(leg, stale, default)
+        assert record["annihilate_electrostatics"] is annihilated and problems == []
+        if annihilated:
+            with pytest.raises(WorkflowError, match=refusal.format("False")):
+                check_partner_legs(tmp_path / name, "lig", {(0, "solvent")}, 1, default)
+        else:
+            check_partner_legs(tmp_path / name, "lig", {(0, "solvent")}, 1, default)
+
+
+def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they_were_made_for(tmp_path, monkeypatch):
+    """Review of dd075d6: (1) a leg that had its lambda windows and their start configurations and
+    no samples yet (stopped before its first stored iteration) took them over after
+    ``alchemy.annihilate_electrostatics`` or ``alchemy.softcore_b`` was changed: the check before a
+    run compared the REST2 scale of the schedule and nothing else, and the result described
+    windows that adaptive lambda scheduling had chosen with the other System. The same was true of
+    ``softcore_alpha`` and the REST2 region. (2) A precalculation stopped after it wrote its start
+    configurations and before it wrote its windows, in a leg that was then given its windows
+    (``lambda_schedule.file``): the start configurations of the precalculation were taken for the
+    given windows. The start configurations now record the settings of the System and the windows
+    they were made for, and both are compared wherever the files are used; start configurations
+    without windows are removed when windows are given."""
+    from cufep.alchemy.schedule import Schedule, fixed_schedule
+    from cufep.config.schema import Config
+    from cufep.workflow import (
+        WorkflowError,
+        check_leg_reuse,
+        publish_windows,
+        start_configurations_of,
+        start_record,
+        stored_windows,
+        take_given_schedule,
+    )
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}, **sections})
+
+    default, stages, log = config(), ["discharge", "vanish"], []
+    lig = tmp_path / "lig"
+    leg = lig / "repeat_0" / "solvent"
+    leg.mkdir(parents=True)
+    schedule = fixed_schedule(stages, {"discharge": 3, "vanish": 4}, default.sampling.rest2.scale)
+    n = len(schedule.states)
+    cfgs = [(np.full((3, 3), float(i)), np.eye(3), np.zeros((3, 3))) for i in range(n)]
+    how = {"start_configurations": "walk", "walk_ps": 5.0}
+    publish_windows(leg, schedule, cfgs, start_record(default, schedule, how), leg="solvent")
+    assert start_configurations_of(leg) == "walk, 5 ps in each window"
+
+    # the run that made them goes on from them
+    check_leg_reuse(default, lig, "solvent", 0, {"made_from": {}}, 5.0)
+    got, configs, recorded = stored_windows(leg, "solvent", stages, default, log.append)
+    assert recorded and len(got.states) == n and [c[0, 0] for c in configs[0]] == list(range(n)) and log == []
+    # a run with another System is refused, before it writes anything and where the files are used
+    for sections, differing in (
+            ({"alchemy": {"annihilate_electrostatics": True}},
+             "alchemy.annihilate_electrostatics: not recorded -> True"),
+            ({"alchemy": {"softcore_b": 2}}, "alchemy.softcore_b: not recorded -> 2"),
+            ({"alchemy": {"softcore_alpha": 0.8}}, "alchemy.softcore_alpha: 0.5 -> 0.8"),
+            ({"sampling": {"rest2": {"region": "ligand"}}}, "rest2.region: pocket -> ligand")):
+        other = config(**sections)
+        refusal = f"lambda windows of this leg and their start configurations.*{differing}.*--reschedule"
+        with pytest.raises(WorkflowError, match=refusal):
+            check_leg_reuse(other, lig, "solvent", 0, {"made_from": {}}, 5.0)
+        with pytest.raises(WorkflowError, match=refusal):
+            stored_windows(leg, "solvent", stages, other, log.append)
+        check_leg_reuse(other, lig, "solvent", 0, {"made_from": {}}, 5.0, reschedule=True)     # the leg starts anew
+    # another lambda_schedule is not a reason: a leg keeps the windows it has (its log says so)
+    check_leg_reuse(config(lambda_schedule={"adaptive": {"start_configurations": "sequential"}}), lig, "solvent", 0,
+                    {"made_from": {}}, 5.0)
+
+    # files of an earlier version record nothing: they are used, and the run is told so
+    with np.load(leg / "start_configs.npz") as data:
+        arrays = {key: data[key] for key in ("positions", "boxes", "velocities")}
+    np.savez(leg / "start_configs.npz", **arrays)
+    check_leg_reuse(config(alchemy={"softcore_b": 2}), lig, "solvent", 0, {"made_from": {}}, 5.0)
+    _schedule, _configs, recorded = stored_windows(leg, "solvent", stages, default, log.append)
+    assert not recorded and "did not record the settings they were made with" in log[-1]
+    assert start_configurations_of(leg) is None
+
+    # (2) the precalculation is stopped between its two writes: the start configurations are there,
+    # the windows are not, and the leg has no windows to go on from
+    again = tmp_path / "again" / "repeat_0" / "solvent"
+    again.mkdir(parents=True)
+
+    def stopped(self, path, **origin):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Schedule, "save", stopped)
+        with pytest.raises(KeyboardInterrupt):
+            publish_windows(again, schedule, cfgs, start_record(default, schedule, how), leg="solvent")
+    assert (again / "start_configs.npz").exists() and not (again / "schedule.yaml").exists()
+    assert stored_windows(again, "solvent", stages, default, log.append) is None
+    # windows are given to that leg (lambda_schedule.file), the very ones of the precalculation: its
+    # start configurations are not taken for them. A run with another System, which the check
+    # before the run lets pass (it sees no windows yet), is then not refused in the leg either
+    # (review of b9e7be2: it was, after the schedule had been written)
+    other = config(alchemy={"softcore_b": 2})
+    schedule.save(tmp_path / "given.yaml", leg="solvent")
+    check_leg_reuse(other, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
+    take_given_schedule(again, tmp_path / "given.yaml", "solvent", stages, log.append)
+    assert "did not write its lambda windows" in log[-1] and not (again / "start_configs.npz").exists()
+    assert len(Schedule.load(again / "schedule.yaml").states) == n
+    assert stored_windows(again, "solvent", stages, other, log.append) is None      # the walk makes them
+    check_leg_reuse(other, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
+    # start configurations that are not those of the windows a leg has are never taken for them:
+    # other states (also in the same number), or another number of them without a record
+    publish_windows(again, schedule, cfgs, start_record(default, schedule, how), leg="solvent")
+    for given in (fixed_schedule(stages, {"discharge": 2, "vanish": 5}, default.sampling.rest2.scale),
+                  fixed_schedule(stages, {"discharge": 3, "vanish": 5}, default.sampling.rest2.scale)):
+        given.save(again / "schedule.yaml", leg="solvent")
+        check_leg_reuse(other, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
+        assert stored_windows(again, "solvent", stages, default, log.append) is None
+        assert "are not those of the lambda windows" in log[-1]
+    np.savez(again / "start_configs.npz", **arrays)
+    assert stored_windows(again, "solvent", stages, default, log.append) is None
+    assert f"({n} configurations, {len(given.states)} windows)" in log[-1]
 
 
 def test_alchemy_settings_added_later_leave_the_record_of_earlier_samples_as_it_was():

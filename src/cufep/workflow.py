@@ -616,6 +616,59 @@ def samples_settings(cfg: Config) -> dict:
             "tail": None if cfg.analysis.lrc == "none" else {"cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}}
 
 
+def windows_settings(cfg: Config) -> dict:
+    """The settings of the System that the lambda windows of a leg and the start configurations of
+    their replicas were made with: the soft-core and the electrostatics inside the ligand, and
+    REST2. (What else the System depends on is recorded and checked where it is made: the
+    prepared systems, the pre-equilibration, the restraint.) The settings of ``lambda_schedule``
+    are not among them: a leg that has its windows keeps them, and its log says so every time."""
+    return {"alchemy": alchemy_record(cfg), "rest2": cfg.sampling.rest2.model_dump(mode="json")}
+
+
+def start_record(cfg: Config, schedule, how: dict) -> dict:
+    """What is written with the start configurations of the lambda windows of a leg (``made_with``
+    of ``start_configs.npz``): how they were made (``how``), the settings of the System they were
+    made with (:func:`windows_settings`) and the windows they are of."""
+    return {**how, "settings": windows_settings(cfg), "states": [state.to_dict() for state in schedule.states]}
+
+
+def start_record_of(start_file: Path) -> dict:
+    """The record written with the start configurations in ``start_file`` (:func:`start_record`);
+    empty for a file of a version that wrote none."""
+    with np.load(start_file) as data:
+        made = json.loads(str(data["made_with"])) if "made_with" in data.files else {}
+    return made if isinstance(made, dict) else {}
+
+
+def starts_are_of(made: dict, schedule) -> bool:
+    """Whether start configurations with the record ``made`` are those of the windows of
+    ``schedule``. A record that does not name its windows (an earlier version) does not say they
+    are others."""
+    return made.get("states") is None or made["states"] == [state.to_dict() for state in schedule.states]
+
+
+def check_windows_settings(made: dict, cfg: Config, where: Path, log=print) -> bool:
+    """Refuse lambda windows and start configurations that were made with another System than this
+    run gives (review of dd075d6: a leg that had its windows and no samples yet took them over
+    after ``alchemy.annihilate_electrostatics`` was changed, and its result described windows that
+    adaptive lambda scheduling had chosen with the other System). Files of a version that did not
+    record the settings are used as they are, and False is returned: a run that samples such
+    windows for the first time says in its result that their origin could not be checked. The
+    one check for the check before a run and for the run of a leg."""
+    stored = made.get("settings")
+    if stored is None:
+        log(f"the lambda windows of this leg and their start configurations: {where} was written by a version that "
+            "did not record the settings they were made with; they are used as they are")
+        return False
+    differing = settings_differences(stored, windows_settings(cfg))
+    if differing:
+        raise WorkflowError(
+            f"the lambda windows of this leg and their start configurations ({where}) were made with other settings "
+            f"than this run gives ({'; '.join(differing[:8])}{' ...' if len(differing) > 8 else ''}). Nothing was "
+            "changed. Use the same settings, or start the leg anew with --reschedule.")
+    return True
+
+
 def alchemical_leg(cfg: Config, system, prep: dict, box, restraint, is_complex: bool):
     """The alchemical System of a leg as its samples are made with it, and what belongs to it.
 
@@ -867,6 +920,11 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
                 f"the lambda schedule in {sched_file} was made with a REST2 scale of {schedule.rest2_scale:g} but "
                 f"sampling.rest2.scale is {rest2_scale:g}. Nothing was changed. Use the same value, or start the "
                 "leg anew with --reschedule.")
+        start_file = leg_dir / "start_configs.npz"
+        if start_file.exists():
+            made = start_record_of(start_file)
+            if starts_are_of(made, schedule):         # start configurations of other windows are made again
+                check_windows_settings(made, cfg, start_file, quiet)
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
         return
@@ -2279,7 +2337,7 @@ def run_leg(job: LegJob) -> dict:
     def run_with(backend_name: str) -> tuple[dict, Schedule]:
         hrex_dir = leg_dir / "hrex"
         sched_file = leg_dir / "schedule.yaml"
-        start_file = leg_dir / "start_configs.npz"
+        windows_files = "the lambda windows and their start configurations"
         # ---- 4. lambda schedule ----------------------------------------------------------------
         ls = cfg.lambda_schedule
         if ls.file is not None and not sched_file.exists():
@@ -2289,12 +2347,15 @@ def run_leg(job: LegJob) -> dict:
                 src = src / ligand_dir_name(job.ligand) / f"{job.leg}_r{job.repeat}.yaml"
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
-            _schedule_of_this_leg(src, job.leg, stages)          # before it is taken over
-            publish(sched_file, lambda tmp: shutil.copy(src, tmp))
-        if sched_file.exists() and start_file.exists():
-            schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
-            start = np.load(start_file)
-            configs = (start["positions"], start["boxes"], start["velocities"])
+            take_given_schedule(leg_dir, src, job.leg, stages, log)
+        stored = stored_windows(leg_dir, job.leg, stages, cfg, log)
+        if stored is not None:
+            schedule, configs, recorded = stored
+            # windows without that record and without samples are sampled by this run as they are, and
+            # the result says so. With samples the leg goes on in the states its samples were made in,
+            # under the settings they record, which this run was held to (check_leg_reuse)
+            if not recorded and not stored_conditions(hrex_dir)[0] and windows_files not in origin_not_recorded:
+                origin_not_recorded.append(windows_files)
             # said every time: a change of lambda_schedule in the YAML does not reach a leg that has its windows
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has "
                 "(schedule.yaml); the settings of lambda_schedule are not applied to them, "
@@ -2371,16 +2432,10 @@ def run_leg(job: LegJob) -> dict:
                 made_with = {"start_configurations": als.start_configurations,
                              **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {})}
             del ctx, integ
-            configs = (np.array([c[0] for c in cfgs]), np.array([c[1] for c in cfgs]), np.array([c[2] for c in cfgs]))
-            # the start configurations first, with how they were made, then the schedule: a leg that
-            # has a schedule of its own has the start configurations that were made with it. (Written
-            # the other way round, a leg that was stopped between the two had its windows and made
-            # their start configurations anew by the walk of given windows, under a schedule that
-            # recorded another way.)
-            publish_npz(start_file, positions=configs[0], boxes=configs[1], velocities=configs[2],
-                        made_with=json.dumps(made_with))
-            schedule.save(sched_file, leg=job.leg, ligand=job.ligand, repeat=job.repeat, seed=seed,
-                          backend=backend_name)
+            configs = publish_windows(leg_dir, schedule, cfgs, start_record(cfg, schedule, made_with), leg=job.leg,
+                                      ligand=job.ligand, repeat=job.repeat, seed=seed, backend=backend_name)
+            if windows_files in origin_not_recorded:      # windows of an earlier version, set aside by a fallback
+                origin_not_recorded.remove(windows_files)
             timed("lambda_schedule", t0)
             log(
                 f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows "
@@ -2614,6 +2669,65 @@ def _schedule_of_this_leg(path: Path, leg: str, stages: list[str]):
     except ValueError as exc:
         raise WorkflowError(f"the lambda schedule {path} cannot be used for the {leg} leg: {exc}") from exc
     return schedule
+
+
+def take_given_schedule(leg_dir: Path, src: Path, leg: str, stages: list[str], log=print) -> None:
+    """Give a leg that has no lambda windows the schedule in ``src`` (``lambda_schedule.file``).
+
+    Start configurations that such a leg has are those of a precalculation that was stopped after
+    it had written them and before it wrote its windows. They are not those of the given windows,
+    also where the values of the windows are the same, and are removed before the schedule is
+    taken over: the leg then has given windows without start configurations, and the walk through
+    them makes new ones with the record of this run. (Review of b9e7be2: left in place, they were
+    taken for given windows of the same values, and a run with other settings of ``alchemy`` was
+    then refused in the leg after the check before the run, which had seen no schedule, had let
+    it pass.)"""
+    _schedule_of_this_leg(src, leg, stages)          # before it is taken over
+    start_file = Path(leg_dir) / "start_configs.npz"
+    if start_file.exists():
+        log(f"{start_file} holds the start configurations of a precalculation that did not write its lambda "
+            "windows; they are removed and made again for the windows that are given")
+        start_file.unlink()
+    publish(Path(leg_dir) / "schedule.yaml", lambda tmp: shutil.copy(src, tmp))
+
+
+def stored_windows(leg_dir: Path, leg: str, stages: list[str], cfg: Config, log=print):
+    """The lambda windows a leg has with the start configurations of their replicas, if this run
+    can go on from them: ``(schedule, (positions, boxes, velocities), whether the files record the
+    settings they were made with)``. None if the leg does not have both files, or has start
+    configurations that are not those of its windows (other states, or another number of them):
+    they are made again for the windows the leg has. Raises WorkflowError if the files were made
+    with another System (:func:`check_windows_settings`)."""
+    sched_file, start_file = Path(leg_dir) / "schedule.yaml", Path(leg_dir) / "start_configs.npz"
+    if not (sched_file.exists() and start_file.exists()):
+        return None
+    schedule = _schedule_of_this_leg(sched_file, leg, stages)
+    made = start_record_of(start_file)
+    with np.load(start_file) as start:
+        configs = (start["positions"], start["boxes"], start["velocities"])
+    if not starts_are_of(made, schedule) or len(configs[0]) != len(schedule.states):
+        log(f"the start configurations in {start_file} are not those of the lambda windows in {sched_file} "
+            f"({len(configs[0])} configurations, {len(schedule.states)} windows): they are made again for these "
+            "windows")
+        return None
+    return schedule, configs, check_windows_settings(made, cfg, start_file, log)
+
+
+def publish_windows(leg_dir: Path, schedule, cfgs: list, record: dict, **origin) -> tuple:
+    """Write the start configurations of the lambda windows of a leg (``cfgs``: positions, box and
+    velocities per window) with their record (:func:`start_record`), then its schedule, and return
+    the configurations as three arrays.
+
+    The start configurations first: a leg that has a schedule of its own then has the start
+    configurations that were made with it. (Written the other way round, a leg that was stopped
+    between the two had its windows and made their start configurations anew by the walk of given
+    windows, under a schedule that recorded another way.) ``origin`` is what the schedule records
+    of the leg it is of (:meth:`cufep.alchemy.schedule.Schedule.save`)."""
+    configs = (np.array([c[0] for c in cfgs]), np.array([c[1] for c in cfgs]), np.array([c[2] for c in cfgs]))
+    publish_npz(Path(leg_dir) / "start_configs.npz", positions=configs[0], boxes=configs[1], velocities=configs[2],
+                made_with=json.dumps(record))
+    schedule.save(Path(leg_dir) / "schedule.yaml", **origin)
+    return configs
 
 
 def _walk_schedule(context, integrator, schedule, window_ps: float, timestep_fs: float) -> list:
@@ -3107,32 +3221,29 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         {name: len(values) - int(start[name]) for name, values in schedule.windows().items() if name in start}
         if start else None)
     # how the windows got the configurations their replicas started from (None: the files do not say)
-    result["start_configurations"] = start_configurations_of(leg_dir, schedule)
+    result["start_configurations"] = start_configurations_of(leg_dir)
     result["rest2"] = run.get("rest2")
     return result
 
 
-def start_configurations_of(leg_dir: Path, schedule=None) -> str | None:
+def start_configurations_of(leg_dir: Path) -> str | None:
     """How the lambda windows of a leg got the configurations its replicas started from, as the
-    files of the leg say it: the record that is written with the start configurations
-    (``start_configs.npz``), or, for a leg of an earlier version, what the record of its adaptive
-    schedule implies (:func:`cufep.alchemy.schedule.recorded_start_configurations`: a leg that had
-    one worker for its precalculation started every window from the end of the one before it, a
-    leg with several from a walk). None if neither says it."""
-    from cufep.alchemy.schedule import recorded_start_configurations
-
+    record says that is written with the start configurations (``start_configs.npz``). None for a
+    leg of an earlier version, whose files do not say it: the record of an adaptive schedule
+    tells whether its precalculation had workers (one: every window from the end of the one
+    before it; several: a walk), but not whether the start configurations the leg has were made
+    by that precalculation. A schedule that was given (``lambda_schedule.file``, also one frozen
+    from another run, which keeps the record of that run) got them from a walk through its
+    windows (review of dd075d6: such a leg was said to be "walk" or "sequential")."""
     file = Path(leg_dir) / "start_configs.npz"
     if file.exists():
         try:
-            with np.load(file) as data:
-                if "made_with" in data.files:
-                    made = json.loads(str(data["made_with"]))
-                    walk = f", {made['walk_ps']:g} ps in each window" if "walk_ps" in made else ""
-                    return f"{made['start_configurations']}{walk}"
+            made = start_record_of(file)
+            if "start_configurations" in made:
+                walk = f", {made['walk_ps']:g} ps in each window" if "walk_ps" in made else ""
+                return f"{made['start_configurations']}{walk}"
         except (OSError, ValueError, KeyError):
             pass
-    if schedule is not None and schedule.mode == "adaptive":
-        return recorded_start_configurations(schedule.provenance)
     return None
 
 

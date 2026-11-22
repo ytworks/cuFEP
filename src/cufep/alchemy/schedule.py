@@ -288,16 +288,6 @@ def als_step(windows: list[int], superdiagonal, threshold: float, room: int = 1)
 START_CONFIGURATIONS = ("walk", "sequential")
 
 
-def recorded_start_configurations(provenance: dict) -> str | None:
-    """How the first windows of an adaptive schedule were started, from its record: what the
-    record says, or for a schedule written before it said so, what followed from whether a pool
-    ran its windows ("walk" with one, "sequential" without); None if the record has neither."""
-    if provenance.get("start_configurations") in START_CONFIGURATIONS:
-        return str(provenance["start_configurations"])
-    concurrent = provenance.get("windows_run_concurrently")
-    return None if concurrent is None else ("walk" if concurrent else "sequential")
-
-
 @dataclass
 class AlsSettings:
     """The settings of the precalculation of one leg. A run takes them from the configuration,

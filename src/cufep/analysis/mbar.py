@@ -1099,6 +1099,11 @@ def detect_equilibration(u: np.ndarray, states: np.ndarray, origins: int = EQUIL
     origin is never taken ("We should never choose data from the first time origin", openmmtools),
     so at least the first n / origins iterations go.
 
+    openmmtools first drops the iteration it starts from, the minimised configuration
+    (``_get_equilibration_data``: ``t0 = 1``, "discard minimization frame"), runs the detection on
+    the rest and adds the one back to its answer. Nothing is dropped here: the caller gives the
+    iterations that follow the equilibration of the run, among which there is no such frame.
+
     ``u`` and ``states`` are those of the iterations the detection may choose from. Returns
     ``iterations`` (the origin that was chosen: how many of them are left out),
     ``statistical_inefficiency`` and ``effective_samples`` there; None for a series too short to
