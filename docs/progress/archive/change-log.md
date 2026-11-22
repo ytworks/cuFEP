@@ -5,6 +5,28 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-22 — [progress] PR #7 merged on the owner's order: the start of the complex leg
+- What: plan `docs/plans/2026-11-21-als-initial-window-design.md` is done (10 steps, two
+  independent reviews, six passes of Codex, the last without a finding; nine runs of the TYK2
+  example) and its pull request is merged into `main`: there adaptive lambda scheduling of the
+  complex leg starts from 30 windows and reads the overlap of a pair alone (threshold 0.30),
+  `max_windows` is 100 and the window settings can differ between the legs. Not run with these
+  defaults: the A2A example, the subset and full benchmarks.
+- Why: the owner's order (2026-11-22).
+- Refs: PR #7
+
+### 2026-11-22 — [amendment] Review by Codex of the new defaults: fixes and a correction
+- What: review 6007410417 (seven P2), each reproduced. Correction of `docs/configuration.md` and
+  of the entry below: an element of the matrix of a stage can reach 0.30, at an end of a stage (at
+  most 0.333 among 784 recorded pairs); 26 or 27 of the 29 pairs of the default start read at or
+  below 0.30 there in the runs of A (6 by the pair alone), and the run to `max_windows` was of
+  harmonic windows. `cufep benchmark run` prints the notes about the file of its example. The
+  figure script counts the last exchange, reads results of earlier versions and draws moves rarer
+  than 0.001. B and C came from 37 legs, not 33. Declined: an old YAML with `max_windows.complex`
+  below 30 is refused with the setting to add. In the image: unit tests 680 passed.
+- Why: the review after the push (the working agreement of PR #7).
+- Refs: PR #7 (review 6007410417 and its replies), `docs/protocol.md`, `docs/configuration.md`
+
 ### 2026-11-22 — [design] The complex leg starts from the windows of mode fixed and reads the overlap of a pair
 - What: defaults of `lambda_schedule.adaptive` for the complex leg: `initial_windows` restrain 6,
   discharge 11, vanish the 15 values of `windows.complex.vanish` (3, 5 and 9 until now);
