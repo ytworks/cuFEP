@@ -18,12 +18,14 @@ Every argument ``label=run`` is one run. For each of them, from the stored sampl
 - the acceptance of the exchanges between the replicas of neighbouring windows, the only
   acceptances that a run records, and the number of round trips.
 
-A leg that has a result gives the acceptances and the round trips of its result (a result of an
-earlier version too: where the production begins is read from the samples). A leg that is
-still being sampled is read up to its last checkpoint: its windows are those of ``schedule.yaml``
-and the two numbers are computed by the functions of the analysis from the iterations stored so
-far; the number of those iterations is shown. A leg without iterations of the production is named
-and left out.
+Everything is read from the samples and the checkpoint of the leg, by the functions of the
+analysis, so a leg that is still being sampled is shown too, up to its last checkpoint and with
+the number of its iterations, and so is a leg of an earlier version. For a finished leg of this
+version the acceptances and the round trips are those of its result. Samples of earlier versions
+do not record the exchanges: their acceptances are not shown (their results hold another number
+under that name, the share of the iterations with a move between the two windows). A leg without
+an exchange of the production, or whose samples cannot be read, is named with the reason and
+left out.
 
 ``--out``: a figure. The colour of a cell is on a logarithmic scale from 0.001 to 1, a move that
 is rarer has the colour of 0.001, and a cell without a move has the colour of the surface; thin
@@ -36,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import json
 import math
 from pathlib import Path
 
@@ -51,49 +52,44 @@ LINE = "#256abf"
 GLYPHS = ((0.3, "█"), (0.1, "▓"), (0.03, "▒"), (0.003, "░"))
 
 
-def moves_of(run: Path, ligand: str, leg: str) -> dict | None:
-    """The moves of the replicas of a leg in its production; None without iterations of it."""
-    import yaml
-
-    from cufep.analysis.mbar import count_round_trips, swap_acceptance
+def moves_of(run: Path, ligand: str, leg: str) -> dict | str:
+    """The moves of the replicas of a leg in its production, from its samples and its checkpoint;
+    or, as a text, why there are none."""
+    from cufep.analysis.mbar import count_round_trips, stage_boundaries, swap_acceptance
     from cufep.sampling.storage import StorageError, equilibration_boundary, read_samples
     from cufep.workflow import ligand_dir_name
 
     leg_dir = run / ligand_dir_name(ligand) / "repeat_0" / leg
     try:
         samples = read_samples(leg_dir / "hrex")
-    except (StorageError, OSError):
-        return None
+    except (StorageError, OSError) as exc:
+        return f"its samples cannot be read ({type(exc).__name__}: {exc})"
     attrs, stored = samples["attrs"], np.asarray(samples["states"])
-    # where the production begins: from the samples (a result of an earlier version does not say)
     first = equilibration_boundary(attrs, leg_dir)
-    if first is None or len(stored) < first + 2:
-        return None
-    states, sampled = stored[first:], None
-    if (leg_dir / "result.json").exists():
-        result = json.loads((leg_dir / "result.json").read_text())
-        windows = result.get("lambda_windows") or {}
-        acceptance = result["analysis"].get("swap_acceptance_neighbour") or []
-        round_trips = result["analysis"].get("round_trips")
-    else:                                                  # being sampled: up to the last checkpoint
-        windows = yaml.safe_load((leg_dir / "schedule.yaml").read_text())["windows"]
-        acceptance = swap_acceptance(samples, first, len(states)) or []
-        round_trips = count_round_trips(states)
-        sampled = (len(states), int(attrs["n_planned_iterations"]) - first)
+    if first is None:
+        return "its samples do not say where the production begins"
+    states = stored[first:]
     after = after_the_last_exchange(leg_dir, len(stored))
-    if after is not None:
-        states = np.vstack([states, after[None, :]])
-    k = len(samples["attrs"]["states"])
+    rows = states if after is None else np.vstack([states, after[None, :]])
+    if len(states) == 0 or len(rows) < 2:
+        return "no exchange of its production is stored yet"
+    k = len(attrs["states"])
     counts = np.zeros((k, k))
-    np.add.at(counts, (states[:-1].ravel(), states[1:].ravel()), 1.0)
-    stages = [len(windows.get(stage, [])) for stage in STAGES[leg]]
-    # neighbouring stages share a window: every stage but the first adds its windows but one
-    tags = "".join(stage[0].upper() * (n if s == 0 else n - 1) for s, (stage, n) in enumerate(zip(STAGES[leg], stages)))
+    np.add.at(counts, (rows[:-1].ravel(), rows[1:].ravel()), 1.0)
+    # the windows of every stage, from the states of the samples; neighbouring stages share a window
+    bounds = stage_boundaries(attrs["states"])
+    stages = [bounds[stage][1] - bounds[stage][0] + 1 for stage in STAGES[leg] if stage in bounds]
+    names = [stage for stage in STAGES[leg] if stage in bounds]
+    tags = "".join(stage[0].upper() * (n if s == 0 else n - 1) for s, (stage, n) in enumerate(zip(names, stages)))
+    acceptance = swap_acceptance(samples, first, len(states))         # None: samples of an earlier version
+    planned = attrs.get("n_planned_iterations")
     visits = counts.sum(axis=1, keepdims=True)
-    return {"matrix": counts / np.where(visits > 0, visits, 1.0), "k": k, "stages": stages, "tags": tags,
+    return {"matrix": counts / np.where(visits > 0, visits, 1.0), "k": k, "stages": stages, "tags": tags.ljust(k, "?"),
             "stage_ends": list(itertools.accumulate(n - 1 for n in stages[:-1])),
-            "acceptance": [float("nan") if v is None else float(v) for v in acceptance],
-            "round_trips": round_trips, "sampled": sampled}
+            "acceptance": None if acceptance is None else [float("nan") if v is None else float(v) for v in acceptance],
+            "round_trips": count_round_trips(states),
+            "sampled": None if (leg_dir / "result.json").exists() else
+            (len(states), None if planned is None else int(planned) - first)}
 
 
 def after_the_last_exchange(leg_dir: Path, n_stored: int) -> np.ndarray | None:
@@ -111,12 +107,13 @@ def after_the_last_exchange(leg_dir: Path, n_stored: int) -> np.ndarray | None:
 def headline(label: str, d: dict) -> str:
     text = f"{label}: {d['k']} windows ({' / '.join(str(s) for s in d['stages'])}), round trips {d['round_trips']}"
     if d["sampled"] is not None:
-        text += f", being sampled ({d['sampled'][0]} of {d['sampled'][1]} iterations)"
+        done, planned = d["sampled"]
+        text += f", being sampled ({done}" + ("" if planned is None else f" of {planned}") + " iterations)"
     return text
 
 
 def lowest_of(d: dict) -> tuple[int, float] | None:
-    if not d["acceptance"] or np.all(np.isnan(d["acceptance"])):
+    if not d["acceptance"] or np.all(np.isnan(d["acceptance"])):           # not recorded, or no proposal
         return None
     lowest = int(np.nanargmin(d["acceptance"]))
     return lowest, d["acceptance"][lowest]
@@ -142,7 +139,9 @@ def print_text(data: list[tuple[str, dict]], width: int) -> None:
             print("    ".join(part if part is not None else " " * len(rows[0])
                               for part, (_l, _d, rows) in zip(line, group)).rstrip())
         for label, d, _rows in group:
-            print(f"{label} acc% " + " ".join("-" if math.isnan(v) else f"{round(100 * v):d}" for v in d["acceptance"]))
+            accepted = d["acceptance"]
+            print(f"{label} acc% " + ("not recorded (samples of an earlier version)" if accepted is None else
+                                     " ".join("-" if math.isnan(v) else f"{round(100 * v):d}" for v in accepted)))
         print()
 
     group: list[tuple[str, dict, list[str]]] = []
@@ -199,6 +198,9 @@ def write_figure(data: list[tuple[str, dict]], ligand: str, leg: str, columns: i
         ax.tick_params(length=2, labelsize=8, labelbottom=False)
         low = fig.add_subplot(grid[2 * r + 1, c], sharex=ax)
         lowest = lowest_of(d)
+        if d["acceptance"] is None:
+            low.text(0.99, 0.97, "acceptances not recorded (samples of an earlier version)",
+                     transform=low.transAxes, ha="right", va="top", fontsize=8, color=INK_2)
         if lowest is not None:
             x = np.arange(len(d["acceptance"])) + 0.5
             low.plot(x, d["acceptance"], color=LINE, lw=2.0, solid_capstyle="round")
@@ -245,8 +247,8 @@ def main() -> None:
     for item in args.runs:
         label, _sep, run = item.partition("=")
         moves = moves_of(Path(run), args.ligand, args.leg)
-        if moves is None:
-            print(f"{label}: the {args.leg} leg has no iterations of the production stored ({run})")
+        if isinstance(moves, str):
+            print(f"{label}: the {args.leg} leg is left out: {moves} ({run})")
         else:
             data.append((label, moves))
     if not data:

@@ -399,7 +399,17 @@ Codex の review (push のあと、head d5f9c3f、PR の review 6007410417、P2 
   `docs/configuration.md` を直した)。
 - 変えなかったもの: 既定の開始 (30 window) に合わない `max_windows.complex` を書いた以前の YAML が
   `cufep analyze --config` でも断られる点。メッセージが既定の開始であることと書くべき設定
-  (`initial_windows.complex`) を言う。以前の開始 (3 / 5 / 9) を書けば、以前と同じ設定になる。
+  (`initial_windows.complex`) を言う。以前の開始 (3 / 5 / 9) を書けば、その leg の解析と再開が
+  できる (leg は自分の `schedule.yaml` を使う)。新しい出力先で前計算からやり直して以前と同じ条件に
+  するには、`overlap_matrix: stage` も書く (threshold は 0.18 になる)。開始だけを書くと complex leg の
+  判定は `pair`・0.30 のままである (Codex の確認の review 6007628566 の指摘で、この項を直した)。
+- Codex の確認の review (head da052f6、review 6007628566): 前回の 7 件のうち 5 件は fixed、変え
+  なかった 1 件は accepted、1 件は incomplete (`docs/configuration.md` の `overlap_matrix` の行に
+  同じ誤りの言い方が残っていた。直した)。新しい P2 が 4 件: 行列の script が以前の版の結果の
+  `swap_acceptance_neighbour` (隣の window へ動いた iteration の割合で、受理率ではない) を受理率
+  として出していた、`lambda_windows` のない結果で止まる、production が 1 iteration の leg を
+  省く、の 3 件は、script がすべてをサンプルと checkpoint から読むようにして直した (受理率は
+  交換の記録があるときだけ出す)。4 件目は上の項の言い方。
 
 確かめたこと (2026-11-22、イメージ `cufep:dev`、作業ツリーのコード):
 
