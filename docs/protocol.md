@@ -475,8 +475,11 @@ start being above the threshold. The solvent leg, which the starts do not change
 C have as many and more windows than A. Three runs give a standard deviation only roughly (the
 95 % interval of a standard deviation of three values reaches from about half of it to about
 six times it), and this is one ligand of one target. The owner's choice (2026-11-22): A is the
-default start of the complex leg, with the overlap of a pair alone and the threshold 0.30. The
-A2A example and the benchmark sets have not been run with it (not run).
+default start of the complex leg, with the overlap of a pair alone and the threshold 0.30. Both
+full benchmark sets ran once with it on 2026-11-22 (commit e77a6c5; `benchmarks/results/`): the
+complex legs had 31 to 36 windows for TYK2 and 30 to 32 for A2A, where 7 of the 17 kept the 30
+of the start, and no result is below the level of overlap of 0.03 (the lowest overlap of a
+ligand is 0.140 to 0.172 for TYK2 and 0.105 to 0.169 for A2A).
 
 *What windows do not cure.* Before that comparison, runs of TYK2 ejm_31 differed by the same
 amount with 13 to 34 windows per leg. In the solvent leg the free energy follows the orientation of the ligand's
@@ -559,7 +562,10 @@ run to run by more than their standard errors (the discharge stage of TYK2 from 
 kcal/mol over runs with thresholds of 0.10 to 0.18). The owner made the pocket the default on
 2026-11-20. The full benchmark runs of 2026-11-20/21 (commit 3b45bfe, the same settings) gave
 -9.84 ± 0.33 for ejm_31 and -18.91 ± 0.52 for 4e, whose complex leg was 44.68 kcal/mol against
-37.61 in the earlier run (`benchmarks/results/`).
+37.61 in the earlier run (the record of those runs is in the tree of commit cda6965). The full
+benchmark runs of 2026-11-22 (commit e77a6c5; the restraint from interactions and the complex
+leg from 30 windows, the defaults since) gave -10.08 ± 0.37 for ejm_31 and -13.50 ± 0.34 for 4e,
+whose complex leg was 39.76 (`benchmarks/results/`).
 
 Only the free energy of a whole leg is a physical quantity then. The scale is not 1 where one
 stage ends and the next begins, so the free energies of the single stages in the results
