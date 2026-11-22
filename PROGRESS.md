@@ -45,8 +45,8 @@ who did not write it (two independent reviews and six passes of Codex, the last 
 finding): their findings are fixed, each after it was reproduced, or answered on PR #7. Both
 examples ran once with the image of commit 720cdb1, in which the MD for the restraint starts
 from the pose that was given, and the TYK2 example three times with the present defaults of the
-complex leg (below). The branch of PR #8 (draft) holds one run of both full benchmark sets with
-the present defaults and the accuracy pages written from it (the row "Benchmarks").
+complex leg (below). PR #8, merged on the owner's order of 2026-11-22, added one run of both full
+benchmark sets with the present defaults and the accuracy pages written from it (the row "Benchmarks").
 
 | item | status |
 |---|---|
@@ -64,7 +64,13 @@ the present defaults and the accuracy pages written from it (the row "Benchmarks
 Open items:
 - The wiki pages (`docs/wiki/`, rewritten in PR #8) are not yet on the GitHub Wiki: it has no
   page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
-  and the measurements that would separate the causes of cuFEP's larger errors; nothing decided.
+  and the measurements that would separate the causes of cuFEP's larger errors.
+- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, its pull request): every
+  remedy proposed for the errors gets a treatment (implemented as a setting, measured on the stored
+  runs, a run under a stated condition, or not done with the reason); defaults change only by the
+  owner's decision. Step 1 started 2026-11-22 (image of e77a6c5, `runs/acc_*`): ejm_49 twice and 4k
+  three times with the present defaults, ejm_49 once with REST2 off. No result yet; the
+  measurements on the stored runs, the MD at the decoupled end and the implementations: not started.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -73,19 +79,19 @@ Open items:
   row "Starts of the complex leg"). Start A is the default of the complex leg since 2026-11-22:
   its three runs differ by 0.30 kcal/mol at most; B and C, with as many and more windows, by
   2.07 and 5.02, and that is not explained (C is not investigated, the owner's order).
-- Plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (PR #8, draft): both
-  full sets are recorded and the wiki pages, the READMEs, `docs/protocol.md` and
-  `docs/configuration.md` give the run of e77a6c5. By the owner's order no unit tests, GPU tests
-  or reviews were run for it (it changes no file of `src/`). Left: the owner's review and merge,
-  the GitHub Wiki.
+- Plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (done, PR #8): by the
+  owner's order no unit tests, GPU tests or reviews were run for it (it changes no file of
+  `src/`). Left: the GitHub Wiki.
 - Workers during the precalculation of adaptive lambda scheduling (seen in both runs of PR #8; no
   fix yet): a leg asks once for one worker per window of its start and keeps them through all
   iterations (`request_devices(..., pinned=True)` in `src/cufep/workflow.py`), also while an
   iteration runs one to five windows. With a start of 30 windows two complex legs hold 59 of the
   64 workers of eight GPUs, and a leg that starts meanwhile makes its whole precalculation with
   what is left: 6 of the 16 complex legs of TYK2 and 11 of the 17 of A2A began it with one or
-  two workers, and the last leg of A2A made it on one worker while seven GPUs had no work. The
-  free energies do not depend on it.
+  two workers, and the last leg of A2A made it on one worker while seven GPUs had no work. A leg
+  with one worker makes the start configurations of its windows in another way (each window from
+  the end of the one before it; with more workers from a 5 ps walk): 4 complex legs of TYK2 and 7
+  of A2A in the runs of e77a6c5. Whether the free energies depend on it is not established.
 - Windows much closer than they need to be read low in the overlap matrix of a leg, which the
   analysis checks: 81 unit-width harmonic windows 0.05 widths apart overlap by 0.50 as pairs and
   read 0.016, below the level of 0.03, so such a result is `NOT RELIABLE` although its free
@@ -104,6 +110,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-22 — [progress] Plan started: the causes of the errors measured, the remedies implemented
+- What: plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress). Step 1 runs in
+  the image of e77a6c5 with the recorded settings of the full runs: ejm_49 twice, 4k three times,
+  ejm_49 once with `sampling.rest2.scale: 1.0`; no result yet. PR #8 is merged (its plan: done).
+  Correction of the open item on the workers of the precalculation ("The free energies do not
+  depend on it"): with one worker the start configurations are made in another way (4 complex
+  legs of TYK2, 7 of A2A); their mean signed errors are -1.42 and -5.85 kcal/mol against -1.13
+  and -2.95 of the other legs (other ligands, found afterwards: no cause follows from it).
+- Why: the owner's order (2026-11-22): find what improves the accuracy and implement it, few runs.
+- Refs: the plan, its pull request, issue #5
 
 ### 2026-11-22 — [progress] A2A full with the present defaults: 17 of 17; the wiki from this run
 - What: one calculation per compound, image of e77a6c5, eight GPUs, exit 0; recorded as the run
