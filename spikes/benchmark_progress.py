@@ -125,6 +125,28 @@ def main(name: str, run_dir: str) -> None:
                               ("mean_signed_error", "rmse", "mue", "centred_rmse", "pearson_r", "kendall_tau",
                                "spearman"))
             print(f"{method}, these {len(done)} ligands: {shown}")
+        felis_comparison(name, done)
+
+
+def felis_comparison(name: str, done: list[tuple[float, float, float]]) -> None:
+    """cuFEP and FEP+ over the ligands with a result, by the definitions of the Felis paper, beside
+    the rows that paper publishes for the target (the numbers and the definitions of the wiki:
+    spikes/wiki_tables.py). The paper gives no value per ligand, and its rows are of the whole set."""
+    from wiki_tables import FELIS, FELIS_HEADER, felis_metrics
+
+    def line(label: str, n, values) -> str:
+        cells = ["N/A" if v is None else f"{v:.2f}".replace("-0.00", "0.00") for v in values]
+        return f"| {label} | {n} | " + " | ".join(cells) + " |"
+
+    exps = [d[0] for d in done]
+    print("\nBy the definitions of the Felis paper (arXiv:2603.22274 v3); its rows are of the whole set, "
+          "three calculations averaged per ligand:")
+    print("| " + " | ".join(FELIS_HEADER["en"]) + " |")
+    print("|" + "---|" * len(FELIS_HEADER["en"]))
+    print(line("cuFEP, this run so far", len(done), felis_metrics([d[1] for d in done], exps)))
+    print(line("FEP+, the same ligands", len(done), felis_metrics([d[2] for d in done], exps)))
+    for label, values in FELIS.get(name, {}).items():
+        print(line(label, "", values))
 
 
 if __name__ == "__main__":

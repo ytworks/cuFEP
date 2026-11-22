@@ -259,16 +259,15 @@ cufep benchmark run tyk2 --tier smoke
 ```
 
 2 つの example は lambda window あたり 5 ns の production を設定しています (既定は 10 ns)。それ以外の
-設定は既定値です。各 example のリガンドはそのベンチマークセットに入っており、全セットのベンチマーク
-計算では TYK2 ejm_31 が -9.84 ± 0.33 kcal/mol、A2A 4e が -18.91 ± 0.52 kcal/mol でした (1 回の計算
-の標準誤差。[benchmarks/results](benchmarks/results/README.md))。これらの計算と次の 2 つは、拘束を
-`restraints.selection: auto` で選び、complex leg の adaptive lambda scheduling を 15 window から始めて
-います (どちらも当時の既定)。上のコマンドは現在、拘束を相互作用から選び (`interactions`)、complex leg を
-30 window から始めます ([docs/configuration.md](docs/configuration.md))。その後の example の結果は
-[PROGRESS.md](PROGRESS.md) にあります。以前のコミットで同じ設定で各 example を
-1 回計算したときは -8.94 ± 0.77 と -11.95 ± 0.73 でした ([docs/configuration.md](docs/configuration.md)
-の `sampling.rest2.region`)。complex leg を繰り返し計算した値どうしは、1 回の計算の標準誤差より
-大きく違います ([protocol: REST2](docs/protocol.md#rest2))。
+設定は既定値です。各 example のリガンドはそのベンチマークセットに入っており、この設定で 2026 年
+11 月 22 日に行った全セットのベンチマーク計算では TYK2 ejm_31 が -10.08 ± 0.37 kcal/mol、A2A 4e が
+-13.50 ± 0.34 kcal/mol でした (1 回の計算の標準誤差。
+[benchmarks/results](benchmarks/results/README.md))。complex leg を繰り返し計算した値どうしは、1 回の
+計算の標準誤差より大きく違います ([protocol: REST2](docs/protocol.md#rest2))。以前の既定値 (拘束を
+`restraints.selection: auto` で選び、complex leg の adaptive lambda scheduling を 15 window から
+始める) で 2 つの example を 1 回ずつ計算した値は、ejm_31 で -9.84 ± 0.33 と -8.94 ± 0.77、4e で
+-18.91 ± 0.52 と -11.95 ± 0.73 でした ([docs/configuration.md](docs/configuration.md) の
+`sampling.rest2.region`)。example のそのほかの計算は [PROGRESS.md](PROGRESS.md) にあります。
 
 ## ベンチマーク
 
@@ -295,11 +294,12 @@ cuFEP を、実験値と、セットとともに公開されている FEP+ の�
 示します。結果のあるリガンドはすべて、NOT RELIABLE のものも含めて比較します。さらに NOT RELIABLE の
 リガンドとそれ以外を分けて比較し、NOT RELIABLE の leg がどこで overlap の基準を下回ったかを示します。
 
-全セットを当時の example の設定で 1 回ずつ計算しました: TYK2 は 16 リガンドすべて、A2A は 17 化合物すべてに
-結果があり、NOT RELIABLE の結果はありません。平均誤差を除いた RMSE は TYK2 で 1.74 kcal/mol、A2A で
-2.26 (FEP+ は 0.47 と 1.08)、Kendall τ は 0.12 と 0.38 (FEP+ は 0.81 と 0.59)、平均符号誤差は
--0.62 と -4.12 です。結果は [benchmarks/results](benchmarks/results/README.md) にあり、実験値、FEP+、
-別の ABFE 手法との比較は wiki の精度のページにあります
+全セットをこの設定で 1 回ずつ計算しました (2026 年 11 月 22 日、コミット e77a6c5): TYK2 は 16 リガンド
+すべて、A2A は 17 化合物すべてに結果があり、NOT RELIABLE の結果はありません。平均誤差を除いた RMSE は
+TYK2 で 1.25 kcal/mol、A2A で 2.68 (FEP+ は 0.47 と 1.08)、Kendall τ は 0.47 と 0.34 (FEP+ は 0.81 と
+0.59)、平均符号誤差は -1.20 と -4.14 です。結果は [benchmarks/results](benchmarks/results/README.md) に
+あり、実験値、FEP+、別の ABFE 手法との比較と、両セットの前回の計算との比較は wiki の精度のページに
+あります
 ([docs/wiki/Accuracy.md](docs/wiki/Accuracy.md)、日本語 [docs/wiki/Accuracy-ja.md](docs/wiki/Accuracy-ja.md))。
 
 ## 制限

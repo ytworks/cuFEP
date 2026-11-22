@@ -39,7 +39,7 @@ solvation:
   padding_solvent_nm: 1.5
 restraints:
   type: boresch
-  selection: auto
+  selection: interactions
   force_constants: openfe
   k_r_kcal_per_A2: 10.0
   k_angle_kcal_per_rad2: 80.0
@@ -49,6 +49,19 @@ restraints:
   host_min_distance_nm: 0.5
   host_max_distance_nm: 1.5
   dssp_filter: true
+  interactions:
+    trajectories: 4
+    length_ns: 3.0
+    discard_ns: 1.0
+    frame_interval_ps: 10.0
+    min_frame_fraction: 0.4
+    angle_range_deg:
+    - 45.0
+    - 135.0
+    stable_structure_fraction: 0.5
+    second_interaction_ratio: 0.6
+    fallback_frame_fraction: 0.15
+    fallback_cutoff_nm: 1.0
 alchemy:
   softcore_alpha: 0.5
 lambda_schedule:
@@ -87,13 +100,33 @@ lambda_schedule:
       - 0.85
       - 1.0
   adaptive:
-    overlap_threshold: 0.18
+    overlap_threshold:
+      complex: 0.3
+      solvent: 0.18
+    overlap_matrix:
+      complex: pair
+      solvent: stage
     candidates: 101
     initial_windows:
       complex:
-        restrain: 3
-        discharge: 5
-        vanish: 9
+        restrain: 6
+        discharge: 11
+        vanish:
+        - 0.0
+        - 0.1
+        - 0.2
+        - 0.3
+        - 0.4
+        - 0.5
+        - 0.6
+        - 0.65
+        - 0.7
+        - 0.75
+        - 0.8
+        - 0.85
+        - 0.9
+        - 0.95
+        - 1.0
       solvent:
         discharge: 5
         vanish: 9
@@ -106,8 +139,8 @@ lambda_schedule:
     sample_interval_ps: 0.5
     walk_ps: 5.0
     max_windows:
-      complex: 48
-      solvent: 32
+      complex: 100
+      solvent: 100
   fixed_walk_ps: 50.0
   file: null
 sampling:
@@ -159,4 +192,4 @@ resources:
   oversubscription_factor: auto
   cpu_threads_per_worker: 2
 output:
-  dir: runs/benchmark_a2a_full
+  dir: runs/benchmark_a2a_full_e77a6c5

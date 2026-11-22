@@ -10,23 +10,23 @@ Every ligand with a binding free energy, NOT RELIABLE ones included (marked). St
 
 | ligand | experiment | cuFEP | standard error | SD over repeats | repeats | FEP+ | cuFEP - experiment | FEP+ - experiment |
 |---|---|---|---|---|---|---|---|---|
-| 4e | -12.07 | -18.91 | 0.52 |  | 1 | -11.01 | -6.83 | +1.06 |
-| 4n | -11.55 | -18.50 | 0.65 |  | 1 | -13.93 | -6.95 | -2.38 |
-| 4k | -11.54 | -15.54 | 0.34 |  | 1 | -12.00 | -4.00 | -0.46 |
-| 4r | -11.46 | -16.43 | 0.63 |  | 1 | -12.31 | -4.96 | -0.85 |
-| 4c | -11.46 | -15.14 | 0.72 |  | 1 | -12.09 | -3.68 | -0.63 |
-| 4f | -11.45 | -14.52 | 0.38 |  | 1 | -11.72 | -3.08 | -0.27 |
-| 4l | -11.38 | -13.82 | 0.65 |  | 1 | -11.32 | -2.44 | +0.06 |
-| 4o | -11.36 | -10.19 | 0.85 |  | 1 | -9.44 | +1.16 | +1.92 |
-| 4g | -11.06 | -13.57 | 0.69 |  | 1 | -11.83 | -2.51 | -0.77 |
-| 4j | -10.89 | -14.63 | 0.47 |  | 1 | -11.54 | -3.75 | -0.65 |
-| 4h | -10.65 | -18.36 | 1.02 |  | 1 | -11.13 | -7.70 | -0.48 |
-| 4m | -10.55 | -16.30 | 0.30 |  | 1 | -11.71 | -5.75 | -1.16 |
-| 4d | -10.51 | -13.30 | 0.34 |  | 1 | -9.98 | -2.80 | +0.53 |
-| 4i | -10.31 | -15.41 | 0.66 |  | 1 | -10.97 | -5.10 | -0.66 |
-| 4b | -9.96 | -16.68 | 0.62 |  | 1 | -10.06 | -6.72 | -0.10 |
-| 4a | -9.41 | -10.15 | 0.45 |  | 1 | -7.15 | -0.74 | +2.26 |
-| 4q | -8.89 | -13.09 | 0.36 |  | 1 | -8.96 | -4.20 | -0.07 |
+| 4e | -12.07 | -13.50 | 0.34 |  | 1 | -11.01 | -1.43 | +1.06 |
+| 4n | -11.55 | -19.17 | 0.33 |  | 1 | -13.93 | -7.62 | -2.38 |
+| 4k | -11.54 | -20.32 | 0.52 |  | 1 | -12.00 | -8.78 | -0.46 |
+| 4r | -11.46 | -16.17 | 0.26 |  | 1 | -12.31 | -4.70 | -0.85 |
+| 4c | -11.46 | -18.75 | 0.88 |  | 1 | -12.09 | -7.29 | -0.63 |
+| 4f | -11.45 | -14.96 | 0.29 |  | 1 | -11.72 | -3.51 | -0.27 |
+| 4l | -11.38 | -14.37 | 0.52 |  | 1 | -11.32 | -2.99 | +0.06 |
+| 4o | -11.36 | -11.05 | 0.51 |  | 1 | -9.44 | +0.31 | +1.92 |
+| 4g | -11.06 | -16.30 | 0.45 |  | 1 | -11.83 | -5.23 | -0.77 |
+| 4j | -10.89 | -15.12 | 0.28 |  | 1 | -11.54 | -4.23 | -0.65 |
+| 4h | -10.65 | -13.74 | 0.30 |  | 1 | -11.13 | -3.08 | -0.48 |
+| 4m | -10.55 | -17.17 | 0.42 |  | 1 | -11.71 | -6.62 | -1.16 |
+| 4d | -10.51 | -11.56 | 0.39 |  | 1 | -9.98 | -1.06 | +0.53 |
+| 4i | -10.31 | -16.22 | 0.41 |  | 1 | -10.97 | -5.91 | -0.66 |
+| 4b | -9.96 | -14.13 | 0.47 |  | 1 | -10.06 | -4.17 | -0.10 |
+| 4a | -9.41 | -8.32 | 0.46 |  | 1 | -7.15 | +1.09 | +2.26 |
+| 4q | -8.89 | -14.11 | 0.27 |  | 1 | -8.96 | -5.22 | -0.07 |
 
 ## Lambda windows and checks of the analysis
 
@@ -34,25 +34,25 @@ Windows per leg, how many of them adaptive lambda scheduling added to its start,
 
 | ligand | windows complex (added) | windows solvent (added) | lowest overlap | of the samples used | flags | overlap below the level |
 |---|---|---|---|---|---|---|
-| 4e | 18 (3) | 17 (4) | 0.035 | 0.037 | few independent samples: complex leg |  |
-| 4n | 20 (5) | 19 (6) | 0.155 | 0.155 | few independent samples: complex leg |  |
-| 4k | 20 (5) | 18 (5) | 0.171 | 0.184 |  |  |
-| 4r | 21 (6) | 18 (5) | 0.166 | 0.166 | few independent samples: complex leg |  |
-| 4c | 18 (3) | 19 (6) | 0.137 | 0.162 | few independent samples: complex leg |  |
-| 4f | 21 (6) | 20 (7) | 0.154 | 0.162 | few independent samples: complex leg |  |
-| 4l | 17 (2) | 17 (4) | 0.140 | 0.128 | few independent samples: complex leg |  |
-| 4o | 18 (3) | 16 (3) | 0.169 | 0.140 | few independent samples: complex leg |  |
-| 4g | 19 (4) | 17 (4) | 0.175 | 0.166 | few independent samples: complex leg |  |
-| 4j | 18 (3) | 17 (4) | 0.121 | 0.121 | few independent samples: complex leg |  |
-| 4h | 17 (2) | 19 (6) | 0.102 | 0.108 | few independent samples: complex leg |  |
-| 4m | 18 (3) | 17 (4) | 0.173 | 0.174 | few independent samples: complex leg |  |
-| 4d | 18 (3) | 18 (5) | 0.182 | 0.170 | few independent samples: complex leg |  |
-| 4i | 18 (3) | 17 (4) | 0.107 | 0.139 | few independent samples: complex leg |  |
-| 4b | 18 (3) | 17 (4) | 0.118 | 0.143 | few independent samples: complex leg |  |
-| 4a | 17 (2) | 18 (5) | 0.115 | 0.118 | few independent samples: complex leg |  |
-| 4q | 18 (3) | 18 (5) | 0.164 | 0.167 | few independent samples: complex leg |  |
+| 4e | 30 (0) | 17 (4) | 0.169 | 0.143 | few independent samples: complex leg |  |
+| 4n | 31 (1) | 17 (4) | 0.147 | 0.148 | few independent samples: complex leg |  |
+| 4k | 31 (1) | 18 (5) | 0.148 | 0.147 | few independent samples: complex leg |  |
+| 4r | 31 (1) | 17 (4) | 0.151 | 0.148 |  |  |
+| 4c | 30 (0) | 17 (4) | 0.145 | 0.145 | few independent samples: complex leg |  |
+| 4f | 32 (2) | 18 (5) | 0.160 | 0.161 | few independent samples: complex leg |  |
+| 4l | 31 (1) | 20 (7) | 0.150 | 0.149 | few independent samples: complex leg |  |
+| 4o | 31 (1) | 19 (6) | 0.158 | 0.158 | few independent samples: complex leg |  |
+| 4g | 30 (0) | 18 (5) | 0.147 | 0.146 | few independent samples: complex leg |  |
+| 4j | 31 (1) | 17 (4) | 0.150 | 0.151 | few independent samples: complex leg |  |
+| 4h | 30 (0) | 16 (3) | 0.145 | 0.146 |  |  |
+| 4m | 31 (1) | 19 (6) | 0.152 | 0.152 | few independent samples: complex leg |  |
+| 4d | 31 (1) | 18 (5) | 0.145 | 0.147 | few independent samples: complex leg |  |
+| 4i | 30 (0) | 17 (4) | 0.105 | 0.104 | few independent samples: complex leg |  |
+| 4b | 30 (0) | 18 (5) | 0.145 | 0.145 |  |  |
+| 4a | 31 (1) | 18 (5) | 0.142 | 0.145 | few independent samples: complex leg |  |
+| 4q | 30 (0) | 18 (5) | 0.151 | 0.151 | few independent samples: complex leg |  |
 
-Adaptive lambda scheduling added windows in 34 of 34 legs. 16 of 17 ligands have a flag.
+Adaptive lambda scheduling added windows in 27 of 34 legs. 14 of 17 ligands have a flag.
 
 ## Agreement with experiment
 
@@ -60,15 +60,15 @@ Values in brackets are 95 % bootstrap intervals over ligands. All numbers are fo
 
 | statistic | cuFEP | FEP+ |
 |---|---|---|
-| mean signed error (kcal/mol) | -4.12 [-5.15, -3.01] | -0.16 [-0.68, 0.36] |
-| RMSE, raw (kcal/mol) | 4.70 [3.73, 5.53] | 1.09 [0.68, 1.43] |
-| MUE, raw (kcal/mol) | 4.26 [3.30, 5.19] | 0.84 [0.53, 1.18] |
-| RMSE after removing the mean error (kcal/mol) | 2.26 [1.47, 2.85] | 1.08 [0.58, 1.40] |
-| pairwise ddG RMSE (kcal/mol) | 3.30 [2.14, 4.15] | 1.58 [0.85, 2.05] |
-| Kendall tau | 0.38 [-0.04, 0.74] | 0.59 [0.28, 0.86] |
-| Spearman rho | 0.48 [-0.09, 0.85] | 0.73 [0.35, 0.95] |
-| Pearson r | 0.39 [-0.19, 0.74] | 0.71 [0.28, 0.90] |
-| Pearson R^2 | 0.15 [0.00, 0.55] | 0.50 [0.08, 0.81] |
+| mean signed error (kcal/mol) | -4.14 [-5.36, -2.85] | -0.16 [-0.68, 0.36] |
+| RMSE, raw (kcal/mol) | 4.94 [3.82, 5.89] | 1.09 [0.68, 1.43] |
+| MUE, raw (kcal/mol) | 4.31 [3.20, 5.40] | 0.84 [0.53, 1.18] |
+| RMSE after removing the mean error (kcal/mol) | 2.68 [1.76, 3.24] | 1.08 [0.58, 1.40] |
+| pairwise ddG RMSE (kcal/mol) | 3.91 [2.56, 4.72] | 1.58 [0.85, 2.05] |
+| Kendall tau | 0.34 [-0.03, 0.67] | 0.59 [0.28, 0.86] |
+| Spearman rho | 0.43 [-0.07, 0.82] | 0.73 [0.35, 0.95] |
+| Pearson r | 0.44 [-0.02, 0.77] | 0.71 [0.28, 0.90] |
+| Pearson R^2 | 0.19 [0.00, 0.60] | 0.50 [0.08, 0.81] |
 
 ## Agreement with experiment by the check of overlap
 
