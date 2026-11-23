@@ -15,8 +15,26 @@ backends can run unchanged ("split" layout):
       internally intact ligand in the complex leg and in the solvent leg, and no
       vacuum leg is needed.
 
+``annihilate_electrostatics=True`` (the rule of openmmtools' ``AbsoluteAlchemicalFactory`` with
+``alchemical_pme_treatment='exact'``, which OpenFE's ABFE protocol uses)
+    The electrostatics inside the ligand are switched off with ``lambda_electrostatics`` too. In
+    openmmtools the charges of the alchemical atoms are offsets scaled by lambda, so pairs of them
+    that are not exceptions, and their periodic images, interact through PME with lambda^2; the
+    charge product of an exception (the 1-4 pairs) gets an offset scaled by lambda, so it is linear
+    in lambda. Here every ligand-ligand pair is an exception, so the same rule is written out: the
+    charge product of every ligand-ligand exception is zero, and a ``CustomBondForce`` of the main
+    force group gives each pair its Coulomb energy, times lambda for a pair that is an exception
+    of the force field and times lambda^2 for a pair that cuFEP made one. The Lennard-Jones
+    interactions inside the ligand are kept, as openmmtools keeps them with
+    ``annihilate_sterics=False``. The decoupled end state is then a ligand without electrostatics
+    of its own, again the same in both legs.
+
 ``CustomNonbondedForce`` (soft-core LJ, Beutler form with a=1, b=1, c=6)
-    ligand x environment only (one interaction group), scaled by ``lambda_sterics``.
+    ligand x environment only (one interaction group), scaled by ``lambda_sterics``. In the
+    names of openmmtools, U = lambda^a 4 eps x (x - 1) with x = 1 / (alpha (1 - lambda)^b +
+    (r / sigma)^c). ``softcore_b=2`` gives r_eff^6 = r^6 + alpha (1 - lambda)^2 sigma^6, the form
+    of Ding et al. (arXiv:2603.22274 v3, who use alpha = 1): the repulsion of an overlapping pair
+    then falls faster as lambda falls.
 
 The cuPotential backend replaces only the NonbondedForce; the soft-core force stays on
 the stock CUDA kernels in the same System.
@@ -36,7 +54,10 @@ REST2 (``rest2=True``)
     Two global parameters carry it, ``rest2_dq`` = sqrt(s) - 1 and ``rest2_ds`` = s - 1; both
     are zero in the physical state, so the base parameters of the System stay the physical
     ones. The ligand charges, which are already offsets scaled by ``lambda_electrostatics``,
-    get the factor sqrt(s) through that parameter (see ``sampling/states.py``).
+    get the factor sqrt(s) through that parameter (see ``sampling/states.py``). With
+    ``annihilate_electrostatics`` the Coulomb energy of a pair inside the ligand carries s like
+    every pair of two hot atoms: lambda^2 * s is the square of that parameter, and lambda * s
+    its product with sqrt(s).
 """
 from __future__ import annotations
 
@@ -70,6 +91,9 @@ REST2_GROUP = 3
 REST2_DQ = "rest2_dq"            # sqrt(s) - 1
 REST2_DS = "rest2_ds"            # s - 1
 REST2_TORSION_FORCE_NAME = "cufep_rest2_torsions"
+LIGAND_COULOMB_FORCE_NAME = "cufep_ligand_coulomb"
+#: 1 / (4 pi epsilon_0) in kJ nm / (mol e^2), the value of OpenMM (ONE_4PI_EPS0)
+ONE_4PI_EPS0 = 138.93545764438198
 
 _E = unit.elementary_charge
 _NM = unit.nanometer
@@ -86,6 +110,22 @@ SOFTCORE_ENERGY = (
 
 #: the same with the REST2 factor of each atom: sqrt(s) for a hot atom, 1 otherwise
 SOFTCORE_ENERGY_REST2 = "(1+hot1*rest2_dq)*(1+hot2*rest2_dq)*" + SOFTCORE_ENERGY
+#: the powers of (1 - lambda) in the soft-core radius that can be chosen (openmmtools' softcore_b)
+SOFTCORE_POWERS = (1, 2)
+
+
+def softcore_energy(softcore_b: int = 1, rest2: bool = False) -> str:
+    """The energy expression of the soft-core force. With ``softcore_b`` 1 it is the text this
+    module always used (the checksum of the System of a stored leg is taken of it)."""
+    if softcore_b not in SOFTCORE_POWERS:
+        raise AlchemyError(f"softcore_b is one of {SOFTCORE_POWERS}, not {softcore_b!r}")
+    energy = SOFTCORE_ENERGY_REST2 if rest2 else SOFTCORE_ENERGY
+    if softcore_b == 1:
+        return energy
+    radius = "softcore_alpha*(1-lambda_sterics)"
+    if energy.count(radius) != 1:
+        raise AlchemyError("the soft-core expression has changed; softcore_energy must follow it")
+    return energy.replace(radius, f"{radius}^{int(softcore_b)}")
 REST2_TORSION_ENERGY = "(1+rest2_ds)*k*(1+cos(periodicity*theta-phase))"
 
 
@@ -105,6 +145,10 @@ class AlchemicalSystem:
     rest2: bool = False
     rest2_atoms: tuple[int, ...] = ()
     rest2_torsions: int = 0
+    #: whether the electrostatics inside the ligand are switched off with lambda_electrostatics
+    annihilate_electrostatics: bool = False
+    #: the power of (1 - lambda) in the soft-core radius (SOFTCORE_POWERS)
+    softcore_b: int = 1
 
     @property
     def lambda_parameters(self) -> tuple[str, ...]:
@@ -126,12 +170,16 @@ def bonded_pairs(system: mm.System) -> set[tuple[int, int]]:
 
 
 def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: float = 0.5, rest2: bool = False,
-                           rest2_atoms=(), bonds=None) -> AlchemicalSystem:
+                           rest2_atoms=(), bonds=None, annihilate_electrostatics: bool = False,
+                           softcore_b: int = 1) -> AlchemicalSystem:
     """Return an alchemical copy of ``system`` in which ``ligand_atoms`` can be decoupled.
 
     With ``rest2`` the System also carries the REST2 scaling of the hot region: the ligand and
     the environment atoms ``rest2_atoms``. ``bonds`` (pairs of atom indices) tells proper
-    torsions from impropers; by default it is taken from the bond terms and constraints.
+    torsions from impropers; by default it is taken from the bond terms and constraints. With
+    ``annihilate_electrostatics`` the electrostatics inside the ligand go with
+    ``lambda_electrostatics`` too (module docstring); without it the System is the one this
+    function always made. ``softcore_b`` is the power of (1 - lambda) in the soft-core radius.
     """
     ligand = tuple(sorted(int(i) for i in ligand_atoms))
     if not ligand:
@@ -166,21 +214,34 @@ def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: floa
     # pairs in the original System and cut off there; here their Lennard-Jones energy beyond the
     # cutoff is kept (hundredths of a kcal/mol for drug-like ligands, the same at both ends of
     # both legs; OpenFE keeps the cutoff). See protocol.md, "Interactions inside the ligand".
+    # With annihilate_electrostatics the charge products of these exceptions are zero and their
+    # Coulomb energies go to a force scaled by lambda (``coulomb``: atoms, charge product, and
+    # whether the pair is an exception of the force field, whose energy openmmtools scales by
+    # lambda, or one made here, a pair that PME would scale by lambda^2).
     existing: set[tuple[int, int]] = set()
+    coulomb: list[tuple[int, int, float, float]] = []
     for k in range(nb.getNumExceptions()):
-        i, j, _qq, _sig, _eps = nb.getExceptionParameters(k)
+        i, j, qq, sig, eps = nb.getExceptionParameters(k)
         in_i, in_j = i in ligand_set, j in ligand_set
         if in_i != in_j:
             raise AlchemyError("an exception connects the ligand to the environment (covalent ligand?)")
         if in_i:
             existing.add((min(i, j), max(i, j)))
+            if annihilate_electrostatics and qq.value_in_unit(_E * _E) != 0.0:
+                coulomb.append((i, j, qq.value_in_unit(_E * _E), 1.0))
+                nb.setExceptionParameters(k, i, j, 0.0, sig, eps)
     for a, i in enumerate(ligand):
         qi, si, ei = params[i]
         for j in ligand[a + 1:]:
             if (i, j) in existing:
                 continue
             qj, sj, ej = params[j]
-            nb.addException(i, j, qi * qj, 0.5 * (si + sj), math.sqrt(ei * ej))
+            if annihilate_electrostatics:
+                nb.addException(i, j, 0.0, 0.5 * (si + sj), math.sqrt(ei * ej))
+                if qi * qj != 0.0:
+                    coulomb.append((i, j, qi * qj, 0.0))
+            else:
+                nb.addException(i, j, qi * qj, 0.5 * (si + sj), math.sqrt(ei * ej))
 
     # -- NonbondedForce: charges through offsets, no ligand LJ -------------------
     nb.addGlobalParameter(LAMBDA_ELECTROSTATICS, 1.0)
@@ -217,7 +278,7 @@ def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: floa
                                               {(min(i, j), max(i, j)) for i, j in bonds})
 
     # -- soft-core LJ: ligand x environment --------------------------------------
-    sc = mm.CustomNonbondedForce(SOFTCORE_ENERGY_REST2 if rest2 else SOFTCORE_ENERGY)
+    sc = mm.CustomNonbondedForce(softcore_energy(softcore_b, rest2))
     sc.setName(SOFTCORE_FORCE_NAME)
     sc.addGlobalParameter(LAMBDA_STERICS, 1.0)
     sc.addGlobalParameter("softcore_alpha", float(softcore_alpha))
@@ -245,9 +306,29 @@ def make_alchemical_system(system: mm.System, ligand_atoms, softcore_alpha: floa
     sc.setForceGroup(SOFTCORE_GROUP)
     out.addForce(sc)
 
+    # -- electrostatics inside the ligand, switched off with the charges ------------
+    if annihilate_electrostatics:
+        # lambda_electrostatics is lambda * sqrt(s) with REST2 (s = 1 without): its square is
+        # lambda^2 * s, and times sqrt(s) = 1 + rest2_dq it is lambda * s. Both atoms of a pair are
+        # ligand atoms and so hot: the pair carries s like every pair of two hot atoms.
+        once = f"{LAMBDA_ELECTROSTATICS}*(1+{REST2_DQ})" if rest2 else LAMBDA_ELECTROSTATICS
+        inside = mm.CustomBondForce(f"{ONE_4PI_EPS0!r}*qq/r*(linear*{once}+(1-linear)*{LAMBDA_ELECTROSTATICS}^2)")
+        inside.setName(LIGAND_COULOMB_FORCE_NAME)
+        inside.addGlobalParameter(LAMBDA_ELECTROSTATICS, 1.0)
+        if rest2:
+            inside.addGlobalParameter(REST2_DQ, 0.0)
+        inside.addPerBondParameter("qq")
+        inside.addPerBondParameter("linear")
+        for i, j, qq, linear in coulomb:
+            inside.addBond(i, j, [qq, linear])
+        inside.setUsesPeriodicBoundaryConditions(nb.getExceptionsUsePeriodicBoundaryConditions())
+        inside.setForceGroup(MAIN_GROUP)
+        out.addForce(inside)
+
     return AlchemicalSystem(system=out, ligand_atoms=ligand, softcore_alpha=float(softcore_alpha),
                             ligand_parameters=tuple(params[i] for i in ligand), rest2=bool(rest2),
-                            rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions)
+                            rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions,
+                            annihilate_electrostatics=bool(annihilate_electrostatics), softcore_b=int(softcore_b))
 
 
 def _move_hot_torsions(system: mm.System, region: set[int], bonds: set[tuple[int, int]]) -> int:

@@ -276,6 +276,20 @@ def stream_seed(seed: int, start: int, worker_id: int, purpose: int = INTEGRATOR
     return int(np.random.SeedSequence(entropy).generate_state(1)[0] & 0x7FFFFFFF) or 1
 
 
+def backend_of(spec: LegSpec):
+    """The backend of a Context of this leg. Every process that makes such a Context gets it here:
+    the workers of the replica exchange and of the precalculation, and the Context in which a leg
+    walks through its windows and runs them when it has no workers for that. A Context that is
+    loaded with the configurations of several windows needs the same room for a changing box as a
+    worker has (``box_safety``; a bilayer)."""
+    from cufep.backends import get_backend
+
+    kwargs = dict(precision=spec.precision, platform=spec.platform, cpu_threads=spec.cpu_threads)
+    if spec.backend in ("cupotential", "cupo"):
+        kwargs.update(integrator=spec.integrator, box_safety=spec.box_safety)
+    return get_backend(spec.backend, **kwargs)
+
+
 class ReplicaWorker:
     """Owns one Context and advances replicas on request."""
 
@@ -284,17 +298,13 @@ class ReplicaWorker:
         import openmm as mm
         import openmm.unit as u
 
-        from cufep.backends import get_backend
         from cufep.sampling.states import StateEnergyEvaluator
 
         self.spec = spec
         self.arrays = arrays
         self.worker_id = worker_id
         self._mm, self._u = mm, u
-        kwargs = dict(precision=spec.precision, platform=spec.platform, cpu_threads=spec.cpu_threads)
-        if spec.backend in ("cupotential", "cupo"):
-            kwargs.update(integrator=spec.integrator, box_safety=spec.box_safety)
-        self.backend = get_backend(spec.backend, **kwargs)
+        self.backend = backend_of(spec)
         system = self.backend.prepare_system(mm.XmlSerializer.deserialize(spec.system_xml))
         temperature = spec.temperature_K * u.kelvin
         self.start = int(start)

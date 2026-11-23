@@ -307,6 +307,43 @@ def test_rest2_backends_agree(rest2_leg):
     assert np.max(np.abs(diff)) < 0.1, diff            # kT, as without REST2 (the fixture has no dispersion correction)
 
 
+@needs_plugin
+def test_backends_agree_with_annihilated_electrostatics_and_the_squared_soft_core():
+    """``alchemy.annihilate_electrostatics`` and ``alchemy.softcore_b: 2``, with REST2: the plugin
+    takes the NonbondedForce whose ligand exceptions carry no charge product, the Coulomb energy
+    inside the ligand and the soft-core stay on stock kernels that share its global parameters,
+    and the reduced potentials of every state agree between the two backends as they do without
+    these settings; on each backend the polynomial evaluation equals setting each state."""
+    import openmm.unit as u
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling.states import set_state
+
+    system, _top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    alch = make_alchemical_system(system, ligand, softcore_alpha=1.0, rest2=True, rest2_atoms=other[:12],
+                                  annihilate_electrostatics=True, softcore_b=2)
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 5, "vanish": 4}, rest2_scale=3.0)
+    kt = 8.31446261815324e-3 * 300.0
+    rows = {}
+    for name in ("openmm", "cupotential"):
+        backend = get_backend(name)
+        ctx = backend.make_context(backend.prepare_system(alch.system),
+                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        rows[name] = StateEnergyEvaluator(ctx, schedule.states, 300.0, None).reduced_potentials()[0]
+        direct = []
+        for state in schedule.states:
+            set_state(ctx, state)
+            direct.append(ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole) / kt)
+        direct = np.array(direct)
+        error = (rows[name] - rows[name][0]) - (direct - direct[0])
+        assert np.max(np.abs(error)) < 0.02, (name, error)
+        del ctx
+    diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
+    assert np.max(np.abs(diff)) < 0.1, diff
+
+
 @needs_cuda
 @pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
 def test_replica_exchange_with_rest2(tmp_path, rest2_leg, backend):

@@ -15,10 +15,12 @@ from cufep.files import publish_text, publish_with
 from cufep.scheduler import GpuMonitor, run_jobs
 from cufep.workflow import (
     KCAL,
+    SETTINGS_ADDED,
     LegJob,
     WorkflowError,
     _Log,
     check_before_jobs,
+    check_given_schedule,
     check_interaction_inputs,
     check_leg_reuse,
     check_partner_legs,
@@ -163,6 +165,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
             if info is not None:
                 check_before_jobs(resolved, lig_dirs[lig.name], mine)
             for r, leg in sorted(mine):
+                # a schedule the leg is to be given: also for a ligand that has no prepared systems yet
+                check_given_schedule(resolved, lig_dirs[lig.name], leg, r, reschedule)
                 if info is not None:
                     check_leg_reuse(resolved, lig_dirs[lig.name], leg, r, info, resolved.sampling.production(leg),
                                     reschedule, log)
@@ -283,7 +287,15 @@ def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print
 
     If the directory holds the configuration of an earlier run that differs in more than the
     resources and the output directory, that file is kept as ``resolved_config.previous_<n>.yaml``:
-    results of the earlier run may still be there (legs this run does not sample).
+    results of the earlier run may still be there (legs this run does not sample). A setting that
+    was added after the earlier record was written is read in it with the value that gives what
+    the version without it did (``SETTINGS_ADDED``): the same YAML run again by a later version
+    is then the same calculation (reviews of dd075d6 and 3897311: it was said to differ by
+    ``alchemy.softcore_b``, ``alchemy.annihilate_electrostatics`` and
+    ``analysis.detect_equilibration`` at their defaults). A setting the earlier record lacks and
+    that is not in that table is a difference: its default now need not be what the earlier
+    version did (``lambda_schedule.adaptive.start_configurations``: a leg of an earlier version
+    started its windows by the number of workers it had).
     """
     path = out_dir / "resolved_config.yaml"
     new = resolved.model_dump(mode="json")
@@ -292,6 +304,9 @@ def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print
     def calculation(data: dict) -> dict:
         return {key: value for key, value in data.items() if key not in ("resources", "output")}
 
+    if earlier is not None:
+        earlier = dict(earlier, **{section: {**added, **earlier[section]} for section, added in SETTINGS_ADDED.items()
+                                   if isinstance(earlier.get(section), dict)})
     if earlier is not None and settings_differences(calculation(earlier), calculation(new)):
         n = 1
         while (out_dir / f"resolved_config.previous_{n}.yaml").exists():

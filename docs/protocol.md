@@ -15,6 +15,7 @@ that can be changed in the configuration.
 | leg | one side of the cycle: the complex leg (protein and ligand) and the solvent leg (ligand in water) | bound / free, phase (YANK) |
 | stage | part of a leg in which one kind of interaction changes: restrain, discharge, vanish | names of A3FE |
 | decoupling | switching off the ligand's interactions with its environment while keeping those within the ligand | |
+| annihilation | switching off interactions within the ligand too; `alchemy.annihilate_electrostatics` does it for the electrostatics | |
 | Boresch restraints | one distance, two angles and three dihedrals between three ligand atoms and three protein atoms | |
 | constraints | fixed bond lengths to hydrogen, which with hydrogen mass repartitioning allow a 4 fs time step | |
 | iteration | one cycle of replica exchange: every replica runs for `time_per_iteration_ps`, energies are evaluated, lambda windows are exchanged | exchange attempt interval |
@@ -105,7 +106,10 @@ restraint's partition function; Boresch's analytical formula is reported next to
 check.
 
 The ligand's own nonbonded interactions are kept at every lambda window (decoupling), so
-the decoupled ligand is the same in both legs and no vacuum leg is needed.
+the decoupled ligand is the same in both legs and no vacuum leg is needed. With
+`alchemy.annihilate_electrostatics: true` the electrostatics inside the ligand are switched off
+with its charges (annihilation) and only its Lennard-Jones interactions are kept; the decoupled
+ligand is then again the same in both legs, a ligand without electrostatics of its own.
 
 ### Interactions inside the ligand
 
@@ -123,6 +127,17 @@ the input poses of the benchmark ligands, with OpenFF 2.2.1 and a cutoff of 0.9 
 energy in question is -0.016 to -0.043 kcal/mol for the 16 TYK2 ligands (longest distance
 inside the ligand 1.3 to 1.5 nm) and at most -0.003 kcal/mol for the 17 A2A ligands (about
 1.0 nm). `spikes/m12_intraligand_lj.py` gives the numbers per ligand.
+
+Annihilated electrostatics (`alchemy.annihilate_electrostatics: true`, off by default) follow
+the rule of openmmtools with exact PME, which OpenFE's ABFE protocol runs: the charges of the
+ligand atoms are scaled by lambda, so a pair of ligand atoms that the force field treats as an
+ordinary pair interacts with lambda^2, and the charge product of a 1-4 pair is scaled by lambda.
+In cuFEP's System the exceptions of the ligand pairs then carry no charge product, and a
+`CustomBondForce` of the main force group holds the Coulomb energy of every pair with its factor
+(configuration.md gives the rule as it was read in the source). With the electrostatics kept, the
+decoupled ligand keeps its internal hydrogen bonds at every lambda window, in both legs; with
+them annihilated it does not. A complex leg and a solvent leg are combined only if both were
+run the same way.
 
 ## Steps of one leg
 
@@ -324,7 +339,9 @@ Points the paper does not specify, and cuFEP's rule for each:
 | a pair exactly at the threshold | deficient (as in the analysis scripts published with the paper) |
 | data used for the overlap matrix | the windows currently in the schedule (`overlap_matrix: stage`, the default of the solvent leg); with `overlap_matrix: pair`, the default of the complex leg, the two windows of each pair alone |
 | energy samples per window | every `sample_interval_ps` (0.5 ps): 100 per window in the solvent leg, 1000 in the complex leg |
-| start of a new window | last configuration of the nearest window that has been run |
+| start of the windows of the first iteration | `start_configurations: walk` (the default): from the end of the pre-equilibration a walk through the windows in order, `walk_ps` (5 ps) of MD in each, and every window then runs from the configuration the walk left it. `sequential`: each window from the last configuration of the window before it (configuration.md) |
+| start of a window that a later iteration adds | last configuration of the nearest window that had been run before that iteration |
+| windows run at the same time | those that have their start configurations, where the leg has workers for them; otherwise one after another. What a window starts from and how much MD it gets does not depend on it |
 
 The windows, the start (`initial_windows` as numbers, `initial_lambda` as values), the
 threshold, the matrix it was compared with and one record per iteration (windows, overlaps, the
@@ -335,7 +352,21 @@ record always holds the elements of the overlap matrix of the windows of the sta
 windows of one stage. The analysis of the production checks another number: the element of the
 matrix of all windows of the leg, from the samples of the production. The
 last configuration of each window is the start of its replica; replica exchange then runs
-its own equilibration before the production.
+its own equilibration before the production. How the windows were started is written with the
+start configurations (`start_configs.npz`, which is written before `schedule.yaml`, so that a
+leg with a schedule of its own has the start configurations made with it), to the log, and to
+the result of the leg (`start_configurations`). With them are written the windows they are of,
+whether this precalculation chose the windows or they were given, and the settings of the
+System they were made with (`alchemy`, `sampling.rest2`): a run that gives other settings to a
+leg that has its windows is refused before it writes anything (`--reschedule` starts the leg
+anew), and start configurations that are not those of the windows a leg has are made again. A
+leg of an earlier version has no such record: its result has no `start_configurations` (the
+record of its schedule tells whether the precalculation had workers, not whether the start
+configurations the leg has were made by it). A run that samples such windows for the first
+time writes its own record with them, which says that their origin is not recorded, and the
+result of the leg says so from then on; so does the result of a leg that found windows of
+adaptive lambda scheduling without start configurations (an earlier version stopped between
+the two) and walked through them.
 
 ### Where cuFEP follows the paper and where it differs
 
@@ -591,6 +622,20 @@ free energy are not affected, and a leg is sampled by one backend.
 ## Checks of the analysis
 
 ### Free energy and uncertainty of a leg
+
+The production that is analysed begins after the equilibration of the run
+(`sampling.equilibration_ns` per lambda window). With `analysis.detect_equilibration: true` it
+begins later: automatic equilibration detection (Chodera 2016, as openmmtools applies it to
+replica exchange) takes the effective energy of every iteration of the production, the sum over
+the replicas of the reduced potential of each in the state it was simulated in, and among 100
+time origins spread evenly over it the one from which the series has the most uncorrelated
+samples; the iterations before that origin are left out as well. The free energy, every part of
+the analysis below and the numbers of the structure are then of the remaining iterations, and
+the result records what was left out (`equilibration_detected`: iterations, the statistical
+inefficiency and the number of uncorrelated samples from there on). Only the start is taken
+from the detection: the samples are thinned as described next, with or without it. The default
+is off (`docs/configuration.md` gives the source and what the detection does on the stored
+benchmark runs).
 
 MBAR assumes uncorrelated samples. The samples of every lambda window are therefore thinned
 by the statistical inefficiency g of that window: the window keeps every ceil(g)-th
@@ -1013,9 +1058,12 @@ belong together:
   input files and the settings that went into them are the same (a trajectory also only if the
   pre-equilibration it started from is the one that is there). Only the lambda windows of a
   leg can be determined again in place, with `--reschedule`.
-- A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg: its
-  stages and its two end states are checked. Give a directory as written by `cufep benchmark
-  freeze`, or the file of one leg together with `--leg`.
+- A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg and of the
+  REST2 scale of the run: its stages, its two end states and its scale are checked before the
+  leg takes it over, and before the run writes anything. Give a directory as written by `cufep
+  benchmark freeze`, or the file of one leg together with `--leg`.
+- A leg whose archive (`--reschedule`) was begun and not completed is not run as it is: the
+  run is refused until `--reschedule` is given again, which completes the archive.
 - How the bilayer changed and how far the ligand was from its input pose are taken from the
   files of the leg whenever its result is made, as numbers. The notes with a verdict on them
   that earlier versions wrote into those files and into their results (whether the bilayer had
@@ -1070,7 +1118,7 @@ version wrote without a record of what they were made from are treated as follow
 
 | file | what happens |
 |---|---|
-| samples (`hrex/samples.h5`) without recorded conditions | read and analysed, never added to, and not written to. That version stored neither the soft-core nor pressure and friction, and it rewrote temperature, backend and states whenever it opened the file, so nothing on the disk shows what the samples were made with. They are held to what their file does hold: a run with another temperature, other lambda states or another length of an iteration is refused, and so is one that asks for more production than they have. A leg that has all its iterations is analysed as it is: the release of the restraint is computed at the temperature of the samples, and the pressure, which they do not record, is named as not compared when the legs are combined. To sample further, the leg is started anew with `--reschedule` |
+| samples (`hrex/samples.h5`) without recorded conditions | read and analysed, never added to, and not written to. That version stored neither the soft-core nor pressure and friction, and it rewrote temperature, backend and states whenever it opened the file, so nothing on the disk shows what the samples were made with. They are held to what their file does hold and to what their version could do: a run with another temperature, other lambda states or another length of an iteration is refused, so is one that asks for more production than they have, and so is one that asks for a treatment that version did not have (`alchemy.annihilate_electrostatics: true`, `alchemy.softcore_b: 2`). A leg that has all its iterations is analysed as it is: the release of the restraint is computed at the temperature of the samples, and the pressure, which they do not record, is named as not compared when the legs are combined. To sample further, the leg is started anew with `--reschedule` |
 | samples in one file (`hrex/samples.h5`, without `manifest.json`) | read as that version stored them: up to its stored counts (`committed_counts`), or, for the versions before them, up to the iterations that all their row datasets hold. A run that continues them never writes to that file: it adds parts and a manifest that names the file, with those counts, as its first part |
 | a checkpoint without the number of its stored rows | not continued from (see "A leg and its own files" above); the run is refused before anything is written |
 | samples that record their conditions with a checksum of the System and without the settings behind it (one version) | before a run, the System is built again from the files of the leg and all recorded conditions are compared, so that a run with another soft-core, restraint or REST2 region is refused before anything is written. If a file needed for that is missing, the run is refused |
@@ -1167,6 +1215,8 @@ Further differences:
 | standard state correction | analytical | numerical, analytical as a check |
 | ligand-environment dispersion tail | isotropic | explicit, by reweighting the coupled state |
 | Lennard-Jones between atoms of the ligand | cut off as in the original System | no cutoff (hundredths of a kcal/mol; "Interactions inside the ligand") |
+| electrostatics between atoms of the ligand | annihilated: switched off with the charges (lambda^2; 1-4 pairs lambda) | kept at every lambda window by default; annihilated by OpenFE's rule with `alchemy.annihilate_electrostatics: true` |
+| soft-core | alpha 0.5, powers a 1, b 1, c 6 | the same by default; `alchemy.softcore_b: 2` for the squared (1 - lambda) |
 | decorrelation of the samples | one statistical inefficiency for all windows, from the reduced potential summed over the replicas (openmmtools) | one per lambda window, the larger of those of its energy differences to the two neighbouring windows (alchemlyb's default takes the next window only) |
 
 Sources: Midgley et al. 2025;

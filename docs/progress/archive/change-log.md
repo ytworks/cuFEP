@@ -5,6 +5,185 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-23 — [progress] Accuracy plan, step 5: annihilated electrostatics, the squared soft-core, the control of E3
+- What: one run each on ejm_49 (experiment -7.75; the defaults three times: -11.84, -8.92, -9.40;
+  kcal/mol; everything else as the full run). `alchemy.annihilate_electrostatics`: -7.71 ± 0.41;
+  two torsions of the ligand that stayed as in the input are turned at the end in 23 and 17 of 36
+  complex windows and 16 and 11 of 17 solvent windows. `alchemy.softcore_b` 2 with alpha 1:
+  -8.78 ± 0.34 (40 and 24 windows). Control of E3, the first repeat's complex leg with its 7
+  windows of sterics 0.25 or less started from the decoupled end after 50 ns there: 35.26 ± 0.48
+  against 40.91 ± 0.36, the whole difference between sterics 0.30 and 0.10; it rises during the
+  production (halves 34.31, 36.23); binding free energy -3.28 ± 0.54. One run each: no cause is
+  established. Not finished: 4k with 100 ns of bilayer equilibration; that control to 10 ns.
+- Why: step 5 of the plan (one run per new setting; controls whose condition was met).
+- Refs: the plan ("手順 5 の結果"), `runs/acc_*` (untracked), `spikes/m25_*.py`
+
+### 2026-11-23 — [design] `analysis.detect_equilibration`: automatic equilibration detection as a setting
+- What: off by default. On, the analysis of a leg leaves out, after `sampling.equilibration_ns`,
+  the iterations before the time origin from which the effective energy has the most uncorrelated
+  samples (the rule of openmmtools, which OpenFE's protocols run); the free energy, its parts and
+  the numbers of the structure are of the rest, and the result records what was left out. Only
+  the start is taken from the detection; the samples are decorrelated window by window as before
+  (cuFEP's own). The analysis of the default is unchanged (version 10, the pinned numbers). Unit
+  tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: step 4e of the plan; what it does on the stored benchmark legs is in the entry below.
+- Refs: `docs/configuration.md` (basis), `docs/protocol.md`, `tests/unit/test_equilibration.py`
+
+### 2026-11-23 — [progress] Accuracy plan: equilibration detection on the stored legs, acceptance of water relocation
+- What: no run. Automatic equilibration detection (the rule of openmmtools) on the production of
+  the 66 stored legs of e77a6c5 leaves out 1.04 ns (TYK2) and 2.30 ns (A2A) of the complex leg on
+  average; kcal/mol: TYK2 mean signed error -1.20 to -1.29, RMSE after removing it 1.25 to 1.12,
+  Kendall tau 0.47 to 0.52; A2A -4.14 to -3.79, 2.68 to 2.73, 0.34 to 0.38. Water relocation
+  (Ding et al.) at the decoupled end of 4k, 200 trial moves each way, both tests of the rule (the
+  second with the energy of the simulation): accepted 0.012 into and 0.004 out of the sphere with
+  1024 trial poses, 0.046 and 0.010 with 4096. The control of E3 is defined and queued.
+- Why: steps 4e and 4d of the plan (measured before a setting is wired or a move implemented).
+- Refs: the plan ("手順 4e の評価と、E3 の対照の作り方"), `spikes/m21_*.py detect`, `spikes/m24_*.py`
+
+### 2026-11-23 — [amendment] Review of the three settings: windows are held to the System they were made for
+- What: independent review of dd075d6..0815fd4 (five findings, each reproduced), and a second
+  reader of the fix (none at that level; two lesser points closed). The start configurations
+  record the settings of the System (`alchemy`, `sampling.rest2`) and the windows they are of: a
+  run that gives other settings to a leg with windows and no samples is refused before it writes
+  anything; start configurations of other windows are made again. Correction of the entry below:
+  a leg of an earlier version has no `start_configurations` in its result. Settings of `alchemy`
+  added since no longer make the same YAML "another configuration". Unit tests 706 passed, GPU
+  tests 26 passed (the image `cufep:dev`).
+- Why: the review before the push (`.claude/rules/fep-invariants.md`).
+- Refs: PR #9, `docs/protocol.md` (adaptive lambda scheduling), `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [progress] Accuracy plan, steps 1 and 3: repeats, REST2 off, 10 ns, MD at the decoupled end
+- What: image of e77a6c5, the recorded settings of the full runs, kcal/mol. ejm_49 (experiment
+  -7.75): -11.84 ± 0.57 (the benchmark run), -8.92 ± 0.44, -9.40 ± 0.29, standard deviation 1.57
+  (complex leg 1.29); REST2 off: -9.76 ± 0.39; the first repeat continued to 10 ns: -9.21 ± 0.43.
+  4k (-11.54), three runs started by the walk: -14.49 ± 0.51, -13.07 ± 0.56, -16.50 ± 0.40 (1.72);
+  the benchmark run, whose windows were started one from another: -20.32 ± 0.52 (complex leg 44.87
+  against 38.78, 37.36, 40.90); to 10 ns: -14.38 ± 0.60. Plain MD: the bilayer of 4k with the solute
+  held stops shrinking at about 70 ns (62.1 nm2; about 66 after the default 10 ns); at the
+  decoupled end of 4k the water in the place of the ligand rises from 10.7 to about 15 molecules in
+  20 to 30 ns, at that of ejm_49 it does not change.
+- Why: steps 1 and 3 of the plan.
+- Refs: the plan ("手順 1 と 3 の結果"), `spikes/m22_decoupled_end_md.py`, `runs/acc_*` (untracked)
+
+### 2026-11-23 — [design] Three settings: the start of the windows, annihilated electrostatics, soft-core power
+- What: `lambda_schedule.adaptive.start_configurations` (walk, the default, or sequential): what
+  the windows of the precalculation start from no longer follows from the number of workers a leg
+  got; it is recorded with `start_configs.npz`, in the log and the result.
+  `alchemy.annihilate_electrostatics` (default false): the electrostatics inside the ligand go with
+  its charges by the rule of openmmtools with exact PME, which OpenFE's ABFE protocol runs; legs
+  that differ in it are not combined. `alchemy.softcore_b` (1 or 2, default 1). With the defaults
+  the System and the recorded conditions of the stored benchmark legs are reproduced. Unit tests
+  706 passed, GPU tests 26 passed. Not run on a benchmark; no default changed.
+- Why: steps 4a to 4c of the plan (remedies as settings; defaults are the owner's decision).
+- Refs: the plan, PR #9, `docs/configuration.md` (basis of the three), `docs/protocol.md`
+
+### 2026-11-22 — [progress] Accuracy plan, step 2: what the stored full runs say
+- What: from the files of the runs of e77a6c5 and 3b45bfe, no new calculation; kcal/mol
+  (`spikes/m21_stored_run_measurements.py`, reviewed by a reader who did not write it). A2A: the XY
+  area of the bilayer falls through all 10 ns of its equilibration (16 of 17 legs, -0.33 nm2/ns)
+  and on, from 69 to about 62 nm2 in 40 ns; in the 7 legs whose precalculation had one worker the
+  last windows start at 62.05 nm2 and the first at 66.05. Second minus first half of the
+  production, complex leg: TYK2 restrain +0.51, discharge +0.40, vanish -0.06; A2A +0.66, -0.11,
+  -0.97, with water entering the place of the ligand (+2.02 molecules, 16 of 17). The benchmark
+  inputs hold no crystal water. The entry below: -1.12, not -1.13 (unrounded errors).
+- Why: step 2 of the plan: what the stored runs decide needs no run.
+- Refs: the plan ("手順 2 の結果"), PR #9
+
+### 2026-11-22 — [progress] Plan started: the causes of the errors measured, the remedies implemented
+- What: plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress). Step 1 runs in
+  the image of e77a6c5 with the recorded settings of the full runs: ejm_49 twice, 4k three times,
+  ejm_49 once with `sampling.rest2.scale: 1.0`; no result yet. PR #8 is merged (its plan: done).
+  Correction of the open item on the workers of the precalculation ("The free energies do not
+  depend on it"): with one worker the start configurations are made in another way (4 complex
+  legs of TYK2, 7 of A2A); their mean signed errors are -1.42 and -5.85 kcal/mol against -1.13
+  and -2.95 of the other legs (other ligands, found afterwards: no cause follows from it).
+- Why: the owner's order (2026-11-22): find what improves the accuracy and implement it, few runs.
+- Refs: the plan, its pull request, issue #5
+
+### 2026-11-22 — [progress] A2A full with the present defaults: 17 of 17; the wiki from this run
+- What: one calculation per compound, image of e77a6c5, eight GPUs, exit 0; recorded as the run
+  wrote it in `benchmarks/results/a2a/`. kcal/mol: mean signed error -4.14 [-5.36, -2.85], RMSE
+  after removing the mean error 2.68 [1.76, 3.24], Kendall tau 0.34 [-0.03, 0.67] (FEP+ -0.16,
+  1.08, 0.59; the run of 3b45bfe -4.12, 2.26, 0.38; Felis: offset 2.74, RMSE after offset 1.16,
+  tau 0.65). No result NOT RELIABLE (lowest overlap 0.105); a window with fewer than 50
+  independent samples in the complex leg of 14/17. 4e: -13.50 ± 0.34. `docs/wiki/Accuracy.md`
+  and `Accuracy-ja.md` are rewritten from the run of both sets, with a section that puts the run
+  of 3b45bfe beside it; both READMEs, `docs/protocol.md` and `docs/configuration.md` follow.
+- Why: the owner's order (2026-11-22); steps 3 to 6 of the plan.
+- Refs: PR #8, `benchmarks/results/README.md`, `docs/wiki/Accuracy.md`, `spikes/wiki_tables.py`
+
+### 2026-11-22 — [progress] TYK2 full with the present defaults: 16 of 16 ligands
+- What: one calculation per ligand, image of e77a6c5, eight GPUs, exit 0; recorded as the run
+  wrote it in `benchmarks/results/tyk2/` (the record of 3b45bfe is in the tree of cda6965).
+  kcal/mol: mean signed error -1.20 [-1.83, -0.60], RMSE after removing the mean error 1.25
+  [0.75, 1.62], Kendall tau 0.47 [0.12, 0.75] (FEP+ 0.00, 0.47, 0.81; the run of 3b45bfe -0.62,
+  1.74, 0.12; Felis, three calculations averaged: offset 0.04, RMSE after offset 0.82, tau 0.68).
+  No result NOT RELIABLE (lowest overlap 0.140); a window with fewer than 50 independent samples
+  in 12/16. Every restraint by `interactions` (VAL 981); complex legs 31 to 36 windows from 30.
+  Seen in the run: how the precalculation holds workers (Open items). A2A is being calculated.
+- Why: the owner's order (2026-11-22); step 3 and 4 of the plan.
+- Refs: PR #8, `benchmarks/results/README.md`, `spikes/benchmark_progress.py` (Felis rows)
+
+### 2026-11-22 — [progress] Plan started: both full benchmark sets once with the present defaults
+- What: plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (in progress).
+  TYK2 (16 ligands), then A2A (17 compounds): tier full, one calculation per ligand, eight GPUs,
+  in the image built from e77a6c5 (`main` after PR #7; its conda environment is the layer of the
+  image of 5e2cf33). No file of the code, the examples or the benchmarks changes: they follow the
+  defaults (`restraints.selection: interactions`; the complex leg from 30 windows, the overlap of
+  a pair alone, 0.30). The results will replace `benchmarks/results/` and the numbers of
+  `docs/wiki/Accuracy.md`. By the owner's order no unit tests, GPU tests or reviews are run for
+  this plan. No result yet.
+- Why: the owner's order (2026-11-22).
+- Refs: the plan, its pull request
+
+### 2026-11-22 — [progress] PR #7 merged on the owner's order: the start of the complex leg
+- What: plan `docs/plans/2026-11-21-als-initial-window-design.md` is done (10 steps, two
+  independent reviews, six passes of Codex, the last without a finding; nine runs of the TYK2
+  example) and its pull request is merged into `main`: there adaptive lambda scheduling of the
+  complex leg starts from 30 windows and reads the overlap of a pair alone (threshold 0.30),
+  `max_windows` is 100 and the window settings can differ between the legs. Not run with these
+  defaults: the A2A example, the subset and full benchmarks.
+- Why: the owner's order (2026-11-22).
+- Refs: PR #7
+
+### 2026-11-22 — [amendment] Review by Codex of the new defaults: fixes and a correction
+- What: review 6007410417 (seven P2), each reproduced. Correction of `docs/configuration.md` and
+  of the entry below: an element of the matrix of a stage can reach 0.30, at an end of a stage (at
+  most 0.333 among 784 recorded pairs); 26 or 27 of the 29 pairs of the default start read at or
+  below 0.30 there in the runs of A (6 by the pair alone), and the run to `max_windows` was of
+  harmonic windows. `cufep benchmark run` prints the notes about the file of its example. The
+  figure script counts the last exchange, reads results of earlier versions and draws moves rarer
+  than 0.001. B and C came from 37 legs, not 33. Declined: an old YAML with `max_windows.complex`
+  below 30 is refused with the setting to add. In the image: unit tests 680 passed.
+- Why: the review after the push (the working agreement of PR #7).
+- Refs: PR #7 (review 6007410417 and its replies), `docs/protocol.md`, `docs/configuration.md`
+
+### 2026-11-22 — [design] The complex leg starts from the windows of mode fixed and reads the overlap of a pair
+- What: defaults of `lambda_schedule.adaptive` for the complex leg: `initial_windows` restrain 6,
+  discharge 11, vanish the 15 values of `windows.complex.vanish` (3, 5 and 9 until now);
+  `overlap_matrix` pair with `overlap_threshold` 0.30 (stage with 0.18 until now). The solvent leg
+  is unchanged (5 and 9 windows, stage, 0.18). The examples and the benchmarks set none of these
+  and follow the defaults (`cufep plan` of both examples; the smoke tier of both sets, exit 0).
+  Not run with them: the A2A example, the subset and full benchmarks. A leg whose threshold is
+  not given has that of the matrix it reads (0.18 stage, 0.30 pair; an independent review:
+  `overlap_matrix: stage` alone kept 0.30 and went to `max_windows`); a threshold without its
+  matrix gets a note. In the image: unit tests 679 passed, GPU tests 25 passed.
+- Why: the owner's choice (2026-11-22) of start A from the nine runs of the entry below.
+- Refs: PR #7, `docs/configuration.md` (basis), `docs/protocol.md` ("The starts of the complex
+  leg that were compared"), `.claude/rules/fep-invariants.md`
+
+### 2026-11-22 — [progress] Three starts of the complex leg on the TYK2 example: nine runs
+- What: step 8 of the plan. ejm_31, 5 ns, image of 5e2cf33, three calculations per start with the
+  same YAML and seed; complex leg by the overlap of a pair alone, threshold 0.30; kcal/mol,
+  experiment -9.54. A (30 windows, those of mode fixed): -9.36, -9.63, -9.33 (standard deviation
+  0.17). B (30, denser at vanish 0.7 to 0.9): -10.01, -9.64, -11.71 (1.11). C (59, placed as B):
+  -11.43, -6.41, -7.64 (2.62). The default, four runs: 2.09. Standard errors 0.34 to 0.59. Lowest
+  overlap 0.081 (C) to 0.153 (A); 0 or 1 round trip in every complex leg. Three runs give a
+  standard deviation only roughly. `spikes/m20_replica_exchange_figures.py` draws the moves of
+  the replicas. The owner chose A (2026-11-22).
+- Why: the owner's hypothesis of 2026-11-21: more initial windows, placed by design.
+- Refs: PR #7, the plan (results), `spikes/m19_window_runs.py`, `runs/tyk2_windows_*` (untracked)
+
 ### 2026-11-21 — [amendment] Reviews of PR #7 before its runs: fixes; the start of candidate C made again
 - What: an independent review (no must-fix) and Codex (ten P2 by reading), each finding reproduced
   first. A start is a candidate to the six decimals cuFEP writes (a recorded start was refused with

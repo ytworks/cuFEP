@@ -1081,6 +1081,50 @@ def statistical_inefficiency(u: np.ndarray, states: np.ndarray) -> float:
     return max(1.0, g)
 
 
+#: the number of time origins the detection of the equilibration tries (openmmtools' max_subset)
+EQUILIBRATION_ORIGINS = 100
+
+
+def detect_equilibration(u: np.ndarray, states: np.ndarray, origins: int = EQUILIBRATION_ORIGINS) -> dict | None:
+    """Where the production of a leg is taken to begin by automatic equilibration detection
+    (Chodera, J. Chem. Theory Comput. 2016, 12, 1799), as openmmtools applies it to replica
+    exchange (``MultiStateSamplerAnalyzer._get_equilibration_data`` and
+    ``multistate.utils.get_equilibration_data_per_sample``), which OpenFE's protocols use.
+
+    The series is the effective energy of every iteration, the sum over the replicas of the
+    reduced potential of each at the state it was simulated in. For ``origins`` time origins t
+    spread evenly over the series (t = floor(i n / origins)) the statistical inefficiency g of the
+    series from t on is estimated (pymbar, ``fast=True``) and with it the number of uncorrelated
+    samples left, (n - t + 1) / g. The origin with the most of them is the start; the first
+    origin is never taken ("We should never choose data from the first time origin", openmmtools),
+    so at least the first n / origins iterations go.
+
+    openmmtools first drops the iteration it starts from, the minimised configuration
+    (``_get_equilibration_data``: ``t0 = 1``, "discard minimization frame"), runs the detection on
+    the rest and adds the one back to its answer. Nothing is dropped here: the caller gives the
+    iterations that follow the equilibration of the run, among which there is no such frame.
+
+    ``u`` and ``states`` are those of the iterations the detection may choose from. Returns
+    ``iterations`` (the origin that was chosen: how many of them are left out),
+    ``statistical_inefficiency`` and ``effective_samples`` there; None for a series too short to
+    have two origins or one that does not change."""
+    _, timeseries = _pymbar()
+    n_iter, n_rep, _ = u.shape
+    series = u[np.arange(n_iter)[:, None], np.arange(n_rep)[None, :], states].sum(axis=1)
+    count = min(int(origins), n_iter - 1)                    # the last entry cannot be analysed
+    if count < 2 or np.allclose(series, series[0]):
+        return None
+    best = None
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        for i in range(1, count):
+            t = int(np.floor(i * n_iter / count))
+            g = max(1.0, float(timeseries.statistical_inefficiency(series[t:], fast=True)))
+            effective = (n_iter - t + 1) / g
+            if best is None or effective > best["effective_samples"]:
+                best = {"iterations": t, "statistical_inefficiency": g, "effective_samples": float(effective)}
+    return best
+
+
 def count_round_trips(states: np.ndarray) -> int:
     """Total number of complete end-to-end-and-back passages over all replicas."""
     n_states = int(states.max()) + 1

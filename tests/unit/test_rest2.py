@@ -204,7 +204,7 @@ def test_precalculation_with_rest2(dipeptides_in_water):
     ctx.setPositions(pos)
     ctx.setVelocitiesToTemperature(300.0, 2)
     settings = AlsSettings(overlap_threshold=0.04, candidates=11, initial_windows={"discharge": 3, "vanish": 3},
-                           window_ps=0.2, sample_interval_ps=0.02, max_windows=7, rest2_scale=2.0)
+                           window_ps=0.2, sample_interval_ps=0.02, walk_ps=0.02, max_windows=7, rest2_scale=2.0)
     schedule, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings, lambda m: None)
     assert schedule.rest2_scale == 2.0 and len(configs) == len(schedule.states)
     scales = [st.rest2_scale for st in schedule.states]

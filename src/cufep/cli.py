@@ -285,6 +285,9 @@ def analyze(directory: str, config, equilibration_ns, equilibration_iterations) 
         if k not in ("f_k", "df_k", "overlap_matrix", "overlap_used_matrix", "overlap_used_weighted_by_number")
     }
     out.update(n_equilibration_iterations=n_equilibration, n_iterations_stored=int(samples["u"].shape[0]))
+    if result.get("equilibration_detected") is not None:
+        # analysis.detect_equilibration: what the detection left out after the equilibration of the run
+        out["equilibration_detected"] = result["equilibration_detected"]
     if "n_planned_iterations" in attrs:
         out["n_planned_iterations"] = int(attrs["n_planned_iterations"])
     # the radii of the tail correction that were really used: the outer one the samples recorded
