@@ -5,6 +5,30 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-23 — [design] Three settings: the start of the windows, annihilated electrostatics, soft-core power
+- What: `lambda_schedule.adaptive.start_configurations` (walk, the default, or sequential): what
+  the windows of the precalculation start from no longer follows from the number of workers a leg
+  got; it is recorded with `start_configs.npz`, in the log and the result.
+  `alchemy.annihilate_electrostatics` (default false): the electrostatics inside the ligand go with
+  its charges by the rule of openmmtools with exact PME, which OpenFE's ABFE protocol runs; legs
+  that differ in it are not combined. `alchemy.softcore_b` (1 or 2, default 1). With the defaults
+  the System and the recorded conditions of the stored benchmark legs are reproduced. Unit tests
+  706 passed, GPU tests 26 passed. Not run on a benchmark; no default changed.
+- Why: steps 4a to 4c of the plan (remedies as settings; defaults are the owner's decision).
+- Refs: the plan, PR #9, `docs/configuration.md` (basis of the three), `docs/protocol.md`
+
+### 2026-11-22 — [progress] Accuracy plan, step 2: what the stored full runs say
+- What: from the files of the runs of e77a6c5 and 3b45bfe, no new calculation; kcal/mol
+  (`spikes/m21_stored_run_measurements.py`, reviewed by a reader who did not write it). A2A: the XY
+  area of the bilayer falls through all 10 ns of its equilibration (16 of 17 legs, -0.33 nm2/ns)
+  and on, from 69 to about 62 nm2 in 40 ns; in the 7 legs whose precalculation had one worker the
+  last windows start at 62.05 nm2 and the first at 66.05. Second minus first half of the
+  production, complex leg: TYK2 restrain +0.51, discharge +0.40, vanish -0.06; A2A +0.66, -0.11,
+  -0.97, with water entering the place of the ligand (+2.02 molecules, 16 of 17). The benchmark
+  inputs hold no crystal water. The entry below: -1.12, not -1.13 (unrounded errors).
+- Why: step 2 of the plan: what the stored runs decide needs no run.
+- Refs: the plan ("手順 2 の結果"), PR #9
+
 ### 2026-11-22 — [progress] Plan started: the causes of the errors measured, the remedies implemented
 - What: plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress). Step 1 runs in
   the image of e77a6c5 with the recorded settings of the full runs: ejm_49 twice, 4k three times,
