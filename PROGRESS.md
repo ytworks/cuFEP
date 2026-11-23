@@ -50,8 +50,8 @@ benchmark sets with the present defaults and the accuracy pages written from it 
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 725 passed (2026-11-23, the branch `feat/relocation-mc`: PR #9 and the water relocation moves, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 29 passed (2026-11-23, one GPU, the same tree and image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
+| Unit tests (CPU) | 727 passed (2026-11-23, commit 0c9dcce of the branch `feat/relocation-mc`: PR #9 and the water relocation moves, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 30 passed (2026-11-23, two GPUs, commit ecf0e0e, `scripts/in_docker.sh --gpus 0,1 python -m pytest tests/gpu`); the four tests of the moves again on 0c9dcce, passed |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7. In the full TYK2 run with the present defaults (e77a6c5, PR #8): -10.08 ± 0.37 (complex leg 40.43, solvent leg 19.79; 33 and 18 windows; lowest overlap 0.154 and 0.189; a window with fewer than 50 independent samples in the complex leg) |
 | Starts of the complex leg (plan `docs/plans/2026-11-21-als-initial-window-design.md`, PR #7) | A is the default since 2026-11-22 (the owner's choice), so its three runs are runs of the TYK2 example as it is now. TYK2 example, three starts of the complex leg, three calculations each with the same YAML and seed (image of 5e2cf33, 4 GPUs each; the overlap of a pair alone, threshold 0.30; solvent leg as the default), kcal/mol. A (30 windows, those of mode fixed): -9.36 ± 0.56, -9.63 ± 0.37, -9.33 ± 0.51; mean -9.44, standard deviation 0.17. B (30 windows, denser at vanish 0.7 to 0.9): -10.01 ± 0.34, -9.64 ± 0.52, -11.71 ± 0.53; -10.45, 1.11. C (59 windows placed as B): -11.43 ± 0.46, -6.41 ± 0.59, -7.64 ± 0.43; -8.50, 2.62. The four runs of the row above: -10.39, 2.09. Complex leg, standard deviation: 0.20, 1.23, 2.20 (1.86). Lowest overlap 0.141 to 0.153 (A), 0.128 to 0.129 (B), 0.081 to 0.085 (C); a window with fewer than 50 independent samples in the complex leg of 2, 1 and 1 of the three runs; 0 or 1 round trip in the complex leg of every run. Three runs give a standard deviation only roughly. Tables: the plan (`spikes/m19_window_runs.py`) |
@@ -68,12 +68,12 @@ Open items:
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, PR #9): every remedy
   proposed for the errors gets a treatment; defaults change only by the owner's decision. One
   calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). What the
-  windows start from moves the complex leg by about 5 kcal/mol (ejm_49 35.3 against 40.9; 4k 44.3
-  against 39.0). The 16 TYK2 ligands with `alchemy.annihilate_electrostatics` (41760a1, once
-  each): mean signed error -0.43 [-1.31, 0.41], RMSE after removing it 1.77 [1.16, 2.17], tau
-  0.20 [-0.12, 0.48]; ligand by ligand +0.76 ± 0.51 from the run of e77a6c5 (standard deviation
-  2.03). Water relocation moves (branch `feat/relocation-mc`, default off): the trial energies
-  are computed on the GPU; no result yet. `membrane.equilibration_ns` stays 10 (the owner).
+  windows start from moves the complex leg by about 5 (ejm_49 35.3 against 40.9; 4k 44.3 against
+  39.0). The 16 TYK2 ligands with `alchemy.annihilate_electrostatics` (41760a1, once each): mean
+  signed error -0.43 [-1.31, 0.41], RMSE after removing it 1.77 [1.16, 2.17], tau 0.20 [-0.12,
+  0.48]; ligand by ligand +0.76 ± 0.51 from the run of e77a6c5. Water relocation moves (branch
+  `feat/relocation-mc`, default off, trial energies on the GPU): the complex leg of ejm_49 from
+  the two start constructions 43.09 and 39.29 (without them 40.91 and 35.26); 4k is running.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [progress] Water relocation moves on ejm_49: the complex leg from two start constructions
+- What: one run each, image of ecf0e0e, 4096 trial poses, half of the anchors in the sphere, the
+  windows and start configurations of the runs they are compared with, kcal/mol. Started by the
+  walk: 43.09 ± 0.75 (without the moves 40.91 ± 0.36); its 7 decoupled-side windows started from
+  the relaxed decoupled end: 39.29 ± 0.35 (35.26 ± 0.48). The two differ by 3.80 (5.65), of which
+  3.22 (4.55) between sterics 0.25 and 0, where at the end of the run the place of the ligand
+  holds about 20 waters in the one and 8 to 10 protein atoms in the other. About 2 % of the
+  moves were accepted (394 to 472 of 22 thousand each way). The sections up to the charges off
+  are 2.1 to 2.8 larger with the moves in both; why is not established.
+- Why: step 6 of the plan (the control of E3 again with the moves, the owner's order).
+- Refs: the plan ("評価 1"), `spikes/m28_complex_leg_sections.py`, `runs/acc_reloc2_*` (untracked)
 
 ### 2026-11-23 — [amendment] Water relocation moves: the trial energies on the GPU; three corrections
 - What: the stand-in energies of a proposal were computed by NumPy on a processor core, which
