@@ -290,28 +290,36 @@ class StandIn:
         return np.stack([self.by_water(pose, q, sigma, epsilon, SCORE_RADIUS_NM, skip=atoms) for pose in poses])
 
 
-#: the kernels of :class:`GpuStandIn` (CUDA C, double precision). The atoms of the configuration are
-#: sorted by the cell of a grid whose cells are at least the radius high, so that everything within
-#: the radius of a point is in its cell and the cells next to it. Fractional coordinates: the image
-#: of a difference with all three components within a half is the nearest one whenever the distance
-#: is less than half the smallest height of the cell, which :func:`check_cell` holds the radius to.
+#: the kernels of :class:`GpuStandIn` (CUDA C, energies in double precision). The atoms of the
+#: configuration are sorted by the cell of a grid whose cells are at least 1/``reach`` of the radius
+#: high, so that everything within the radius of a point is in the cells up to ``reach`` away from
+#: its own. A pair is first measured in single precision against the radius plus a margin (1e-3 nm,
+#: far above the error of that measure) and, if it may be within the radius, measured and computed
+#: in double precision: the numbers are those of double precision alone, most pairs cost a third.
+#: Fractional coordinates: the image of a difference with all three components within a half is the
+#: nearest one whenever the distance is less than half the smallest height of the cell, which
+#: :func:`check_cell` holds the radius to.
 _CUDA_SOURCE = r"""
 extern "C" __global__
-void site_energies(const double* frac, const double* par, const int* group, const int* cell_start,
-                   const int* dims, const double* box, const double* inv, const double* sites,
-                   const double* site_par, const int* own, const double radius, const double k_rf,
+void site_energies(const double* frac, const float* near, const double* par, const int* group,
+                   const int* cell_start, const int* dims, const double* box, const float* box32,
+                   const double* inv, const double* sites, const double* site_par, const int* own,
+                   const double radius, const float r2near, const int reach, const double k_rf,
                    const double c_rf, const double coulomb, const int m, double* out)
 {
     const int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= m) return;
     double f[3];
+    float h[3];
     int c[3], first[3], count[3];
     for (int d = 0; d < 3; ++d) {
         f[d] = sites[3 * i] * inv[d] + sites[3 * i + 1] * inv[3 + d] + sites[3 * i + 2] * inv[6 + d];
         f[d] -= floor(f[d]);
+        h[d] = (float)f[d];
         c[d] = min((int)(f[d] * dims[d]), dims[d] - 1);
-        count[d] = min(3, dims[d]);
-        first[d] = dims[d] >= 3 ? -1 : 0;
+        // the cells up to `reach` away, or every cell of the axis once if there are fewer
+        if (dims[d] >= 2 * reach + 1) { count[d] = 2 * reach + 1; first[d] = -reach; }
+        else { count[d] = dims[d]; first[d] = -c[d]; }
     }
     const double qi = site_par[3 * i], si = site_par[3 * i + 1], ei = site_par[3 * i + 2];
     const double r2max = radius * radius;
@@ -326,6 +334,12 @@ void site_energies(const double* frac, const double* par, const int* group, cons
                 const int cell = cx + dims[0] * (cy + dims[1] * cz);
                 for (int j = cell_start[cell]; j < cell_start[cell + 1]; ++j) {
                     if (mine >= 0 && group[j] == mine) continue;
+                    float ex = near[3 * j] - h[0], ey = near[3 * j + 1] - h[1], ez = near[3 * j + 2] - h[2];
+                    ex -= rintf(ex); ey -= rintf(ey); ez -= rintf(ez);
+                    const float px = ex * box32[0] + ey * box32[3] + ez * box32[6];
+                    const float py = ex * box32[1] + ey * box32[4] + ez * box32[7];
+                    const float pz = ex * box32[2] + ey * box32[5] + ez * box32[8];
+                    if (px * px + py * py + pz * pz > r2near) continue;
                     double dx = frac[3 * j] - f[0], dy = frac[3 * j + 1] - f[1], dz = frac[3 * j + 2] - f[2];
                     dx -= rint(dx); dy -= rint(dy); dz -= rint(dz);
                     const double x = dx * box[0] + dy * box[3] + dz * box[6];
@@ -333,13 +347,15 @@ void site_energies(const double* frac, const double* par, const int* group, cons
                     const double z = dx * box[2] + dy * box[5] + dz * box[8];
                     const double r2 = x * x + y * y + z * z;
                     if (r2 > r2max || r2 <= 0.0) continue;
-                    const double r = sqrt(r2);
-                    double e = coulomb * qi * par[5 * j] * (1.0 / r + k_rf * r2 - c_rf);
-                    const double eps = sqrt(ei * par[5 * j + 2]);
+                    const double inv_r = 1.0 / sqrt(r2);
+                    double e = coulomb * qi * par[5 * j] * (inv_r + k_rf * r2 - c_rf);
+                    const double eps = ei * par[5 * j + 2];          // the square roots of the two epsilon
                     if (eps > 0.0) {
-                        const double t = r / (0.5 * (si + par[5 * j + 1]));
-                        const double t2 = t * t;
-                        const double s = 1.0 / (par[5 * j + 3] + t2 * t2 * t2);
+                        const double sig = 0.5 * (si + par[5 * j + 1]);
+                        const double soft = par[5 * j + 3];
+                        double s;                                    // 1 / (soft + (r / sigma)^6)
+                        if (soft == 0.0) { const double a = sig * sig * inv_r * inv_r; s = a * a * a; }
+                        else { const double t2 = r2 / (sig * sig); s = 1.0 / (soft + t2 * t2 * t2); }
                         e += par[5 * j + 4] * 4.0 * eps * s * (s - 1.0);
                     }
                     total += e;
@@ -376,13 +392,13 @@ void poses_with_waters(const double* waters, const double* site_par, const doubl
                 const double z = dx * box[2] + dy * box[5] + dz * box[8];
                 const double r2 = x * x + y * y + z * z;
                 if (r2 > r2max || r2 <= 0.0) continue;
-                const double r = sqrt(r2);
-                double e = coulomb * site_par[3 * a] * site_par[3 * b] * (1.0 / r + k_rf * r2 - c_rf);
-                const double eps = sqrt(site_par[3 * a + 2] * site_par[3 * b + 2]);
+                const double inv_r = 1.0 / sqrt(r2);
+                double e = coulomb * site_par[3 * a] * site_par[3 * b] * (inv_r + k_rf * r2 - c_rf);
+                const double eps = site_par[3 * a + 2] * site_par[3 * b + 2];
                 if (eps > 0.0) {
-                    const double q = r / (0.5 * (site_par[3 * a + 1] + site_par[3 * b + 1]));
-                    const double q2 = q * q;
-                    const double s = 1.0 / (q2 * q2 * q2);
+                    const double sig = 0.5 * (site_par[3 * a + 1] + site_par[3 * b + 1]);
+                    const double q = sig * sig * inv_r * inv_r;
+                    const double s = q * q * q;
                     e += 4.0 * eps * s * (s - 1.0);
                 }
                 total += e;
@@ -399,6 +415,11 @@ class GpuStandIn:
     the same energy function in double precision, the atoms found through a grid of cells instead
     of a tree. One object per mover; :meth:`load` gives it the configuration of an attempt."""
 
+    #: cells of the grid per radius, and how far (in cells) the atoms within the radius can be
+    REACH = 2
+    #: what is added to the radius for the first measure of a pair, in single precision (nm)
+    NEAR_MARGIN_NM = 1e-3
+
     def __init__(self, spec: RelocationSpec, device: int) -> None:
         import cupy as cp
 
@@ -409,7 +430,9 @@ class GpuStandIn:
         group = np.full(len(spec.charge), -1, dtype=np.int32)
         group[waters] = np.arange(self.n_w, dtype=np.int32)[:, None]
         first = waters[0]
-        site_par = np.stack([spec.charge[first], spec.sigma[first], spec.epsilon[first]], axis=1).astype(np.float64)
+        # per site of a water: charge, sigma and the square root of epsilon
+        site_par = np.stack([spec.charge[first], spec.sigma[first], np.sqrt(spec.epsilon[first])],
+                            axis=1).astype(np.float64)
         with self.device:
             module = cp.RawModule(code=_CUDA_SOURCE)
             self.site_kernel = module.get_function("site_energies")
@@ -429,9 +452,11 @@ class GpuStandIn:
         inverse = np.linalg.inv(box)
         key = (float(lambda_electrostatics), float(lambda_sterics))
         if key not in self.parameters:
-            # per atom: charge, sigma, epsilon, the soft-core term and the factor of its Lennard-Jones
+            # per atom: charge, sigma, the square root of epsilon, the soft-core term and the factor
+            # of its Lennard-Jones
             par = np.empty((len(spec.charge), 5))
-            par[:, 0], par[:, 1], par[:, 2], par[:, 3], par[:, 4] = spec.charge, spec.sigma, spec.epsilon, 0.0, 1.0
+            par[:, 0], par[:, 1], par[:, 2] = spec.charge, spec.sigma, np.sqrt(spec.epsilon)
+            par[:, 3], par[:, 4] = 0.0, 1.0
             par[spec.ligand, 0] *= key[0]
             par[spec.ligand, 3] = float(spec.softcore_alpha) * (1.0 - key[1]) ** int(spec.softcore_b)
             par[spec.ligand, 4] = key[1]
@@ -442,6 +467,7 @@ class GpuStandIn:
         self.heights = cell_heights(box)
         with self.device:
             self.box, self.inverse = cp.asarray(box.ravel()), cp.asarray(inverse.ravel())
+            self.box32 = cp.asarray(box.ravel().astype(np.float32))
             self.positions = cp.asarray(np.ascontiguousarray(positions, dtype=np.float64))
             # x @ inverse, written out: no library but the kernels CuPy compiles itself is needed
             rows = cp.asarray(inverse)
@@ -453,16 +479,19 @@ class GpuStandIn:
         return self
 
     def _grid(self, radius_nm: float):
-        """The atoms sorted by the cells of a grid whose cells are at least ``radius_nm`` high."""
+        """The atoms sorted by the cells of a grid whose cells are at least ``radius_nm`` / REACH
+        high: (fractional coordinates, the same in single precision, parameters, water of each
+        atom, where the atoms of each cell start, cells per axis)."""
         if radius_nm not in self.grids:
             cp = self.cp
-            dims = np.maximum(1, np.floor(self.heights / float(radius_nm))).astype(np.int32)
+            dims = np.maximum(1, np.floor(self.heights * (self.REACH / float(radius_nm)))).astype(np.int32)
             n = cp.asarray(dims)
             cell = cp.minimum((self.frac * n).astype(cp.int32), n - 1)
             number = cell[:, 0] + int(dims[0]) * (cell[:, 1] + int(dims[1]) * cell[:, 2])
             order = cp.argsort(number)
             start = cp.searchsorted(number[order], cp.arange(int(dims.prod()) + 1, dtype=number.dtype))
-            self.grids[radius_nm] = (cp.ascontiguousarray(self.frac[order]), cp.ascontiguousarray(self.par[order]),
+            frac = cp.ascontiguousarray(self.frac[order])
+            self.grids[radius_nm] = (frac, frac.astype(cp.float32), cp.ascontiguousarray(self.par[order]),
                                      cp.ascontiguousarray(self.group[order]), start.astype(cp.int32), n)
         return self.grids[radius_nm]
 
@@ -472,12 +501,13 @@ class GpuStandIn:
         radius = float(radius_nm)
         k_rf = (DIELECTRIC - 1.0) / ((2.0 * DIELECTRIC + 1.0) * radius ** 3)
         c_rf = 3.0 * DIELECTRIC / ((2.0 * DIELECTRIC + 1.0) * radius)
-        frac, par, group, start, dims = self._grid(radius)
+        frac, near, par, group, start, dims = self._grid(radius)
         m = int(sites.shape[0])
         out = cp.empty(m, dtype=cp.float64)
         self.site_kernel(((m + 127) // 128,), (128,),
-                         (frac, par, group, start, dims, self.box, self.inverse, cp.ascontiguousarray(sites),
-                          cp.ascontiguousarray(site_par), own, np.float64(radius), np.float64(k_rf),
+                         (frac, near, par, group, start, dims, self.box, self.box32, self.inverse,
+                          cp.ascontiguousarray(sites), cp.ascontiguousarray(site_par), own, np.float64(radius),
+                          np.float32((radius + self.NEAR_MARGIN_NM) ** 2), np.int32(self.REACH), np.float64(k_rf),
                           np.float64(c_rf), np.float64(ONE_4PI_EPS0), np.int32(m), out))
         return out
 
@@ -618,6 +648,11 @@ class RelocationMover:
         replaced by the pose the water had, and its ``log_q_ratio`` is the negative."""
         spec, beta = self.spec, self.beta
         radius = float(spec.radius_nm)
+        if not (np.isfinite(x).all() and np.isfinite(box).all()):
+            # a configuration that is not finite (a simulation that failed): nothing is proposed from
+            # it, and what the run does about such a replica is not held up here (the draw of the
+            # anchors would not end: no point is at a distance from a centre that is not a number)
+            return None
         check_cell(box, radius, float(spec.cutoff_nm))            # the cell as it is now
         centre = self.centre(x, box)
         inside = self.inside(x, box)
@@ -647,7 +682,7 @@ class RelocationMover:
             local = nearest_image(x[atoms] - x[atoms[0]], box)
             anchors, anchor_inside = self._anchors(centre, box, p_in)
             rotations = random_rotations(self.rng, len(anchors))
-            poses = anchors[:, None, :] + np.einsum("kij,sj->ksi", rotations, local)
+            poses = anchors[:, None, :] + np.matmul(local, rotations.transpose(0, 2, 1))
         # the target region is the sphere, unless the move goes out of it
         in_target = np.asarray(anchor_inside, dtype=bool) != out
         if not in_target.any():

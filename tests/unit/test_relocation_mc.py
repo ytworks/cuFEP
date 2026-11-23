@@ -303,6 +303,20 @@ def test_one_move_is_attempted_for_every_interval_of_md():
     assert sum(attempts_due(iteration, 625, 6250) for iteration in range(100)) == 10
 
 
+def test_nothing_is_proposed_from_a_configuration_that_is_not_finite(water_ligand_system):
+    """A replica whose simulation failed has coordinates that are not numbers. No move is proposed
+    from them, at once: the draw of the anchors outside the sphere, which repeats until every
+    anchor is outside, would never end for a centre that is not a number, and the worker would
+    hang instead of reporting the replica (found on 2026-11-23, in a test run that did not end)."""
+    system, pos, box, ligand = water_ligand_system
+    mover = RelocationMover(water_spec(system, ligand, trial_poses=16), None, seed=2)
+    state = AlchemicalState(lambda_restraints=1.0, lambda_electrostatics=1.0, lambda_sterics=1.0)
+    broken = pos.copy()
+    broken[ligand[0]] = np.nan
+    assert mover.proposal(broken, box, state, True) is None and mover.proposal(broken, box, state, False) is None
+    assert mover.proposal(pos, box * np.nan, state, True) is None
+
+
 def test_a_cell_that_became_too_small_for_the_sphere_stops_the_moves(water_ligand_system):
     """The sphere and the cutoff are compared with the cell when the leg is built and again at
     every attempt, with the cell the Context has then: a barostat changes the cell, and in one
