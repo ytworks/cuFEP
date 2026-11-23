@@ -73,7 +73,7 @@ Open items:
   signed error -0.43 [-1.31, 0.41], RMSE after removing it 1.77 [1.16, 2.17], tau 0.20 [-0.12,
   0.48]; ligand by ligand +0.76 ± 0.51 from the run of e77a6c5. Water relocation moves (PR #10,
   default off): 4k -16.61 and ejm_49 -11.42 with them, inside the range of the runs without.
-  Running, one ligand at a time (the owner): whether E1 and E3 change the result of more ligands.
+  Running since 2026-11-23T12:17Z: both full sets again with the image of 41760a1 (the owner).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [progress] E1 and E3 verified ligand by ligand; the full benchmarks run again with E1 alone
+- What: E1 (the windows of a leg start from the walk): the complex legs of four A2A ligands
+  that the run of e77a6c5 had started one window from another, made again, kcal/mol: 4k -20.32
+  to -14.69 (mean of three), 4n -19.17 to -17.38, 4c -18.75 to -15.19, 4q -14.11 to -12.52; all
+  towards experiment, by 3.1 on average. E3 (the decoupled-side windows from the relaxed
+  decoupled end): the complex leg of ejm_49 changed by -5.65, that of 4k by +0.47 ± 0.63 (its
+  pocket does not close). The owner stopped both verifications there and decided: no remedy for
+  E3 in this plan; both full sets run again with E1 alone (image of 41760a1, the head of PR #9,
+  A2A first), to be compared with the run of e77a6c5. No result yet.
+- Why: the owner's order of 2026-11-23 (verify what had an effect, then end the session).
+- Refs: the plan ("E1 の検証", "E3 の検証"), `runs/acc_e1_a2a`, `runs/acc_e3_a2a_4k`, `runs/configs/chain_full_benchmarks_e1.sh` (untracked)
 
 ### 2026-11-23 — [progress] Water relocation moves, one whole calculation per ligand; what is verified next
 - What: with the moves (4096 trial poses, half of the anchors in the sphere), all eight GPUs,
