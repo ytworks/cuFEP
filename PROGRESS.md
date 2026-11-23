@@ -64,9 +64,9 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- The wiki pages (`docs/wiki/`, rewritten in PR #8) are not yet on the GitHub Wiki: it has no
-  page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
-  and the measurements that would separate the causes of cuFEP's larger errors.
+- Plan `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md` (in progress): `membrane.complex_leg`.
+- The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
+  the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9): of the remedies it
   tried, one changed results and is adopted, the walk as the one way of starting the windows
   (below). Not adopted, defaults unchanged: `alchemy.annihilate_electrostatics`,
@@ -111,6 +111,14 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [design] Plan: the bilayer for the MD of the restraint only, the complex leg in water
+- What: the owner's order. A setting `membrane.complex_leg: bilayer | water` (default `bilayer`,
+  the behaviour of today): with `water` the MD from which the restraint is chosen runs in the
+  bilayer and the alchemical run of the complex leg in water. To be run on the A2A set one ligand
+  at a time and compared with the run of e77a6c5 (the owner's decision). Not implemented yet.
+- Why: to see whether the bilayer in the alchemical run is behind the larger errors of A2A.
+- Refs: `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md`
 
 ### 2026-11-23 — [design] The accuracy plan is closed: the walk is the one way of starting the windows
 - What: the owner's decision. Adopted: `lambda_schedule.adaptive.start_configurations`, default
