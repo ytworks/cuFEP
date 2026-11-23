@@ -72,3 +72,18 @@ A2A のベンチマークで見る。
 - 単体テスト 714 passed、GPU テスト 26 passed(イメージ `cufep:dev`、作業ツリーのソース)。
   実物の二重層を作る準備は単体テストでは通していない(二重層の構築を置き換えたテストだけ)。
   設定を使った run はまだ無い。
+
+### 2026-11-23: 短い設定での確認(イメージ `cufep:a34bbe2`、4k、全 GPU)
+
+- `runs/a2a_water_smoke_a34bbe2`(二重層の平衡化 0.5 ns、拘束条件の MD 4 × 0.3 ns、窓あたりの
+  production 0.1 ns)。終了コード 0。数値は短すぎて結果ではない。
+- 準備が書いた系: `prep/complex.*` は 61,452 原子で脂質が無く(水 18,883 分子)、等方圧、
+  dodecahedron。`prep/complex_bilayer.*` は 73,275 原子で POPC 91 + 91。アンカーは 2 つの系で同じ番号
+  (この入力には結晶水が無く、リガンドの前の原子は消えない)。
+- レグの順番: 水中の平衡化、二重層の平衡化、拘束条件の MD 4 本(cuPotential)、拘束(ASN 253 との
+  水素結合)、水中の系で 30 窓の alchemical run。`restraint.json` に `md_system`、`start`、
+  `alchemical_start`。結果の `restraint_choice.md_system` は `complex_bilayer`、`bilayer` は二重層の
+  平衡化の数値。
+- 同じコマンドをもう一度: 何も計算し直さず、リガンドと両レグの `result.json`、`restraint.json`、
+  `equil.npz`、`restraint_equil.npz` は変わらない(sha256 が同じ)。`cufep analyze` は複合体レグの
+  結果と同じ値を出す(209.90 ± 2.68 kJ/mol)。
