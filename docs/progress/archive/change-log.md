@@ -5,6 +5,45 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-23 — [design] Water relocation moves in the complex leg (`sampling.relocation_mc`), default off
+- What: RelocationMC of Ding et al. (arXiv:2603.22274 v3), written from the paper: a whole water
+  is moved between a sphere around the ligand and the rest of the cell; the move, its acceptance
+  ratio and the velocities are the paper's. cuFEP's own: the energies of the trial poses and the
+  scores are a stand-in (Lennard-Jones and reaction-field Coulomb on the processor) and the
+  acceptance uses the potential energy of the Context in the state of the replica; the anchors
+  can be drawn with a share in the sphere (`inner_fraction`; default the paper's uniform draw);
+  any cell. Attempted in the replica exchange and in the precalculation; counted by window in the
+  result. Unit tests 725 passed, the three GPU tests of the moves passed. No calculation yet.
+- Why: step 4d of the plan; the owner's order of 2026-11-23 (implement it, then decide the rest).
+- Refs: `docs/protocol.md` ("Water relocation moves"), `docs/configuration.md`, branch `feat/relocation-mc`
+
+### 2026-11-23 — [progress] The owner's decisions after step 5; the TYK2 set with annihilated electrostatics started
+- What: the owner (2026-11-23): implement RelocationMC first and decide the rest by its result;
+  `membrane.equilibration_ns` stays 10 ns (100 ns is too long); no run with a softer distance
+  restraint and none with crystal waters; run the 16 TYK2 ligands once with
+  `alchemy.annihilate_electrostatics: true`; after RelocationMC, the control of E3 again with it.
+  Started: that TYK2 set, image of 41760a1, eight GPUs (`runs/acc_annihilate_tyk2_full`). No
+  result yet.
+- Why: step 6 of the plan (the owner decides the defaults and what is implemented next).
+- Refs: the plan, PR #9, `runs/configs/chain_acc_annihilate_tyk2_full.sh` (untracked)
+
+### 2026-11-23 — [amendment] Fourth review by Codex (93d42ee): two more paths of a given schedule
+- What: review 6016033556 (two P2), both fixed. With `--reschedule` a given file inside an
+  archive of the leg that was begun and not completed is refused too. A schedule a leg has
+  without start configurations gets the record of this leg before the walk through its windows.
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [amendment] Third review by Codex (6b1a609): a given schedule is read, not copied first
+- What: review 6015941311 (two P2), both fixed. A leg that is given its windows
+  (`lambda_schedule.file`) reads the schedule and writes its `schedule.yaml` with the start
+  configurations of the walk, not before it: a run stopped during the walk leaves no windows
+  that look like those of an earlier version, and the schedule names this leg. With
+  `--reschedule` only a file that is set aside is refused, not the one in `previous_<n>/`.
+  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
 ### 2026-11-23 — [amendment] Second review by Codex (8dc042e): the origin of windows, a given schedule of the leg itself
 - What: review 6015842320 (four P2); three fixed, one answered. `--reschedule` with
   `lambda_schedule.file` naming a file of the leg that is set aside is refused before anything is
