@@ -5,6 +5,41 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-23 — [progress] Accuracy plan, step 5: annihilated electrostatics, the squared soft-core, the control of E3
+- What: one run each on ejm_49 (experiment -7.75; the defaults three times: -11.84, -8.92, -9.40;
+  kcal/mol; everything else as the full run). `alchemy.annihilate_electrostatics`: -7.71 ± 0.41;
+  two torsions of the ligand that stayed as in the input are turned at the end in 23 and 17 of 36
+  complex windows and 16 and 11 of 17 solvent windows. `alchemy.softcore_b` 2 with alpha 1:
+  -8.78 ± 0.34 (40 and 24 windows). Control of E3, the first repeat's complex leg with its 7
+  windows of sterics 0.25 or less started from the decoupled end after 50 ns there: 35.26 ± 0.48
+  against 40.91 ± 0.36, the whole difference between sterics 0.30 and 0.10; it rises during the
+  production (halves 34.31, 36.23); binding free energy -3.28 ± 0.54. One run each: no cause is
+  established. Not finished: 4k with 100 ns of bilayer equilibration; that control to 10 ns.
+- Why: step 5 of the plan (one run per new setting; controls whose condition was met).
+- Refs: the plan ("手順 5 の結果"), `runs/acc_*` (untracked), `spikes/m25_*.py`
+
+### 2026-11-23 — [design] `analysis.detect_equilibration`: automatic equilibration detection as a setting
+- What: off by default. On, the analysis of a leg leaves out, after `sampling.equilibration_ns`,
+  the iterations before the time origin from which the effective energy has the most uncorrelated
+  samples (the rule of openmmtools, which OpenFE's protocols run); the free energy, its parts and
+  the numbers of the structure are of the rest, and the result records what was left out. Only
+  the start is taken from the detection; the samples are decorrelated window by window as before
+  (cuFEP's own). The analysis of the default is unchanged (version 10, the pinned numbers). Unit
+  tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: step 4e of the plan; what it does on the stored benchmark legs is in the entry below.
+- Refs: `docs/configuration.md` (basis), `docs/protocol.md`, `tests/unit/test_equilibration.py`
+
+### 2026-11-23 — [progress] Accuracy plan: equilibration detection on the stored legs, acceptance of water relocation
+- What: no run. Automatic equilibration detection (the rule of openmmtools) on the production of
+  the 66 stored legs of e77a6c5 leaves out 1.04 ns (TYK2) and 2.30 ns (A2A) of the complex leg on
+  average; kcal/mol: TYK2 mean signed error -1.20 to -1.29, RMSE after removing it 1.25 to 1.12,
+  Kendall tau 0.47 to 0.52; A2A -4.14 to -3.79, 2.68 to 2.73, 0.34 to 0.38. Water relocation
+  (Ding et al.) at the decoupled end of 4k, 200 trial moves each way, both tests of the rule (the
+  second with the energy of the simulation): accepted 0.012 into and 0.004 out of the sphere with
+  1024 trial poses, 0.046 and 0.010 with 4096. The control of E3 is defined and queued.
+- Why: steps 4e and 4d of the plan (measured before a setting is wired or a move implemented).
+- Refs: the plan ("手順 4e の評価と、E3 の対照の作り方"), `spikes/m21_*.py detect`, `spikes/m24_*.py`
+
 ### 2026-11-23 — [amendment] Review of the three settings: windows are held to the System they were made for
 - What: independent review of dd075d6..0815fd4 (five findings, each reproduced), and a second
   reader of the fix (none at that level; two lesser points closed). The start configurations
