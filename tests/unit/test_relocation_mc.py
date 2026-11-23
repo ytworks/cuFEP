@@ -9,10 +9,11 @@ import pytest
 from cufep.sampling.relocation_mc import (
     KB_KJ_PER_MOL_K,
     SCORE_RADIUS_NM,
+    RelocationError,
     RelocationMover,
     RelocationSpec,
     StandIn,
-    attempt_is_due,
+    attempts_due,
     random_rotations,
     sphere_radius,
 )
@@ -289,14 +290,37 @@ def test_a_water_that_is_moved_keeps_its_shape_and_the_velocity_of_its_centre_of
 
 
 def test_one_move_is_attempted_for_every_interval_of_md():
-    """A move is attempted after the MD of an iteration in which the trajectory of the replica
-    passed a multiple of the interval: with iterations of 625 steps and an interval of 1000 steps
-    (2.5 ps and 4 ps at 4 fs), 1000 attempts in 1600 iterations, never two in one, and the same
-    ones whatever iteration a leg is resumed at."""
-    due = [attempt_is_due(iteration, 625, 1000) for iteration in range(1600)]
-    assert sum(due) == 1000 and due[:5] == [False, True, False, True, True]
-    assert sum(attempt_is_due(iteration, 625, 250) for iteration in range(16)) == 16      # at most one each
-    assert sum(attempt_is_due(iteration, 625, 6250) for iteration in range(100)) == 10
+    """After the MD of an iteration one move is attempted for every multiple of the interval the
+    trajectory of the replica passed in it: with iterations of 625 steps and an interval of 1000
+    steps (2.5 ps and 4 ps at 4 fs), 1000 attempts in 1600 iterations, and the same ones whatever
+    iteration a leg is resumed at. An interval shorter than an iteration gives several attempts
+    after one iteration, as many as the setting says (review of 723b12f: it gave one, 16 where
+    10000 steps hold 40 intervals of 250)."""
+    due = [attempts_due(iteration, 625, 1000) for iteration in range(1600)]
+    assert sum(due) == 1000 and due[:5] == [0, 1, 0, 1, 1]
+    assert [attempts_due(iteration, 625, 250) for iteration in range(4)] == [2, 3, 2, 3]
+    assert sum(attempts_due(iteration, 625, 250) for iteration in range(16)) == 40
+    assert sum(attempts_due(iteration, 625, 6250) for iteration in range(100)) == 10
+
+
+def test_a_cell_that_became_too_small_for_the_sphere_stops_the_moves(water_ligand_system):
+    """The sphere and the cutoff are compared with the cell when the leg is built and again at
+    every attempt, with the cell the Context has then: a barostat changes the cell, and in one
+    whose smallest height is no more than twice the radius the nearest image of a water no longer
+    decides its region. The attempt stops with the reason (review of 723b12f: only the cell the
+    leg was built with was compared)."""
+    system, pos, box, ligand = water_ligand_system
+    height = float(np.linalg.norm(box[0]))
+    spec = water_spec(system, ligand, radius_nm=0.49 * height, trial_poses=16)
+    context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("CPU"), {"Threads": "1"})
+    context.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    context.setPositions(pos)
+    mover = RelocationMover(spec, context, seed=3)
+    state = AlchemicalState(lambda_restraints=1.0, lambda_electrostatics=1.0, lambda_sterics=1.0)
+    assert mover.attempt(state)["direction"] in ("in", "out")
+    context.setPeriodicBoxVectors(*[mm.Vec3(*(0.97 * np.asarray(r))) for r in box])
+    with pytest.raises(RelocationError, match="not less than half the smallest height of the cell"):
+        mover.attempt(state)
 
 
 def test_the_radius_of_the_sphere_is_that_of_the_paper():
@@ -353,6 +377,15 @@ def test_a_leg_with_the_moves_stores_them_by_window_and_goes_on_after_a_stop(tmp
     assert sum(numbers["accepted_into_the_sphere"]) == int(samples["relocations"][2:, :, 1].sum())
     # samples without the moves have no such numbers
     assert relocation_numbers({"u": samples["u"]}, 0) is None
+    # an interval shorter than an iteration (5 steps in 10): two moves of every replica after each
+    from dataclasses import replace
+
+    short = replace(spec, name="short", relocation=water_spec(system, ligand, trial_poses=32, interval_ps=0.01))
+    with ReplicaExchangeSampler(short, tmp_path / "short", devices=[None], inline=True, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(2, record_stride=1, checkpoint_stride=2)
+    moves = read_samples(tmp_path / "short")["relocations"]
+    assert (moves[:, :, 0] + moves[:, :, 2] == 2).all()
 
 
 def test_the_moves_are_recorded_with_the_samples_of_the_leg_that_makes_them():

@@ -10,9 +10,9 @@ samples; a Context made as a worker of the run makes its own, in the state of on
 configuration that window started from. For each setting (trial poses : share of the anchors drawn
 in the sphere, none = uniform in the whole cell as in the paper) ``--moves`` moves are attempted,
 each from that same configuration (an accepted move is undone), so that the numbers are those of
-independent attempts: the share accepted in each direction, and the processor time of the proposal
-(the stand-in energies, NumPy and SciPy on one core; the two evaluations of the potential energy
-of the simulation are not timed).
+independent attempts: the share accepted in each direction, and the time of the proposal (the
+stand-in energies: on the CUDA device of the Context with CuPy, else NumPy and SciPy on the
+processor; the two evaluations of the potential energy of the simulation are not timed).
 """
 from __future__ import annotations
 
@@ -97,9 +97,9 @@ def main() -> None:
         seconds = []
         for _ in range(n_moves):
             # the proposal alone, timed on the processor; then the move as the package makes it
-            t0 = time.process_time()
+            t0 = time.perf_counter()
             mover.proposal(x0, box, state, bool(mover.rng.random() < 0.5))
-            seconds.append(time.process_time() - t0)
+            seconds.append(time.perf_counter() - t0)
             move = mover.attempt(state)
             counts[move["direction"]][0] += 1
             counts[move["direction"]][1] += int(move["accepted"])
@@ -109,12 +109,12 @@ def main() -> None:
         row = {"waters_in_the_sphere": inside, "radius_nm": relocation.radius_nm,
                "attempted_in": counts["in"][0], "accepted_in": counts["in"][1],
                "attempted_out": counts["out"][0], "accepted_out": counts["out"][1],
-               "proposal_cpu_seconds_median": float(np.median(seconds))}
+               "trial_energies_on": mover.engine, "proposal_seconds_median": float(np.median(seconds))}
         result["settings"][item] = row
         print(f"  trial poses {poses}, share in the sphere {fraction}: sphere of {relocation.radius_nm:.3f} nm with "
               f"{inside} waters; into the sphere {counts['in'][1]} of {counts['in'][0]} accepted, out of it "
-              f"{counts['out'][1]} of {counts['out'][0]}; proposal {np.median(seconds):.2f} s of processor time "
-              "(median)", flush=True)
+              f"{counts['out'][1]} of {counts['out'][0]}; proposal {1000 * np.median(seconds):.1f} ms (median, trial "
+              f"energies on {mover.engine})", flush=True)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / f"{ligand}_window{k}.json").write_text(json.dumps(result, indent=1))
 

@@ -506,9 +506,12 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                 starts.append(_snapshot(context))
             run_from(todo, starts)
         else:                                             # first iteration: each from the end of the one before
+            # run where every other window is run (a pool, if there is one): its workers make the
+            # water relocation moves of a window (review of 723b12f: these windows ran in the
+            # Context of the leg, which has no mover when a pool has them)
             config = start
             for nd in todo:
-                runs[nd] = run_window(context, integrator, task_for(nd, config), **moves)
+                run_from([nd], [config])
                 config = runs[nd]["config"]
 
     def total_windows() -> int:

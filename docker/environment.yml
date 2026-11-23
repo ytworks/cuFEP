@@ -31,6 +31,11 @@ dependencies:
   # (restraints.selection: interactions); ProLIF reads the frames through MDAnalysis
   - prolif=2.2.3
   - mdanalysis=2.11.*
+  # the trial energies of the water relocation moves on the GPU (sampling.relocation_mc): CuPy
+  # compiles its kernels with NVRTC, which OpenMM brings, and needs the headers of the CUDA runtime
+  - cupy-core=14.2.*
+  - cuda-cudart-dev
+  - cuda-cccl
   # development / tests
   - pytest
   - pip

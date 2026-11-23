@@ -527,6 +527,51 @@ def moves_leg():
     return alch, schedule, pos, box, ligand, relocation
 
 
+def test_the_trial_energies_on_the_gpu_are_those_of_the_processor(moves_leg):
+    """The numbers a proposal needs (the scores of all waters, the energies of the trial poses at
+    the cutoff and at the radius of the scores, the energy of a pose with every other water) come
+    from kernels on the CUDA device of the Context; the NumPy stand-in is the reference. Both are
+    the same function in double precision, so they agree to rounding: in a triclinic cell, with
+    the ligand at intermediate lambda values, for poses anywhere in the cell. A mover on a CUDA
+    Context uses the device, and then makes the proposal the processor makes from the same random
+    numbers."""
+    import openmm.unit as u
+
+    from cufep.sampling.relocation_mc import SCORE_RADIUS_NM, GpuStandIn, RelocationMover, StandIn, random_rotations
+
+    alch, schedule, pos, box, _ligand, relocation = moves_leg
+    pos = np.asarray(pos, dtype=float)
+    box = np.asarray(box, dtype=float) + np.array([[0.0, 0.0, 0.0], [0.6, 0.0, 0.0], [0.3, 0.5, 0.0]])
+    rng = np.random.default_rng(5)
+    moved = 11
+    atoms = relocation.waters[moved]
+    local = pos[atoms] - pos[atoms[0]]
+    poses = (rng.random((512, 3)) @ box)[:, None, :] + np.einsum("kij,sj->ksi", random_rotations(rng, 512), local)
+    gpu = GpuStandIn(relocation, 0)
+    for lambda_electrostatics, lambda_sterics in ((1.0, 1.0), (0.4, 1.0), (0.0, 0.3)):
+        reference = StandIn(relocation, pos, box, lambda_electrostatics, lambda_sterics)
+        device = gpu.load(pos, box, lambda_electrostatics, lambda_sterics)
+        for a, b in ((reference.scores(), device.scores()),
+                     (reference.pose_energies(poses, moved, relocation.cutoff_nm),
+                      device.pose_energies(poses, moved, relocation.cutoff_nm)),
+                     (reference.pose_energies(poses[:32], moved, SCORE_RADIUS_NM),
+                      device.pose_energies(poses[:32], moved, SCORE_RADIUS_NM)),
+                     (reference.with_waters(poses[:2], moved), device.with_waters(poses[:2], moved))):
+            assert a.shape == b.shape and np.isfinite(a).all()
+            assert np.allclose(a, b, rtol=1e-9, atol=1e-9)
+    # a mover on a CUDA Context computes on the device, and its proposal is that of the processor
+    backend = get_backend("openmm")
+    ctx = backend.make_context(backend.prepare_system(alch.system),
+                               backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
+    state = schedule.states[2]
+    on_device, on_processor = RelocationMover(relocation, ctx, seed=9), RelocationMover(relocation, None, seed=9)
+    assert on_device.engine == "the GPU of the Context" and on_processor.engine == "the processor"
+    for out in (False, True, False, True):
+        a, b = on_device.proposal(pos, box, state, out), on_processor.proposal(pos, box, state, out)
+        assert a["moved"] == b["moved"] and a["chosen"] == b["chosen"]
+        assert a["log_q_ratio"] == pytest.approx(b["log_q_ratio"], rel=1e-9, abs=1e-9)
+
+
 @needs_plugin
 def test_the_energy_change_of_a_relocated_water_agrees_between_the_backends(moves_leg):
     """The acceptance of a water relocation move needs one number of the backend: the change of

@@ -51,9 +51,9 @@ Where the paper is silent or this module differs (cuFEP's own)
 - The paper names neither the point of a water that is put on an anchor nor the one that decides
   its region: the oxygen here, for both. The two directions are chosen with probability 1/2.
 - The cell can be triclinic (the paper's kernel needs an orthorhombic one).
-- When a move is attempted (``attempt_is_due``): the paper attempts one every 1000 MD steps (4 ps);
-  here one is attempted at the end of the MD of an iteration during which a multiple of
-  ``interval_ps`` was passed, the same number of attempts.
+- When a move is attempted (``attempts_due``): the paper attempts one every 1000 MD steps (4 ps);
+  here one is attempted, at the end of the MD of an iteration, for every multiple of
+  ``interval_ps`` that was passed during it: the same number of attempts.
 """
 from __future__ import annotations
 
@@ -74,12 +74,15 @@ SCORE_RADIUS_NM = 0.5
 OUT_PROBABILITY = 0.5
 
 
-def attempt_is_due(iteration: int, steps_per_iteration: int, interval_steps: int) -> bool:
-    """Whether a move is attempted after the MD of ``iteration`` (counted from 0): if a multiple of
-    ``interval_steps`` MD steps of the replica's trajectory was passed during it. A function of
-    the iteration alone, so that a leg that is resumed attempts its moves where it would have."""
+def attempts_due(iteration: int, steps_per_iteration: int, interval_steps: int) -> int:
+    """How many moves are attempted after the MD of ``iteration`` (counted from 0): one for every
+    multiple of ``interval_steps`` MD steps of the replica's trajectory that was passed during it,
+    so that the number of attempts is that of the interval whatever the length of an iteration
+    (review of 723b12f: with an interval shorter than an iteration only one move was attempted
+    per iteration, fewer than the setting says). A function of the iteration alone, so that a
+    leg that is resumed attempts its moves where it would have."""
     before, after = int(iteration) * int(steps_per_iteration), (int(iteration) + 1) * int(steps_per_iteration)
-    return after // int(interval_steps) > before // int(interval_steps)
+    return after // int(interval_steps) - before // int(interval_steps)
 
 
 def random_rotations(rng: np.random.Generator, n: int) -> np.ndarray:
@@ -119,6 +122,15 @@ class RelocationSpec:
     trial_poses: int
     inner_fraction: float | None  # None: anchors uniform in the whole cell (the paper)
     interval_ps: float
+
+
+def image_within_half_a_cell(delta: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """The image of every difference vector whose fractional components are all within a half. It
+    is the nearest image whenever the nearest one is shorter than half the smallest height of the
+    cell, so a distance compared with a radius that :func:`check_cell` has passed is decided
+    rightly by it (the kernels of :class:`GpuStandIn` use the same rule)."""
+    frac = np.asarray(delta, dtype=float) @ np.linalg.inv(box)
+    return (frac - np.rint(frac)) @ box
 
 
 def cell_heights(box: np.ndarray) -> np.ndarray:
@@ -185,6 +197,9 @@ class StandIn:
 
     def __init__(self, spec: RelocationSpec, positions: np.ndarray, box: np.ndarray, lambda_electrostatics: float,
                  lambda_sterics: float) -> None:
+        self.spec = spec
+        self.positions = np.asarray(positions, dtype=float)
+        self.set_groups(len(self.positions), np.asarray(spec.waters))
         self.environment = Environment(positions, box, spec.cutoff_nm)
         self.charge = np.array(spec.charge, dtype=float)
         self.charge[spec.ligand] *= float(lambda_electrostatics)
@@ -243,6 +258,275 @@ class StandIn:
         self.group = np.full(n_atoms, -1, dtype=np.int64)
         self.group[waters] = np.arange(len(waters))[:, None]
 
+    # -- what a proposal needs (the same three numbers from :class:`GpuStandIn`) ---------------------
+    def _site_parameters(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        first = np.asarray(self.spec.waters)[0]
+        return self.spec.charge[first], self.spec.sigma[first], self.spec.epsilon[first]
+
+    def scores(self) -> np.ndarray:
+        """The score of every water: its energy with everything else within the radius of the
+        scores."""
+        waters = np.asarray(self.spec.waters)
+        n_w, n_s = waters.shape
+        q, sigma, epsilon = self._site_parameters()
+        per_site = self.energies(self.positions[waters.reshape(-1)], np.tile(q, n_w), np.tile(sigma, n_w),
+                                 np.tile(epsilon, n_w), SCORE_RADIUS_NM, own=np.repeat(np.arange(n_w), n_s))
+        return per_site.reshape(n_w, n_s).sum(axis=1)
+
+    def pose_energies(self, poses: np.ndarray, moved: int, radius_nm: float) -> np.ndarray:
+        """The energy of a water in each of ``poses`` (number, sites, 3) with everything within
+        ``radius_nm`` but the atoms of the water ``moved``, whose poses they are."""
+        k, n_s = len(poses), np.asarray(self.spec.waters).shape[1]
+        q, sigma, epsilon = self._site_parameters()
+        atoms = np.asarray(self.spec.waters)[int(moved)]
+        return self.energies(np.asarray(poses, dtype=float).reshape(-1, 3), np.tile(q, k), np.tile(sigma, k),
+                             np.tile(epsilon, k), float(radius_nm), skip=atoms).reshape(k, n_s).sum(axis=1)
+
+    def with_waters(self, poses: np.ndarray, moved: int) -> np.ndarray:
+        """(pose, water): the energy of the water ``moved`` in each of ``poses`` with every other
+        water within the radius of the scores (0 with itself)."""
+        q, sigma, epsilon = self._site_parameters()
+        atoms = np.asarray(self.spec.waters)[int(moved)]
+        return np.stack([self.by_water(pose, q, sigma, epsilon, SCORE_RADIUS_NM, skip=atoms) for pose in poses])
+
+
+#: the kernels of :class:`GpuStandIn` (CUDA C, double precision). The atoms of the configuration are
+#: sorted by the cell of a grid whose cells are at least the radius high, so that everything within
+#: the radius of a point is in its cell and the cells next to it. Fractional coordinates: the image
+#: of a difference with all three components within a half is the nearest one whenever the distance
+#: is less than half the smallest height of the cell, which :func:`check_cell` holds the radius to.
+_CUDA_SOURCE = r"""
+extern "C" __global__
+void site_energies(const double* frac, const double* par, const int* group, const int* cell_start,
+                   const int* dims, const double* box, const double* inv, const double* sites,
+                   const double* site_par, const int* own, const double radius, const double k_rf,
+                   const double c_rf, const double coulomb, const int m, double* out)
+{
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i >= m) return;
+    double f[3];
+    int c[3], first[3], count[3];
+    for (int d = 0; d < 3; ++d) {
+        f[d] = sites[3 * i] * inv[d] + sites[3 * i + 1] * inv[3 + d] + sites[3 * i + 2] * inv[6 + d];
+        f[d] -= floor(f[d]);
+        c[d] = min((int)(f[d] * dims[d]), dims[d] - 1);
+        count[d] = min(3, dims[d]);
+        first[d] = dims[d] >= 3 ? -1 : 0;
+    }
+    const double qi = site_par[3 * i], si = site_par[3 * i + 1], ei = site_par[3 * i + 2];
+    const double r2max = radius * radius;
+    const int mine = own[i];
+    double total = 0.0;
+    for (int a = 0; a < count[0]; ++a) {
+        const int cx = (c[0] + first[0] + a + dims[0]) % dims[0];
+        for (int b = 0; b < count[1]; ++b) {
+            const int cy = (c[1] + first[1] + b + dims[1]) % dims[1];
+            for (int g = 0; g < count[2]; ++g) {
+                const int cz = (c[2] + first[2] + g + dims[2]) % dims[2];
+                const int cell = cx + dims[0] * (cy + dims[1] * cz);
+                for (int j = cell_start[cell]; j < cell_start[cell + 1]; ++j) {
+                    if (mine >= 0 && group[j] == mine) continue;
+                    double dx = frac[3 * j] - f[0], dy = frac[3 * j + 1] - f[1], dz = frac[3 * j + 2] - f[2];
+                    dx -= rint(dx); dy -= rint(dy); dz -= rint(dz);
+                    const double x = dx * box[0] + dy * box[3] + dz * box[6];
+                    const double y = dx * box[1] + dy * box[4] + dz * box[7];
+                    const double z = dx * box[2] + dy * box[5] + dz * box[8];
+                    const double r2 = x * x + y * y + z * z;
+                    if (r2 > r2max || r2 <= 0.0) continue;
+                    const double r = sqrt(r2);
+                    double e = coulomb * qi * par[5 * j] * (1.0 / r + k_rf * r2 - c_rf);
+                    const double eps = sqrt(ei * par[5 * j + 2]);
+                    if (eps > 0.0) {
+                        const double t = r / (0.5 * (si + par[5 * j + 1]));
+                        const double t2 = t * t;
+                        const double s = 1.0 / (par[5 * j + 3] + t2 * t2 * t2);
+                        e += par[5 * j + 4] * 4.0 * eps * s * (s - 1.0);
+                    }
+                    total += e;
+                }
+            }
+        }
+    }
+    out[i] = total;
+}
+
+extern "C" __global__
+void poses_with_waters(const double* waters, const double* site_par, const double* poses, const double* box,
+                       const double* inv, const double radius, const double k_rf, const double c_rf,
+                       const double coulomb, const int n_w, const int n_s, const int n_p, const int skip,
+                       double* out)
+{
+    const int t = blockDim.x * blockIdx.x + threadIdx.x;
+    if (t >= n_w * n_p) return;
+    const int p = t / n_w, w = t % n_w;
+    double total = 0.0;
+    if (w != skip) {
+        const double r2max = radius * radius;
+        for (int a = 0; a < n_s; ++a) {
+            const double* pa = poses + 3 * (p * n_s + a);
+            for (int b = 0; b < n_s; ++b) {
+                const double* wb = waters + 3 * (w * n_s + b);
+                const double ux = wb[0] - pa[0], uy = wb[1] - pa[1], uz = wb[2] - pa[2];
+                double dx = ux * inv[0] + uy * inv[3] + uz * inv[6];
+                double dy = ux * inv[1] + uy * inv[4] + uz * inv[7];
+                double dz = ux * inv[2] + uy * inv[5] + uz * inv[8];
+                dx -= rint(dx); dy -= rint(dy); dz -= rint(dz);
+                const double x = dx * box[0] + dy * box[3] + dz * box[6];
+                const double y = dx * box[1] + dy * box[4] + dz * box[7];
+                const double z = dx * box[2] + dy * box[5] + dz * box[8];
+                const double r2 = x * x + y * y + z * z;
+                if (r2 > r2max || r2 <= 0.0) continue;
+                const double r = sqrt(r2);
+                double e = coulomb * site_par[3 * a] * site_par[3 * b] * (1.0 / r + k_rf * r2 - c_rf);
+                const double eps = sqrt(site_par[3 * a + 2] * site_par[3 * b + 2]);
+                if (eps > 0.0) {
+                    const double q = r / (0.5 * (site_par[3 * a + 1] + site_par[3 * b + 1]));
+                    const double q2 = q * q;
+                    const double s = 1.0 / (q2 * q2 * q2);
+                    e += 4.0 * eps * s * (s - 1.0);
+                }
+                total += e;
+            }
+        }
+    }
+    out[t] = total;
+}
+"""
+
+
+class GpuStandIn:
+    """The numbers of :class:`StandIn` that a proposal needs, computed on a CUDA device with CuPy:
+    the same energy function in double precision, the atoms found through a grid of cells instead
+    of a tree. One object per mover; :meth:`load` gives it the configuration of an attempt."""
+
+    def __init__(self, spec: RelocationSpec, device: int) -> None:
+        import cupy as cp
+
+        self.cp, self.spec = cp, spec
+        self.device = cp.cuda.Device(int(device))
+        waters = np.asarray(spec.waters)
+        self.n_w, self.n_s = waters.shape
+        group = np.full(len(spec.charge), -1, dtype=np.int32)
+        group[waters] = np.arange(self.n_w, dtype=np.int32)[:, None]
+        first = waters[0]
+        site_par = np.stack([spec.charge[first], spec.sigma[first], spec.epsilon[first]], axis=1).astype(np.float64)
+        with self.device:
+            module = cp.RawModule(code=_CUDA_SOURCE)
+            self.site_kernel = module.get_function("site_energies")
+            self.water_kernel = module.get_function("poses_with_waters")
+            self.group = cp.asarray(group)
+            self.site_par = cp.asarray(site_par)
+            self.water_index = cp.asarray(waters.reshape(-1).astype(np.int64))
+            self.score_par = cp.asarray(np.tile(site_par, (self.n_w, 1)))
+            self.score_own = cp.asarray(np.repeat(np.arange(self.n_w, dtype=np.int32), self.n_s))
+        self.parameters = {}                     # by (lambda_electrostatics, lambda_sterics): on the device
+
+    def load(self, positions: np.ndarray, box: np.ndarray, lambda_electrostatics: float,
+             lambda_sterics: float) -> GpuStandIn:
+        """The configuration and the alchemical state the next numbers are of."""
+        cp, spec = self.cp, self.spec
+        box = np.asarray(box, dtype=np.float64)
+        inverse = np.linalg.inv(box)
+        key = (float(lambda_electrostatics), float(lambda_sterics))
+        if key not in self.parameters:
+            # per atom: charge, sigma, epsilon, the soft-core term and the factor of its Lennard-Jones
+            par = np.empty((len(spec.charge), 5))
+            par[:, 0], par[:, 1], par[:, 2], par[:, 3], par[:, 4] = spec.charge, spec.sigma, spec.epsilon, 0.0, 1.0
+            par[spec.ligand, 0] *= key[0]
+            par[spec.ligand, 3] = float(spec.softcore_alpha) * (1.0 - key[1]) ** int(spec.softcore_b)
+            par[spec.ligand, 4] = key[1]
+            if len(self.parameters) >= 128:      # a worker has the states of one leg: far fewer
+                self.parameters.clear()
+            with self.device:
+                self.parameters[key] = cp.asarray(par)
+        self.heights = cell_heights(box)
+        with self.device:
+            self.box, self.inverse = cp.asarray(box.ravel()), cp.asarray(inverse.ravel())
+            self.positions = cp.asarray(np.ascontiguousarray(positions, dtype=np.float64))
+            # x @ inverse, written out: no library but the kernels CuPy compiles itself is needed
+            rows = cp.asarray(inverse)
+            frac = (self.positions[:, 0:1] * rows[0] + self.positions[:, 1:2] * rows[1]
+                    + self.positions[:, 2:3] * rows[2])
+            self.frac = frac - cp.floor(frac)
+            self.par = self.parameters[key]
+            self.grids = {}
+        return self
+
+    def _grid(self, radius_nm: float):
+        """The atoms sorted by the cells of a grid whose cells are at least ``radius_nm`` high."""
+        if radius_nm not in self.grids:
+            cp = self.cp
+            dims = np.maximum(1, np.floor(self.heights / float(radius_nm))).astype(np.int32)
+            n = cp.asarray(dims)
+            cell = cp.minimum((self.frac * n).astype(cp.int32), n - 1)
+            number = cell[:, 0] + int(dims[0]) * (cell[:, 1] + int(dims[1]) * cell[:, 2])
+            order = cp.argsort(number)
+            start = cp.searchsorted(number[order], cp.arange(int(dims.prod()) + 1, dtype=number.dtype))
+            self.grids[radius_nm] = (cp.ascontiguousarray(self.frac[order]), cp.ascontiguousarray(self.par[order]),
+                                     cp.ascontiguousarray(self.group[order]), start.astype(cp.int32), n)
+        return self.grids[radius_nm]
+
+    def _sites(self, sites, site_par, own, radius_nm: float):
+        """Energy of every site with all atoms within ``radius_nm`` but those of the water ``own``."""
+        cp = self.cp
+        radius = float(radius_nm)
+        k_rf = (DIELECTRIC - 1.0) / ((2.0 * DIELECTRIC + 1.0) * radius ** 3)
+        c_rf = 3.0 * DIELECTRIC / ((2.0 * DIELECTRIC + 1.0) * radius)
+        frac, par, group, start, dims = self._grid(radius)
+        m = int(sites.shape[0])
+        out = cp.empty(m, dtype=cp.float64)
+        self.site_kernel(((m + 127) // 128,), (128,),
+                         (frac, par, group, start, dims, self.box, self.inverse, cp.ascontiguousarray(sites),
+                          cp.ascontiguousarray(site_par), own, np.float64(radius), np.float64(k_rf),
+                          np.float64(c_rf), np.float64(ONE_4PI_EPS0), np.int32(m), out))
+        return out
+
+    def scores(self) -> np.ndarray:
+        with self.device:
+            per_site = self._sites(self.positions[self.water_index], self.score_par, self.score_own, SCORE_RADIUS_NM)
+            return self.cp.asnumpy(per_site.reshape(self.n_w, self.n_s).sum(axis=1))
+
+    def pose_energies(self, poses: np.ndarray, moved: int, radius_nm: float) -> np.ndarray:
+        cp = self.cp
+        k = len(poses)
+        with self.device:
+            sites = cp.asarray(np.ascontiguousarray(poses, dtype=np.float64).reshape(-1, 3))
+            own = cp.full(k * self.n_s, int(moved), dtype=cp.int32)
+            per_site = self._sites(sites, cp.tile(self.site_par, (k, 1)), own, radius_nm)
+            return cp.asnumpy(per_site.reshape(k, self.n_s).sum(axis=1))
+
+    def with_waters(self, poses: np.ndarray, moved: int) -> np.ndarray:
+        cp = self.cp
+        k = len(poses)
+        radius = float(SCORE_RADIUS_NM)
+        k_rf = (DIELECTRIC - 1.0) / ((2.0 * DIELECTRIC + 1.0) * radius ** 3)
+        c_rf = 3.0 * DIELECTRIC / ((2.0 * DIELECTRIC + 1.0) * radius)
+        with self.device:
+            out = cp.empty(k * self.n_w, dtype=cp.float64)
+            self.water_kernel(((k * self.n_w + 127) // 128,), (128,),
+                              (cp.ascontiguousarray(self.positions[self.water_index]), self.site_par,
+                               cp.asarray(np.ascontiguousarray(poses, dtype=np.float64).reshape(-1, 3)), self.box,
+                               self.inverse, np.float64(radius), np.float64(k_rf), np.float64(c_rf),
+                               np.float64(ONE_4PI_EPS0), np.int32(self.n_w), np.int32(self.n_s), np.int32(k),
+                               np.int32(int(moved)), out))
+            return cp.asnumpy(out.reshape(k, self.n_w))
+
+
+def gpu_stand_in(spec: RelocationSpec, context) -> GpuStandIn | None:
+    """The stand-in on the CUDA device of ``context``, or None where there is none (another
+    platform, or an environment without CuPy): the NumPy stand-in is used then, which gives the
+    same numbers on the processor and is much slower."""
+    if context is None:                          # a mover that only makes proposals
+        return None
+    platform = context.getPlatform()
+    if platform.getName() != "CUDA":
+        return None
+    try:
+        import cupy  # noqa: F401
+    except ImportError:
+        return None
+    return GpuStandIn(spec, int(platform.getPropertyValue(context, "DeviceIndex").split(",")[0]))
+
 
 def logsumexp(values: np.ndarray) -> float:
     values = np.asarray(values, dtype=float)
@@ -268,6 +552,14 @@ class RelocationMover:
             raise ValueError("inner_fraction is a number between 0 and 1, or none")
         if SCORE_RADIUS_NM > spec.cutoff_nm:
             raise ValueError("the cutoff is shorter than the radius of the scores")
+        # where the stand-in energies are computed: the CUDA device of the Context, else the processor
+        self.gpu = gpu_stand_in(spec, context)
+        self.engine = "the GPU of the Context" if self.gpu is not None else "the processor"
+
+    def _stand_in(self, x: np.ndarray, box: np.ndarray, state):
+        if self.gpu is not None:
+            return self.gpu.load(x, box, state.lambda_electrostatics, state.lambda_sterics)
+        return StandIn(self.spec, x, box, state.lambda_electrostatics, state.lambda_sterics)
 
     # -- the potential energy of the simulation ------------------------------------------------------
     def _potential(self, positions: np.ndarray | None = None) -> float:
@@ -293,7 +585,7 @@ class RelocationMover:
         todo = np.flatnonzero(~inner)
         while len(todo):
             trial = self.rng.random((len(todo), 3)) @ box
-            outside = np.linalg.norm(nearest_image(trial - centre, box), axis=1) >= radius
+            outside = np.linalg.norm(image_within_half_a_cell(trial - centre, box), axis=1) >= radius
             anchors[todo[outside]] = trial[outside]
             todo = todo[~outside]
         return anchors, inner
@@ -306,7 +598,7 @@ class RelocationMover:
 
     def inside(self, x: np.ndarray, box: np.ndarray) -> np.ndarray:
         """Whether each water is in the sphere: by its oxygen."""
-        distance = np.linalg.norm(nearest_image(x[self.waters[:, 0]] - self.centre(x, box), box), axis=1)
+        distance = np.linalg.norm(image_within_half_a_cell(x[self.waters[:, 0]] - self.centre(x, box), box), axis=1)
         return distance < float(self.spec.radius_nm)
 
     def proposal(self, x: np.ndarray, box: np.ndarray, state, out: bool, moved: int | None = None,
@@ -326,6 +618,7 @@ class RelocationMover:
         replaced by the pose the water had, and its ``log_q_ratio`` is the negative."""
         spec, beta = self.spec, self.beta
         radius = float(spec.radius_nm)
+        check_cell(box, radius, float(spec.cutoff_nm))            # the cell as it is now
         centre = self.centre(x, box)
         inside = self.inside(x, box)
         source, target = (inside, ~inside) if out else (~inside, inside)
@@ -337,14 +630,9 @@ class RelocationMover:
         log_h_in, log_h_out = np.log(p_in / v_in), np.log((1.0 - p_in) / (volume - v_in))
         log_h_source, log_h_target = (log_h_in, log_h_out) if out else (log_h_out, log_h_in)
 
-        energy = StandIn(spec, x, box, state.lambda_electrostatics, state.lambda_sterics)
-        energy.set_groups(len(x), self.waters)
-        q, sigma, epsilon = spec.charge[self.waters[0]], spec.sigma[self.waters[0]], spec.epsilon[self.waters[0]]
-        n_w, n_s = self.waters.shape
+        energy = self._stand_in(x, box, state)
         # the scores of all waters in x: the interaction of each with everything else
-        per_site = energy.energies(x[self.waters.reshape(-1)], np.tile(q, n_w), np.tile(sigma, n_w),
-                                   np.tile(epsilon, n_w), SCORE_RADIUS_NM, own=np.repeat(np.arange(n_w), n_s))
-        score = per_site.reshape(n_w, n_s).sum(axis=1)
+        score = energy.scores()
         log_z_source = logsumexp(beta * score[source])
         if moved is None:
             members = np.flatnonzero(source)
@@ -364,10 +652,9 @@ class RelocationMover:
         in_target = np.asarray(anchor_inside, dtype=bool) != out
         if not in_target.any():
             return None
-        k = len(poses)
-        trial = energy.energies(poses.reshape(-1, 3), np.tile(q, k), np.tile(sigma, k), np.tile(epsilon, k),
-                                spec.cutoff_nm, skip=atoms).reshape(k, n_s).sum(axis=1)
-        u_own = float(energy.energies(x[atoms], q, sigma, epsilon, spec.cutoff_nm, skip=atoms).sum())
+        # the energies of the K poses and of the pose D has, in one computation
+        trial = energy.pose_energies(np.concatenate([poses, x[atoms][None]]), moved, spec.cutoff_nm)
+        trial, u_own = trial[:-1], float(trial[-1])
         log_w_forward = logsumexp(-beta * trial[in_target]) - log_h_target
         if not np.isfinite(log_w_forward):
             return None
@@ -385,10 +672,9 @@ class RelocationMover:
         y = x.copy()
         y[atoms] = poses[chosen]
         others = np.flatnonzero(target)
-        changed = score[others].copy()
-        for sign, pose in ((-1.0, x[atoms]), (1.0, poses[chosen])):
-            changed += sign * energy.by_water(pose, q, sigma, epsilon, SCORE_RADIUS_NM, skip=atoms)[others]
-        s_new = float(energy.energies(poses[chosen], q, sigma, epsilon, SCORE_RADIUS_NM, skip=atoms).sum())
+        old_and_new = energy.with_waters(np.stack([x[atoms], poses[chosen]]), moved)
+        changed = score[others] - old_and_new[0, others] + old_and_new[1, others]
+        s_new = float(energy.pose_energies(poses[chosen][None], moved, SCORE_RADIUS_NM)[0])
         log_z_target = logsumexp(np.append(beta * changed, beta * s_new))
         direction = np.log((1.0 - OUT_PROBABILITY) / OUT_PROBABILITY) * (1.0 if out else -1.0)
         log_q_ratio = (direction + log_z_source - log_z_target + beta * (s_new - score[moved])
@@ -434,6 +720,17 @@ class RelocationMover:
 
 class RelocationError(ValueError):
     """The moves cannot be made in this system as they are asked for."""
+
+
+def check_cell(box: np.ndarray, radius_nm: float, cutoff_nm: float) -> None:
+    """The sphere and the cutoff must be less than half the smallest height of the cell: else the
+    nearest image of a water does not decide its region, nor that of an atom its interaction.
+    Checked when a leg is built and at every attempt, with the cell of that moment (a barostat
+    changes it)."""
+    smallest = float(cell_heights(np.asarray(box, dtype=float)).min())
+    if 2.0 * radius_nm >= smallest or 2.0 * cutoff_nm >= smallest:
+        raise RelocationError(f"the sphere (radius {radius_nm:.2f} nm) or the cutoff ({cutoff_nm:g} nm) is not "
+                              f"less than half the smallest height of the cell ({smallest:.2f} nm)")
 
 
 def relocation_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, cutoff_nm: float,
@@ -492,10 +789,7 @@ def relocation_spec(system, topology, positions: np.ndarray, box: np.ndarray, li
     pose = np.asarray(positions, dtype=float)[heavy]
     pose = pose[0] + nearest_image(pose - pose[0], box)
     radius = sphere_radius(pose, radius_margin_nm)
-    smallest = float(cell_heights(box).min())
-    if 2.0 * radius >= smallest or 2.0 * float(cutoff_nm) >= smallest:
-        raise RelocationError(f"the sphere (radius {radius:.2f} nm) or the cutoff ({float(cutoff_nm):g} nm) is not "
-                              f"less than half the smallest height of the cell ({smallest:.2f} nm)")
+    check_cell(box, radius, float(cutoff_nm))
     if float(cutoff_nm) < SCORE_RADIUS_NM:
         raise RelocationError(f"the cutoff ({float(cutoff_nm):g} nm) is shorter than the radius of the scores "
                               f"({SCORE_RADIUS_NM:g} nm)")

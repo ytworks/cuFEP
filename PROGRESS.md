@@ -72,8 +72,8 @@ Open items:
   against 39.0). The 16 TYK2 ligands with `alchemy.annihilate_electrostatics` (41760a1, once
   each): mean signed error -0.43 [-1.31, 0.41], RMSE after removing it 1.77 [1.16, 2.17], tau
   0.20 [-0.12, 0.48]; ligand by ligand +0.76 ± 0.51 from the run of e77a6c5 (standard deviation
-  2.03). Water relocation moves (branch `feat/relocation-mc`, default off): their runs on 4k and
-  ejm_49 are running, no result yet. `membrane.equilibration_ns` stays 10 (the owner).
+  2.03). Water relocation moves (branch `feat/relocation-mc`, default off): the trial energies
+  are computed on the GPU; no result yet. `membrane.equilibration_ns` stays 10 (the owner).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [amendment] Water relocation moves: the trial energies on the GPU; three corrections
+- What: the stand-in energies of a proposal were computed by NumPy on a processor core, which
+  made a leg with the moves several times slower; the three runs started with it were stopped
+  (no result). They are now computed by kernels on the CUDA device of the Context (CuPy, added to
+  the image; the same numbers to rounding; the NumPy function is the reference of the tests).
+  Corrected, each with a test that fails before: with a pool, windows started one from another
+  ran without moves; an interval shorter than an iteration gave one attempt per iteration; the
+  cell was compared with the sphere only when the leg was built.
+- Why: the owner's order of 2026-11-23 (an implementation that slows a leg is not usable).
+- Refs: `docs/configuration.md`, `docs/protocol.md`, `tests/gpu/test_gpu.py`, the plan ("手順 6")
 
 ### 2026-11-23 — [progress] The TYK2 set with annihilated electrostatics: one calculation per ligand
 - What: `alchemy.annihilate_electrostatics: true`, the rest as the full run of e77a6c5 (image of
