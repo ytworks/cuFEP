@@ -64,7 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md` (in progress, PR #14): `membrane.complex_leg` is implemented, off by default. A2A runs with `water` one ligand at a time (image of a34bbe2): 4k -12.11 ± 0.53 kcal/mol (the plan, "記録"); the other 16 are running or to run.
+- Plan `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md` (in progress, PR #14): `membrane.complex_leg` is implemented, off by default. A2A runs with `water` one ligand at a time (image of a34bbe2): 4k -12.11 ± 0.53 and 4e -16.17 ± 0.47 kcal/mol (in the bilayer, e77a6c5: -20.32 and -13.50; the plan, "記録"); the other 15 are running or to run.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9): of the remedies it
