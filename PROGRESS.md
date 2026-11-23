@@ -71,9 +71,9 @@ Open items:
   windows start from moves the complex leg by about 5 (ejm_49 35.3 against 40.9; 4k 44.3 against
   39.0). The 16 TYK2 ligands with `alchemy.annihilate_electrostatics` (41760a1, once each): mean
   signed error -0.43 [-1.31, 0.41], RMSE after removing it 1.77 [1.16, 2.17], tau 0.20 [-0.12,
-  0.48]; ligand by ligand +0.76 ± 0.51 from the run of e77a6c5. Water relocation moves (branch
-  `feat/relocation-mc`, default off, trial energies on the GPU): the complex leg of ejm_49 from
-  the two start constructions 43.09 and 39.29 (without them 40.91 and 35.26); 4k is running.
+  0.48]; ligand by ligand +0.76 ± 0.51 from the run of e77a6c5. Water relocation moves (PR #10,
+  default off): 4k -16.61 and ejm_49 -11.42 with them, inside the range of the runs without.
+  Running, one ligand at a time (the owner): whether E1 and E3 change the result of more ligands.
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [progress] Water relocation moves, one whole calculation per ligand; what is verified next
+- What: with the moves (4096 trial poses, half of the anchors in the sphere), all eight GPUs,
+  kcal/mol: 4k -16.61 ± 0.37 (without them -14.49, -13.07, -16.50; experiment -11.54), ejm_49
+  -11.42 ± 0.52 (-11.84, -8.92, -9.40; -7.75). On ejm_49 the sections of the coupled side rise
+  as moves are accepted, more into the sphere than out of it (the entry below said the reason
+  was not established); checks on that leg found no bias (`spikes/m29_*`). A third ligand was
+  stopped by the owner; the default stays off. The owner's order for the rest of the session:
+  verify E1 (the walk for the legs the benchmark started one window from another) and E3 (the
+  decoupled-side windows from the relaxed decoupled end), one ligand at a time on eight GPUs.
+- Why: step 6 of the plan; the owner judges after every ligand.
+- Refs: the plan ("評価 2"), PR #10, `runs/acc_reloc2_a2a_4k`, `runs/acc_moves_tyk2` (untracked)
 
 ### 2026-11-23 — [progress] Water relocation moves on ejm_49: the complex leg from two start constructions
 - What: one run each, image of ecf0e0e, 4096 trial poses, half of the anchors in the sphere, the
