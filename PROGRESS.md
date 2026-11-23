@@ -31,7 +31,7 @@ OpenMM, on all GPUs of a machine, from two files.
 
 ## Current Status
 
-Snapshot date: 2026-11-23. `main` holds PR #1 (the engine of plan
+Snapshot date: 2026-11-24. `main` holds PR #1 (the engine of plan
 `docs/plans/2026-11-18-abfe-engine.md`), PR #2 (the README and the harness), PR #3 (wording fixes
 and ruff), PR #4 (plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`: benchmarks
 with the settings of the examples, the full sets, an accuracy wiki), PR #6 (plan
@@ -64,7 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md` (in progress, PR #14): `membrane.complex_leg` is implemented, off by default; no run with it yet (A2A, one ligand at a time).
+- Plan `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md` (in progress, PR #14): `membrane.complex_leg` is implemented, off by default. A2A runs with `water` one ligand at a time (image of a34bbe2): 4k -12.11 ± 0.53 kcal/mol (the plan, "記録"); the other 16 are running or to run.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9): of the remedies it
@@ -111,6 +111,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-24 — [progress] `membrane.complex_leg: water` on A2A: the short run, and 4k
+- What: image of a34bbe2, eight GPUs, the settings of the set (5 ns per window, one calculation).
+  A short run of 4k passed the checks of the plan from its files (systems of 61,452 and 73,275
+  atoms, the restraint from the bilayer, the same command again computes nothing). 4k (experiment
+  -11.54): -12.11 ± 0.53 kcal/mol; complex leg 36.60 ± 0.50, solvent leg 14.90 ± 0.18; restraint
+  ASN 253 (784 of 800 frames); lowest overlap 0.154 and 0.171; fewest independent samples 12
+  (complex leg) and 193. In the bilayer: -20.32 ± 0.52 (e77a6c5, windows started one from another)
+  and -14.49, -13.07, -16.50 (the walk; complex leg 38.78, 37.36, 40.90). The other 16 follow.
+- Why: the plan (one ligand at a time, each reported).
+- Refs: the plan ("記録"), `runs/benchmark_a2a_full_water_a34bbe2` (untracked), PR #14
 
 ### 2026-11-23 — [design] `membrane.complex_leg`: the restraint from the bilayer, the alchemical run in water
 - What: a setting, default `bilayer` (no default, number of the analysis or stored result changes).
