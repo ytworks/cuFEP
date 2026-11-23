@@ -5,6 +5,29 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-22 — [progress] Plan started: the causes of the errors measured, the remedies implemented
+- What: plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress). Step 1 runs in
+  the image of e77a6c5 with the recorded settings of the full runs: ejm_49 twice, 4k three times,
+  ejm_49 once with `sampling.rest2.scale: 1.0`; no result yet. PR #8 is merged (its plan: done).
+  Correction of the open item on the workers of the precalculation ("The free energies do not
+  depend on it"): with one worker the start configurations are made in another way (4 complex
+  legs of TYK2, 7 of A2A); their mean signed errors are -1.42 and -5.85 kcal/mol against -1.13
+  and -2.95 of the other legs (other ligands, found afterwards: no cause follows from it).
+- Why: the owner's order (2026-11-22): find what improves the accuracy and implement it, few runs.
+- Refs: the plan, its pull request, issue #5
+
+### 2026-11-22 — [progress] A2A full with the present defaults: 17 of 17; the wiki from this run
+- What: one calculation per compound, image of e77a6c5, eight GPUs, exit 0; recorded as the run
+  wrote it in `benchmarks/results/a2a/`. kcal/mol: mean signed error -4.14 [-5.36, -2.85], RMSE
+  after removing the mean error 2.68 [1.76, 3.24], Kendall tau 0.34 [-0.03, 0.67] (FEP+ -0.16,
+  1.08, 0.59; the run of 3b45bfe -4.12, 2.26, 0.38; Felis: offset 2.74, RMSE after offset 1.16,
+  tau 0.65). No result NOT RELIABLE (lowest overlap 0.105); a window with fewer than 50
+  independent samples in the complex leg of 14/17. 4e: -13.50 ± 0.34. `docs/wiki/Accuracy.md`
+  and `Accuracy-ja.md` are rewritten from the run of both sets, with a section that puts the run
+  of 3b45bfe beside it; both READMEs, `docs/protocol.md` and `docs/configuration.md` follow.
+- Why: the owner's order (2026-11-22); steps 3 to 6 of the plan.
+- Refs: PR #8, `benchmarks/results/README.md`, `docs/wiki/Accuracy.md`, `spikes/wiki_tables.py`
+
 ### 2026-11-22 — [progress] TYK2 full with the present defaults: 16 of 16 ligands
 - What: one calculation per ligand, image of e77a6c5, eight GPUs, exit 0; recorded as the run
   wrote it in `benchmarks/results/tyk2/` (the record of 3b45bfe is in the tree of cda6965).
