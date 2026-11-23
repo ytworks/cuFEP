@@ -508,3 +508,81 @@ def test_a_pre_equilibration_that_holds_the_solute_runs_on_the_backend_of_the_le
     assert held.backend == backend and held.notes == [] and held.frames.shape[0] == 4
     assert np.linalg.norm(held.positions[heavy] - pos[heavy], axis=1).max() < 0.1
 
+
+
+@pytest.fixture(scope="module")
+def moves_leg():
+    """Two dipeptides in a 3.2 nm water box, one of them the ligand, with what a mover of water
+    relocation moves needs of it (a sphere of the paper's radius around the ligand)."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling.relocation_mc import relocation_spec
+
+    system, top, pos, box, ligand, _other = build_dipeptides_in_water(box_nm=3.2)
+    cutoff = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce)).getCutoffDistance()._value
+    relocation = relocation_spec(system, top, pos, box, ligand, cutoff, 0.5, 1, 300.0, trial_poses=256,
+                                 inner_fraction=0.5, interval_ps=0.4, radius_margin_nm=0.3)
+    alch = make_alchemical_system(system, ligand)
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 3})
+    return alch, schedule, pos, box, ligand, relocation
+
+
+@needs_plugin
+def test_the_energy_change_of_a_relocated_water_agrees_between_the_backends(moves_leg):
+    """The acceptance of a water relocation move needs one number of the backend: the change of
+    the potential energy of the simulation when the water is put at its new pose, in the state the
+    replica is simulated in. For the same proposals (they are made on the processor, from the
+    same configuration) the plugin and stock OpenMM give the same change, as closely as they agree
+    on the energies of the states."""
+    import openmm.unit as u
+
+    from cufep.sampling.relocation_mc import RelocationMover
+    from cufep.sampling.states import set_state
+
+    alch, schedule, pos, box, _ligand, relocation = moves_leg
+    state = schedule.states[2]                               # charges half off
+    proposals = RelocationMover(relocation, None, seed=3)
+    moves = [proposals.proposal(np.asarray(pos, dtype=float), np.asarray(box, dtype=float), state, out)
+             for out in (False, True, False, True, False, True)]
+    assert all(move is not None for move in moves)
+    kt = 8.31446261815324e-3 * 300.0
+    changes = {}
+    for name in ("openmm", "cupotential"):
+        backend = get_backend(name)
+        ctx = backend.make_context(backend.prepare_system(alch.system),
+                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        set_state(ctx, state)
+        mover = RelocationMover(relocation, ctx, seed=3)
+        base = mover._potential(pos)
+        assert mover._potential(pos) == pytest.approx(base, abs=0.05)      # the same number when asked again
+        changes[name] = np.array([mover._potential(move["y"]) - base for move in moves]) / kt
+        del ctx
+    assert np.max(np.abs(changes["cupotential"] - changes["openmm"])) < 0.1, changes
+    assert np.abs(changes["openmm"]).max() > 1.0                           # (moves that change the energy)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_replica_exchange_with_water_relocation_moves(tmp_path, moves_leg, backend):
+    """Replica exchange with worker processes and the moves: every replica attempts one move after
+    the MD of an iteration in which the interval was passed (0.4 ps: every second iteration of 50
+    steps of 4 fs), in the state it is simulated in; the samples hold the attempts by window and the
+    energies stay finite."""
+    alch, schedule, pos, box, ligand, relocation = moves_leg
+    devices = [0, 1] if _gpu_count() >= 2 else [0]
+    spec = LegSpec(name="gpu-moves", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=alch.system.getNumParticles(),
+                   backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=4.0,
+                   steps_per_iteration=50, seed=3, frame_atoms=list(ligand), relocation=relocation)
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=devices, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(10, record_stride=2, checkpoint_stride=5)
+    data = read_samples(tmp_path / "hrex")
+    k = len(schedule.states)
+    own = data["u"][np.arange(10)[:, None], np.arange(k), data["states"]]
+    assert np.all(np.isfinite(own)) and np.all(np.isfinite(data["u"][:, :, [0, k - 1]]))
+    moves = data["relocations"]
+    attempted = moves[:, :, 0] + moves[:, :, 2]
+    assert moves.shape == (10, k, 4) and attempted.sum(axis=1).tolist() == [0, k] * 5
+    assert (moves[:, :, 1] <= moves[:, :, 0]).all() and (moves[:, :, 3] <= moves[:, :, 2]).all()

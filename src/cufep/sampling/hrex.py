@@ -612,9 +612,20 @@ class ReplicaExchangeSampler:
                 self.accepted += acc
                 self.attempted += att
             if store:
+                # the water relocation moves of this iteration, by the state they were made in:
+                # attempted into the sphere, accepted, attempted out of it, accepted
+                relocations = None
+                if self.spec.relocation is not None:
+                    relocations = np.zeros((len(sampled_states), 4), dtype="i8")
+                    for res in results:
+                        for state_index, direction, accepted in (res or {}).get("relocation", ()):
+                            column = 0 if direction == "in" else 2
+                            relocations[state_index, column] += 1
+                            relocations[state_index, column + 1] += int(accepted)
                 # records carry the row of their iteration: iterations that are not stored (a warm-up
                 # with store=False) have no row
-                row = self.storage.append(u, sampled_states, self.arrays.vol.copy(), swaps=swaps)
+                row = self.storage.append(u, sampled_states, self.arrays.vol.copy(), swaps=swaps,
+                                          relocations=relocations)
                 for res in results:
                     if res.get("recorded"):
                         self.storage.append_record(row, res["recorded"])

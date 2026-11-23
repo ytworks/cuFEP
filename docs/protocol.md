@@ -619,6 +619,60 @@ dispersion correction when an epsilon offset changes, the cuPotential plugin doe
 therefore differ by a constant per window in the scaled windows; the end states and the
 free energy are not affected, and a leg is sampled by one backend.
 
+## Water relocation moves
+
+Water exchanges slowly between a buried binding site and the bulk. At the decoupled end of the
+A2A complex leg of 4k the number of water molecules in the place of the ligand kept rising for 20
+to 30 ns of plain MD, far longer than a lambda window is sampled (plan
+`docs/plans/2026-11-22-accuracy-causes-and-fixes.md`). With `sampling.relocation_mc.enabled: true`
+the complex leg makes water relocation moves: RelocationMC of Ding et al. (arXiv:2603.22274 v3,
+"RelocationMC water-sampling protocol" and its appendix), a Monte Carlo move that takes a whole
+water molecule from the rest of the cell into a sphere around the ligand, or out of it. The number
+of particles and the cell do not change, so no chemical potential is needed, and the replicas,
+their exchange and MBAR are what they are without the moves. The default is off.
+
+The sphere is centred on the geometric centre of the heavy atoms of the ligand and has the radius
+of the paper: half the largest distance between two heavy atoms of the ligand in the prepared
+pose, plus 0.3 nm (`radius_margin_nm`). One move, with x the configuration and beta = 1 / kT:
+
+1. A direction is chosen: out of the sphere or into it. The source region S is where the water
+   is taken, the target region T the other one.
+2. Every water M of S has a score s_M, its interaction with everything else. The water D that is
+   moved is chosen with probability exp(beta s_D) / Z_S(x), Z_S(x) the sum of exp(beta s_M) over
+   the waters of S: a water that is held weakly is preferred.
+3. K anchors are drawn (`trial_poses`), each with an independent uniform orientation of the
+   conformation of D, and sorted into the two regions afterwards. A trial pose i has the weight
+   w_i = exp(-beta u_i) / h(i): u_i is its interaction with everything but D, h the density its
+   anchor was drawn with. Among the poses of T one, C, is chosen with probability w_C / W_f, W_f
+   the sum of the weights of the poses of T.
+4. The reverse pool is the same K poses with the chosen one replaced by the pose D has; W_r is
+   the sum of the weights of its poses of S. Z_T(y) is the sum of exp(beta s_M) over the waters
+   of T in the proposed configuration y, the moved water among them.
+5. The move is accepted with probability min(1, r),
+   ln r = ln(g_r / g_f) + ln Z_S(x) - ln Z_T(y) + beta (s_C - s_D) + ln W_f - ln W_r
+   - beta [dU - (u_C - u_D)], with dU = U(y) - U(x) the change of the potential energy of the
+   simulation and g_f, g_r the probabilities of the two directions.
+6. An accepted water keeps the velocity of its centre of mass, and its velocities relative to it
+   are turned with the molecule. A move that is not accepted changes nothing.
+
+Where cuFEP follows the paper and where it differs:
+
+| point | the paper | cuFEP |
+|---|---|---|
+| the energies u of the trial poses and the scores s | computed by a CUDA kernel: the direct-space and reciprocal-space PME interaction of every pose, so that dU - (u_C - u_D) is a correction of the finite mesh only | OpenMM gives no energy per molecule. u is a stand-in: Lennard-Jones and reaction-field Coulomb (dielectric 78.5) within the cutoff of the run, the ligand with its charges times `lambda_electrostatics` and its soft-core at `lambda_sterics`, without REST2; s is the same within 0.5 nm. What the stand-in misses is in dU - (u_C - u_D), which uses the potential energy of the Context in the state the replica is simulated in (its lambda values and its REST2 scale). The ratio above is a Metropolis-Hastings ratio for any u and s, so the moves keep the distribution of that state exactly; a poor stand-in costs acceptance, not correctness |
+| the anchors | uniform in the whole cell ("draws K independent candidate anchors uniformly from the complete periodic box"), so that h is constant, cancels, and no volume appears; K = 16384 | the same by default. With `inner_fraction` that share of the anchors is drawn uniformly in the sphere and the rest uniformly outside it; h then differs between the two regions and stays in the weights (the paper's w_i = exp(-beta u_i) / h_0(i) before h_0 is cancelled). In a cell much larger than the sphere few uniform anchors fall into it (0.3 % for 4k) |
+| the point of a water that is put on an anchor, and that decides its region | not said | the oxygen, for both |
+| the probabilities of the two directions | g_f and g_r, not given | 1/2 each |
+| the cell | orthorhombic (a limit of the kernel) | any cell |
+| when a move is attempted | every 1000 MD steps (4 ps), in the protein-ligand leg | in the complex leg, one for every `interval_ps` (4 ps) of the MD of a replica: after the MD of the iteration in which a multiple of the interval was passed (an iteration is 2.5 ps), in the equilibration and the production of the replica exchange, and in the windows of the precalculation of adaptive lambda scheduling |
+| which waters | all relocatable waters have "identical, lambda-invariant nonbonded parameters" and no interaction within themselves; for a charged ligand the alchemical waters are left out | every water (residue HOH); the same two conditions are checked, and a system that does not meet them is refused. cuFEP has no charged ligands |
+
+What is recorded: the samples of the leg hold, per iteration and lambda window, the moves
+attempted and accepted in each direction (`relocations`), and the result of the leg gives their
+sums over the production by window (`relocation_mc`), as numbers without a verdict. The settings
+of the moves are among the conditions of the samples of the complex leg: a leg sampled with them
+is not continued without them or with other ones.
+
 ## Checks of the analysis
 
 ### Free energy and uncertainty of a leg
@@ -1203,7 +1257,7 @@ The absolute binding protocol of OpenFE, from its documentation and source code 
 | replica exchange | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
 | MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns; a complex leg with the default `restraints.selection: interactions`: 0.25 + 0.5 ns with the heavy atoms of protein and ligand held and no free MD (a bilayer: 0.25 + 1.0 + 10 ns, held), from the end of which the alchemical run and the four trajectories of 3 ns for the restraint start |
 | restraint | Boresch, atoms chosen automatically, fixed force constants | from the interactions of unrestrained MD of the complex by default (`restraints.selection: interactions`); as OpenFE with `auto` |
-| water sampling | none | none |
+| water sampling | none | none by default; water relocation moves between a sphere around the ligand and the bulk in the complex leg with `sampling.relocation_mc` (RelocationMC of Ding et al.; "Water relocation moves") |
 | GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
 | membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |
 
@@ -1219,7 +1273,7 @@ Further differences:
 | soft-core | alpha 0.5, powers a 1, b 1, c 6 | the same by default; `alchemy.softcore_b: 2` for the squared (1 - lambda) |
 | decorrelation of the samples | one statistical inefficiency for all windows, from the reduced potential summed over the replicas (openmmtools) | one per lambda window, the larger of those of its energy differences to the two neighbouring windows (alchemlyb's default takes the next window only) |
 
-Sources: Midgley et al. 2025;
+Sources: Midgley et al. 2025; Ding et al., arXiv:2603.22274 v3 (the water relocation moves);
 OpenFE 1.13 source and documentation (the plots are those of `multistate_analysis.py`); SOMD2 documentation (oversubscription factor); Mey et
 al., "Best Practices for Alchemical Free Energy Calculations", LiveCoMS 2020; Grossfield et
 al., "Best Practices for Quantification of Uncertainty and Sampling Quality in Molecular

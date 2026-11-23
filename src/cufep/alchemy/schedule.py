@@ -375,13 +375,17 @@ def _load(context, config) -> None:
     context.setVelocities(vel)
 
 
-def run_window(context, integrator, task: dict) -> dict:
+def run_window(context, integrator, task: dict, mover=None, interval_steps: int = 0) -> dict:
     """One window of the precalculation in an existing Context (this process or a pool worker).
 
     ``task``: ``state`` (lambda parameters), ``config`` (positions, box, velocities) to start
     from, ``stages`` whose candidate energies are recorded, ``candidates``, ``temperature_K``,
     ``equilibration_steps``, ``n_samples`` and ``steps_per_sample``.
     Returns the energies per stage, shape (samples, candidates), and the last configuration.
+
+    With ``mover`` (:class:`cufep.sampling.relocation_mc.RelocationMover` on this Context) one
+    water relocation move is attempted for every ``interval_steps`` of the MD of the window, in
+    its equilibration and between its samples, in the state of the window.
     """
     grid = np.linspace(0.0, 1.0, int(task["candidates"]))
     state = AlchemicalState(**task["state"])
@@ -391,18 +395,30 @@ def run_window(context, integrator, task: dict) -> dict:
                                              task["temperature_K"], None) for name in task["stages"]}
     _load(context, task["config"])
     set_state(context, state)
-    if task["equilibration_steps"] > 0:
-        integrator.step(int(task["equilibration_steps"]))
+    done = 0
+
+    def md(steps: int) -> None:
+        nonlocal done
+        steps = int(steps)
+        while steps > 0:
+            chunk = steps if mover is None else min(steps, int(interval_steps) - done % int(interval_steps))
+            integrator.step(chunk)
+            done, steps = done + chunk, steps - chunk
+            if mover is not None and done % int(interval_steps) == 0:
+                mover.attempt(state)
+
+    md(task["equilibration_steps"])
     energies = {name: np.empty((int(task["n_samples"]), len(grid))) for name in task["stages"]}
     for i in range(int(task["n_samples"])):
-        integrator.step(int(task["steps_per_sample"]))
+        md(task["steps_per_sample"])
         for name in task["stages"]:
             energies[name][i] = evaluators[name].reduced_potentials(restore=state)[0]
     return {"energies": energies, "config": _snapshot(context)}
 
 
 def adaptive_schedule(context, integrator, stages: list[str], temperature_K: float, timestep_fs: float,
-                      settings: AlsSettings | None = None, log=print, pool=None):
+                      settings: AlsSettings | None = None, log=print, pool=None, mover=None,
+                      interval_steps: int = 0):
     """Adaptive lambda scheduling for one leg, starting from the Context's current configuration.
 
     The windows of the first iteration get their start configurations as
@@ -465,12 +481,16 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
 
     concurrent = []                              # the numbers of windows a pool was given at a time
 
+    # the water relocation moves of a window, where this process runs it (a pool's workers have their own)
+    moves = {} if mover is None else {"mover": mover, "interval_steps": interval_steps}
+
     def run_from(todo: list[tuple[int, int]], starts: list) -> None:
         """Run windows whose start configurations are known: at the same time, or one by one."""
         tasks = [task_for(nd, config) for nd, config in zip(todo, starts)]
         if pool is not None:
             concurrent.append(len(tasks))
-        results = pool.run(tasks) if pool is not None else [run_window(context, integrator, t) for t in tasks]
+        results = pool.run(tasks) if pool is not None else [run_window(context, integrator, t, **moves)
+                                                              for t in tasks]
         for nd, result in zip(todo, results):
             runs[nd] = result
 
@@ -488,7 +508,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         else:                                             # first iteration: each from the end of the one before
             config = start
             for nd in todo:
-                runs[nd] = run_window(context, integrator, task_for(nd, config))
+                runs[nd] = run_window(context, integrator, task_for(nd, config), **moves)
                 config = runs[nd]["config"]
 
     def total_windows() -> int:

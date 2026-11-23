@@ -596,7 +596,10 @@ ANALYSIS_SETTINGS_ADDED = {"detect_equilibration": False}
 
 #: the settings added later, by section of the configuration: a record of a configuration that an
 #: earlier version wrote is read with these values where it lacks them (``write_run_record``)
-SETTINGS_ADDED = {"alchemy": ALCHEMY_SETTINGS_ADDED, "analysis": ANALYSIS_SETTINGS_ADDED}
+SETTINGS_ADDED = {"alchemy": ALCHEMY_SETTINGS_ADDED, "analysis": ANALYSIS_SETTINGS_ADDED,
+                  # no water relocation moves: the section as it is by default
+                  "sampling": {"relocation_mc": {"enabled": False, "interval_ps": 4.0, "trial_poses": 16384,
+                                                 "inner_fraction": "uniform", "radius_margin_nm": 0.3}}}
 
 
 def alchemy_record(cfg: Config) -> dict:
@@ -615,14 +618,19 @@ def electrostatics_annihilated(conditions: dict | None) -> bool:
     return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
 
 
-def samples_settings(cfg: Config) -> dict:
+def samples_settings(cfg: Config, leg: str | None = None) -> dict:
     """The settings that the samples of a leg depend on and that their other recorded conditions
     (states, temperature, pressure, dynamics, System checksum) do not name in the words of the
     configuration: the soft-core and the electrostatics inside the ligand, REST2, the length of an
-    iteration and the tail correction."""
-    return {"alchemy": alchemy_record(cfg), "rest2": cfg.sampling.rest2.model_dump(mode="json"),
-            "time_per_iteration_ps": float(cfg.sampling.time_per_iteration_ps),
-            "tail": None if cfg.analysis.lrc == "none" else {"cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}}
+    iteration and the tail correction; and, for the ``leg`` that has them (the complex leg), the
+    water relocation moves. The moves are written only where they are made, so that the samples
+    of every leg without them, also those of earlier versions, have the record they had."""
+    settings = {"alchemy": alchemy_record(cfg), "rest2": cfg.sampling.rest2.model_dump(mode="json"),
+                "time_per_iteration_ps": float(cfg.sampling.time_per_iteration_ps),
+                "tail": None if cfg.analysis.lrc == "none" else {"cutoff_nm": float(cfg.analysis.lrc_cutoff_nm)}}
+    if leg == "complex" and cfg.sampling.relocation_mc.enabled:
+        settings["relocation_mc"] = cfg.sampling.relocation_mc.model_dump(mode="json")
+    return settings
 
 
 def windows_settings(cfg: Config) -> dict:
@@ -720,8 +728,24 @@ def alchemical_leg(cfg: Config, system, prep: dict, box, restraint, is_complex: 
     if cfg.analysis.lrc in ("reweight", "isotropic"):
         tail = TailEnergy.from_system(system, prep["ligand"], alch.ligand_parameters, cfg.dynamics.cutoff_nm,
                                       cfg.analysis.lrc_cutoff_nm).to_dict()
+    # water relocation moves (the complex leg): what a mover needs of the fully interacting system
+    relocation = None
+    moves = cfg.sampling.relocation_mc
+    if is_complex and moves.enabled:
+        from cufep.sampling.relocation_mc import RelocationError, relocation_spec
+
+        try:
+            relocation = relocation_spec(
+                system, prep["topology"], prep["positions"], np.asarray(box, dtype=float), prep["ligand"],
+                cfg.dynamics.cutoff_nm, cfg.alchemy.softcore_alpha, cfg.alchemy.softcore_b,
+                cfg.thermodynamics.temperature_K, moves.trial_poses,
+                None if moves.inner_fraction == "uniform" else float(moves.inner_fraction), moves.interval_ps,
+                moves.radius_margin_nm)
+        except RelocationError as exc:
+            raise WorkflowError(f"sampling.relocation_mc cannot be used with this system: {exc}") from exc
     return SimpleNamespace(alch=alch, xml=xml, tail=tail, rest2_on=rest2_on, hot_atoms=hot_atoms,
-                           hot_residues=hot_residues)
+                           hot_residues=hot_residues, relocation=relocation,
+                           leg="complex" if is_complex else "solvent")
 
 
 def leg_spec(cfg: Config, built, states: list[dict], barostat: str, timestep_fs: float, backend_name: str, seed: int,
@@ -755,7 +779,8 @@ def leg_spec(cfg: Config, built, states: list[dict], barostat: str, timestep_fs:
         seed=seed,
         cpu_threads=cfg.resources.cpu_threads_per_worker,
         lrc=built.tail,
-        settings=samples_settings(cfg),
+        settings=samples_settings(cfg, getattr(built, "leg", None)),
+        relocation=getattr(built, "relocation", None),
         box_safety=1.3 if barostat == "membrane" else None,
         **more,
     )
@@ -980,7 +1005,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     differing = [f"{key}: {conditions[key]} -> {value}" for key, value in current.items()
                  if key in conditions and not _same(conditions[key], value)]
     if isinstance(conditions.get("settings"), dict):
-        differing += settings_differences(conditions["settings"], samples_settings(cfg))
+        differing += settings_differences(conditions["settings"], samples_settings(cfg, leg))
     elif not differing:
         # samples that record their conditions without the settings behind them: all their conditions,
         # with the checksum of the System, against those this run would sample under
@@ -2414,6 +2439,7 @@ def run_leg(job: LegJob) -> dict:
                 cpu_threads=cfg.resources.cpu_threads_per_worker,
                 box_safety=1.3 if barostat == "membrane" else None,
                 mps_thread_percentage=thread_percentage(job.oversubscription),
+                relocation=built.relocation,
             )
             backend = backend_of(pool_spec)
             prepared = backend.prepare_system(alch.system)
@@ -2460,7 +2486,17 @@ def run_leg(job: LegJob) -> dict:
                 # without them one after another in this process: the same windows from the same
                 # start configurations either way (adaptive_schedule)
                 if job.inline or len(devices) < 2:
-                    schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log)
+                    # (the water relocation moves of a window are then made by a mover on this Context)
+                    mover, interval_steps = None, 0
+                    if built.relocation is not None:
+                        from cufep.sampling.relocation_mc import RelocationMover
+                        from cufep.sampling.worker import RELOCATION_STREAM, stream_seed
+                        from cufep.steps import md_steps
+
+                        mover = RelocationMover(built.relocation, ctx, stream_seed(seed + 23, 0, 0, RELOCATION_STREAM))
+                        interval_steps = md_steps(built.relocation.interval_ps, timestep_fs)
+                    schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, mover=mover,
+                                                       interval_steps=interval_steps)
                 else:
                     with WindowPool(pool_spec, devices[:n_first], log) as pool:
                         schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, pool=pool)
@@ -3359,15 +3395,15 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     # the production that is analysed: from the end of the equilibration of the run, or with
     # analysis.detect_equilibration from where the detection puts it; the free energy and the
     # numbers of the structure are of the same iterations
-    start, detected = production_start(samples, n_equilibration, a)
+    first, detected = production_start(samples, n_equilibration, a)
     try:
-        res = analyze_leg(samples, temperature, n_equilibration=start, n_fractions=a.convergence_points,
+        res = analyze_leg(samples, temperature, n_equilibration=first, n_fractions=a.convergence_points,
                           n_blocks=a.convergence_blocks, error_blocks=a.error_blocks,
                           part_error_blocks=a.part_error_blocks, tail=a.lrc, min_overlap=a.min_overlap)
     except NoCorrection as exc:
         raise WorkflowError(f"the samples in {leg_dir}: {exc}") from exc
     correction = res.correction
-    structure = structural_analysis(samples, start)
+    structure = structural_analysis(samples, first)
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
     # the notes of the pre-equilibration and the restraint, and what their files say as numbers
     notes, file_numbers = notes_of_leg_files(leg_dir)
@@ -3430,6 +3466,8 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         if start else None)
     # how the windows got the configurations their replicas started from (None: the files do not say)
     result["start_configurations"] = start_configurations_of(leg_dir)
+    # the water relocation moves of the production that is analysed, by lambda window (None: none)
+    result["relocation_mc"] = relocation_numbers(samples, first)
     result["rest2"] = run.get("rest2")
     return result
 
@@ -4108,3 +4146,15 @@ def _same_combination(stored: dict, again: dict) -> bool:
 
     keys = set(stored)
     return core(stored, keys) == core(again, keys)
+
+
+def relocation_numbers(samples: dict, start: int) -> dict | None:
+    """The water relocation moves of the iterations from ``start`` on, by lambda window, as numbers
+    without a verdict: attempted and accepted, into the sphere and out of it. None for samples of
+    a leg without the moves."""
+    if "relocations" not in samples:
+        return None
+    counts = np.asarray(samples["relocations"][int(start):], dtype=np.int64).sum(axis=0)
+    names = ("attempted_into_the_sphere", "accepted_into_the_sphere", "attempted_out_of_the_sphere",
+             "accepted_out_of_the_sphere")
+    return {name: [int(n) for n in counts[:, column]] for column, name in enumerate(names)}

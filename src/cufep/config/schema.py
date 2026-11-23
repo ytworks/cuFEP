@@ -518,9 +518,30 @@ class Rest2Config(_Section):
     residues: list[str] = Field(default_factory=list)
 
 
+class RelocationMcConfig(_Section):
+    """Water relocation moves between a sphere around the ligand and the rest of the cell, in the
+    complex leg: RelocationMC of Ding et al. (arXiv:2603.22274 v3). A whole water molecule is
+    moved into the sphere or out of it; the number of particles and the cell do not change.
+    """
+
+    enabled: bool = False
+    #: one move is attempted for every interval of MD of a replica (the paper: every 1000 steps
+    #: of 4 fs)
+    interval_ps: float = Field(default=4.0, gt=0.0)
+    #: K, the number of trial poses of a move (the paper: 16384)
+    trial_poses: int = Field(default=16384, ge=1)
+    #: the share of the trial poses whose anchor is drawn in the sphere, the rest outside it;
+    #: uniform = all anchors uniform in the whole cell, as the paper draws them
+    inner_fraction: Literal["uniform"] | Annotated[float, Field(gt=0.0, lt=1.0)] = "uniform"
+    #: the radius of the sphere is half the largest distance between two heavy atoms of the
+    #: ligand in the prepared pose, plus this (the paper: 0.3 nm)
+    radius_margin_nm: float = Field(default=0.3, ge=0.0)
+
+
 class SamplingConfig(_Section):
     pre_equilibration: PreEquilibrationConfig = Field(default_factory=PreEquilibrationConfig)
     rest2: Rest2Config = Field(default_factory=Rest2Config)
+    relocation_mc: RelocationMcConfig = Field(default_factory=RelocationMcConfig)
     #: hrex = Hamiltonian replica exchange between the lambda windows; none = independent windows
     exchange: Literal["hrex", "none"] = "hrex"
     time_per_iteration_ps: float = Field(default=2.5, gt=0.0)

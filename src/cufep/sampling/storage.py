@@ -79,8 +79,10 @@ def open_samples(path: str | Path, mode: str = "r", wait_s: float = READ_WAIT_S)
 ROW_DATASETS = ("u", "states", "volume")
 #: rows that only samples of later versions have: proposals and acceptances of exchange between the
 #: replicas in neighbouring states, per iteration ((states - 1) x [proposed, accepted]); samples in
-#: which any part lacks them have none (no part is refused for it)
-OPTIONAL_ROW_DATASETS = ("swaps",)
+#: which any part lacks them have none (no part is refused for it). And of a leg with water
+#: relocation moves: the moves attempted and accepted in every state, per iteration (states x
+#: [attempted into the sphere, accepted, attempted out of it, accepted])
+OPTIONAL_ROW_DATASETS = ("swaps", "relocations")
 TAIL_DATASETS = ("lrc_iter", "lrc_du")
 FRAME_DATASETS = ("frame_iter", "frames", "frame_box")
 #: the dataset in which samples of the previous version say how much of every dataset is stored
@@ -620,10 +622,12 @@ class LegStorage:
         return self._stored
 
     # -- appending ------------------------------------------------------------------
-    def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray, swaps: np.ndarray | None = None) -> int:
+    def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray, swaps: np.ndarray | None = None,
+               relocations: np.ndarray | None = None) -> int:
         n = self.n_iterations
         self._mem.rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8"),
-                               None if swaps is None else np.array(swaps, dtype="i8")))
+                               None if swaps is None else np.array(swaps, dtype="i8"),
+                               None if relocations is None else np.array(relocations, dtype="i8")))
         return n
 
     def append_record(self, iteration: int, record: dict) -> None:
@@ -671,6 +675,8 @@ class LegStorage:
             if all(len(row) > 3 and row[3] is not None for row in self._rows):
                 h5.create_dataset("swaps", data=np.stack([row[3] for row in self._rows]) if m else
                                   np.zeros((0, max(0, s - 1), 2), dtype="i8"))
+            if m and all(len(row) > 4 and row[4] is not None for row in self._rows):
+                h5.create_dataset("relocations", data=np.stack([row[4] for row in self._rows]))
             h5.create_dataset("lrc_iter", data=np.array([it for it, _ in tail], dtype="i8"))
             h5.create_dataset("lrc_du", data=np.array([du for _, du in tail], dtype="f8"))
             h5.create_dataset("frame_iter", data=np.array([it for it, _ in frames], dtype="i8"))
