@@ -5,6 +5,31 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-23 — [amendment] Review of the three settings: windows are held to the System they were made for
+- What: independent review of dd075d6..0815fd4 (five findings, each reproduced), and a second
+  reader of the fix (none at that level; two lesser points closed). The start configurations
+  record the settings of the System (`alchemy`, `sampling.rest2`) and the windows they are of: a
+  run that gives other settings to a leg with windows and no samples is refused before it writes
+  anything; start configurations of other windows are made again. Correction of the entry below:
+  a leg of an earlier version has no `start_configurations` in its result. Settings of `alchemy`
+  added since no longer make the same YAML "another configuration". Unit tests 706 passed, GPU
+  tests 26 passed (the image `cufep:dev`).
+- Why: the review before the push (`.claude/rules/fep-invariants.md`).
+- Refs: PR #9, `docs/protocol.md` (adaptive lambda scheduling), `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [progress] Accuracy plan, steps 1 and 3: repeats, REST2 off, 10 ns, MD at the decoupled end
+- What: image of e77a6c5, the recorded settings of the full runs, kcal/mol. ejm_49 (experiment
+  -7.75): -11.84 ± 0.57 (the benchmark run), -8.92 ± 0.44, -9.40 ± 0.29, standard deviation 1.57
+  (complex leg 1.29); REST2 off: -9.76 ± 0.39; the first repeat continued to 10 ns: -9.21 ± 0.43.
+  4k (-11.54), three runs started by the walk: -14.49 ± 0.51, -13.07 ± 0.56, -16.50 ± 0.40 (1.72);
+  the benchmark run, whose windows were started one from another: -20.32 ± 0.52 (complex leg 44.87
+  against 38.78, 37.36, 40.90); to 10 ns: -14.38 ± 0.60. Plain MD: the bilayer of 4k with the solute
+  held stops shrinking at about 70 ns (62.1 nm2; about 66 after the default 10 ns); at the
+  decoupled end of 4k the water in the place of the ligand rises from 10.7 to about 15 molecules in
+  20 to 30 ns, at that of ejm_49 it does not change.
+- Why: steps 1 and 3 of the plan.
+- Refs: the plan ("手順 1 と 3 の結果"), `spikes/m22_decoupled_end_md.py`, `runs/acc_*` (untracked)
+
 ### 2026-11-23 — [design] Three settings: the start of the windows, annihilated electrostatics, soft-core power
 - What: `lambda_schedule.adaptive.start_configurations` (walk, the default, or sequential): what
   the windows of the precalculation start from no longer follows from the number of workers a leg
