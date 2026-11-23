@@ -112,6 +112,17 @@ Open items:
 
 ## Change Log
 
+### 2026-11-23 — [amendment] Second review by Codex (8dc042e): the origin of windows, a given schedule of the leg itself
+- What: review 6015842320 (four P2); three fixed, one answered. `--reschedule` with
+  `lambda_schedule.file` naming a file of the leg that is set aside is refused before anything is
+  moved. Windows of adaptive lambda scheduling that a leg had without start configurations get
+  the note that their origin is not recorded also when a file is named. That note is read from
+  the files of the leg whenever its result is made (`cufep analyze` too). Not changed: a leg whose
+  windows 2861b93, a commit inside this pull request, sampled first (no such directory exists).
+  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
 ### 2026-11-23 — [amendment] Review by Codex of 2861b93: records that hold through other versions and interruptions
 - What: review 6015499088 (one P1, seven P2), each fixed. A result that lacks
   `annihilate_electrostatics` takes it from its samples, before a run and in the combination; a

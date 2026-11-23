@@ -2159,6 +2159,14 @@ def test_a_result_says_how_the_windows_of_its_leg_were_started(tmp_path):
              made_with=json.dumps({"start_configurations": "walk of the given windows", "walk_ps": 50.0}))
     result = leg_result_from_samples(leg, AnalysisConfig(), {"leg": "solvent"})
     assert result["start_configurations"] == "walk of the given windows, 50 ps in each window"
+    assert result["origin_not_recorded"] == []
+    # what that record says of the origin of the windows is in the result whoever makes it, also
+    # `cufep analyze` of a leg whose run had not written a result yet (review of 8dc042e)
+    np.savez(leg / "start_configs.npz", positions=np.zeros((3, 1, 3)), made_with=json.dumps({
+        "settings": {}, "origin_not_recorded": "the lambda windows and their start configurations"}))
+    result = leg_result_from_samples(leg, AnalysisConfig(), {"leg": "solvent"})
+    assert result["origin_not_recorded"] == ["the lambda windows and their start configurations"]
+    assert any("without a record of what it was made from" in note for note in result["notes"])
 
 
 def test_legs_with_and_without_annihilated_electrostatics_are_not_combined(tmp_path):
@@ -2419,6 +2427,24 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
                              "solvent", 0)
     # a leg that keeps the windows it has takes no schedule: nothing of the file is asked
     check_given_schedule(unscaled_given, lig, "solvent", 0)
+    # ... and a leg that is started anew is not given a file that is set aside with it (review of
+    # 8dc042e: the leg's own schedule.yaml passed the check and was gone when the leg came to take it)
+    own = config(lambda_schedule={"file": str(leg / "schedule.yaml")})
+    check_given_schedule(own, lig, "solvent", 0)
+    with pytest.raises(WorkflowError, match="a file of the leg that --reschedule sets aside"):
+        check_given_schedule(own, lig, "solvent", 0, reschedule=True)
+    # windows of adaptive lambda scheduling that a leg had before the run, without start
+    # configurations: the walk through them records that their origin is not known, whether or not
+    # a file is named now (review of 8dc042e); windows of the configuration or of a file do not
+    from cufep.workflow import given_windows_record
+
+    chosen = fixed_schedule(stages, {"discharge": 3, "vanish": 4}, default.sampling.rest2.scale)
+    chosen.mode = "adaptive"
+    assert given_windows_record(50.0, chosen, True) == {
+        "start_configurations": "walk of the given windows", "walk_ps": 50.0, "windows": "given",
+        "origin_not_recorded": "the lambda windows"}
+    assert "origin_not_recorded" not in given_windows_record(50.0, chosen, False)
+    assert "origin_not_recorded" not in given_windows_record(50.0, schedule, True)
     with pytest.raises(WorkflowError, match="REST2 scale of 1 but this leg runs with 1.5"):
         check_given_schedule(unscaled_given, lig, "solvent", 0, reschedule=True)
     check_leg_reuse(config(lambda_schedule={"file": str(tmp_path / "given.yaml")}), tmp_path / "again", "solvent", 0,

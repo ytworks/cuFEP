@@ -2370,7 +2370,8 @@ def run_leg(job: LegJob) -> dict:
 
         # ---- 4. lambda schedule ----------------------------------------------------------------
         ls = cfg.lambda_schedule
-        if ls.file is not None and not sched_file.exists():
+        found_in_leg = sched_file.exists()             # windows the leg had before this run
+        if ls.file is not None and not found_in_leg:
             src = given_schedule_file(cfg, ligand_dir_name(job.ligand), job.leg, job.repeat)
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
@@ -2437,13 +2438,7 @@ def run_leg(job: LegJob) -> dict:
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
                 check_scale(schedule)                      # before anything is written for these windows
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
-                made_with = {"start_configurations": "walk of the given windows", "walk_ps": float(ls.fixed_walk_ps),
-                             "windows": "given"}
-                if sched_file.exists() and ls.file is None and schedule.mode == "adaptive":
-                    # windows that adaptive lambda scheduling chose in an earlier run of this leg, which
-                    # left no start configurations with them (a version that wrote the schedule first):
-                    # the settings they were chosen with are not recorded, and the result says so
-                    made_with["origin_not_recorded"] = WINDOWS_ORIGINS[1]
+                made_with = given_windows_record(ls.fixed_walk_ps, schedule, found_in_leg)
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
                 # the windows of an iteration run at the same time on the GPUs the scheduler grants
@@ -2748,8 +2743,14 @@ def check_given_schedule(cfg: Config, lig_dir: Path, leg: str, repeat: int, resc
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT
 
     given = given_schedule_file(cfg, Path(lig_dir).name, leg, repeat)
-    if given is None or ((Path(lig_dir) / f"repeat_{repeat}" / leg / "schedule.yaml").exists() and not reschedule):
+    leg_dir = Path(lig_dir) / f"repeat_{repeat}" / leg
+    if given is None or ((leg_dir / "schedule.yaml").exists() and not reschedule):
         return
+    if reschedule and given.resolve().is_relative_to(leg_dir.resolve()):
+        # (review of 8dc042e: the file passed the check, was set aside with the leg, and was gone
+        # when the leg came to take it, after its samples and its result had been set aside too)
+        raise WorkflowError(f"lambda_schedule.file names {given}, a file of the leg that --reschedule sets aside. "
+                            "Nothing was changed. Give a copy of it from outside the directory of the leg.")
     if not given.exists():
         raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {given}")
     _schedule_of_this_leg(given, leg, list(STAGES_COMPLEX if leg == "complex" else STAGES_SOLVENT))
@@ -2783,6 +2784,36 @@ def take_given_schedule(leg_dir: Path, src: Path, leg: str, stages: list[str], r
 #: sampled for the first time by a later one; windows that adaptive lambda scheduling chose in an
 #: earlier run which left no start configurations with them
 WINDOWS_ORIGINS = ("the lambda windows and their start configurations", "the lambda windows")
+
+
+def given_windows_record(walk_ps: float, schedule, found_in_leg: bool) -> dict:
+    """How start configurations were made by the walk through windows that the precalculation of
+    this run did not choose (:func:`start_record`): the windows of the configuration (mode
+    fixed), a schedule this run took from ``lambda_schedule.file``, or a schedule the leg had
+    before the run without start configurations (``found_in_leg``).
+
+    Windows of the last kind that adaptive lambda scheduling chose come from an earlier run of
+    the leg which left no start configurations with them, a version that wrote the schedule
+    first: the settings they were chosen with are not recorded, and the record says so, whatever
+    ``lambda_schedule.file`` names now (review of 8dc042e: with a file named, which a leg that has
+    windows does not take, the note was left out)."""
+    record = {"start_configurations": "walk of the given windows", "walk_ps": float(walk_ps), "windows": "given"}
+    if found_in_leg and schedule.mode == "adaptive":
+        record["origin_not_recorded"] = WINDOWS_ORIGINS[1]
+    return record
+
+
+def windows_origin_of(leg_dir: Path) -> str | None:
+    """What the record written with the start configurations of a leg says is not recorded of the
+    origin of its windows (one of :data:`WINDOWS_ORIGINS`), or None."""
+    file = Path(leg_dir) / "start_configs.npz"
+    if not file.exists():
+        return None
+    try:
+        origin = start_record_of(file).get("origin_not_recorded")
+    except (OSError, ValueError, KeyError):
+        return None
+    return origin if origin in WINDOWS_ORIGINS else None
 
 
 def adopt_windows(leg_dir: Path, schedule, configs: tuple, cfg: Config, made: dict) -> dict:
@@ -3320,6 +3351,11 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
     # what the run noted besides, without the verdicts of earlier versions
     notes += [n for n in (run.get("notes") or []) if n not in notes and not str(n).startswith(_ANALYSIS_NOTES)]
     origin_not_recorded = list(run.get("origin_not_recorded") or [])
+    # what the files of the leg say of its windows, whoever asks (review of 8dc042e: `cufep analyze`
+    # of a leg that was stopped before its first result did not have the note of its run)
+    windows_origin = windows_origin_of(leg_dir)
+    if windows_origin and windows_origin not in origin_not_recorded:
+        origin_not_recorded.append(windows_origin)
     # the pressure is the one the samples were made under; samples that do not record it have none
     pressure = conditions.get("pressure_bar")
     release, release_analytical = restraint_release_of(leg_dir, attrs, temperature)
