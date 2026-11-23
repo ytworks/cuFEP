@@ -578,3 +578,4 @@ Refs: this pull request; issue #5; `benchmarks/results/`; `docs/protocol.md` ("I
 
 - イメージ `cufep:41760a1`(PR #9 の先頭。既定値の違いは E1 の「窓は worker の数によらず walk から始める」だけ)、GPU 8 枚、1 化合物 1 計算、production 5 ns。A2A、TYK2 の順(`runs/configs/chain_full_benchmarks_e1.sh`、`runs/benchmark_{a2a,tyk2}_full_41760a1`)。2026-11-23T12:17Z に開始。
 - 比べる相手は e77a6c5 の run(TYK2: 平均誤差 -1.20、平均誤差を除いた RMSE 1.25、τ 0.47。A2A: -4.14、2.68、0.34)。結果はここに追記する。
+- 変更(同日、オーナーの指示: 今回は 1 リガンドずつ実行する): セットをまとめて走らせる実行は開始 4 分で止め、同じディレクトリで 1 リガンドずつ、計算全体を GPU 8 枚で走らせている(`runs/configs/chain_benchmarks_e1_by_ligand.sh`、2026-11-23T12:21Z に開始)。順番は、A2A が 4r、4j、4h、4k、4n、4c、4q(e77a6c5 で逐次だった 7 件)、4g、4l、4i、4a、4b、4d、4o、4f、4e、4m。続けて TYK2 が ejm_45、ejm_47、jmc_23、ejm_55(同 4 件)、ejm_49、ejm_54、jmc_30、ejm_43、ejm_44、ejm_48、jmc_27、ejm_46、ejm_42、jmc_28、ejm_31、ejm_50。1 件終わるごとに、e77a6c5 の値と実験値に対して判定する。
