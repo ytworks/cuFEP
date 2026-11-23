@@ -1,5 +1,5 @@
 # 二重層は拘束条件の MD だけ、複合体レグの FEP は水中
-Status: In progress
+Status: In progress (2026-11-24: オーナーの指示で A2A の run を 4k と 4e の 2 本で止めた。設定と PR #14 の扱いはオーナーの決定待ち)
 Refs: this pull request; `docs/configuration.md` (`membrane.complex_leg`); `docs/protocol.md` ("Systems", "Steps of one leg"); `benchmarks/results/a2a/`
 
 ## Context
@@ -105,3 +105,13 @@ A2A のベンチマークで見る。
 - 4k: 窓を walk で始めた二重層の 3 本(`runs/acc_base_a2a_4k_{1,2,3}`、イメージ e77a6c5)は
   -14.49、-13.07、-16.50(平均 -14.69、標準偏差 1.72)。複合体レグ 38.78、37.36、40.90。
   C-alpha の RMSD 1.60、1.60、1.46 A。拘束の解放は水中 -9.58、二重層 -9.57 から -9.60。
+
+### 2026-11-24: オーナーの指示で run を止めた
+
+- 3 本目(4g)の途中、2026-11-23T16:06:55Z に止めた。4g は準備と水中の平衡化までで、結果は無い。
+  結果があるのは上の表の 4k と 4e の 2 本。セットの統計は出していない。
+- 2 本の差(水中 - 二重層): 4k は比較対象(窓を 1 つずつ順に始めた run)に対して +8.21、窓を walk で
+  始めた二重層の 3 本の平均に対して +2.58。4e は -2.66。1 計算のばらつきとして測ってあるのは 4k の
+  二重層の 3 本の標準偏差 1.72。
+- ディレクトリは残してある(`runs/benchmark_a2a_full_water_a34bbe2`、`runs/a2a_water_smoke_a34bbe2`、
+  進行の記録 `runs/a2a_water_a34bbe2.log`。追跡していない)。設定は PR #14 にあり、既定は `bilayer` のまま。
