@@ -1,5 +1,5 @@
 # 精度の改善: 誤差の原因の測定と、解決策の実装
-Status: In progress (手順 0〜3 済み。手順 4 は 4a、4b、4c を実装済み(独立レビューの指摘 5 件を修正)、4e は関数と保存データでの評価まで、4d は受理率の測定まで。手順 5 は、新しい設定の 2 回(ejm_49)が済み、二重層の平衡化 100 ns の 1 回(4k)と E3 の対照 1 回(ejm_49)を実行中)
+Status: In progress (手順 0〜3 済み。手順 4 は 4a、4b、4c を実装済み(独立レビューの指摘 5 件を修正)、4e は設定 `analysis.detect_equilibration` まで実装済み、4d は受理率の測定まで。手順 5 は、新しい設定の 2 回と E3 の対照 1 回(どれも ejm_49)が済み、二重層の平衡化 100 ns の 1 回(4k)と、E3 の対照の 10 ns への延長を実行中)
 Refs: this pull request; issue #5; `benchmarks/results/`; `docs/protocol.md` ("Interactions inside the ligand", "Adaptive lambda scheduling", "REST2", "How cuFEP compares"); `docs/configuration.md`
 
 ## Context
@@ -390,3 +390,17 @@ Refs: this pull request; issue #5; `benchmarks/results/`; `docs/protocol.md` ("I
 
 - ΔG bind も 2 つの leg の値も、既定の 3 回の範囲の中にある。
 - ALS が vanish 段階に足した窓は、complex leg で 9、solvent leg で 9。NOT RELIABLE はない。独立サンプルが 50 未満の窓が両方の leg にある(complex 36、solvent 23)。production の後半と前半の差は complex leg +0.21、solvent leg +0.35。
+
+**E3 の対照: 消去側の 7 窓を、緩和した消去端から始める、ejm_49 の complex leg、1 回**(`runs/acc_e3_tyk2_ejm_49`、イメージ `cufep:e77a6c5`、GPU 4 枚。作り方は上の「E3 の対照の作り方」。準備、平衡化、拘束、35 個の λ 窓、solvent leg は 1 回目の run のもの)
+
+| run | ΔG bind | complex leg | 前半 / 後半 | production の 5 分割 | overlap の最小 | 往復 |
+|---|---|---|---|---|---|---|
+| 1 回目(walk で始めた同じ leg) | -8.92 ± 0.44 | 40.91 ± 0.36 | 40.53 / 41.29 | 39.77、40.93、40.71、41.18、41.97 | 0.155 | 0 |
+| 消去側の 7 窓を緩和した消去端から | -3.28 ± 0.54 | 35.26 ± 0.48 | 34.31 / 36.23 | 34.34、34.31、35.00、36.58、35.89 | 0.156 | 0 |
+
+- 同じ leg(同じ窓、同じ拘束、同じ平衡化)で、7 窓の開始構造だけを変えると、complex leg が 5.65 下がった。既定の 3 回の complex leg の標準偏差(1.29)の 4.4 倍。実験値は -7.75 で、既定は結合が強すぎる側、この対照は弱すぎる側にある。
+- 差は、`lambda_sterics` 0.30〜0.10 の窓の間(27 番から 32 番)だけで生じている。各窓の自由エネルギー(1 番目の窓を 0 として、対照 − 1 回目): 26 番まで +0.5 以内、27 番 +0.15、28 番 -1.11、29 番 -2.99、30 番 -3.74、31 番 -4.70、32 番 -5.61、34 番 -5.65。
+- 置き換えた窓と元の窓の境(27 番と 28 番)で、隣の窓との overlap は 0.181(1 回目は 0.227)、交換の受理率は 0.13(この leg で最も低い)。NOT RELIABLE はない。
+- 対照の leg の値は production の間に上がっていく(前半 34.31、後半 36.23)。1 回目の leg も上がっている(40.53、41.29)。5 ns の production では、開始構造による差は消えない。
+- この対照の開始構造は、`lambda_sterics` が 0 でない窓の平衡の構造ではない(リガンドが完全に消えた状態で緩和した環境を、5 ps ずつ歩かせて戻しただけ)。だから、この値は「より正しい値」ではなく、開始構造を反対側に振ったときの値として読む。
+- 続けて、この対照を 10 ns まで延ばす run を始めた(`runs/acc_e3_ext10_tyk2_ejm_49`、条件つきの 1 回): leg の値が上がり続けるかどうかを見る。

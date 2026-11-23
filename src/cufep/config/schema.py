@@ -579,6 +579,11 @@ class AnalysisConfig(_Section):
     #: number of time blocks for the standard error of every part of the production: each half,
     #: each point of the forward and reverse series, each consecutive block
     part_error_blocks: int = Field(default=5, ge=2)
+    #: automatic equilibration detection (Chodera 2016, as openmmtools applies it to replica
+    #: exchange and OpenFE's protocols run it): after the equilibration of
+    #: sampling.equilibration_ns, the iterations before the time origin that leaves the most
+    #: uncorrelated samples of the effective energy are left out of the analysis as well
+    detect_equilibration: bool = False
 
 
 class ResourcesConfig(_Section):

@@ -619,6 +619,20 @@ free energy are not affected, and a leg is sampled by one backend.
 
 ### Free energy and uncertainty of a leg
 
+The production that is analysed begins after the equilibration of the run
+(`sampling.equilibration_ns` per lambda window). With `analysis.detect_equilibration: true` it
+begins later: automatic equilibration detection (Chodera 2016, as openmmtools applies it to
+replica exchange) takes the effective energy of every iteration of the production, the sum over
+the replicas of the reduced potential of each in the state it was simulated in, and among 100
+time origins spread evenly over it the one from which the series has the most uncorrelated
+samples; the iterations before that origin are left out as well. The free energy, every part of
+the analysis below and the numbers of the structure are then of the remaining iterations, and
+the result records what was left out (`equilibration_detected`: iterations, the statistical
+inefficiency and the number of uncorrelated samples from there on). Only the start is taken
+from the detection: the samples are thinned as described next, with or without it. The default
+is off (`docs/configuration.md` gives the source and what the detection does on the stored
+benchmark runs).
+
 MBAR assumes uncorrelated samples. The samples of every lambda window are therefore thinned
 by the statistical inefficiency g of that window: the window keeps every ceil(g)-th
 iteration. g is taken from the energy difference between the window and a neighbouring one,

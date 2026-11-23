@@ -50,7 +50,7 @@ benchmark sets with the present defaults and the accuracy pages written from it 
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 706 passed (2026-11-23, the branch of PR #9 with the three settings of the accuracy plan, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| Unit tests (CPU) | 707 passed (2026-11-23, the branch of PR #9 with the four settings of the accuracy plan, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
 | GPU tests | 26 passed (2026-11-23, one GPU, the same tree and image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7. In the full TYK2 run with the present defaults (e77a6c5, PR #8): -10.08 ± 0.37 (complex leg 40.43, solvent leg 19.79; 33 and 18 windows; lowest overlap 0.154 and 0.189; a window with fewer than 50 independent samples in the complex leg) |
@@ -68,11 +68,12 @@ Open items:
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, PR #9): every remedy
   proposed for the errors gets a treatment; defaults change only by the owner's decision. One
   calculation varies by a standard deviation of 1.57 kcal/mol for ejm_49 and 1.72 for 4k (three
-  runs each); the bilayer of A2A needs about 70 ns to stop shrinking. New settings, defaults
-  unchanged: `lambda_schedule.adaptive.start_configurations`; one run each on ejm_49 (defaults:
-  -11.84, -8.92, -9.40) of `alchemy.annihilate_electrostatics` (-7.71 ± 0.41) and
-  `alchemy.softcore_b` 2 with alpha 1 (-8.78 ± 0.34). Running: 4k with 100 ns of bilayer
-  equilibration, the control of E3. Not yet: RelocationMC, equilibration detection as a setting.
+  runs each). New settings, defaults unchanged: `start_configurations` of the precalculation,
+  `analysis.detect_equilibration`, and, one run each on ejm_49 (defaults: -11.84, -8.92, -9.40),
+  `alchemy.annihilate_electrostatics` (-7.71 ± 0.41) and `alchemy.softcore_b` 2 (-8.78 ± 0.34).
+  The same complex leg of ejm_49 with its last 7 windows started from the relaxed decoupled end:
+  35.26 against 40.91. Running: 4k with 100 ns of bilayer equilibration, that control to 10 ns.
+  Not yet: RelocationMC (how to compute the trial energies is the owner's decision).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -82,8 +83,7 @@ Open items:
   its three runs differ by 0.30 kcal/mol at most; B and C, with as many and more windows, by
   2.07 and 5.02, and that is not explained (C is not investigated, the owner's order).
 - Plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (done, PR #8): by the
-  owner's order no unit tests, GPU tests or reviews were run for it (it changes no file of
-  `src/`). Left: the GitHub Wiki.
+  owner's order no unit tests, GPU tests or reviews were run for it (no file of `src/` changed).
 - Workers during the precalculation of adaptive lambda scheduling (both runs of PR #8; no fix yet):
   a leg asks once for one worker per window of its start and keeps them through all iterations
   (`request_devices(..., pinned=True)` in `src/cufep/workflow.py`). With a start of 30 windows two
@@ -111,6 +111,30 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [progress] Accuracy plan, step 5: annihilated electrostatics, the squared soft-core, the control of E3
+- What: one run each on ejm_49 (experiment -7.75; the defaults three times: -11.84, -8.92, -9.40;
+  kcal/mol; everything else as the full run). `alchemy.annihilate_electrostatics`: -7.71 ± 0.41;
+  two torsions of the ligand that stayed as in the input are turned at the end in 23 and 17 of 36
+  complex windows and 16 and 11 of 17 solvent windows. `alchemy.softcore_b` 2 with alpha 1:
+  -8.78 ± 0.34 (40 and 24 windows). Control of E3, the first repeat's complex leg with its 7
+  windows of sterics 0.25 or less started from the decoupled end after 50 ns there: 35.26 ± 0.48
+  against 40.91 ± 0.36, the whole difference between sterics 0.30 and 0.10; it rises during the
+  production (halves 34.31, 36.23); binding free energy -3.28 ± 0.54. One run each: no cause is
+  established. Not finished: 4k with 100 ns of bilayer equilibration; that control to 10 ns.
+- Why: step 5 of the plan (one run per new setting; controls whose condition was met).
+- Refs: the plan ("手順 5 の結果"), `runs/acc_*` (untracked), `spikes/m25_*.py`
+
+### 2026-11-23 — [design] `analysis.detect_equilibration`: automatic equilibration detection as a setting
+- What: off by default. On, the analysis of a leg leaves out, after `sampling.equilibration_ns`,
+  the iterations before the time origin from which the effective energy has the most uncorrelated
+  samples (the rule of openmmtools, which OpenFE's protocols run); the free energy, its parts and
+  the numbers of the structure are of the rest, and the result records what was left out. Only
+  the start is taken from the detection; the samples are decorrelated window by window as before
+  (cuFEP's own). The analysis of the default is unchanged (version 10, the pinned numbers). Unit
+  tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: step 4e of the plan; what it does on the stored benchmark legs is in the entry below.
+- Refs: `docs/configuration.md` (basis), `docs/protocol.md`, `tests/unit/test_equilibration.py`
 
 ### 2026-11-23 — [progress] Accuracy plan: equilibration detection on the stored legs, acceptance of water relocation
 - What: no run. Automatic equilibration detection (the rule of openmmtools) on the production of

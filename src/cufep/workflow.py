@@ -2788,12 +2788,35 @@ def analysis_record(cfg) -> dict:
 
     settings = analysis_settings(cfg)
     a = settings.analysis
-    return {"version": ANALYSIS_VERSION, "structure": STRUCTURE_VERSION, "lrc": a.lrc,
-            "lrc_cutoff_nm": float(a.lrc_cutoff_nm),
-            "min_overlap": float(a.min_overlap),
-            "min_effective_samples": float(a.min_effective_samples),
-            "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
-            "error_blocks": [int(count) for count in a.error_blocks], "part_error_blocks": int(a.part_error_blocks)}
+    record = {"version": ANALYSIS_VERSION, "structure": STRUCTURE_VERSION, "lrc": a.lrc,
+              "lrc_cutoff_nm": float(a.lrc_cutoff_nm),
+              "min_overlap": float(a.min_overlap),
+              "min_effective_samples": float(a.min_effective_samples),
+              "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
+              "error_blocks": [int(count) for count in a.error_blocks], "part_error_blocks": int(a.part_error_blocks)}
+    # a setting that was added later is recorded only when it is on: a result made without it has
+    # the record every earlier result has, and is not made again for a key
+    if a.detect_equilibration:
+        record["detect_equilibration"] = True
+    return record
+
+
+def production_start(samples: dict, n_equilibration: int, analysis) -> tuple[int, dict | None]:
+    """Where the analysis of stored samples begins, and what automatic equilibration detection
+    found (None with ``analysis.detect_equilibration`` off): the end of the equilibration of the
+    run, ``n_equilibration``, and with the detection the iterations it leaves out after that
+    (:func:`cufep.analysis.mbar.detect_equilibration`, on the iterations from the end of the
+    equilibration on). The one place for the result of a leg and for the check of what an
+    analysis needs, so that both take the same production."""
+    from cufep.analysis.mbar import detect_equilibration
+
+    a = getattr(analysis, "analysis", analysis)
+    if not a.detect_equilibration:
+        return int(n_equilibration), None
+    found = detect_equilibration(samples["u"][n_equilibration:], samples["states"][n_equilibration:])
+    if found is None:                      # too few iterations, or an energy that does not change
+        return int(n_equilibration), {"iterations": 0, "statistical_inefficiency": None, "effective_samples": None}
+    return int(n_equilibration) + int(found["iterations"]), found
 
 
 def analyse_leg_directory(directory, config=None, equilibration_ns: float | None = None,
@@ -3161,14 +3184,18 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         raise WorkflowError(f"the samples in {leg_dir} cannot be analysed with these settings: {'; '.join(problems)}")
     if schedule is None and (leg_dir / "schedule.yaml").exists():
         schedule = Schedule.load(leg_dir / "schedule.yaml")
+    # the production that is analysed: from the end of the equilibration of the run, or with
+    # analysis.detect_equilibration from where the detection puts it; the free energy and the
+    # numbers of the structure are of the same iterations
+    start, detected = production_start(samples, n_equilibration, a)
     try:
-        res = analyze_leg(samples, temperature, n_equilibration=n_equilibration, n_fractions=a.convergence_points,
+        res = analyze_leg(samples, temperature, n_equilibration=start, n_fractions=a.convergence_points,
                           n_blocks=a.convergence_blocks, error_blocks=a.error_blocks,
                           part_error_blocks=a.part_error_blocks, tail=a.lrc, min_overlap=a.min_overlap)
     except NoCorrection as exc:
         raise WorkflowError(f"the samples in {leg_dir}: {exc}") from exc
     correction = res.correction
-    structure = structural_analysis(samples, n_equilibration)
+    structure = structural_analysis(samples, start)
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
     # the notes of the pre-equilibration and the restraint, and what their files say as numbers
     notes, file_numbers = notes_of_leg_files(leg_dir)
@@ -3188,6 +3215,10 @@ def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | 
         "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
         "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
         "n_iterations_stored": int(samples["u"].shape[0]), "n_equilibration_iterations": int(n_equilibration),
+        # with analysis.detect_equilibration: the iterations of the production that the detection left
+        # out after the equilibration of the run, with the statistical inefficiency and the number of
+        # uncorrelated samples of the effective energy from there on (None: the detection is off)
+        "equilibration_detected": detected,
         # decoupling with the full LJ range (MBAR minus the tail correction of the same iterations),
         # its standard error (cufep.analysis.mbar.TimeRangeEstimator), and the MBAR part alone
         "delta_g_decouple": res.delta_g, "delta_g_error": res.delta_g_error,
@@ -3456,6 +3487,7 @@ def samples_analysis_problems(leg_dir: Path, analysis) -> list[str]:
     boundary = equilibration_boundary(attrs, leg_dir)
     if boundary is None:
         return ["they do not record where their production begins"]
+    boundary = production_start(samples, boundary, analysis)[0]
     n = int(samples["u"].shape[0]) - boundary
     if n < MIN_INDEPENDENT_SAMPLES:
         return [f"they hold {max(0, n)} iterations of production"]
