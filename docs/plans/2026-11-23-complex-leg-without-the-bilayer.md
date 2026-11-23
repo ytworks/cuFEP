@@ -54,3 +54,21 @@ A2A のベンチマークで見る。
   書かない。
 
 ## 記録
+
+### 2026-11-23: 実装
+
+- `membrane.complex_leg`(既定 `bilayer`)を実装した。準備(`prepare_ligand`)が 2 つの複合体を書き、
+  拘束条件の段階(`restraint_from_the_bilayer`)が二重層の系を平衡化して(`restraint_equil.npz`)
+  拘束を選び、アンカーを水中の系の番号に写す(`solute_correspondence`、`restraint_in_system`)。
+  `restraint.json` は、選んだときの系と番号(`md_system`)と、alchemical run が始まる配置
+  (`alchemical_start`)を記録し、レグはその 2 つのファイルと照合する(`check_restraint_of_leg`)。
+- 書いていない者による差分のレビュー(1 回): 誤った数値になる入力やディレクトリの状態は
+  見つからなかった。指摘 5 件のうち 4 件を直した。二重層の平衡化のファイルをレグ自身も設定と
+  照合する(`check_restraint_equil`)。原子の対応に鎖の名前を含める。`docs/protocol.md` の溶媒レグの
+  箱の形と `ligand_rmsd_from_input_A` の記述。変えなかった 1 件: `membrane.enabled: false` のときの
+  `complex_leg` は、ほかの `membrane.*` と同じく何もしない。
+- 溶媒レグ: cuPotential プラグインでは変更なし。stock OpenMM では `solvation.box_shape: auto` が
+  水中の複合体の形(dodecahedron)を溶媒レグの箱にも与える。
+- 単体テスト 714 passed、GPU テスト 26 passed(イメージ `cufep:dev`、作業ツリーのソース)。
+  実物の二重層を作る準備は単体テストでは通していない(二重層の構築を置き換えたテストだけ)。
+  設定を使った run はまだ無い。

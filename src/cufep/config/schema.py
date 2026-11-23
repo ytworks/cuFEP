@@ -71,6 +71,21 @@ class MembraneConfig(_Section):
     padding_nm: float = 1.5
     #: unrestrained MD of the bilayer before the alchemical run (replaces pre_equilibration md_ns)
     equilibration_ns: float = 10.0
+    #: what the alchemical run of the complex leg is made in when a bilayer is built: bilayer = the
+    #: complex in the bilayer; water = the complex in water, prepared from the same pose as a soluble
+    #: complex is, while the MD from which the restraint is chosen (restraints.selection:
+    #: interactions) still runs in the bilayer. cuFEP's own, to see what the bilayer does to a result
+    complex_leg: Literal["bilayer", "water"] = "bilayer"
+
+    @property
+    def in_complex_leg(self) -> bool:
+        """Whether the alchemical run of the complex leg is made in a bilayer."""
+        return bool(self.enabled) and self.complex_leg == "bilayer"
+
+    @property
+    def for_restraint_only(self) -> bool:
+        """Whether a bilayer is built for the MD of the restraint alone (``complex_leg: water``)."""
+        return bool(self.enabled) and self.complex_leg == "water"
 
 
 class ForceFieldConfig(_Section):
@@ -693,6 +708,13 @@ def configuration_problems(cfg: "Config") -> list[str]:
     water = water_problem(cfg.forcefield.water, membrane=bool(cfg.membrane.enabled))
     if water:
         problems.append(water)
+    if cfg.membrane.for_restraint_only and cfg.restraints.selection != "interactions":
+        # the bilayer of this setting is the system of the MD from which the restraint is chosen: with another
+        # selection there is no such MD, and a bilayer would be built that nothing uses
+        problems.append(
+            f"membrane.complex_leg is 'water': the bilayer is then built for the MD from which the restraint is "
+            f"chosen, which only restraints.selection: interactions has (it is '{cfg.restraints.selection}'). Use "
+            "restraints.selection: interactions, or membrane.complex_leg: bilayer")
     problems += initial_window_problems(cfg)
     if cfg.restraints.selection == "interactions":
         # the thresholds of the rule are numbers of frames, rounded down: none of them may be no frame

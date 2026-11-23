@@ -52,8 +52,8 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 707 passed (2026-11-23, the branch of PR #9 with the four settings of the accuracy plan, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 26 passed (2026-11-23, one GPU, the same tree and image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
+| Unit tests (CPU) | 714 passed (2026-11-23, the branch of PR #14 with `membrane.complex_leg`, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 26 passed (2026-11-23, one GPU, the same tree and image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); none of them builds a bilayer |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7. In the full TYK2 run with the present defaults (e77a6c5, PR #8): -10.08 ± 0.37 (complex leg 40.43, solvent leg 19.79; 33 and 18 windows; lowest overlap 0.154 and 0.189; a window with fewer than 50 independent samples in the complex leg) |
 | Starts of the complex leg (plan `docs/plans/2026-11-21-als-initial-window-design.md`, PR #7) | A is the default since 2026-11-22 (the owner's choice), so its three runs are runs of the TYK2 example as it is now. TYK2 example, three starts of the complex leg, three calculations each with the same YAML and seed (image of 5e2cf33, 4 GPUs each; the overlap of a pair alone, threshold 0.30; solvent leg as the default), kcal/mol. A (30 windows, those of mode fixed): -9.36 ± 0.56, -9.63 ± 0.37, -9.33 ± 0.51; mean -9.44, standard deviation 0.17. B (30 windows, denser at vanish 0.7 to 0.9): -10.01 ± 0.34, -9.64 ± 0.52, -11.71 ± 0.53; -10.45, 1.11. C (59 windows placed as B): -11.43 ± 0.46, -6.41 ± 0.59, -7.64 ± 0.43; -8.50, 2.62. The four runs of the row above: -10.39, 2.09. Complex leg, standard deviation: 0.20, 1.23, 2.20 (1.86). Lowest overlap 0.141 to 0.153 (A), 0.128 to 0.129 (B), 0.081 to 0.085 (C); a window with fewer than 50 independent samples in the complex leg of 2, 1 and 1 of the three runs; 0 or 1 round trip in the complex leg of every run. Three runs give a standard deviation only roughly. Tables: the plan (`spikes/m19_window_runs.py`) |
@@ -64,7 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md` (in progress): `membrane.complex_leg`.
+- Plan `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md` (in progress, PR #14): `membrane.complex_leg` is implemented, off by default; no run with it yet (A2A, one ligand at a time).
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9): of the remedies it
@@ -111,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [design] `membrane.complex_leg`: the restraint from the bilayer, the alchemical run in water
+- What: a setting, default `bilayer` (no default, number of the analysis or stored result changes).
+  With `water` the preparation writes two complexes of one pose (`prep/complex.*` in water,
+  `prep/complex_bilayer.*`); the pre-equilibration of the bilayer (`restraint_equil.npz`) and the
+  MD of the restraint run in the bilayer, the alchemical run on the complex in water; the anchors
+  are the same atoms, held to the rules at the start of the alchemical run; only with
+  `restraints.selection: interactions`. cuFEP's own, off by default. A review by a reader who
+  did not write it: no wrong number found, five points, four fixed. Unit tests 714 passed, GPU
+  tests 26 passed (the image `cufep:dev`). No run with the setting yet.
+- Why: the plan of this day (the owner's order).
+- Refs: PR #14, `docs/configuration.md`, `docs/protocol.md` ("Systems"), `tests/unit/test_complex_leg_in_water.py`
 
 ### 2026-11-23 — [design] Plan: the bilayer for the MD of the restraint only, the complex leg in water
 - What: the owner's order. A setting `membrane.complex_leg: bilayer | water` (default `bilayer`,

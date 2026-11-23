@@ -230,7 +230,9 @@ def test_a_leg_result_gives_the_bilayer_and_the_pose_as_numbers_without_verdicts
     (archived / "equil.npz").unlink()
     (archived / "restraint.json").unlink()
     assert leg_files(archived) == {"equil.npz": legs["complex"] / "equil.npz",
-                                   "restraint.json": legs["complex"] / "restraint.json"}
+                                   "restraint.json": legs["complex"] / "restraint.json",
+                                   # the pre-equilibration of another system for the restraint, which this leg has not
+                                   "restraint_equil.npz": None}
     assert leg_result_from_samples(archived, cfg, run("complex"))["ligand_rmsd_from_input_A"] == 2.5
     for name in ("hrex", "result.json"):
         (archived / name).rename(legs["complex"] / name)

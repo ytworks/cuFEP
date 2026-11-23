@@ -175,6 +175,8 @@ def restraint_selection_lines(cfg) -> str:
             "solvent settles), a frame "
             f"every {ri.frame_interval_ps:g} ps, the first {ri.discard_ns:g} ns of each left out: {n} frames;",
             f"  on the backend of the leg ({cfg.backend.name}, fallback {cfg.backend.fallback});",
+            *(["  of the complex in the bilayer; the alchemical run is made on the complex in water "
+               "(membrane.complex_leg: water);"] if cfg.membrane.for_restraint_only else []),
             f"  an interaction is kept in {frames_needed(n, ri.min_frame_fraction)} frames or more "
             f"({ri.min_frame_fraction:g}), anchor angles within {ri.angle_range_deg[0]:g} to "
             f"{ri.angle_range_deg[1]:g} degrees;",

@@ -88,6 +88,29 @@ a water or an ion closer than 0.15 nm to another molecule, levels of cuFEP's own
 `Modeller.addMembrane` relaxes the lipids with a short MD whose random seed OpenMM does not
 let the caller set, so two preparations of one membrane system are not identical.
 
+With `membrane.complex_leg: water` (cuFEP's own, off by default: an option to see what the
+bilayer does to a result) the bilayer is built for the choice of the restraint alone. The
+preparation then writes two complexes of the pose that was given: the complex in the bilayer
+(`prep/complex_bilayer.*`) and the complex in water (`prep/complex.*`), built as a run without
+a bilayer builds it. The complex in the bilayer is pre-equilibrated as every bilayer system is
+(`restraint_equil.npz` in the directory of the leg), and the MD from which the restraint is
+chosen (`restraints.selection: interactions`, the only selection this can be used with) starts
+from there. The alchemical run of the complex leg is made on the complex in water, after the
+pre-equilibration of a complex in water (`equil.npz`): nothing stands in for the bilayer
+around the protein. The six anchors are the same atoms in both systems; the build of a
+bilayer can remove a crystal water or an ion that comes before the ligand, so the two number
+the ligand differently, and the anchors are named again as the complex in water numbers them.
+The preparation stops, before it writes anything, unless protein and ligand are the same
+atoms with the same bonds in both. Every candidate for the anchors is held to the rules of the
+anchors at the configuration the alchemical run starts from, as in every other calculation.
+The result of the complex leg says in which system the MD of its restraint was made
+(`restraint_choice`). Its `bilayer` numbers are those of the pre-equilibration in the bilayer,
+and `ligand_rmsd_from_input_A` is measured over the MD in the bilayer, as it is measured over
+the MD of the restraint in every other calculation. The solvent leg is prepared and run as
+without the setting; on stock OpenMM `solvation.box_shape: auto` gives its box the shape of
+the complex in water (a dodecahedron) where a bilayer in the alchemical run gives a cube, and
+with the cuPotential plugin it is a cube in both cases.
+
 ## Thermodynamic cycle
 
 ```
@@ -1057,7 +1080,12 @@ belong together:
   chosen and the restraint are used again only if the
   input files and the settings that went into them are the same (a trajectory also only if the
   pre-equilibration it started from is the one that is there). Only the lambda windows of a
-  leg can be determined again in place, with `--reschedule`.
+  leg can be determined again in place, with `--reschedule`. With `membrane.complex_leg: water`
+  the trajectories start from the pre-equilibration of the complex in the bilayer
+  (`restraint_equil.npz`), and the restraint is held to two files: to that one, and to the
+  pre-equilibration of the complex in water from which the alchemical run starts
+  (`equil.npz`), at which its anchors were held to the rules. A directory prepared with one
+  value of the setting is refused by a run with the other before anything is written.
 - A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg and of the
   REST2 scale of the run: its stages, its two end states and its scale are checked before the
   leg takes it over, and before the run writes anything. Give a directory as written by `cufep
@@ -1205,7 +1233,7 @@ The absolute binding protocol of OpenFE, from its documentation and source code 
 | restraint | Boresch, atoms chosen automatically, fixed force constants | from the interactions of unrestrained MD of the complex by default (`restraints.selection: interactions`); as OpenFE with `auto` |
 | water sampling | none | none |
 | GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
-| membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |
+| membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP. `membrane.complex_leg: water` (cuFEP's own, off by default) keeps the bilayer for the MD of the restraint and makes the alchemical run of the complex leg in water |
 
 Further differences:
 

@@ -134,6 +134,62 @@ def restraint_anchor_problems(host_atoms, guest_atoms, prep: dict) -> list[str]:
     return out
 
 
+def solute_correspondence(prep_from: dict, prep_to: dict) -> dict[int, int]:
+    """For two prepared systems of one complex (``topology``, ``solute``, ``protein`` and
+    ``ligand`` as :func:`load_prepared` gives them): the atom of ``prep_to`` for every atom of the
+    solute of ``prep_from``, protein and ligand.
+
+    The two are built from the same pose, and a builder only removes or appends molecules, so the
+    atoms of the solute come in the same order in both; their numbers need not be the same (only
+    the build of a bilayer can remove a crystal water or an ion, which come before the ligand).
+    Raises WorkflowError where the solutes are not the same atoms with the same bonds: name,
+    element, residue (name, number, insertion code), chain and whether protein or ligand, atom by
+    atom (the chain: two chains of one sequence and numbering differ in nothing else, and the
+    builders of OpenMM keep the names of the chains they are given). Exact; nothing is compared
+    within a tolerance."""
+    def of(prep):
+        atoms = list(prep["topology"].atoms())
+        solute = [int(i) for i in prep["solute"]]
+        protein, ligand = set(int(i) for i in prep["protein"]), set(int(i) for i in prep["ligand"])
+        rank = {i: r for r, i in enumerate(solute)}
+        described = [(atoms[i].name, None if atoms[i].element is None else atoms[i].element.symbol,
+                      atoms[i].residue.name, str(atoms[i].residue.id),
+                      (getattr(atoms[i].residue, "insertionCode", "") or "").strip(), i in protein, i in ligand,
+                      str(atoms[i].residue.chain.id))
+                     for i in solute]
+        bonds = {tuple(sorted((rank[a.index], rank[b.index]))) for a, b in prep["topology"].bonds()
+                 if a.index in rank and b.index in rank}
+        return solute, described, bonds
+
+    (solute_a, atoms_a, bonds_a), (solute_b, atoms_b, bonds_b) = of(prep_from), of(prep_to)
+    problem = None
+    if len(solute_a) != len(solute_b):
+        problem = f"{len(solute_a)} atoms of protein and ligand in one and {len(solute_b)} in the other"
+    else:
+        other = next((r for r, (a, b) in enumerate(zip(atoms_a, atoms_b)) if a != b), None)
+        if other is not None:
+            name = lambda d: f"{d[2]}{d[3]}{d[4]}:{d[0]} of chain {d[7]}"                   # noqa: E731
+            problem = (f"atom {other} of protein and ligand is {name(atoms_a[other])} in one and "
+                       f"{name(atoms_b[other])} in the other")
+        elif bonds_a != bonds_b:
+            first = sorted(bonds_a ^ bonds_b)[0]
+            problem = f"the bond between atoms {first[0]} and {first[1]} of protein and ligand is in one of them only"
+    if problem:
+        raise WorkflowError("the two prepared systems of the complex are not of the same protein and ligand: "
+                            f"{problem}. A restraint chosen in one cannot be used in the other; nothing was written")
+    return dict(zip(solute_a, solute_b))
+
+
+def restraint_in_system(restraint, atom_map: dict[int, int]):
+    """A Boresch restraint with its six anchors as another prepared system of the same solute
+    numbers them (``atom_map`` of :func:`solute_correspondence`). The reference values and force
+    constants are those of the atoms and do not change."""
+    from dataclasses import replace
+
+    return replace(restraint, host_atoms=tuple(atom_map[int(i)] for i in restraint.host_atoms),
+                   guest_atoms=tuple(atom_map[int(i)] for i in restraint.guest_atoms))
+
+
 def check_before_jobs(cfg: Config, lig_dir: Path, legs) -> None:
     """Refuse, before any job starts and before an earlier result of a leg is set aside, what the job
     of a complex leg would refuse from the prepared systems and the files of its leg: manual restraint
@@ -264,20 +320,29 @@ def _remove_clashing_waters(modeller, ligand_xyz_nm: np.ndarray) -> int:
     return len(doomed)
 
 
+def _solute_of(topology, ligand_atoms) -> dict:
+    """The atoms of the protein, of the ligand and of both (the solute) in a topology, as a
+    prepared system records them (:func:`_write_system`, :func:`load_prepared`)."""
+    from cufep.prep.protein import AMINO_ACIDS, CAPS
+
+    protein = [a.index for a in topology.atoms() if a.residue.name in AMINO_ACIDS or a.residue.name in CAPS]
+    ligand = [int(i) for i in ligand_atoms]
+    return {"topology": topology, "protein": protein, "ligand": ligand, "solute": sorted(set(protein) | set(ligand))}
+
+
 def _write_system(prep_dir: Path, name: str, modeller, system, ligand_atoms: list[int]) -> None:
     import openmm as mm
     import openmm.app as app
     import openmm.unit as unit
 
     from cufep.prep.ligand import LIGAND_RESNAME
-    from cufep.prep.protein import AMINO_ACIDS, CAPS
     from cufep.prep.topology_io import topology_to_dict
 
     top = modeller.topology
     pos = np.asarray(modeller.positions.value_in_unit(unit.nanometer), dtype=float)
     box = np.array([[float(v) for v in vec.value_in_unit(unit.nanometer)] for vec in top.getPeriodicBoxVectors()])
-    protein = [a.index for a in top.atoms() if a.residue.name in AMINO_ACIDS or a.residue.name in CAPS]
-    solute = sorted(set(protein) | set(ligand_atoms))
+    members = _solute_of(top, ligand_atoms)
+    protein, solute = members["protein"], members["solute"]
     publish_text(prep_dir / f"{name}_system.xml", mm.XmlSerializer.serialize(system))
     publish_text(prep_dir / f"{name}_topology.json", json.dumps(topology_to_dict(top)))
     publish_npz(prep_dir / f"{name}.npz", positions=pos, box=box, ligand=np.array(ligand_atoms, dtype=int),
@@ -359,10 +424,14 @@ def check_made_from(what: str, where: Path, stored: dict | None, current: dict, 
     return True
 
 
-def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape: str) -> list[str]:
-    """Where a ``prep.json`` without a record of its origin says something else than this run."""
+def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape: str,
+                        complex_leg: str = "bilayer") -> list[str]:
+    """Where a ``prep.json`` without a record of its origin says something else than this run.
+    ``complex_leg`` is ``membrane.complex_leg``: with a bilayer, what the complex of the alchemical
+    run is in (a file without a record of its origin has the bilayer complex alone)."""
+    in_leg = bool(membrane) and complex_leg == "bilayer"
     expected = {"ligand": ligand_name, "membrane": bool(membrane),
-                "complex_barostat": "membrane" if membrane else "isotropic", "box_shape": box_shape}
+                "complex_barostat": "membrane" if in_leg else "isotropic", "box_shape": box_shape}
     return [f"{key}: {info[key]} -> {value}" for key, value in expected.items() if key in info and info[key] != value]
 
 
@@ -594,9 +663,15 @@ ALCHEMY_SETTINGS_ADDED = {"softcore_b": 1, "annihilate_electrostatics": False}
 #: record of an analysis (:func:`analysis_record`)
 ANALYSIS_SETTINGS_ADDED = {"detect_equilibration": False}
 
+#: settings of ``membrane`` that were added after preparations were first recorded, with the value
+#: that gives the prepared systems those were: at that value a setting is not written to the record
+#: of a preparation (:func:`prep_made_from`)
+MEMBRANE_SETTINGS_ADDED = {"complex_leg": "bilayer"}
+
 #: the settings added later, by section of the configuration: a record of a configuration that an
 #: earlier version wrote is read with these values where it lacks them (``write_run_record``)
-SETTINGS_ADDED = {"alchemy": ALCHEMY_SETTINGS_ADDED, "analysis": ANALYSIS_SETTINGS_ADDED}
+SETTINGS_ADDED = {"alchemy": ALCHEMY_SETTINGS_ADDED, "analysis": ANALYSIS_SETTINGS_ADDED,
+                  "membrane": MEMBRANE_SETTINGS_ADDED}
 
 
 def alchemy_record(cfg: Config) -> dict:
@@ -907,16 +982,17 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     if equil_file.exists():
         eq = np.load(equil_file)
         check_equil_file(eq, equil_file, cfg, leg, in_membrane, leg_seed(cfg, repeat, leg), quiet)
+    # the system on which the MD for a restraint is made and the pre-equilibration it starts from: those of
+    # the leg, or the complex in the bilayer of a leg whose alchemical run is in water (restraint_system)
+    stage = restraint_system(prep_info) if is_complex else None
+    md_equil, md_in_membrane = equil_file, in_membrane
+    if stage is not None:
+        md_equil, md_in_membrane = leg_dir / RESTRAINT_EQUIL, stage.get("barostat") == "membrane"
+        check_restraint_equil(cfg, leg_dir, prep_info, leg_seed(cfg, repeat, leg), quiet)
     rfile = leg_dir / "restraint.json"
     if is_complex and rfile.exists():
         check_restraint_file(_read_json(rfile) or {}, rfile, cfg, quiet)
-        if equil_file.exists():
-            check_restraint_start(_read_json(rfile) or {}, rfile, np.load(equil_file))
-        elif ((_read_json(rfile) or {}).get("info") or {}).get("start") is not None:
-            raise WorkflowError(
-                f"the restraint in {rfile} was chosen from MD that started from the pre-equilibration of this leg, "
-                f"and {equil_file} is not there: a pre-equilibration that is made again is another start. Nothing "
-                "was changed; run the calculation in a new output.dir")
+        check_restraint_of_leg(_read_json(rfile) or {}, rfile, leg_dir)
     elif is_complex and cfg.restraints.selection == "interactions":
         # the trajectories from which the restraint is still to be chosen: those the leg has must be
         # ones of this run (the same settings, and the pre-equilibration they started from)
@@ -924,12 +1000,12 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
 
         stored = [k for k in range(int(cfg.restraints.interactions.trajectories))
                   if trajectory_file(leg_dir, k).exists()]
-        if stored and not equil_file.exists():
+        if stored and not md_equil.exists():
             raise WorkflowError(f"{trajectory_file(leg_dir, stored[0]).parent} holds MD for the restraint of this leg "
-                                f"but {equil_file}, which it started from, is not there. Nothing was changed; run the "
+                                f"but {md_equil}, which it started from, is not there. Nothing was changed; run the "
                                 "calculation in a new output.dir")
         if stored:
-            made_with = restraint_md_made_with(cfg, leg_seed(cfg, repeat, leg), in_membrane, np.load(equil_file))
+            made_with = restraint_md_made_with(cfg, leg_seed(cfg, repeat, leg), md_in_membrane, np.load(md_equil))
             for k in stored:
                 check_restraint_md_file(trajectory_file(leg_dir, k), k, made_with, quiet)
     if reschedule:
@@ -1000,11 +1076,12 @@ def check_prepared(cfg: Config, ligand, lig_dir: Path, membrane: bool, box_shape
     info = json.loads(done.read_text())
     check_made_from(f"the prepared systems of {ligand.name}", lig_dir / "prep", info.get("made_from"),
                     prep_made_from(cfg, ligand, membrane, box_shape), log,
-                    contradictions=prep_contradictions(info, ligand.name, membrane, box_shape))
+                    contradictions=prep_contradictions(info, ligand.name, membrane, box_shape,
+                                                       cfg.membrane.complex_leg))
     from cufep.prep.solvate import box_height_problem
 
     # a box an earlier version made too small for the cutoff: refused before any MD
-    for leg in ("complex", "solvent"):
+    for leg in ("complex", "solvent", BILAYER_COMPLEX):
         stored = lig_dir / "prep" / f"{leg}.npz"
         if stored.exists():
             problem = box_height_problem(np.load(stored)["box"], cfg.dynamics.cutoff_nm)
@@ -1056,8 +1133,13 @@ def prep_made_from(cfg: Config, ligand, membrane: bool, box_shape: str) -> dict:
         "dynamics": {k: data["dynamics"][k] for k in ("cutoff_nm", "hmr_mass_amu", "constraints")},
         "solvation": dict(data["solvation"], box_shape=box_shape),
         "thermodynamics": {k: data["thermodynamics"][k] for k in ("ionic_strength_M", "ph")},
+        # membrane.complex_leg was added later: its value bilayer is what every preparation before it did and
+        # is not recorded, so that those preparations are still used; water (a second prepared complex) is
         "membrane": dict({k: data["membrane"][k] for k in ("orientation", "lipid", "padding_nm")} if membrane else {},
-                         enabled=bool(membrane)),
+                         enabled=bool(membrane),
+                         **({"complex_leg": data["membrane"]["complex_leg"]}
+                            if membrane and data["membrane"]["complex_leg"] != MEMBRANE_SETTINGS_ADDED["complex_leg"]
+                            else {})),
     }
 
 
@@ -1246,19 +1328,20 @@ def check_interaction_inputs(cfg: Config, ligands) -> None:
             "lead on (L1-L2-L3). Give the anchors (restraints.selection: manual) or use restraints.selection: auto")
 
 
-def check_restraint_start(stored: dict, rfile: Path, eq) -> None:
+def check_restraint_start(stored: dict, rfile: Path, eq, name: str = "equil.npz") -> None:
     """Refuse a restraint chosen from interactions that is not of this leg. Its record holds the
-    configuration its trajectories started from, the end of the pre-equilibration, as every
-    trajectory does (``start``). The settings alone do not tell the restraint of another repeat, or
-    of a pre-equilibration that was made again, from this leg's (review of eb6f89f). A restraint of
-    another selection has no such record."""
+    configuration its trajectories started from, the end of the pre-equilibration ``eq`` (the file
+    ``name`` of the leg), as every trajectory does (``start``). The settings alone do not tell the
+    restraint of another repeat, or of a pre-equilibration that was made again, from this leg's
+    (review of eb6f89f). A restraint of another selection has no such record. The legs ask through
+    :func:`check_restraint_of_leg`, which knows which pre-equilibration the MD started from."""
     from cufep.sampling.restraint_md import start_digest
 
     recorded = (stored.get("info") or {}).get("start")
     if recorded is not None and recorded != start_digest(eq["positions"], eq["velocities"], eq["box"]):
         raise WorkflowError(
             f"the restraint in {rfile} cannot be used again: it was chosen from MD that started from another "
-            "configuration than the pre-equilibration of this leg ends in (equil.npz). Nothing was changed. A "
+            f"configuration than the pre-equilibration of this leg ends in ({name}). Nothing was changed. A "
             "calculation with other input or settings needs a new output.dir.")
 
 
@@ -1357,10 +1440,16 @@ def restraint_trajectories(cfg: Config, job: "LegJob", leg_dir: Path, prep: dict
     return read_trajectories(leg_dir, int(ri.trajectories))
 
 
-def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temperature_K: float):
+def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temperature_K: float, start=None):
     """The Boresch restraint of ``restraints.selection: interactions`` from the trajectories of the
     leg: ``(restraint, info, report)``. ``info`` is what ``restraint.json`` records of the choice,
     ``report`` the numbers of the analysis for ``interactions.json``.
+
+    ``start`` is the configuration the alchemical run starts from, as ``(positions of the atoms of
+    prep, box)``, where that is not the end of the pre-equilibration ``eq`` from which the
+    trajectories started (``membrane.complex_leg: water``: the trajectories are of the complex in
+    the bilayer, the alchemical run of the complex in water). Every candidate is held to the rules
+    there, as it is at the start in every other case.
 
     The frames later than ``discard_ns`` are analysed with the ligand in the periodic image
     nearest to the protein. ProLIF gives the interactions of every frame
@@ -1446,9 +1535,11 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
         fallback_frame_fraction=ri.fallback_frame_fraction, fallback_cutoff_nm=ri.fallback_cutoff_nm)
     k_r, k_a = rc.k_r_kcal_per_A2 * KCAL * 100.0, rc.k_angle_kcal_per_rad2 * KCAL
 
+    begin, begin_box = (eq["positions"], eq["box"]) if start is None else start
+
     def measured(host, guest):
         return measure_anchors(host, guest, ligand, analysed.frames, frame_atoms, analysed.boxes, None,
-                               start=eq["positions"], start_box=eq["box"], start_among_frames=True)
+                               start=begin, start_box=begin_box, start_among_frames=True)
 
     def restraint_of(host, guest):
         """``(restraint, measurement, why it cannot be used or None)`` for a candidate: the restraint it
@@ -1555,7 +1646,7 @@ def interaction_restraint(cfg: Config, prep: dict, rdmol, eq, trajectories, temp
 
 
 def restraint_from_interactions(cfg: Config, job: "LegJob", leg_dir: Path, prep: dict, rdmol, eq, in_membrane: bool,
-                                seed: int, n_atoms: int, log=print):
+                                seed: int, n_atoms: int, log=print, start=None):
     """The restraint stage of a complex leg with ``restraints.selection: interactions``:
     ``(restraint, info, seconds of the MD)``.
 
@@ -1565,6 +1656,7 @@ def restraint_from_interactions(cfg: Config, job: "LegJob", leg_dir: Path, prep:
     the directory of the leg. The caller writes ``restraint.json``, which is what says that the
     stage is done: a leg that stopped before that runs the stage again, with the trajectories it
     has, and gets the same restraint. ``n_atoms`` is the number of particles of the System.
+    ``start`` is passed on to :func:`interaction_restraint`.
     """
     from cufep.alchemy.restraints import ligand_pose_rmsd
     from cufep.analysis.interactions import packages_problem
@@ -1576,7 +1668,7 @@ def restraint_from_interactions(cfg: Config, job: "LegJob", leg_dir: Path, prep:
     trajectories = restraint_trajectories(cfg, job, leg_dir, prep, eq, in_membrane, seed, log)
     md_seconds = time.perf_counter() - t_md
     restraint, info, report = interaction_restraint(cfg, prep, rdmol, eq, trajectories,
-                                                    cfg.thermodynamics.temperature_K)
+                                                    cfg.thermodynamics.temperature_K, start=start)
     # how far the ligand moved from the pose it was given, measured as for every selection, over the free MD
     # of this one: the analysed frames of the trajectories (at most 200 of them, evenly spaced, as whole systems)
     analysed = trajectories.after(cfg.restraints.interactions.discard_ns)
@@ -1608,6 +1700,53 @@ def restraint_from_interactions(cfg: Config, job: "LegJob", leg_dir: Path, prep:
         + (f"; {info['candidates_refused']} candidate(s) ranked before it were refused"
            if info["candidates_refused"] else ""))
     return restraint, info, md_seconds
+
+
+def restraint_from_the_bilayer(cfg: Config, job: "LegJob", leg_dir: Path, prep: dict, eq, stage: dict, rdmol,
+                               seed: int, device, log=print):
+    """The restraint of a complex leg whose alchemical run is made in water, chosen in the bilayer
+    (``membrane.complex_leg: water``): ``(restraint, info, seconds of the MD, seconds of the
+    pre-equilibration in the bilayer)``.
+
+    ``prep`` and ``eq`` are the prepared complex in water and its pre-equilibration, from whose end
+    the alchemical run starts; ``stage`` is the record of the complex in the bilayer
+    (:func:`restraint_system`). That complex is pre-equilibrated as the bilayer system of a leg is
+    (:func:`run_pre_equilibration`, to :data:`RESTRAINT_EQUIL`), the trajectories start from there
+    and the restraint is chosen in it (:func:`restraint_from_interactions`), every candidate held
+    to the rules at the start of the alchemical run too. The anchors are then named as the system
+    of the leg numbers them (:func:`solute_correspondence`, :func:`restraint_in_system`), and the
+    record keeps them as they were chosen (``md_system``) and the start of the alchemical run
+    (``alchemical_start``): :func:`check_restraint_of_leg` holds the restraint to both
+    pre-equilibrations. The caller writes ``restraint.json``.
+    """
+    from cufep.sampling.restraint_md import start_digest
+
+    bilayer = load_prepared(Path(job.lig_dir) / "prep", stage["name"])
+    atom_map = solute_correspondence(bilayer, prep)
+    equil_file = leg_dir / RESTRAINT_EQUIL
+    in_membrane = stage.get("barostat") == "membrane"
+    seconds = 0.0
+    if not equil_file.exists():
+        t0 = time.perf_counter()
+        run_pre_equilibration(cfg, "complex", bilayer, None, stage["barostat"], stage.get("membrane_info") or {},
+                              seed, equil_file, device, log,
+                              what="pre-equilibration of the complex in the bilayer, for the restraint,")
+        seconds = time.perf_counter() - t0
+    eq_bilayer = np.load(equil_file)
+    check_equil_file(eq_bilayer, equil_file, cfg, "complex", in_membrane, seed, log)
+    # the configuration the alchemical run starts from, as the system of the bilayer numbers its atoms: the
+    # solute where the complex in water has it (the anchors are atoms of the solute; no other row is read)
+    begin = np.full((len(bilayer["positions"]), 3), np.nan)
+    begin[list(atom_map)] = np.asarray(eq["positions"], dtype=float)[list(atom_map.values())]
+    restraint, info, md_seconds = restraint_from_interactions(
+        cfg, job, leg_dir, bilayer, rdmol, eq_bilayer, in_membrane, seed, len(bilayer["positions"]), log,
+        start=(begin, np.asarray(eq["box"], dtype=float)))
+    info["md_system"] = {"name": stage["name"], "host_atoms": [int(i) for i in restraint.host_atoms],
+                         "guest_atoms": [int(i) for i in restraint.guest_atoms]}
+    info["alchemical_start"] = start_digest(eq["positions"], eq["velocities"], eq["box"])
+    log("the restraint was chosen from MD of the complex in the bilayer; the alchemical run is made on the complex "
+        "in water (membrane.complex_leg: water)")
+    return restraint_in_system(restraint, atom_map), info, md_seconds, seconds
 
 
 def interactions_csv(report: dict) -> str:
@@ -1668,26 +1807,50 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
     ionic = cfg.thermodynamics.ionic_strength_M
 
     # ---- complex ------------------------------------------------------------------------
-    modeller = combine((protein.topology, protein.positions), ligand)
-    n_removed = _remove_clashing_waters(modeller, ligand.positions_nm()[ligand.heavy_atom_indices()])
-    if n_removed:
-        warnings.append(f"{n_removed} water(s) overlapping the ligand were removed")
-    membrane_info: dict = {}
-    if membrane:
-        from cufep.prep.membrane import add_membrane
-        membrane_info = add_membrane(modeller, forcefield, cfg, log)
-        warnings += [f"membrane: {w}" for w in membrane_info.pop("warnings", [])]
-        barostat = "membrane"
-    else:
-        solvate(modeller, forcefield, SolvationSpec(padding_nm=cfg.solvation.padding_complex_nm, box_shape=box_shape,
-                                                    water=cfg.forcefield.water,
-                                                    ionic_strength_M=ionic, min_edge_nm=min_edge))
-        barostat = "isotropic"
-    _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated complex")
-    system = create_system(forcefield, modeller.topology, sysspec)
-    lig_idx = ligand_atom_indices(modeller.topology)
-    _write_system(prep_dir, "complex", modeller, system, lig_idx)
-    n_complex = system.getNumParticles()
+    def complex_in(bilayer: bool) -> dict:
+        """The complex of the pose that was given, in a bilayer or in water: the Modeller, the System,
+        the ligand atoms, the barostat it runs under and the numbers of its bilayer."""
+        modeller = combine((protein.topology, protein.positions), ligand)
+        n_removed = _remove_clashing_waters(modeller, ligand.positions_nm()[ligand.heavy_atom_indices()])
+        notes = [f"{n_removed} water(s) overlapping the ligand were removed"] if n_removed else []
+        numbers: dict = {}
+        if bilayer:
+            from cufep.prep.membrane import add_membrane
+            numbers = add_membrane(modeller, forcefield, cfg, log)
+            notes += [f"membrane: {w}" for w in numbers.pop("warnings", [])]
+            field = forcefield
+        else:
+            # a complex in water is built without the lipid file, as a run without a bilayer builds it
+            field = forcefield if not membrane else make_forcefield(ffspec, [ligand], include_lipid=False)
+            solvate(modeller, field, SolvationSpec(padding_nm=cfg.solvation.padding_complex_nm, box_shape=box_shape,
+                                                   water=cfg.forcefield.water,
+                                                   ionic_strength_M=ionic, min_edge_nm=min_edge))
+        _check_box(modeller, cfg.dynamics.cutoff_nm, f"{ligand.name}: the solvated complex")
+        return {"modeller": modeller, "system": create_system(field, modeller.topology, sysspec),
+                "ligand": ligand_atom_indices(modeller.topology), "barostat": "membrane" if bilayer else "isotropic",
+                "membrane_info": numbers, "notes": notes}
+
+    # With membrane.complex_leg: water the bilayer is the system of the MD from which the restraint is chosen
+    # and the alchemical run is made on the complex in water: two systems of the same pose. The bilayer is
+    # built first (its orientation can stop the run), and nothing is written unless the two are of the same
+    # protein and ligand, atom by atom
+    in_leg = membrane and cfg.membrane.complex_leg == "bilayer"
+    for_restraint = complex_in(True) if membrane and not in_leg else None
+    built = complex_in(in_leg)
+    restraint_record = None
+    if for_restraint is not None:
+        solute_correspondence(_solute_of(for_restraint["modeller"].topology, for_restraint["ligand"]),
+                              _solute_of(built["modeller"].topology, built["ligand"]))
+        _write_system(prep_dir, BILAYER_COMPLEX, for_restraint["modeller"], for_restraint["system"],
+                      for_restraint["ligand"])
+        restraint_record = {"name": BILAYER_COMPLEX, "barostat": for_restraint["barostat"],
+                            "n_atoms": for_restraint["system"].getNumParticles(),
+                            "membrane_info": for_restraint["membrane_info"]}
+        warnings += [note for note in for_restraint["notes"] if note.startswith("membrane: ")]
+    warnings += built["notes"]
+    barostat, membrane_info = built["barostat"], built["membrane_info"]
+    _write_system(prep_dir, "complex", built["modeller"], built["system"], built["ligand"])
+    n_complex = built["system"].getNumParticles()
 
     # ---- ligand in solvent -----------------------------------------------------------------
     modeller = combine(None, ligand)
@@ -1705,8 +1868,13 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
             "box_built_for_backend": cfg.backend.name, "made_from": made_from,
             # the chain of the input PDB of every chain of the prepared protein
             "input_chains": dict(protein.input_chains)}
+    if restraint_record is not None:
+        # the system of the MD from which the restraint is chosen, where it is not the one of the alchemical run
+        info["restraint_system"] = restraint_record
     publish_text(done, json.dumps(info, indent=1))       # last: the mark that the preparation is complete
     log(f"{ligand.name}: complex {n_complex} atoms, solvent leg {system.getNumParticles()} atoms"
+        + (f"; complex in the bilayer, for the MD of the restraint, {restraint_record['n_atoms']} atoms"
+           if restraint_record is not None else "")
         + (f"; warnings: {'; '.join(warnings)}" if warnings else ""))
     return info
 
@@ -1849,8 +2017,78 @@ def leg_with_samples_stays_on_its_backend(exc: BaseException) -> str:
             "cuPotential, and samples of the two backends are never mixed")
 
 
+#: the prepared complex in the bilayer of a ligand whose complex leg has its alchemical run in water
+#: (``membrane.complex_leg: water``): the system of the MD from which the restraint is chosen
+BILAYER_COMPLEX = "complex_bilayer"
+#: the pre-equilibration of that system in the directory of the leg: where the MD for the restraint starts
+RESTRAINT_EQUIL = "restraint_equil.npz"
 #: the files of a leg that its samples were made from and that a new set of lambda windows uses again
-LEG_INPUT_FILES = ("equil.npz", "restraint.json")
+LEG_INPUT_FILES = ("equil.npz", "restraint.json", RESTRAINT_EQUIL)
+
+
+def restraint_system(prep_info: dict) -> dict | None:
+    """The record of the prepared system in which the restraint of a complex leg is chosen where
+    that is another one than the system of its alchemical run (``membrane.complex_leg: water``:
+    name of the prepared system, barostat, atoms, numbers of the bilayer); None where the two are
+    one system, as in every preparation without that setting."""
+    record = prep_info.get("restraint_system")
+    return record if isinstance(record, dict) and record.get("name") else None
+
+
+def check_restraint_equil(cfg: Config, leg_dir: Path, prep_info: dict, seed: int, log=print) -> None:
+    """Refuse the pre-equilibration of the system in which the restraint of a complex leg is chosen
+    (:data:`RESTRAINT_EQUIL`, where that is another system than the one of the alchemical run) if
+    this run cannot use it: made with other settings, or holding less MD than asked
+    (:func:`check_equil_file`). One rule for the check before any job and for the leg, whether the
+    leg has its restraint or not: a leg with a restraint used the file unasked when its prepared
+    systems were made again, so that no check before the jobs was made (review of the first
+    version of this setting: a restraint from a bilayer equilibrated for another
+    ``membrane.equilibration_ns`` than the run records). Nothing to ask where there is no such
+    system or no such file yet."""
+    stage = restraint_system(prep_info)
+    equil = Path(leg_dir) / RESTRAINT_EQUIL
+    if stage is not None and equil.exists():
+        check_equil_file(np.load(equil), equil, cfg, "complex", stage.get("barostat") == "membrane", seed, log)
+
+
+def check_restraint_of_leg(stored: dict, rfile: Path, sample_dir: Path) -> None:
+    """Refuse a restraint chosen from interactions that is not the one of the leg whose files are in
+    ``sample_dir`` (a leg directory, or a ``previous_<n>/`` in it): one rule for the run of a leg,
+    for the check before any job and for every reading of its samples (review of 877ab88: ``cufep
+    analyze`` gave the release of the restraint of another repeat).
+
+    The record of the restraint holds the configuration its MD started from (``start``,
+    :func:`check_restraint_start`): the pre-equilibration of the leg, or, where the MD was made in
+    another system than the alchemical run (``md_system``), the pre-equilibration of that system
+    (:data:`RESTRAINT_EQUIL`). In that case it also holds the configuration the alchemical run
+    starts from (``alchemical_start``), to which the anchors were held. A file that is needed for
+    the comparison and is not there is a refusal too: a pre-equilibration that is made again is
+    another start. A restraint of another selection has no such record."""
+    from cufep.sampling.restraint_md import start_digest
+
+    info = stored.get("info") or {}
+    files = leg_files(sample_dir)
+
+    def needed(name: str):
+        if files[name] is None:
+            raise WorkflowError(
+                f"the restraint in {rfile} was chosen from MD that started from the pre-equilibration of its leg, "
+                f"and {name} is not there: that the restraint is the one of this leg cannot be checked (a "
+                "pre-equilibration that is made again is another start). Nothing was changed; run the calculation "
+                "in a new output.dir")
+        return np.load(files[name])
+
+    if info.get("start") is not None:
+        name = RESTRAINT_EQUIL if info.get("md_system") else "equil.npz"
+        check_restraint_start(stored, rfile, needed(name), name)
+    if info.get("alchemical_start") is not None:
+        eq = needed("equil.npz")
+        if info["alchemical_start"] != start_digest(eq["positions"], eq["velocities"], eq["box"]):
+            raise WorkflowError(
+                f"the restraint in {rfile} cannot be used again: its anchors were held to the rules at another "
+                "configuration than the pre-equilibration of this leg ends in (equil.npz), from which the "
+                "alchemical run starts. Nothing was changed. A calculation with other input or settings needs a "
+                "new output.dir.")
 
 
 def leg_files(sample_dir: Path) -> dict[str, Path | None]:
@@ -2103,6 +2341,74 @@ def precision_that_ran(cfg: Config, backend: str) -> str:
     return f"that of the {cfg.backend.platform} platform"
 
 
+def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: str, membrane_info: dict, seed: int,
+                          equil_file: Path, device, log=print, what: str = "pre-equilibration") -> None:
+    """Make the pre-equilibration of a prepared system (:func:`load_prepared`) and write it to
+    ``equil_file``: plain MD of the fully interacting system, by the settings of ``leg``
+    (:func:`pre_equilibration_parts`, :func:`equil_made_with`).
+
+    One function for the system of a leg and for the complex in the bilayer in which the restraint
+    of a leg in water is chosen (``membrane.complex_leg: water``): ``barostat`` says which the
+    system is (``membrane`` for a bilayer), ``membrane_info`` holds the numbers of its bilayer,
+    and ``what`` is how the log names the MD. ``system`` None reads the System of ``prep``."""
+    from cufep.sampling.equilibrate import pre_equilibrate
+    from cufep.steps import frames_of
+
+    if system is None:
+        import openmm as mm
+
+        system = mm.XmlSerializer.deserialize(prep["system_xml"])
+
+    in_membrane = leg == "complex" and barostat == "membrane"
+    pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
+    production, held = pre_equilibration_parts(cfg, leg, in_membrane)
+    atoms = list(prep["topology"].atoms())
+    heavy_solute = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
+    # A freshly built bilayer needs longer: the heavy atoms of protein and ligand are held while the lipids and
+    # the water settle (NVT, NPT), then it runs for membrane.equilibration_ns (free, or with the solute still
+    # held: pre_equilibration_parts)
+    restrained = heavy_solute if held or in_membrane else []
+    wall_atoms: list[int] = []
+    wall_half = 0.0
+    if in_membrane:
+        # While the trimmed bilayer closes up, bulk water is kept out of the hydrophobic core.
+        plane = float((membrane_info or {}).get("phosphate_plane_nm", 0.0))
+        wall_half = max(0.0, plane - 0.6)
+        if wall_half > 0:
+            from scipy.spatial import cKDTree
+            tree = cKDTree(prep["positions"][heavy_solute])
+            for a_ in atoms:
+                if a_.residue.name == "HOH" and a_.element is not None and a_.element.symbol == "O":
+                    xyz = prep["positions"][a_.index]
+                    if abs(xyz[2]) > wall_half and tree.query(xyz)[0] > 0.6:
+                        wall_atoms.append(a_.index)
+    settings = plain_md_settings(
+        cfg, float(cfg.dynamics.timestep_fs), barostat, seed,
+        nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns, production_ns=production,
+        hold_solute=held, restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half,
+        wall_centre_nm=0.0,
+        ligand_atoms=prep["ligand"] if in_membrane else [],
+        water_oxygens=[a.index for a in atoms
+                       if a.residue.name == "HOH" and a.element is not None and a.element.symbol == "O"]
+        if in_membrane else [])
+    t0 = time.perf_counter()
+    eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device, log)
+    # the restraint search uses the last pre_equilibration md_ns of the trajectory
+    n_keep = max(2, frames_of(pre.md_ns * 1000.0, settings.frame_interval_ps, eq.timestep_fs))
+    # simulated_ns is the MD integrated (simulated_ns_is_integrated): earlier versions recorded the
+    # length asked for and integrated whole frame intervals of it (equil_contradictions)
+    publish_npz(equil_file, positions=eq.positions, velocities=eq.velocities, box=eq.box,
+                frames=eq.frames[-n_keep:], frame_boxes=eq.frame_boxes[-n_keep:],
+                frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
+                simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
+                backend=eq.backend,               # what ran the unrestrained MD (made_with: what was asked)
+                backend_precision=precision_that_ran(cfg, eq.backend),
+                pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
+                made_with=json.dumps(equil_made_with(cfg, leg, in_membrane, seed)),
+                membrane_drift=json.dumps(eq.drift))
+    log(f"{what} done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
+
+
 def run_leg(job: LegJob) -> dict:
     """Run (or resume, or extend) one leg and return its result dictionary."""
     import openmm as mm
@@ -2118,7 +2424,6 @@ def run_leg(job: LegJob) -> dict:
     )
     from cufep.alchemy.schedule import Schedule, adaptive_schedule, schedule_from_windows
     from cufep.mps import thread_percentage
-    from cufep.sampling.equilibrate import pre_equilibrate
     from cufep.sampling.hrex import ReplicaExchangeSampler, WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
     from cufep.sampling.storage import read_samples, stored_backend, stored_conditions
@@ -2151,67 +2456,14 @@ def run_leg(job: LegJob) -> dict:
     def timed(name: str, t_start: float) -> None:
         timing["phases"][name] = timing["phases"].get(name, 0.0) + (time.perf_counter() - t_start)
 
-    timestep_cfg = float(cfg.dynamics.timestep_fs)
-    pre = cfg.sampling.pre_equilibration.complex if is_complex else cfg.sampling.pre_equilibration.solvent
-
     # ---- 1. pre-equilibration: plain MD of the fully interacting system -------------------
     equil_file = leg_dir / "equil.npz"
     in_membrane = is_complex and barostat == "membrane"
-    equil_from = equil_made_with(cfg, job.leg, in_membrane, seed)
     if not equil_file.exists():
-        production, held = pre_equilibration_parts(cfg, job.leg, in_membrane)
-        restrained: list[int] = []
-        if held:
-            atoms = list(prep["topology"].atoms())
-            restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
-        wall_atoms: list[int] = []
-        wall_half = 0.0
-        if in_membrane:
-            # While the trimmed bilayer closes up, bulk water is kept out of the hydrophobic core.
-            plane = float(prep_info.get("membrane_info", {}).get("phosphate_plane_nm", 0.0))
-            wall_half = max(0.0, plane - 0.6)
-            if wall_half > 0:
-                from scipy.spatial import cKDTree
-                heavy_solute = [i for i in prep["solute"]
-                                if (el := list(prep["topology"].atoms())[i].element) is not None and el.symbol != "H"]
-                tree = cKDTree(prep["positions"][heavy_solute])
-                for a_ in prep["topology"].atoms():
-                    if a_.residue.name == "HOH" and a_.element is not None and a_.element.symbol == "O":
-                        xyz = prep["positions"][a_.index]
-                        if abs(xyz[2]) > wall_half and tree.query(xyz)[0] > 0.6:
-                            wall_atoms.append(a_.index)
-            # A freshly built bilayer needs longer: hold the protein and ligand heavy atoms while the lipids and
-            # water settle (NVT, NPT), then run for membrane.equilibration_ns (free, or with the solute still held:
-            # pre_equilibration_parts).
-            atoms = list(prep["topology"].atoms())
-            restrained = [i for i in prep["solute"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
-        settings = plain_md_settings(
-            cfg, timestep_cfg, barostat, seed,
-            nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns, production_ns=production,
-            hold_solute=held, restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half,
-            wall_centre_nm=0.0,
-            ligand_atoms=prep["ligand"] if in_membrane else [],
-            water_oxygens=[a.index for a in prep["topology"].atoms()
-                           if a.residue.name == "HOH" and a.element is not None and a.element.symbol == "O"]
-            if in_membrane else [])
         t0 = time.perf_counter()
-        eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device0, log)
-        # the restraint search uses the last pre_equilibration md_ns of the trajectory
-        from cufep.steps import frames_of
-
-        n_keep = max(2, frames_of(pre.md_ns * 1000.0, settings.frame_interval_ps, eq.timestep_fs))
-        # simulated_ns is the MD integrated (simulated_ns_is_integrated): earlier versions recorded the
-        # length asked for and integrated whole frame intervals of it (equil_contradictions)
-        publish_npz(equil_file, positions=eq.positions, velocities=eq.velocities, box=eq.box,
-                    frames=eq.frames[-n_keep:], frame_boxes=eq.frame_boxes[-n_keep:],
-                    frame_atoms=np.array(eq.frame_atoms), timestep_fs=eq.timestep_fs, notes=json.dumps(eq.notes),
-                    simulated_ns=eq.simulated_ns, simulated_ns_is_integrated=True,
-                    backend=eq.backend,               # what ran the unrestrained MD (made_with: what was asked)
-                    backend_precision=precision_that_ran(cfg, eq.backend),
-                    pocket_waters=eq.pocket_waters, area_nm2=eq.area_nm2,
-                    made_with=json.dumps(equil_from), membrane_drift=json.dumps(eq.drift))
+        run_pre_equilibration(cfg, job.leg, prep, system, barostat, prep_info.get("membrane_info", {}), seed,
+                              equil_file, device0, log)
         timed("pre_equilibration", t0)
-        log(f"pre-equilibration done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
     eq = np.load(equil_file)
     # files of this leg that an earlier version wrote without a record of what they were made from
     origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
@@ -2234,11 +2486,13 @@ def run_leg(job: LegJob) -> dict:
         symmetry = ligand_symmetry_number(rdmol)
         rfile = leg_dir / "restraint.json"
         restraint_from = restraint_made_with(cfg)
+        # the pre-equilibration of another system in which the restraint is chosen, if the leg has one
+        check_restraint_equil(cfg, leg_dir, prep_info, seed, log)
         if rfile.exists():
             stored = json.loads(rfile.read_text())
             if not check_restraint_file(stored, rfile, cfg, log):
                 origin_not_recorded.append("the restraint")
-            check_restraint_start(stored, rfile, eq)
+            check_restraint_of_leg(stored, rfile, leg_dir)
             restraint = BoreschRestraint.from_dict(stored["restraint"])
             problems = restraint_anchor_problems(restraint.host_atoms, restraint.guest_atoms, prep)
             if problems:
@@ -2267,10 +2521,21 @@ def run_leg(job: LegJob) -> dict:
                         "ligand_rmsd_A": 10 * rmsd, "ligand_rmsd_reference": "input pose", "notes": []}
                 log(f"restraint (manual anchors): r0 {10 * restraint.r0:.2f} A, ligand RMSD {10 * rmsd:.2f} A")
             elif rc.selection == "interactions":
-                restraint, info, md_seconds = restraint_from_interactions(
-                    cfg, job, leg_dir, prep, rdmol, eq, in_membrane, seed, system.getNumParticles(), log)
+                stage = restraint_system(prep_info)
+                if stage is None:
+                    restraint, info, md_seconds = restraint_from_interactions(
+                        cfg, job, leg_dir, prep, rdmol, eq, in_membrane, seed, system.getNumParticles(), log)
+                else:
+                    # the MD for the restraint is made on another prepared system than the alchemical run (the
+                    # complex in the bilayer, membrane.complex_leg: water), which is pre-equilibrated first
+                    restraint, info, md_seconds, equil_seconds = restraint_from_the_bilayer(
+                        cfg, job, leg_dir, prep, eq, stage, rdmol, seed, device0, log)
+                    timing["phases"]["restraint_equilibration"] = \
+                        timing["phases"].get("restraint_equilibration", 0.0) + equil_seconds
                 device0 = job.devices[0] if job.devices else None       # the GPU the job goes on with
                 timing["phases"]["restraint_md"] = timing["phases"].get("restraint_md", 0.0) + md_seconds
+                if stage is not None:
+                    md_seconds += equil_seconds          # the phase "restraint" is the choice without any MD
             elif rc.selection == "auto":
                 full = np.zeros((eq["frames"].shape[0], system.getNumParticles(), 3))
                 full[:, eq["frame_atoms"], :] = eq["frames"]
@@ -3136,6 +3401,14 @@ def notes_of_leg_files(leg_dir: Path) -> tuple[list[str], dict]:
         eq = np.load(equil_file)
         notes += equil_notes(eq)
         numbers["bilayer"] = bilayer_numbers(eq)
+    if files[RESTRAINT_EQUIL] is not None:
+        # a leg whose alchemical run is made in water and whose restraint was chosen in the bilayer: the bilayer
+        # is the one of that MD, and what its pre-equilibration notes (a recovery) is said of it
+        eq_md = np.load(files[RESTRAINT_EQUIL])
+        notes += [note for note in (f"pre-equilibration of the complex in the bilayer, for the restraint: {n}"
+                                    for n in equil_notes(eq_md)) if note not in notes]
+        if numbers["bilayer"] is None:
+            numbers["bilayer"] = bilayer_numbers(eq_md)
     stored = _read_json(restraint_file) if restraint_file is not None else None
     if stored:
         notes += [n for n in restraint_notes(stored) if n not in notes]
@@ -3154,8 +3427,13 @@ def restraint_choice(info: dict) -> dict | None:
     for a restraint of another selection."""
     if info.get("selection") != "interactions":
         return None
-    return {key: info.get(key) for key in ("method", "anchors", "interaction", "score", "candidates_tested",
-                                           "candidates_refused", "md")}
+    choice = {key: info.get(key) for key in ("method", "anchors", "interaction", "score", "candidates_tested",
+                                             "candidates_refused", "md")}
+    if info.get("md_system"):
+        # the MD was made on another prepared system than the alchemical run (membrane.complex_leg: water: the
+        # complex in the bilayer); said only then, so that every other result stays as it was
+        choice["md_system"] = info["md_system"]["name"]
+    return choice
 
 
 #: how the notes begin that the analysis of a leg writes; a result that is made again from its
@@ -3209,16 +3487,9 @@ def restraint_release_of(leg_dir: Path, attrs: dict, temperature_K: float) -> tu
     if not restrained and states:
         return 0.0, 0.0
     stored = _read_json(found) or {}
-    equil = leg_files(leg_dir)["equil.npz"]
-    if equil is None and (stored.get("info") or {}).get("start") is not None:
-        raise WorkflowError(f"the restraint in {found} was chosen from MD that started from the pre-equilibration of "
-                            "its leg, and equil.npz is not there: that the restraint is the one of these samples "
-                            "cannot be checked")
-    if equil is not None:
-        # a restraint chosen from interactions belongs to the pre-equilibration its MD started from: the run of
-        # a leg refuses another one, and so does every reading of its samples (review of 877ab88: cufep analyze
-        # gave the release of the restraint of another repeat)
-        check_restraint_start(stored, found, np.load(equil))
+    # a restraint chosen from interactions belongs to the pre-equilibration its MD started from: the run of a
+    # leg refuses another one, and so does every reading of its samples
+    check_restraint_of_leg(stored, found, leg_dir)
     restraint = BoreschRestraint.from_dict(stored.get("restraint") or {})
     return (float(restraint.release_free_energy(temperature_K, "numerical")),
             float(restraint.release_free_energy(temperature_K, "analytical")))
