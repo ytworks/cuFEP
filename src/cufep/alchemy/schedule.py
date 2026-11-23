@@ -463,9 +463,13 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     def nearest(nd: tuple[int, int]):
         return runs[min(runs, key=lambda other: abs(path(other) - path(nd)))]["config"] if runs else start
 
+    concurrent = []                              # the numbers of windows a pool was given at a time
+
     def run_from(todo: list[tuple[int, int]], starts: list) -> None:
         """Run windows whose start configurations are known: at the same time, or one by one."""
         tasks = [task_for(nd, config) for nd, config in zip(todo, starts)]
+        if pool is not None:
+            concurrent.append(len(tasks))
         results = pool.run(tasks) if pool is not None else [run_window(context, integrator, t) for t in tasks]
         for nd, result in zip(todo, results):
             runs[nd] = result
@@ -550,11 +554,12 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                                      "window_ps_integrated": n_samples * steps_per_sample * float(timestep_fs) / 1000.0,
                                      "equilibration_ps_integrated": equilibration_steps * float(timestep_fs) / 1000.0,
                                      # how the windows of the first iteration were started, and
-                                     # whether windows ran at the same time (which changes nothing
-                                     # of what a window starts from)
+                                     # whether two or more windows were given to workers at the
+                                     # same time in some iteration (which changes nothing of what a
+                                     # window starts from)
                                      "start_configurations": s.start_configurations,
                                      **({"walk_ps": s.walk_ps} if s.start_configurations == "walk" else {}),
-                                     "windows_run_concurrently": pool is not None,
+                                     "windows_run_concurrently": any(n > 1 for n in concurrent),
                                      # the start, as a number per stage and as its lambda values
                                      "initial_windows": {n: len(first[k]) for k, n in enumerate(stages)},
                                      "initial_lambda": {n: [round(i / top, 6) for i in first[k]]

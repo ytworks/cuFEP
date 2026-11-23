@@ -589,6 +589,15 @@ def leg_seed(cfg: Config, repeat: int, leg: str) -> int:
 #: do not have it.
 ALCHEMY_SETTINGS_ADDED = {"softcore_b": 1, "annihilate_electrostatics": False}
 
+#: settings of ``analysis`` that were added after results were first recorded, with the value that
+#: gives the analysis those results were made with: at that value a setting is not written to the
+#: record of an analysis (:func:`analysis_record`)
+ANALYSIS_SETTINGS_ADDED = {"detect_equilibration": False}
+
+#: the settings added later, by section of the configuration: a record of a configuration that an
+#: earlier version wrote is read with these values where it lacks them (``write_run_record``)
+SETTINGS_ADDED = {"alchemy": ALCHEMY_SETTINGS_ADDED, "analysis": ANALYSIS_SETTINGS_ADDED}
+
 
 def alchemy_record(cfg: Config) -> dict:
     """The ``alchemy`` section as the conditions of samples record it (ALCHEMY_SETTINGS_ADDED)."""
@@ -617,17 +626,19 @@ def samples_settings(cfg: Config) -> dict:
 
 
 def windows_settings(cfg: Config) -> dict:
-    """The settings of the System that the lambda windows of a leg and the start configurations of
-    their replicas were made with: the soft-core and the electrostatics inside the ligand, and
-    REST2. (What else the System depends on is recorded and checked where it is made: the
-    prepared systems, the pre-equilibration, the restraint.) The settings of ``lambda_schedule``
-    are not among them: a leg that has its windows keeps them, and its log says so every time."""
+    """The settings of the System that the start configurations of the lambda windows of a leg
+    were made with, and its windows too where the same precalculation chose them: the soft-core
+    and the electrostatics inside the ligand, and REST2. (What else the System depends on is
+    recorded and checked where it is made: the prepared systems, the pre-equilibration, the
+    restraint.) The settings of ``lambda_schedule`` are not among them: a leg that has its windows
+    keeps them, and its log says so every time."""
     return {"alchemy": alchemy_record(cfg), "rest2": cfg.sampling.rest2.model_dump(mode="json")}
 
 
 def start_record(cfg: Config, schedule, how: dict) -> dict:
     """What is written with the start configurations of the lambda windows of a leg (``made_with``
-    of ``start_configs.npz``): how they were made (``how``), the settings of the System they were
+    of ``start_configs.npz``): how they were made (``how``: the way, and whether this
+    precalculation chose the windows or they were given), the settings of the System they were
     made with (:func:`windows_settings`) and the windows they are of."""
     return {**how, "settings": windows_settings(cfg), "states": [state.to_dict() for state in schedule.states]}
 
@@ -880,6 +891,18 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     is_complex = leg == "complex"
     in_membrane = is_complex and prep_info.get("complex_barostat") == "membrane"
     quiet = lambda message: None                                    # noqa: E731  run_leg logs it when it uses the file
+    # a leg whose archive (--reschedule) was begun and not completed is not run as it is: part of
+    # what it had is set aside, the rest is still in place (review of 2861b93: a run without
+    # --reschedule made new start configurations and analysed the samples that were left, with the
+    # record of the new ones)
+    unfinished = sorted(leg_dir.glob(".previous_*.partial"))
+    if unfinished and not reschedule:
+        raise WorkflowError(
+            f"the {leg} leg of repeat {repeat} was being started anew (--reschedule) when a run stopped: "
+            f"{unfinished[0]} holds a part of what the leg had. Nothing was changed. Run this leg with "
+            "--reschedule again to complete that (--ligand and --leg restrict a run to it).")
+    # the schedule the leg is to be given, if it will take one (lambda_schedule.file)
+    check_given_schedule(cfg, lig_dir, leg, repeat, reschedule)
     equil_file = leg_dir / "equil.npz"
     if equil_file.exists():
         eq = np.load(equil_file)
@@ -2337,25 +2360,31 @@ def run_leg(job: LegJob) -> dict:
     def run_with(backend_name: str) -> tuple[dict, Schedule]:
         hrex_dir = leg_dir / "hrex"
         sched_file = leg_dir / "schedule.yaml"
-        windows_files = "the lambda windows and their start configurations"
+
+        def check_scale(schedule) -> None:
+            if abs(schedule.rest2_scale - (rest2.scale if rest2_on else 1.0)) > 1e-9:
+                raise WorkflowError(
+                    f"the lambda schedule of this leg was made with a REST2 scale of {schedule.rest2_scale:g} but "
+                    f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a "
+                    "new one")
+
         # ---- 4. lambda schedule ----------------------------------------------------------------
         ls = cfg.lambda_schedule
         if ls.file is not None and not sched_file.exists():
-            # one file for every leg, or a directory of frozen schedules: <ligand>/<leg>_r<repeat>.yaml
-            src = Path(ls.file)
-            if src.is_dir():
-                src = src / ligand_dir_name(job.ligand) / f"{job.leg}_r{job.repeat}.yaml"
+            src = given_schedule_file(cfg, ligand_dir_name(job.ligand), job.leg, job.repeat)
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
-            take_given_schedule(leg_dir, src, job.leg, stages, log)
+            take_given_schedule(leg_dir, src, job.leg, stages, rest2.scale if rest2_on else 1.0, log)
         stored = stored_windows(leg_dir, job.leg, stages, cfg, log)
         if stored is not None:
-            schedule, configs, recorded = stored
-            # windows without that record and without samples are sampled by this run as they are, and
-            # the result says so. With samples the leg goes on in the states its samples were made in,
-            # under the settings they record, which this run was held to (check_leg_reuse)
-            if not recorded and not stored_conditions(hrex_dir)[0] and windows_files not in origin_not_recorded:
-                origin_not_recorded.append(windows_files)
+            schedule, configs, made = stored
+            # windows without a record of their settings and without samples are sampled by this run
+            # as they are: they get its record, which says that their origin is not known. With
+            # samples the leg goes on in the states its samples were made in, under the settings
+            # they record, which this run was held to (check_leg_reuse)
+            if "settings" not in made and not stored_conditions(hrex_dir)[0]:
+                made = adopt_windows(leg_dir, schedule, configs, cfg, made)
+            windows_origin = made.get("origin_not_recorded")
             # said every time: a change of lambda_schedule in the YAML does not reach a leg that has its windows
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has "
                 "(schedule.yaml); the settings of lambda_schedule are not applied to them, "
@@ -2406,8 +2435,15 @@ def run_leg(job: LegJob) -> dict:
                 else:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
+                check_scale(schedule)                      # before anything is written for these windows
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
-                made_with = {"start_configurations": "walk of the given windows", "walk_ps": float(ls.fixed_walk_ps)}
+                made_with = {"start_configurations": "walk of the given windows", "walk_ps": float(ls.fixed_walk_ps),
+                             "windows": "given"}
+                if sched_file.exists() and ls.file is None and schedule.mode == "adaptive":
+                    # windows that adaptive lambda scheduling chose in an earlier run of this leg, which
+                    # left no start configurations with them (a version that wrote the schedule first):
+                    # the settings they were chosen with are not recorded, and the result says so
+                    made_with["origin_not_recorded"] = WINDOWS_ORIGINS[1]
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
                 # the windows of an iteration run at the same time on the GPUs the scheduler grants
@@ -2430,12 +2466,12 @@ def run_leg(job: LegJob) -> dict:
                     with WindowPool(pool_spec, devices[:n_first], log) as pool:
                         schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, pool=pool)
                 made_with = {"start_configurations": als.start_configurations,
-                             **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {})}
+                             **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {}),
+                             "windows": "chosen by this precalculation"}
             del ctx, integ
             configs = publish_windows(leg_dir, schedule, cfgs, start_record(cfg, schedule, made_with), leg=job.leg,
                                       ligand=job.ligand, repeat=job.repeat, seed=seed, backend=backend_name)
-            if windows_files in origin_not_recorded:      # windows of an earlier version, set aside by a fallback
-                origin_not_recorded.remove(windows_files)
+            windows_origin = made_with.get("origin_not_recorded")
             timed("lambda_schedule", t0)
             log(
                 f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows "
@@ -2444,12 +2480,12 @@ def run_leg(job: LegJob) -> dict:
                 + f"; start configurations: {made_with['start_configurations']}"
                 + (f" ({made_with['walk_ps']:g} ps in each window)" if "walk_ps" in made_with else "")
             )
-
-        if abs(schedule.rest2_scale - (rest2.scale if rest2_on else 1.0)) > 1e-9:
-            raise WorkflowError(
-                f"the lambda schedule of this leg was made with a REST2 scale of {schedule.rest2_scale:g} but "
-                f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a new one"
-            )
+        # what of the windows has no record of its origin, as their files say it now (not what an
+        # attempt on another backend found before its windows were set aside)
+        origin_not_recorded[:] = [item for item in origin_not_recorded if item not in WINDOWS_ORIGINS]
+        if windows_origin:
+            origin_not_recorded.append(windows_origin)
+        check_scale(schedule)
 
         # ---- 5. replica exchange -----------------------------------------------------------------
         spec = leg_spec(cfg, built, [s.to_dict() for s in schedule.states], barostat, timestep_fs, backend_name,
@@ -2671,8 +2707,58 @@ def _schedule_of_this_leg(path: Path, leg: str, stages: list[str]):
     return schedule
 
 
-def take_given_schedule(leg_dir: Path, src: Path, leg: str, stages: list[str], log=print) -> None:
-    """Give a leg that has no lambda windows the schedule in ``src`` (``lambda_schedule.file``).
+def given_schedule_file(cfg: Config, ligand_dir: str, leg: str, repeat: int) -> Path | None:
+    """The file from which a leg is given its lambda windows (``lambda_schedule.file``: one file
+    for every leg, or a directory of frozen schedules, ``<ligand>/<leg>_r<repeat>.yaml``); None if
+    the configuration names none."""
+    if cfg.lambda_schedule.file is None:
+        return None
+    src = Path(cfg.lambda_schedule.file)
+    return src / ligand_dir / f"{leg}_r{repeat}.yaml" if src.is_dir() else src
+
+
+def check_given_schedule_scale(src: Path, rest2_scale: float) -> None:
+    """Refuse a given lambda schedule whose REST2 scale is not that of the run, before the leg
+    takes it over (review of 2861b93: it was refused after its windows and their start
+    configurations had been written with the settings of the run, and the run with the scale
+    corrected to that of the schedule was then refused for those start configurations)."""
+    from cufep.alchemy.schedule import Schedule
+
+    try:
+        given = float(Schedule.load(src).rest2_scale)
+    except ValueError as exc:
+        raise WorkflowError(f"the lambda schedule {src} cannot be read: {exc}") from exc
+    if abs(given - rest2_scale) > 1e-9:
+        raise WorkflowError(
+            f"the lambda schedule {src} (lambda_schedule.file) was made with a REST2 scale of {given:g} but this "
+            f"leg runs with {rest2_scale:g} (sampling.rest2.scale). Nothing of the windows of the leg was written. "
+            "Use the same value, or a schedule made with it.")
+
+
+def check_given_schedule(cfg: Config, lig_dir: Path, leg: str, repeat: int, reschedule: bool = False) -> None:
+    """Before a run writes or samples anything: the lambda schedule a leg is to be given
+    (``lambda_schedule.file``) must be there, one of this leg (its stages and its two end states)
+    and of the REST2 scale of the run. A leg takes a given schedule when it has no windows, or
+    when it is started anew (``--reschedule``); for a leg that keeps its windows nothing is
+    checked. From the configuration and the files alone, also for a ligand that has no prepared
+    systems yet (review of 3897311: the scale was checked for legs with prepared systems and
+    without ``--reschedule`` only, the leg not at all; a leg started anew with a schedule it could
+    not take had its samples set aside and then failed). Raises WorkflowError;
+    :func:`take_given_schedule` checks again when the leg takes the schedule."""
+    from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT
+
+    given = given_schedule_file(cfg, Path(lig_dir).name, leg, repeat)
+    if given is None or ((Path(lig_dir) / f"repeat_{repeat}" / leg / "schedule.yaml").exists() and not reschedule):
+        return
+    if not given.exists():
+        raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {given}")
+    _schedule_of_this_leg(given, leg, list(STAGES_COMPLEX if leg == "complex" else STAGES_SOLVENT))
+    check_given_schedule_scale(given, cfg.sampling.rest2.scale if cfg.sampling.rest2.scale > 1.0 else 1.0)
+
+
+def take_given_schedule(leg_dir: Path, src: Path, leg: str, stages: list[str], rest2_scale: float, log=print) -> None:
+    """Give a leg that has no lambda windows the schedule in ``src`` (``lambda_schedule.file``),
+    if it is one of this leg and of the REST2 scale the leg runs with.
 
     Start configurations that such a leg has are those of a precalculation that was stopped after
     it had written them and before it wrote its windows. They are not those of the given windows,
@@ -2683,6 +2769,7 @@ def take_given_schedule(leg_dir: Path, src: Path, leg: str, stages: list[str], l
     then refused in the leg after the check before the run, which had seen no schedule, had let
     it pass.)"""
     _schedule_of_this_leg(src, leg, stages)          # before it is taken over
+    check_given_schedule_scale(src, rest2_scale)
     start_file = Path(leg_dir) / "start_configs.npz"
     if start_file.exists():
         log(f"{start_file} holds the start configurations of a precalculation that did not write its lambda "
@@ -2691,13 +2778,36 @@ def take_given_schedule(leg_dir: Path, src: Path, leg: str, stages: list[str], l
     publish(Path(leg_dir) / "schedule.yaml", lambda tmp: shutil.copy(src, tmp))
 
 
+#: what the result of a leg names when the origin of its lambda windows is not recorded
+#: (``origin_not_recorded``): windows and start configurations of a version that wrote no record,
+#: sampled for the first time by a later one; windows that adaptive lambda scheduling chose in an
+#: earlier run which left no start configurations with them
+WINDOWS_ORIGINS = ("the lambda windows and their start configurations", "the lambda windows")
+
+
+def adopt_windows(leg_dir: Path, schedule, configs: tuple, cfg: Config, made: dict) -> dict:
+    """Give start configurations that an earlier version wrote without a record of their settings
+    the record of the run that samples them first: its settings, the windows, what the file said
+    of how they were made, and that their origin is not recorded. Returns the record.
+
+    The result of the leg then says so in this run and in every later one (review of 2861b93: it
+    was said until the first checkpoint, after which the leg had samples and went on without the
+    note), and a run with other settings is refused as for any leg that has its windows."""
+    how = {key: made[key] for key in ("start_configurations", "walk_ps") if key in made}
+    record = dict(start_record(cfg, schedule, how), origin_not_recorded=WINDOWS_ORIGINS[0])
+    publish_npz(Path(leg_dir) / "start_configs.npz", positions=configs[0], boxes=configs[1], velocities=configs[2],
+                made_with=json.dumps(record))
+    return record
+
+
 def stored_windows(leg_dir: Path, leg: str, stages: list[str], cfg: Config, log=print):
     """The lambda windows a leg has with the start configurations of their replicas, if this run
-    can go on from them: ``(schedule, (positions, boxes, velocities), whether the files record the
-    settings they were made with)``. None if the leg does not have both files, or has start
-    configurations that are not those of its windows (other states, or another number of them):
-    they are made again for the windows the leg has. Raises WorkflowError if the files were made
-    with another System (:func:`check_windows_settings`)."""
+    can go on from them: ``(schedule, (positions, boxes, velocities), the record written with the
+    start configurations)``, the record empty for files of a version that wrote none. None if the
+    leg does not have both files, or has start configurations that are not those of its windows
+    (other states, or another number of them): they are made again for the windows the leg has.
+    Raises WorkflowError if the files were made with another System
+    (:func:`check_windows_settings`)."""
     sched_file, start_file = Path(leg_dir) / "schedule.yaml", Path(leg_dir) / "start_configs.npz"
     if not (sched_file.exists() and start_file.exists()):
         return None
@@ -2710,7 +2820,8 @@ def stored_windows(leg_dir: Path, leg: str, stages: list[str], cfg: Config, log=
             f"({len(configs[0])} configurations, {len(schedule.states)} windows): they are made again for these "
             "windows")
         return None
-    return schedule, configs, check_windows_settings(made, cfg, start_file, log)
+    check_windows_settings(made, cfg, start_file, log)
+    return schedule, configs, made
 
 
 def publish_windows(leg_dir: Path, schedule, cfgs: list, record: dict, **origin) -> tuple:
@@ -2794,10 +2905,10 @@ def analysis_record(cfg) -> dict:
               "min_effective_samples": float(a.min_effective_samples),
               "convergence_points": int(a.convergence_points), "convergence_blocks": int(a.convergence_blocks),
               "error_blocks": [int(count) for count in a.error_blocks], "part_error_blocks": int(a.part_error_blocks)}
-    # a setting that was added later is recorded only when it is on: a result made without it has
-    # the record every earlier result has, and is not made again for a key
-    if a.detect_equilibration:
-        record["detect_equilibration"] = True
+    # a setting that was added later is recorded only away from the value that gives what the
+    # versions before it did: a result made that way has the record every earlier result has, and
+    # is not made again for a key
+    record.update({key: getattr(a, key) for key, value in ANALYSIS_SETTINGS_ADDED.items() if getattr(a, key) != value})
     return record
 
 
@@ -3082,6 +3193,13 @@ def unrecorded_samples_problems(attrs: dict, n_stored: int, leg_dir: Path, cfg: 
         problems.append(
             f"temperature: {float(attrs['temperature_K']):g} K -> {float(cfg.thermodynamics.temperature_K):g} K"
         )
+    # a setting of alchemy that came after such samples: they were made with the one treatment
+    # their version had (review of 2861b93: complete samples of that kind were given back for a run
+    # that asked for annihilated electrostatics or the squared soft-core)
+    for key, value in ALCHEMY_SETTINGS_ADDED.items():
+        if getattr(cfg.alchemy, key) != value:
+            problems.append(f"alchemy.{key}: {value} (all the version that made the samples had) -> "
+                            f"{getattr(cfg.alchemy, key)}")
     if (
         states is not None
         and isinstance(attrs.get("states"), list)
@@ -3500,6 +3618,29 @@ def samples_analysis_problems(leg_dir: Path, analysis) -> list[str]:
     return [f"the tail correction of their production cannot be estimated: {why}"] if why else []
 
 
+def with_cycle_conditions(leg_dir: Path, data: dict) -> dict:
+    """The result ``data`` of a leg with the condition of the cycle that it lacks and that its
+    samples record: whether the electrostatics inside the ligand were annihilated.
+
+    A result has the key since the setting exists; one written without it is of a version that
+    had only the electrostatics kept, unless that version analysed again the samples of a later
+    one (review of 2861b93: such a result of annihilated samples was read as "kept", and combined
+    with a leg that had kept them). So the samples are asked where the result does not say, by
+    the check before a run and by the combination alike; a leg whose samples are gone, or record
+    no conditions, was made with the electrostatics kept (:data:`CYCLE_CONDITION_DEFAULTS`)."""
+    from cufep.sampling.storage import StorageError, stored_conditions
+
+    if data.get("annihilate_electrostatics") is not None:
+        return data
+    try:
+        n_stored, conditions = stored_conditions(Path(leg_dir) / "hrex")
+    except StorageError:
+        return data
+    if n_stored == 0 or conditions is None:
+        return data
+    return dict(data, annihilate_electrostatics=electrostatics_annihilated(conditions))
+
+
 def combined_record(leg_dir: Path, data: dict, cfg: Config) -> tuple[dict, list[str]]:
     """What a finished leg that a run does not sample will be combined with at the end of that run,
     and why it could not be: its result as it is, if it was analysed as this run analyses or its
@@ -3510,7 +3651,7 @@ def combined_record(leg_dir: Path, data: dict, cfg: Config) -> tuple[dict, list[
 
     n_stored, attrs = stored_attributes(leg_dir / "hrex")
     if data.get("analysis_record") == analysis_record(cfg) or n_stored == 0:
-        return data, []
+        return with_cycle_conditions(leg_dir, data), []
     conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
     record = {key: data.get(key) for key, _name in CYCLE_CONDITIONS}
     record.update(temperature_K=attrs.get("temperature_K"), pressure_bar=conditions.get("pressure_bar"),
@@ -3662,7 +3803,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
             warnings.append(f"repeat {r} is incomplete")
             continue
         c, s = states["complex"][1], states["solvent"][1]
-        complete += [(f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else ""), states[leg][1])
+        complete += [(f"{leg} leg" + (f" of repeat {r}" if repeats > 1 else ""),
+                      with_cycle_conditions(lig_dir / f"repeat_{r}" / leg, states[leg][1]))
                      for leg in ("complex", "solvent")]
         dg = s["delta_g_decouple"] - c["delta_g_decouple"] - c["restraint_release"]
         # the standard error of a leg (from time blocks since version 4 of the analysis; a result of
@@ -3766,6 +3908,8 @@ def combine_ligand(lig_dir: Path, ligand_name: str, repeats: int, analysis=None,
         "repeats_planned": int(repeats),
         "analysis_record": run_record,
         "leg_digests": digests,
+        # the conditions of the cycle that this combination compared among its legs
+        "cycle_conditions": [key for key, _name in CYCLE_CONDITIONS],
     }
     if per_repeat:
         vals = np.array([p["dg_bind"] for p in per_repeat]) / KCAL
@@ -3819,7 +3963,11 @@ def stored_ligand_result(lig_dir: Path, name: str) -> dict:
     from cufep.analysis.mbar import ANALYSIS_VERSION
 
     def verdicts_current(result: dict) -> bool:
-        return (result.get("analysis_record") or {}).get("version") == ANALYSIS_VERSION
+        # of this version of the analysis, and combined under the conditions of the cycle this
+        # version compares (review of 2861b93: a ligand that a version before
+        # annihilate_electrostatics had combined from legs that differ in it was shown again as it was)
+        return ((result.get("analysis_record") or {}).get("version") == ANALYSIS_VERSION
+                and result.get("cycle_conditions") == [key for key, _name in CYCLE_CONDITIONS])
 
     lig_dir = Path(lig_dir)
     path = lig_dir / "result.json"

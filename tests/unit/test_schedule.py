@@ -518,6 +518,16 @@ def test_what_a_window_starts_from_does_not_depend_on_a_pool(water_ligand_system
     assert len(configs_a) == len(configs_b) == len(a.states)
     for (pa, ba, va), (pb, bb, vb) in zip(configs_a, configs_b):
         assert np.array_equal(pa, pb) and np.array_equal(ba, bb) and np.array_equal(va, vb)
+    if start == "sequential":
+        # the record says whether windows ran at the same time, not whether there was a pool (review
+        # of 2861b93: a leg that ran its windows one after another and added none, so that its pool
+        # was never given a window, was recorded as having run them concurrently)
+        capped = AlsSettings(overlap_threshold=0.25, candidates=21, initial_windows={"discharge": 2, "vanish": 3},
+                             window_ps=0.2, equilibration_ps=0.02, sample_interval_ps=0.02, max_windows=4,
+                             start_configurations="sequential")
+        only, _configs = adaptive_schedule(*leg, ["discharge", "vanish"], 300.0, 2.0, capped, lambda m: None,
+                                           pool=Pool())
+        assert len(only.states) == 4 and only.provenance["windows_run_concurrently"] is False
 
 
 def test_the_two_ways_of_starting_the_first_windows(water_ligand_system):

@@ -355,14 +355,18 @@ last configuration of each window is the start of its replica; replica exchange 
 its own equilibration before the production. How the windows were started is written with the
 start configurations (`start_configs.npz`, which is written before `schedule.yaml`, so that a
 leg with a schedule of its own has the start configurations made with it), to the log, and to
-the result of the leg (`start_configurations`). With them are written the windows they are of
-and the settings of the System they were made with (`alchemy`, `sampling.rest2`): a run that
-gives other settings to a leg that has its windows is refused before it writes anything
-(`--reschedule` starts the leg anew), and start configurations of other windows than the leg
-has are made again. A leg of an earlier version has no such record: its result has no
-`start_configurations` (the record of its schedule tells whether the precalculation had workers,
-not whether the start configurations the leg has were made by it), and a run that samples such
-windows for the first time says in the result that their origin could not be checked.
+the result of the leg (`start_configurations`). With them are written the windows they are of,
+whether this precalculation chose the windows or they were given, and the settings of the
+System they were made with (`alchemy`, `sampling.rest2`): a run that gives other settings to a
+leg that has its windows is refused before it writes anything (`--reschedule` starts the leg
+anew), and start configurations that are not those of the windows a leg has are made again. A
+leg of an earlier version has no such record: its result has no `start_configurations` (the
+record of its schedule tells whether the precalculation had workers, not whether the start
+configurations the leg has were made by it). A run that samples such windows for the first
+time writes its own record with them, which says that their origin is not recorded, and the
+result of the leg says so from then on; so does the result of a leg that found windows of
+adaptive lambda scheduling without start configurations (an earlier version stopped between
+the two) and walked through them.
 
 ### Where cuFEP follows the paper and where it differs
 
@@ -1054,9 +1058,12 @@ belong together:
   input files and the settings that went into them are the same (a trajectory also only if the
   pre-equilibration it started from is the one that is there). Only the lambda windows of a
   leg can be determined again in place, with `--reschedule`.
-- A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg: its
-  stages and its two end states are checked. Give a directory as written by `cufep benchmark
-  freeze`, or the file of one leg together with `--leg`.
+- A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg and of the
+  REST2 scale of the run: its stages, its two end states and its scale are checked before the
+  leg takes it over, and before the run writes anything. Give a directory as written by `cufep
+  benchmark freeze`, or the file of one leg together with `--leg`.
+- A leg whose archive (`--reschedule`) was begun and not completed is not run as it is: the
+  run is refused until `--reschedule` is given again, which completes the archive.
 - How the bilayer changed and how far the ligand was from its input pose are taken from the
   files of the leg whenever its result is made, as numbers. The notes with a verdict on them
   that earlier versions wrote into those files and into their results (whether the bilayer had
@@ -1111,7 +1118,7 @@ version wrote without a record of what they were made from are treated as follow
 
 | file | what happens |
 |---|---|
-| samples (`hrex/samples.h5`) without recorded conditions | read and analysed, never added to, and not written to. That version stored neither the soft-core nor pressure and friction, and it rewrote temperature, backend and states whenever it opened the file, so nothing on the disk shows what the samples were made with. They are held to what their file does hold: a run with another temperature, other lambda states or another length of an iteration is refused, and so is one that asks for more production than they have. A leg that has all its iterations is analysed as it is: the release of the restraint is computed at the temperature of the samples, and the pressure, which they do not record, is named as not compared when the legs are combined. To sample further, the leg is started anew with `--reschedule` |
+| samples (`hrex/samples.h5`) without recorded conditions | read and analysed, never added to, and not written to. That version stored neither the soft-core nor pressure and friction, and it rewrote temperature, backend and states whenever it opened the file, so nothing on the disk shows what the samples were made with. They are held to what their file does hold and to what their version could do: a run with another temperature, other lambda states or another length of an iteration is refused, so is one that asks for more production than they have, and so is one that asks for a treatment that version did not have (`alchemy.annihilate_electrostatics: true`, `alchemy.softcore_b: 2`). A leg that has all its iterations is analysed as it is: the release of the restraint is computed at the temperature of the samples, and the pressure, which they do not record, is named as not compared when the legs are combined. To sample further, the leg is started anew with `--reschedule` |
 | samples in one file (`hrex/samples.h5`, without `manifest.json`) | read as that version stored them: up to its stored counts (`committed_counts`), or, for the versions before them, up to the iterations that all their row datasets hold. A run that continues them never writes to that file: it adds parts and a manifest that names the file, with those counts, as its first part |
 | a checkpoint without the number of its stored rows | not continued from (see "A leg and its own files" above); the run is refused before anything is written |
 | samples that record their conditions with a checksum of the System and without the settings behind it (one version) | before a run, the System is built again from the files of the leg and all recorded conditions are compared, so that a run with another soft-core, restraint or REST2 region is refused before anything is written. If a file needed for that is missing, the run is refused |

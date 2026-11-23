@@ -1056,9 +1056,11 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
 
     longer = {"production_ns": 20.0}
     without(["alchemy"], "softcore_b", "annihilate_electrostatics")
+    without(["analysis"], "detect_equilibration")             # (review of 3897311: the same for this one)
     driver._run(config(sampling=longer), out, False, log.append)
     assert previous() == ["resolved_config.previous_1.yaml"]
     assert read_settings(out / "resolved_config.yaml")["alchemy"]["softcore_b"] == 1
+    assert read_settings(out / "resolved_config.yaml")["analysis"]["detect_equilibration"] is False
     without(["alchemy"], "softcore_b", "annihilate_electrostatics")
     hrex.rename(hrex.parent / "kept")                # (its samples would refuse another soft-core)
     driver._run(config(sampling=longer, alchemy={"softcore_b": 2}), out, False, log.append)
@@ -1098,6 +1100,12 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
         check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
     short = {"equilibration_ns": 0.005, "production_ns": 0.01}
     check_leg_reuse(config(sampling=short), lig_dir, "solvent", 0, prep_info, 0.01)          # what they hold
+    # ... and to the one treatment of alchemy their version had (review of 2861b93: such samples, complete,
+    # were given back for a run that asked for annihilated electrostatics or the squared soft-core)
+    for added, said in (({"annihilate_electrostatics": True}, "alchemy.annihilate_electrostatics: False .* -> True"),
+                        ({"softcore_b": 2}, "alchemy.softcore_b: 1 .* -> 2")):
+        with pytest.raises(ConditionsError, match=said):
+            check_leg_reuse(config(sampling=short, alchemy=added), lig_dir, "solvent", 0, prep_info, 0.01)
     with pytest.raises(ConditionsError, match="temperature: 298.15 K -> 310 K"):
         check_leg_reuse(config(sampling=short, thermodynamics={"temperature_K": 310.0}), lig_dir, "solvent", 0,
                         prep_info, 0.01)
@@ -2246,6 +2254,38 @@ def test_legs_with_and_without_annihilated_electrostatics_are_not_combined(tmp_p
         else:
             check_partner_legs(tmp_path / name, "lig", {(0, "solvent")}, 1, default)
 
+    # a result without the key whose samples say that the electrostatics were annihilated (a version
+    # before the setting analysed the samples of a later one again): the samples are asked, before a
+    # run and in the combination (review of 2861b93: the result counted as "kept", the check before
+    # the run took it as it was because its analysis was that of the run, and the ligand got a
+    # binding free energy from two different ends)
+    from cufep.workflow import analysis_record, stored_ligand_result
+
+    mixed = tmp_path / "result of an earlier version"
+    sampled(mixed / "repeat_0" / "complex", {"softcore_alpha": 0.5, "annihilate_electrostatics": True})
+    written = dict(_leg_result(160.0), temperature_K=298.15, pressure_bar=1.0, lrc_method=default.analysis.lrc,
+                   lrc_long_cutoff_nm=float(default.analysis.lrc_cutoff_nm), analysis_record=analysis_record(default))
+    (mixed / "repeat_0" / "complex" / "result.json").write_text(json.dumps(written))
+    record, _problems = combined_record(mixed / "repeat_0" / "complex", written, default)
+    assert record["annihilate_electrostatics"] is True
+    with pytest.raises(WorkflowError, match=refusal.format("False")):
+        check_partner_legs(mixed, "lig", {(0, "solvent")}, 1, default)
+    write(mixed, "solvent", **kept)
+    out = combine_ligand(mixed, "lig", 1)
+    assert "dg_bind" not in out and out["inconsistent_legs"][-1] == (
+        "electrostatics inside the ligand annihilated: complex leg True, solvent leg False")
+    # a ligand that such a version combined from these two legs is not shown again as it was by a
+    # run of another ligand: its result does not say that this condition was compared
+    stale = dict(combine_ligand(tmp_path / "kept", "lig", 1, default.analysis), dg_bind=-99.0)
+    assert stale["cycle_conditions"][-1] == "annihilate_electrostatics"
+    (tmp_path / "kept" / "result.json").write_text(json.dumps(stale))
+    assert stored_ligand_result(tmp_path / "kept", "lig")["dg_bind"] == -99.0          # combined by this version
+    del stale["cycle_conditions"]
+    stale["leg_digests"] = combine_ligand(mixed, "lig", 1, publish=False)["leg_digests"]
+    (mixed / "result.json").write_text(json.dumps(stale))
+    shown = stored_ligand_result(mixed, "lig")
+    assert "dg_bind" not in shown and shown["not_part_of_this_run"] and shown["inconsistent_legs"]
+
 
 def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they_were_made_for(tmp_path, monkeypatch):
     """Review of dd075d6: (1) a leg that had its lambda windows and their start configurations and
@@ -2263,6 +2303,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     from cufep.config.schema import Config
     from cufep.workflow import (
         WorkflowError,
+        adopt_windows,
         check_leg_reuse,
         publish_windows,
         start_configurations_of,
@@ -2287,8 +2328,10 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
 
     # the run that made them goes on from them
     check_leg_reuse(default, lig, "solvent", 0, {"made_from": {}}, 5.0)
-    got, configs, recorded = stored_windows(leg, "solvent", stages, default, log.append)
-    assert recorded and len(got.states) == n and [c[0, 0] for c in configs[0]] == list(range(n)) and log == []
+    got, configs, made = stored_windows(leg, "solvent", stages, default, log.append)
+    assert made["settings"] == {"alchemy": {"softcore_alpha": 0.5}, "rest2": default.sampling.rest2.model_dump()}
+    assert "origin_not_recorded" not in made and made["start_configurations"] == "walk"
+    assert len(got.states) == n and [c[0, 0] for c in configs[0]] == list(range(n)) and log == []
     # a run with another System is refused, before it writes anything and where the files are used
     for sections, differing in (
             ({"alchemy": {"annihilate_electrostatics": True}},
@@ -2311,10 +2354,21 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     with np.load(leg / "start_configs.npz") as data:
         arrays = {key: data[key] for key in ("positions", "boxes", "velocities")}
     np.savez(leg / "start_configs.npz", **arrays)
-    check_leg_reuse(config(alchemy={"softcore_b": 2}), lig, "solvent", 0, {"made_from": {}}, 5.0)
-    _schedule, _configs, recorded = stored_windows(leg, "solvent", stages, default, log.append)
-    assert not recorded and "did not record the settings they were made with" in log[-1]
+    squared = config(alchemy={"softcore_b": 2})
+    check_leg_reuse(squared, lig, "solvent", 0, {"made_from": {}}, 5.0)
+    got, configs, made = stored_windows(leg, "solvent", stages, squared, log.append)
+    assert made == {} and "did not record the settings they were made with" in log[-1]
     assert start_configurations_of(leg) is None
+    # the run that samples them first gives them its record, which says that their origin is not
+    # known: the result says so in that run and in every later one, and a run with other settings
+    # is refused from then on (review of 2861b93: the note was gone once the leg had a checkpoint)
+    adopted = adopt_windows(leg, got, configs, squared, made)
+    assert adopted["origin_not_recorded"] == "the lambda windows and their start configurations"
+    assert adopted["settings"]["alchemy"] == {"softcore_alpha": 0.5, "softcore_b": 2}
+    later = stored_windows(leg, "solvent", stages, squared, log.append)[2]
+    assert later == adopted and np.array_equal(np.load(leg / "start_configs.npz")["positions"], arrays["positions"])
+    with pytest.raises(WorkflowError, match="alchemy.softcore_b: 2 -> not given"):
+        check_leg_reuse(default, lig, "solvent", 0, {"made_from": {}}, 5.0)
 
     # (2) the precalculation is stopped between its two writes: the start configurations are there,
     # the windows are not, and the leg has no windows to go on from
@@ -2337,7 +2391,39 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     other = config(alchemy={"softcore_b": 2})
     schedule.save(tmp_path / "given.yaml", leg="solvent")
     check_leg_reuse(other, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
-    take_given_schedule(again, tmp_path / "given.yaml", "solvent", stages, log.append)
+    # (a given schedule of another REST2 scale than the run is refused before the leg takes it, by
+    # the check before the run too: review of 2861b93, it was refused after the windows and their
+    # start configurations had been written, and those then refused the run with the scale corrected)
+    unscaled = fixed_schedule(stages, {"discharge": 3, "vanish": 4}, 1.0)
+    unscaled.save(tmp_path / "unscaled.yaml", leg="solvent")
+    with pytest.raises(WorkflowError, match="REST2 scale of 1 but this leg runs with 1.5.*Nothing of the windows"):
+        take_given_schedule(again, tmp_path / "unscaled.yaml", "solvent", stages, 1.5, log.append)
+    assert (again / "start_configs.npz").exists() and not (again / "schedule.yaml").exists()
+    # before the run: for a leg that will take the schedule, also one that is started anew, and also
+    # where the ligand has nothing yet (review of 3897311: with --reschedule the samples of the leg
+    # were set aside first and the leg then failed; a schedule of the other leg was not looked at)
+    from cufep.workflow import check_given_schedule
+
+    unscaled_given = config(lambda_schedule={"file": str(tmp_path / "unscaled.yaml")})
+    for reschedule in (False, True):
+        with pytest.raises(WorkflowError, match="REST2 scale of 1 but this leg runs with 1.5"):
+            check_leg_reuse(unscaled_given, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0,
+                            reschedule=reschedule)
+    with pytest.raises(WorkflowError, match="REST2 scale of 1 but this leg runs with 1.5"):
+        check_given_schedule(unscaled_given, tmp_path / "a ligand without files", "solvent", 0)
+    with pytest.raises(WorkflowError, match="cannot be used for the complex leg"):
+        check_given_schedule(config(lambda_schedule={"file": str(tmp_path / "given.yaml")}), tmp_path / "again",
+                             "complex", 0)
+    with pytest.raises(WorkflowError, match="there is no schedule at"):
+        check_given_schedule(config(lambda_schedule={"file": str(tmp_path / "none.yaml")}), tmp_path / "again",
+                             "solvent", 0)
+    # a leg that keeps the windows it has takes no schedule: nothing of the file is asked
+    check_given_schedule(unscaled_given, lig, "solvent", 0)
+    with pytest.raises(WorkflowError, match="REST2 scale of 1 but this leg runs with 1.5"):
+        check_given_schedule(unscaled_given, lig, "solvent", 0, reschedule=True)
+    check_leg_reuse(config(lambda_schedule={"file": str(tmp_path / "given.yaml")}), tmp_path / "again", "solvent", 0,
+                    {"made_from": {}}, 5.0)
+    take_given_schedule(again, tmp_path / "given.yaml", "solvent", stages, default.sampling.rest2.scale, log.append)
     assert "did not write its lambda windows" in log[-1] and not (again / "start_configs.npz").exists()
     assert len(Schedule.load(again / "schedule.yaml").states) == n
     assert stored_windows(again, "solvent", stages, other, log.append) is None      # the walk makes them
@@ -2354,6 +2440,14 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     np.savez(again / "start_configs.npz", **arrays)
     assert stored_windows(again, "solvent", stages, default, log.append) is None
     assert f"({n} configurations, {len(given.states)} windows)" in log[-1]
+
+    # a leg whose archive (--reschedule) was begun and not completed is not run as it is (review of
+    # 2861b93: a run without --reschedule made new start configurations for the windows and analysed
+    # the samples that were left, with the record of the new ones)
+    (again / ".previous_1.partial").mkdir()
+    with pytest.raises(WorkflowError, match="was being started anew .--reschedule. when a run stopped.*again"):
+        check_leg_reuse(default, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
+    check_leg_reuse(default, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0, reschedule=True)
 
 
 def test_alchemy_settings_added_later_leave_the_record_of_earlier_samples_as_it_was():

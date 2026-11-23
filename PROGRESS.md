@@ -66,14 +66,14 @@ Open items:
   page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
   and the measurements that would separate the causes of cuFEP's larger errors.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, PR #9): every remedy
-  proposed for the errors gets a treatment; defaults change only by the owner's decision. One
-  calculation varies by a standard deviation of 1.57 kcal/mol for ejm_49 and 1.72 for 4k (three
-  runs each). New settings, defaults unchanged: `start_configurations` of the precalculation,
-  `analysis.detect_equilibration`, and, one run each on ejm_49 (defaults: -11.84, -8.92, -9.40),
-  `alchemy.annihilate_electrostatics` (-7.71 ± 0.41) and `alchemy.softcore_b` 2 (-8.78 ± 0.34).
-  The same complex leg of ejm_49 with its last 7 windows started from the relaxed decoupled end:
-  35.26 against 40.91. Running: 4k with 100 ns of bilayer equilibration, that control to 10 ns.
-  Not yet: RelocationMC (how to compute the trial energies is the owner's decision).
+  proposed for the errors gets a treatment; defaults change only by the owner's decision. Steps 0
+  to 5 are done but RelocationMC (how to compute its trial energies is the owner's decision); the
+  results are in the plan and wait for the owner (step 6). One calculation varies by a standard
+  deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). New settings, defaults unchanged, one run
+  each on ejm_49 (defaults: -11.84, -8.92, -9.40): `alchemy.annihilate_electrostatics` -7.71,
+  `alchemy.softcore_b` 2 -8.78; also `start_configurations`, `analysis.detect_equilibration`.
+  What the windows start from moves the complex leg by about 5 kcal/mol: ejm_49 35.3 against 40.9
+  (decoupled-side windows from the relaxed end), 4k 44.3 against 39.0 (bilayer equilibrated 100 ns).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,29 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [amendment] Review by Codex of 2861b93: records that hold through other versions and interruptions
+- What: review 6015499088 (one P1, seven P2), each fixed. A result that lacks
+  `annihilate_electrostatics` takes it from its samples, before a run and in the combination; a
+  stored ligand result is shown again only if it compared the conditions of the cycle this
+  version compares. Samples without recorded conditions refuse a treatment their version did not
+  have. A given schedule of another REST2 scale is refused before the leg takes it. A leg whose
+  archive was not completed is refused until `--reschedule` completes it. Windows of an earlier
+  version that a run samples first get its record, and the result keeps saying that their origin
+  is not recorded. `windows_run_concurrently` is true only if windows ran at the same time.
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `docs/protocol.md`, `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [progress] Accuracy plan, step 5: the bilayer equilibrated 100 ns; the control of E3 to 10 ns
+- What: one run each, image of e77a6c5, kcal/mol. 4k (experiment -11.54) with
+  `membrane.equilibration_ns: 100`: -19.84 ± 0.41, complex leg 44.32 ± 0.40 against 38.78, 37.36,
+  40.90 of the three runs with 10 ns (the walk) and 44.87 of the benchmark run (windows started
+  one from another); the area of the bilayer no longer changes at the end of the 100 ns (-0.008 %
+  between its last two quarters; -0.9 to -2.5 % after 10 ns). The control of E3 continued to
+  10 ns: complex leg 35.39 ± 0.66 against 40.74 of the first repeat continued to 10 ns; the two
+  ways of starting the windows do not come closer. No cause is established by one run each.
+- Why: step 5 of the plan (controls whose condition was met).
+- Refs: the plan ("手順 5 の結果", "手順 5 までのまとめ"), `runs/acc_*` (untracked)
 
 ### 2026-11-23 — [progress] Accuracy plan, step 5: annihilated electrostatics, the squared soft-core, the control of E3
 - What: one run each on ejm_49 (experiment -7.75; the defaults three times: -11.84, -8.92, -9.40;
