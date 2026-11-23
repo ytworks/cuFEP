@@ -1,5 +1,5 @@
 # 二重層は拘束条件の MD だけ、複合体レグの FEP は水中
-Status: In progress (2026-11-24: オーナーの指示で A2A の run を 4k と 4e の 2 本で止めた。設定と PR #14 の扱いはオーナーの決定待ち)
+Status: Dropped (2026-11-24: オーナーの決定。A2A の run を 4k と 4e の 2 本で止め、PR #14 をマージせずにクローズした。設定は main に入っていない)
 Refs: this pull request; `docs/configuration.md` (`membrane.complex_leg`); `docs/protocol.md` ("Systems", "Steps of one leg"); `benchmarks/results/a2a/`
 
 ## Context
