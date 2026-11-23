@@ -1,5 +1,5 @@
 # 精度の改善: 誤差の原因の測定と、解決策の実装
-Status: In progress (手順 0〜5 済み。手順 6: RelocationMC を実装して評価した(既定は off のまま)。E1 と E3 を 1 リガンドずつ検証した。オーナーの決定(2026-11-23): E1 だけを採用して全ベンチマークをやり直す(実行中、`cufep:41760a1`))
+Status: Done (2026-11-23。オーナーの決定: E1 の修正だけを採用する(PR #9 を main にマージ)。ほかの設定は既定 off のまま、RelocationMC(PR #10)はマージしない。E1 だけでの全ベンチマークのやり直しは、1 件(4r)で止めた)
 Refs: this pull request; issue #5; `benchmarks/results/`; `docs/protocol.md` ("Interactions inside the ligand", "Adaptive lambda scheduling", "REST2", "How cuFEP compares"); `docs/configuration.md`
 
 ## Context
@@ -579,3 +579,11 @@ Refs: this pull request; issue #5; `benchmarks/results/`; `docs/protocol.md` ("I
 - イメージ `cufep:41760a1`(PR #9 の先頭。既定値の違いは E1 の「窓は worker の数によらず walk から始める」だけ)、GPU 8 枚、1 化合物 1 計算、production 5 ns。A2A、TYK2 の順(`runs/configs/chain_full_benchmarks_e1.sh`、`runs/benchmark_{a2a,tyk2}_full_41760a1`)。2026-11-23T12:17Z に開始。
 - 比べる相手は e77a6c5 の run(TYK2: 平均誤差 -1.20、平均誤差を除いた RMSE 1.25、τ 0.47。A2A: -4.14、2.68、0.34)。結果はここに追記する。
 - 変更(同日、オーナーの指示: 今回は 1 リガンドずつ実行する): セットをまとめて走らせる実行は開始 4 分で止め、同じディレクトリで 1 リガンドずつ、計算全体を GPU 8 枚で走らせている(`runs/configs/chain_benchmarks_e1_by_ligand.sh`、2026-11-23T12:21Z に開始)。順番は、A2A が 4r、4j、4h、4k、4n、4c、4q(e77a6c5 で逐次だった 7 件)、4g、4l、4i、4a、4b、4d、4o、4f、4e、4m。続けて TYK2 が ejm_45、ejm_47、jmc_23、ejm_55(同 4 件)、ejm_49、ejm_54、jmc_30、ejm_43、ejm_44、ejm_48、jmc_27、ejm_46、ejm_42、jmc_28、ejm_31、ejm_50。1 件終わるごとに、e77a6c5 の値と実験値に対して判定する。
+- 結果と打ち切り(同日): 1 件目の 4r は -16.17 → -15.95 ± 0.31(実験値 -11.46、complex leg 40.36 → 40.33)で、変化は +0.2 だった(`spikes/m30_ligands_against_a_run.py`)。2 件目の 4j の途中で、オーナーの指示により検証を止めた。逐次だった A2A の 5 件の変化は +5.6(4k)、+1.8(4n)、+3.6(4c)、+1.6(4q)、+0.2(4r)で、平均 +2.6、すべて実験値に近づく向き。
+
+**結論(オーナーの決定、2026-11-23): E1 だけを採用する**
+
+- 採用: E1 の修正(`lambda_schedule.adaptive.start_configurations`、既定は walk。PR #9)。A2A で逐次だった complex leg を平均 2.6 kcal/mol、実験値の側に動かす。同じ設定の計算が、worker の数で別の答えになることもなくなる。
+- 採用しない(設定としては残るが、既定は off): 内部の静電の消去、(1-λ)² のソフトコア、平衡化の自動検出(以上 PR #9)、RelocationMC(PR #10、マージしない)。どれも精度を良くしなかった。
+- 実装しない: E3 への対処(消去端から始める設定、配座の拘束と解放の補正)、二重層の平衡化の延長。
+- 残っている誤差: walk にしたあとも、A2A の 5 件は -3.2〜-5.8、TYK2 のセットは平均 -1.20。原因として残る候補は、消去端の蛋白質の緩和(TYK2 の ejm_49 では確認、A2A の 4k では起きない)と、力場・電荷。
