@@ -2371,11 +2371,12 @@ def run_leg(job: LegJob) -> dict:
         # ---- 4. lambda schedule ----------------------------------------------------------------
         ls = cfg.lambda_schedule
         found_in_leg = sched_file.exists()             # windows the leg had before this run
+        given = None                                   # windows the leg is given by a file, if it has none
         if ls.file is not None and not found_in_leg:
             src = given_schedule_file(cfg, ligand_dir_name(job.ligand), job.leg, job.repeat)
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
-            take_given_schedule(leg_dir, src, job.leg, stages, rest2.scale if rest2_on else 1.0, log)
+            given = given_schedule(src, job.leg, stages, rest2.scale if rest2_on else 1.0)
         stored = stored_windows(leg_dir, job.leg, stages, cfg, log)
         if stored is not None:
             schedule, configs, made = stored
@@ -2429,9 +2430,11 @@ def run_leg(job: LegJob) -> dict:
             ctx.setPositions(eq["positions"])
             ctx.setVelocities(eq["velocities"])
             t0 = time.perf_counter()
-            if sched_file.exists() or ls.mode_of(job.leg) == "fixed":
+            if given is not None or sched_file.exists() or ls.mode_of(job.leg) == "fixed":
                 # the windows are given: only make a start configuration for each of them
-                if sched_file.exists():
+                if given is not None:
+                    schedule = given
+                elif sched_file.exists():
                     schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
                 else:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
@@ -2739,44 +2742,46 @@ def check_given_schedule(cfg: Config, lig_dir: Path, leg: str, repeat: int, resc
     systems yet (review of 3897311: the scale was checked for legs with prepared systems and
     without ``--reschedule`` only, the leg not at all; a leg started anew with a schedule it could
     not take had its samples set aside and then failed). Raises WorkflowError;
-    :func:`take_given_schedule` checks again when the leg takes the schedule."""
+    :func:`given_schedule` checks again when the leg takes the schedule."""
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT
 
     given = given_schedule_file(cfg, Path(lig_dir).name, leg, repeat)
     leg_dir = Path(lig_dir) / f"repeat_{repeat}" / leg
     if given is None or ((leg_dir / "schedule.yaml").exists() and not reschedule):
         return
-    if reschedule and given.resolve().is_relative_to(leg_dir.resolve()):
-        # (review of 8dc042e: the file passed the check, was set aside with the leg, and was gone
-        # when the leg came to take it, after its samples and its result had been set aside too)
+    inside = given.resolve().relative_to(leg_dir.resolve()).parts \
+        if given.resolve().is_relative_to(leg_dir.resolve()) else ()
+    if reschedule and inside and (inside[0] in LEG_RUN_FILES or inside[0].startswith(FAILED_BACKEND_DIR)):
+        # what archive_leg moves, not an archive that is complete (previous_<n>/). (Reviews of
+        # 8dc042e and 6b1a609: the schedule of the leg itself passed the check, was set aside with
+        # the leg and was gone when the leg came to take it, after its samples and its result had
+        # been set aside too; the first form of this refusal also refused the schedule in
+        # previous_1/, which stays where it is)
         raise WorkflowError(f"lambda_schedule.file names {given}, a file of the leg that --reschedule sets aside. "
-                            "Nothing was changed. Give a copy of it from outside the directory of the leg.")
+                            "Nothing was changed. Give a copy of it, or the one in an archive of the leg "
+                            "(previous_<n>/).")
     if not given.exists():
         raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {given}")
     _schedule_of_this_leg(given, leg, list(STAGES_COMPLEX if leg == "complex" else STAGES_SOLVENT))
     check_given_schedule_scale(given, cfg.sampling.rest2.scale if cfg.sampling.rest2.scale > 1.0 else 1.0)
 
 
-def take_given_schedule(leg_dir: Path, src: Path, leg: str, stages: list[str], rest2_scale: float, log=print) -> None:
-    """Give a leg that has no lambda windows the schedule in ``src`` (``lambda_schedule.file``),
-    if it is one of this leg and of the REST2 scale the leg runs with.
+def given_schedule(src: Path, leg: str, stages: list[str], rest2_scale: float):
+    """The lambda schedule in ``src`` (``lambda_schedule.file``) for a leg that has no windows, if
+    it is one of this leg and of the REST2 scale the leg runs with; raises WorkflowError if not.
 
-    Start configurations that such a leg has are those of a precalculation that was stopped after
-    it had written them and before it wrote its windows. They are not those of the given windows,
-    also where the values of the windows are the same, and are removed before the schedule is
-    taken over: the leg then has given windows without start configurations, and the walk through
-    them makes new ones with the record of this run. (Review of b9e7be2: left in place, they were
-    taken for given windows of the same values, and a run with other settings of ``alchemy`` was
-    then refused in the leg after the check before the run, which had seen no schedule, had let
-    it pass.)"""
-    _schedule_of_this_leg(src, leg, stages)          # before it is taken over
+    Nothing is written: the leg walks through the given windows and publishes its start
+    configurations and then its ``schedule.yaml`` together (:func:`publish_windows`), as it does
+    for windows of its own. So a leg has a schedule only with the start configurations made for
+    it, wherever a run of given windows is stopped, and its ``schedule.yaml`` names this leg.
+    (Reviews of b9e7be2, 8dc042e and 6b1a609: while the file was copied into the leg first, start
+    configurations of a stopped precalculation were taken for given windows of the same values;
+    a run stopped during the walk left windows that a later run could not tell from those of an
+    earlier version; and one stopped between the two writes kept the record of the leg the file
+    came from.)"""
+    schedule = _schedule_of_this_leg(src, leg, stages)
     check_given_schedule_scale(src, rest2_scale)
-    start_file = Path(leg_dir) / "start_configs.npz"
-    if start_file.exists():
-        log(f"{start_file} holds the start configurations of a precalculation that did not write its lambda "
-            "windows; they are removed and made again for the windows that are given")
-        start_file.unlink()
-    publish(Path(leg_dir) / "schedule.yaml", lambda tmp: shutil.copy(src, tmp))
+    return schedule
 
 
 #: what the result of a leg names when the origin of its lambda windows is not recorded

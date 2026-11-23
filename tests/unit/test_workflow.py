@@ -2313,11 +2313,11 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
         WorkflowError,
         adopt_windows,
         check_leg_reuse,
+        given_schedule,
         publish_windows,
         start_configurations_of,
         start_record,
         stored_windows,
-        take_given_schedule,
     )
 
     def config(**sections):
@@ -2405,7 +2405,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     unscaled = fixed_schedule(stages, {"discharge": 3, "vanish": 4}, 1.0)
     unscaled.save(tmp_path / "unscaled.yaml", leg="solvent")
     with pytest.raises(WorkflowError, match="REST2 scale of 1 but this leg runs with 1.5.*Nothing of the windows"):
-        take_given_schedule(again, tmp_path / "unscaled.yaml", "solvent", stages, 1.5, log.append)
+        given_schedule(tmp_path / "unscaled.yaml", "solvent", stages, 1.5)
     assert (again / "start_configs.npz").exists() and not (again / "schedule.yaml").exists()
     # before the run: for a leg that will take the schedule, also one that is started anew, and also
     # where the ligand has nothing yet (review of 3897311: with --reschedule the samples of the leg
@@ -2433,6 +2433,12 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     check_given_schedule(own, lig, "solvent", 0)
     with pytest.raises(WorkflowError, match="a file of the leg that --reschedule sets aside"):
         check_given_schedule(own, lig, "solvent", 0, reschedule=True)
+    # (the schedule in an archive of the leg stays where it is and can be given: review of 6b1a609,
+    # the refusal took every file under the directory of the leg)
+    (leg / "previous_1").mkdir()
+    schedule.save(leg / "previous_1" / "schedule.yaml", leg="solvent")
+    check_given_schedule(config(lambda_schedule={"file": str(leg / "previous_1" / "schedule.yaml")}), lig, "solvent",
+                         0, reschedule=True)
     # windows of adaptive lambda scheduling that a leg had before the run, without start
     # configurations: the walk through them records that their origin is not known, whether or not
     # a file is named now (review of 8dc042e); windows of the configuration or of a file do not
@@ -2449,11 +2455,20 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
         check_given_schedule(unscaled_given, lig, "solvent", 0, reschedule=True)
     check_leg_reuse(config(lambda_schedule={"file": str(tmp_path / "given.yaml")}), tmp_path / "again", "solvent", 0,
                     {"made_from": {}}, 5.0)
-    take_given_schedule(again, tmp_path / "given.yaml", "solvent", stages, default.sampling.rest2.scale, log.append)
-    assert "did not write its lambda windows" in log[-1] and not (again / "start_configs.npz").exists()
-    assert len(Schedule.load(again / "schedule.yaml").states) == n
+    # the leg takes the schedule without writing anything: it walks through the given windows and
+    # publishes its start configurations and then its schedule.yaml together, so the start
+    # configurations of the stopped precalculation are never taken for the given windows, a run
+    # stopped during the walk leaves no windows behind, and the schedule names this leg (reviews of
+    # b9e7be2, 8dc042e and 6b1a609, each of a way the copy that came first went wrong)
+    took = given_schedule(tmp_path / "given.yaml", "solvent", stages, default.sampling.rest2.scale)
+    assert len(took.states) == n and not (again / "schedule.yaml").exists()
     assert stored_windows(again, "solvent", stages, other, log.append) is None      # the walk makes them
     check_leg_reuse(other, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
+    publish_windows(again, took, cfgs, start_record(other, took, given_windows_record(50.0, took, False)),
+                    leg="solvent", repeat=0)
+    _schedule, _configs, made = stored_windows(again, "solvent", stages, other, log.append)
+    assert made["windows"] == "given" and "origin_not_recorded" not in made
+    assert made["settings"]["alchemy"]["softcore_b"] == 2 and Schedule.load(again / "schedule.yaml").leg == "solvent"
     # start configurations that are not those of the windows a leg has are never taken for them:
     # other states (also in the same number), or another number of them without a record
     publish_windows(again, schedule, cfgs, start_record(default, schedule, how), leg="solvent")

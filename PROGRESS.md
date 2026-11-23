@@ -112,6 +112,16 @@ Open items:
 
 ## Change Log
 
+### 2026-11-23 — [amendment] Third review by Codex (6b1a609): a given schedule is read, not copied first
+- What: review 6015941311 (two P2), both fixed. A leg that is given its windows
+  (`lambda_schedule.file`) reads the schedule and writes its `schedule.yaml` with the start
+  configurations of the walk, not before it: a run stopped during the walk leaves no windows
+  that look like those of an earlier version, and the schedule names this leg. With
+  `--reschedule` only a file that is set aside is refused, not the one in `previous_<n>/`.
+  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
 ### 2026-11-23 — [amendment] Second review by Codex (8dc042e): the origin of windows, a given schedule of the leg itself
 - What: review 6015842320 (four P2); three fixed, one answered. `--reschedule` with
   `lambda_schedule.file` naming a file of the leg that is set aside is refused before anything is
