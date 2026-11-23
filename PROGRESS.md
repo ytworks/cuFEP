@@ -47,6 +47,8 @@ examples ran once with the image of commit 720cdb1, in which the MD for the rest
 from the pose that was given, and the TYK2 example three times with the present defaults of the
 complex leg (below). PR #8, merged on the owner's order of 2026-11-22, added one run of both full
 benchmark sets with the present defaults and the accuracy pages written from it (the row "Benchmarks").
+PR #9, merged on the owner's order of 2026-11-23 (the accuracy plan, done): the windows of a leg
+start from the walk whatever number of workers it has; three settings that stay off by default.
 
 | item | status |
 |---|---|
@@ -65,15 +67,13 @@ Open items:
 - The wiki pages (`docs/wiki/`, rewritten in PR #8) are not yet on the GitHub Wiki: it has no
   page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
   and the measurements that would separate the causes of cuFEP's larger errors.
-- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, PR #9): every remedy
-  proposed for the errors gets a treatment; defaults change only by the owner's decision. Steps 0
-  to 5 are done but RelocationMC (how to compute its trial energies is the owner's decision); the
-  results are in the plan and wait for the owner (step 6). One calculation varies by a standard
-  deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). New settings, defaults unchanged, one run
-  each on ejm_49 (defaults: -11.84, -8.92, -9.40): `alchemy.annihilate_electrostatics` -7.71,
-  `alchemy.softcore_b` 2 -8.78; also `start_configurations`, `analysis.detect_equilibration`.
-  What the windows start from moves the complex leg by about 5 kcal/mol: ejm_49 35.3 against 40.9
-  (decoupled-side windows from the relaxed end), 4k 44.3 against 39.0 (bilayer equilibrated 100 ns).
+- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9): of the remedies it
+  tried, one changed results and is adopted, the walk as the one way of starting the windows
+  (below). Not adopted, defaults unchanged: `alchemy.annihilate_electrostatics`,
+  `alchemy.softcore_b` 2, `analysis.detect_equilibration`, longer production, REST2 off, a longer
+  bilayer equilibration, water relocation moves (PR #10, not merged). One calculation varies by a
+  standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied: the decoupled-side
+  windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -91,8 +91,8 @@ Open items:
   precalculation with what is left: 6 of the 16 complex legs of TYK2 and 11 of the 17 of A2A began
   it with one or two workers. A leg with one worker started every window from the end of the one
   before it, a leg with more from a 5 ps walk: 4 complex legs of TYK2 and 7 of A2A in the runs of
-  e77a6c5. For 4k that leg is 5.86 kcal/mol above the mean of three runs started by the walk
-  (standard deviation 1.78). The branch of PR #9 makes the way a setting (default: the walk).
+  e77a6c5. PR #9 made the way a setting (default: the walk): five such A2A ligands come 0.2 to
+  5.6 kcal/mol nearer experiment (mean 2.6; the plan). The full sets are not run again with it.
 - Windows much closer than they need to be read low in the overlap matrix of a leg, which the
   analysis checks: 81 unit-width harmonic windows 0.05 widths apart overlap by 0.50 as pairs and
   read 0.016, below the level of 0.03, so such a result is `NOT RELIABLE` although its free
@@ -111,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [design] The accuracy plan is closed: the walk is the one way of starting the windows
+- What: the owner's decision. Adopted: `lambda_schedule.adaptive.start_configurations`, default
+  the walk (E1). The A2A ligands whose complex leg the run of e77a6c5 had started one window
+  from another, with the walk, kcal/mol: 4k -20.32 to -14.69 (mean of three), 4n -19.17 to
+  -17.38, 4c -18.75 to -15.19, 4q -14.11 to -12.52, 4r -16.17 to -15.95. Not adopted (off by
+  default): annihilated electrostatics (16 TYK2 ligands: mean signed error -0.43, RMSE after
+  removing it 1.77, tau 0.20), the squared soft-core, equilibration detection; water relocation
+  moves stay in PR #10 (4k -16.61, ejm_49 -11.42 with them). No remedy for the relaxation of the
+  pocket at the decoupled end. The full sets were not run again (stopped after one ligand).
+- Why: only E1 changed results beyond the scatter of one calculation (1.57 and 1.72).
+- Refs: the plan (steps 5 and 6, "結論"), PR #9, PR #10, `spikes/m27_paired_runs.py`, `spikes/m30_ligands_against_a_run.py`
 
 ### 2026-11-23 — [amendment] Fourth review by Codex (93d42ee): two more paths of a given schedule
 - What: review 6016033556 (two P2), both fixed. With `--reschedule` a given file inside an
