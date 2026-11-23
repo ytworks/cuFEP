@@ -67,13 +67,13 @@ Open items:
   and the measurements that would separate the causes of cuFEP's larger errors.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (in progress, PR #9): every remedy
   proposed for the errors gets a treatment; defaults change only by the owner's decision. One
-  calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). New
-  settings, defaults unchanged, one run each on ejm_49 (defaults: -11.84, -8.92, -9.40):
-  `alchemy.annihilate_electrostatics` -7.71, `alchemy.softcore_b` 2 -8.78. What the windows start
-  from moves the complex leg by about 5 kcal/mol (ejm_49 35.3 against 40.9; 4k 44.3 against 39.0).
-  The owner (2026-11-23): `membrane.equilibration_ns` stays 10; running, no result yet: the 16
-  TYK2 ligands with annihilated electrostatics; water relocation moves are implemented (branch
-  `feat/relocation-mc`, default off, not pushed) and their runs on 4k and ejm_49 are queued.
+  calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). What the
+  windows start from moves the complex leg by about 5 kcal/mol (ejm_49 35.3 against 40.9; 4k 44.3
+  against 39.0). The 16 TYK2 ligands with `alchemy.annihilate_electrostatics` (41760a1, once
+  each): mean signed error -0.43 [-1.31, 0.41], RMSE after removing it 1.77 [1.16, 2.17], tau
+  0.20 [-0.12, 0.48]; ligand by ligand +0.76 ± 0.51 from the run of e77a6c5 (standard deviation
+  2.03). Water relocation moves (branch `feat/relocation-mc`, default off): their runs on 4k and
+  ejm_49 are running, no result yet. `membrane.equilibration_ns` stays 10 (the owner).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-23 — [progress] The TYK2 set with annihilated electrostatics: one calculation per ligand
+- What: `alchemy.annihilate_electrostatics: true`, the rest as the full run of e77a6c5 (image of
+  41760a1, eight GPUs, exit 0, 16 of 16 with a result, none NOT RELIABLE), kcal/mol, 95 %
+  bootstrap intervals over ligands: mean signed error -0.43 [-1.31, 0.41] (e77a6c5: -1.20), RMSE
+  after removing it 1.77 [1.16, 2.17] (1.25), Kendall tau 0.20 [-0.12, 0.48] (0.47). Ligand by
+  ligand the two runs differ by +0.76 on average (standard deviation 2.03, standard error 0.51;
+  -2.67 to +4.72). ejm_49: -9.33 ± 0.42 (the first run with this setting: -7.71). Both legs are
+  about 197 larger. No default is changed. The runs with relocation moves have started.
+- Why: the owner's order of 2026-11-23 (step 6 of the plan).
+- Refs: the plan ("手順 6"), `spikes/m27_paired_runs.py`, `runs/acc_annihilate_tyk2_full` (untracked)
 
 ### 2026-11-23 — [design] Water relocation moves in the complex leg (`sampling.relocation_mc`), default off
 - What: RelocationMC of Ding et al. (arXiv:2603.22274 v3), written from the paper: a whole water
