@@ -112,6 +112,13 @@ Open items:
 
 ## Change Log
 
+### 2026-11-23 — [amendment] Fourth review by Codex (93d42ee): two more paths of a given schedule
+- What: review 6016033556 (two P2), both fixed. With `--reschedule` a given file inside an
+  archive of the leg that was begun and not completed is refused too. A schedule a leg has
+  without start configurations gets the record of this leg before the walk through its windows.
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
 ### 2026-11-23 — [amendment] Third review by Codex (6b1a609): a given schedule is read, not copied first
 - What: review 6015941311 (two P2), both fixed. A leg that is given its windows
   (`lambda_schedule.file`) reads the schedule and writes its `schedule.yaml` with the start

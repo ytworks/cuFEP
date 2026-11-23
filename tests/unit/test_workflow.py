@@ -2439,6 +2439,29 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     schedule.save(leg / "previous_1" / "schedule.yaml", leg="solvent")
     check_given_schedule(config(lambda_schedule={"file": str(leg / "previous_1" / "schedule.yaml")}), lig, "solvent",
                          0, reschedule=True)
+    # (but not one in an archive that was begun and not completed, which is renamed: review of 93d42ee)
+    import shutil
+
+    (leg / ".previous_2.partial").mkdir()
+    schedule.save(leg / ".previous_2.partial" / "schedule.yaml", leg="solvent")
+    with pytest.raises(WorkflowError, match="a file of the leg that --reschedule sets aside"):
+        check_given_schedule(config(lambda_schedule={"file": str(leg / ".previous_2.partial" / "schedule.yaml")}),
+                             lig, "solvent", 0, reschedule=True)
+    shutil.rmtree(leg / ".previous_2.partial")
+    # a schedule that a leg has without start configurations gets the record of this leg before the
+    # walk through its windows (review of 93d42ee: the copy of a given schedule that an earlier
+    # version left named the ligand it came from, and stayed so where a run was stopped between
+    # publishing the start configurations and the schedule)
+    import yaml
+
+    from cufep.workflow import own_schedule
+
+    left = tmp_path / "left by an earlier version" / "repeat_0" / "solvent"
+    left.mkdir(parents=True)
+    schedule.save(left / "schedule.yaml", leg="solvent", ligand="ejm_49", repeat=1)
+    assert len(own_schedule(left, "solvent", stages, ligand="ejm_31", repeat=0, seed=3, backend="openmm").states) == n
+    named = yaml.safe_load((left / "schedule.yaml").read_text())
+    assert (named["leg"], named["ligand"], named["repeat"], named["seed"]) == ("solvent", "ejm_31", 0, 3)
     # windows of adaptive lambda scheduling that a leg had before the run, without start
     # configurations: the walk through them records that their origin is not known, whether or not
     # a file is named now (review of 8dc042e); windows of the configuration or of a file do not

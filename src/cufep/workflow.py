@@ -2435,7 +2435,8 @@ def run_leg(job: LegJob) -> dict:
                 if given is not None:
                     schedule = given
                 elif sched_file.exists():
-                    schedule = _schedule_of_this_leg(sched_file, job.leg, stages)
+                    schedule = own_schedule(leg_dir, job.leg, stages, ligand=job.ligand, repeat=job.repeat,
+                                            seed=seed, backend=backend_name)
                 else:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
@@ -2751,12 +2752,15 @@ def check_given_schedule(cfg: Config, lig_dir: Path, leg: str, repeat: int, resc
         return
     inside = given.resolve().relative_to(leg_dir.resolve()).parts \
         if given.resolve().is_relative_to(leg_dir.resolve()) else ()
-    if reschedule and inside and (inside[0] in LEG_RUN_FILES or inside[0].startswith(FAILED_BACKEND_DIR)):
-        # what archive_leg moves, not an archive that is complete (previous_<n>/). (Reviews of
-        # 8dc042e and 6b1a609: the schedule of the leg itself passed the check, was set aside with
-        # the leg and was gone when the leg came to take it, after its samples and its result had
-        # been set aside too; the first form of this refusal also refused the schedule in
-        # previous_1/, which stays where it is)
+    moved = inside and (inside[0] in LEG_RUN_FILES or inside[0].startswith(FAILED_BACKEND_DIR)
+                        or (inside[0].startswith(".previous_") and inside[0].endswith(".partial")))
+    if reschedule and moved:
+        # what archive_leg moves or renames, not an archive that is complete (previous_<n>/).
+        # (Reviews of 8dc042e, 6b1a609 and 93d42ee: the schedule of the leg itself passed the check,
+        # was set aside with the leg and was gone when the leg came to take it, after its samples
+        # and its result had been set aside too; the first form of this refusal also refused the
+        # schedule in previous_1/, which stays where it is; and a file in an archive that was begun
+        # and not completed is renamed with it)
         raise WorkflowError(f"lambda_schedule.file names {given}, a file of the leg that --reschedule sets aside. "
                             "Nothing was changed. Give a copy of it, or the one in an archive of the leg "
                             "(previous_<n>/).")
@@ -2789,6 +2793,20 @@ def given_schedule(src: Path, leg: str, stages: list[str], rest2_scale: float):
 #: sampled for the first time by a later one; windows that adaptive lambda scheduling chose in an
 #: earlier run which left no start configurations with them
 WINDOWS_ORIGINS = ("the lambda windows and their start configurations", "the lambda windows")
+
+
+def own_schedule(leg_dir: Path, leg: str, stages: list[str], **origin):
+    """The schedule a leg has without start configurations, with the record of this leg written
+    to it before the walk through its windows (``origin``: ligand, repeat, seed, backend).
+
+    Such a schedule can be the copy of a given one that an earlier version put into the leg
+    before its walk: it names the leg it came from. The record is set here, before the start
+    configurations are published, so that the leg cannot end with start configurations of its
+    own under a schedule that names another ligand (review of 93d42ee: a run stopped between the
+    two writes of :func:`publish_windows` left that, and the next run took both files)."""
+    schedule = _schedule_of_this_leg(Path(leg_dir) / "schedule.yaml", leg, stages)
+    schedule.save(Path(leg_dir) / "schedule.yaml", leg=leg, **origin)
+    return schedule
 
 
 def given_windows_record(walk_ps: float, schedule, found_in_leg: bool) -> dict:
