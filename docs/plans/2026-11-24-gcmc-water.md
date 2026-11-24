@@ -205,3 +205,16 @@ P1 は無し(移動が誤った分布を出す入力は作れなかった。受�
 - 短い確認の run(GPU 8 枚、ワーカー 31、MPS)5 回のうち 1 回が、反復 84 で「CUDA_ERROR_LAUNCH_FAILED」になり、その GPU の
   MPS が落ちてレグが失敗した。同じ設定をもう一度流すと最後まで走った。1 プロセスで同じレグの移動を 450 回ずつ 3 通り
   行っても起きなかった。原因は分かっていない。本番の run で同じ失敗が出たら、そのレグは checkpoint から続けられる。
+
+### 2026-11-25: A2A、GCMC、1 本ずつ(イメージ `cufep:8252ccd`、GPU 8 枚)
+
+- 設定: セットの設定(5 ns、1 計算)に `sampling.gcmc.enabled: true` だけを足したもの。OPC の run はそれに
+  `forcefield.water: amber14/opc.xml`。`runs/configs/a2a_gcmc_{tip3p,opc}_8252ccd.yaml`、出力
+  `runs/benchmark_a2a_full_gcmc_{tip3p,opc}_8252ccd`。OPC の設定と、移動なしの二重層 + OPC の run(0e3b2a9)の設定との違いは、
+  その後に増えた設定の既定値、`sampling.gcmc.enabled`、出力先だけ。
+- 順番: 4k(TIP3P)、4k(OPC)、4e(TIP3P)、4e(OPC)。残りをどちらの水で流すかはオーナーが決める。
+
+結果(kcal/mol、1 リガンド 1 計算)。「GCMC なし」は TIP3P では e77a6c5、OPC では 0e3b2a9 の run:
+
+| リガンド | 水 | 実験値 | GCMC あり(この run) | GCMC なし | 複合体レグ あり / なし | 溶媒レグ あり / なし | 拘束 | 窓 複合体 / 溶媒 | 最小の overlap | 独立なサンプルが 50 未満の窓 | 挿入 / 削除(行った数 / 試行) | 球の中の水(最初の窓 → 最後の窓の平均) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
