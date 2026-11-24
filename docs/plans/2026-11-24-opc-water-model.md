@@ -278,3 +278,11 @@ e77a6c5 の run の `resolved_config.yaml` との違いは `forcefield.water`、
     自由エネルギーを計算しないので、二つのレグは同じ水のまま)。Lipid21 の論文は TIP3P で検証している。
 - 比較対象: e77a6c5 の run(二重層 + TIP3P)と、`complex_leg: water` を TIP3P で実行した 2 本
   (イメージ a34bbe2: 4k -12.11 ± 0.53、4e -16.17 ± 0.47)。
+- 実装と確認: merge 4914fc9(`membrane.complex_leg` と `membrane.water`)。書いた本人でない読み手の短いレビューは
+  P1 無し。P2(同じ水を明示的に書いたときの準備の記録)と P3 を直した。unit テスト 716 本(最終のツリー)、
+  GPU テスト 35 本(レビューの修正の前の merge 後のツリー)が通った。
+- run: イメージ `cufep:02f3d7a`、GPU 8 枚、1 本ずつ、設定 `runs/configs/a2a_opc_water_leg_02f3d7a.yaml`、出力
+  `runs/benchmark_a2a_full_opc_water_leg_02f3d7a`。この設定と、TIP3P で `complex_leg: water` を実行した a34bbe2 の
+  設定との違いは、`forcefield.water`(OPC)、`membrane.water`(TIP3P と明記)、出力先だけ。
+- 4k の準備(run のファイルから): alchemical run の複合体(水中)は 80,761 粒子で水 18,989 個が全て 4 サイト、
+  二重層の複合体は 73,088 粒子で水 14,729 個が全て 3 サイト(仮想サイト 0、POPC 90 + 90)、溶媒レグは OPC の水 844 個。
