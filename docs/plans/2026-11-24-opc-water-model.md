@@ -1,5 +1,5 @@
 # 水モデル OPC: 文献の調査、ベンチマークでの比較、既定値の判断
-Status: In progress (2026-11-24: TYK2 16 本を OPC で実行し終えた。A2A の二重層 + OPC は 4k と 4e の 2 本で止め、拘束は二重層 + TIP3P、FEP は水中 + OPC の実験 (`membrane.complex_leg: water`、`membrane.water`) も 4k と 4e の 2 本で止めた。二重層 + OPC に水の relocation の移動 (`sampling.relocation_mc`、PR #10 を merge) を入れた run は 4k で結果が変わらず、オーナーの指示で止めた。次は GCMC (`docs/plans/2026-11-24-gcmc-water.md`)。既定値は TIP3P のまま、移動の既定も off のまま)
+Status: Done (2026-11-25、オーナーの決定: 止める。既定値は当面変えない(水は TIP3P のまま)。経過: 2026-11-24: TYK2 16 本を OPC で実行し終えた。A2A の二重層 + OPC は 4k と 4e の 2 本で止め、拘束は二重層 + TIP3P、FEP は水中 + OPC の実験 (`membrane.complex_leg: water`、`membrane.water`) も 4k と 4e の 2 本で止めた。二重層 + OPC に水の relocation の移動 (`sampling.relocation_mc`、PR #10 を merge) を入れた run は 4k で結果が変わらず、オーナーの指示で止めた。次は GCMC (`docs/plans/2026-11-24-gcmc-water.md`)。既定値は TIP3P のまま、移動の既定も off のまま)
 Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/protocol.md` ("Systems"); `benchmarks/results/`
 
 ## Context
@@ -368,3 +368,11 @@ e77a6c5 の run の `resolved_config.yaml` との違いは `forcefield.water`、
 - 4k は移動ありとなしで同じ(-19.16 ± 0.59 と -19.15 ± 0.35)。2 本目の 4e は複合体レグの途中で止めた(結果は無い)。
 - オーナーの指示: これを止め、GCMC を適切に適用する。計画は `docs/plans/2026-11-24-gcmc-water.md`。
   GCMC は TIP3P と OPC の両方に対応させる。
+
+### 2026-11-25: GCMC の 4 本のあと、オーナーが止めた。既定値は変えない
+
+- 水の GCMC(計画 `docs/plans/2026-11-24-gcmc-water.md`)を 4k と 4e、TIP3P と OPC で流した。OPC では 4k -19.96 ± 0.29、
+  4e -18.26 ± 0.54(GCMC なしは -19.15、-20.61)。4 本とも結合が実験値より 5〜8 kcal/mol 強いままだった。
+- オーナーの決定: 止める。いったん既定値は変更しない。`forcefield.water` の既定は `amber14/tip3p.xml` のまま。
+- この計画でコードに入ったもの(全て既定の動作は変えない): 4 サイトの水での二重層、`membrane.complex_leg` と
+  `membrane.water`、`sampling.relocation_mc`、`sampling.gcmc`。

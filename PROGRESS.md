@@ -64,8 +64,8 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done; A2A with OPC, in the bilayer and with the complex leg in water, was stopped after 4k and 4e each (Change Log).
-  With the water relocation moves 4k did not change (-19.16 ± 0.59 against -19.15 ± 0.35); that run was stopped. Plan `docs/plans/2026-11-24-gcmc-water.md` (in progress): GCMC of water in the complex leg (`sampling.gcmc`), default off, implemented; 4k and 4e ran with TIP3P and OPC (Change Log): all four still bind 5 to 8 kcal/mol too strongly, the rest of the set waits for the owner. The error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
+- Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done, PR #15, a draft that is not merged): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
+  With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
@@ -111,6 +111,13 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [design] The owner's decision: the runs stop, no default changes for now
+- What: after the four runs with grand canonical moves of water (the entry below) the owner stops the
+  evaluation on A2A; the remaining 15 ligands are not run. No default changes for now: the water
+  stays TIP3P, `sampling.gcmc` and `sampling.relocation_mc` stay off. The two plans are closed.
+- Why: the owner's decision. In the four runs the binding stayed 5 to 8 kcal/mol too strong.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` (`Status:`)
 
 ### 2026-11-25 — [progress] A2A with grand canonical moves of water: 4k and 4e, TIP3P and OPC
 - What: image of 8252ccd, one calculation each on eight GPUs, the set's settings with

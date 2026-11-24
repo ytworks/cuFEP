@@ -1,5 +1,5 @@
 # 水の grand canonical Monte Carlo (GCMC) を複合体レグに入れる
-Status: In progress (2026-11-25: 承認。リスク確認(水の相互作用を実行中に切り替える)は通った。出典の全文の確認と実装はこれから。既定は off)
+Status: Done (2026-11-25: 実装した。`sampling.gcmc`、既定は off。A2A の評価は 4 本(4k と 4e、TIP3P と OPC)でオーナーが止めた。4 本とも結合が実験値より 5〜8 kcal/mol 強いままだった。オーナーの決定: 既定値は当面変えない。PR #15、ドラフト)
 Refs: this pull request (#15); `docs/protocol.md` ("Water relocation moves", "Limits of version 0.1"); `docs/configuration.md` (`sampling`); `docs/plans/2026-11-24-opc-water-model.md`; `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (E4)
 
 ## Context
@@ -255,3 +255,9 @@ P1 は無し(移動が誤った分布を出す入力は作れなかった。受�
   7〜9 個から 16〜21 個に増えた。GPU のエラーとワーカーの作り直しは 4 本とも無い。
 - 4 本とも結合が実験値より 5〜8 kcal/mol 強い。GCMC のあり・なしの差は +3.0、-0.8、-0.4、+2.4 で、向きがそろっていない
   (1 計算のばらつきは 4k で標準偏差 1.7)。残りをどちらの水で流すかはオーナーの判断を待つ。
+
+### 2026-11-25: オーナーの決定
+
+- 「止めて良い。いったん既定値は変更しない」。残りの 15 本は流さない。`sampling.gcmc` は既定 off のまま、水は TIP3P のまま。
+- 残っていること(指示があれば行う): μ'ex の誤差を小さくするための長い水の箱の計算。取得できなかった出典(Ross 2015、
+  Samways 2020 の本文、Ross 2020、Gelb 2003)の確認。REST2 と分散補正がある系でのバックエンドの違いの扱い。
