@@ -466,6 +466,17 @@ def test_precalculation_with_the_windows_of_an_iteration_run_by_a_pool(water_lig
     assert schedule.states[0] == AlchemicalState(1.0, 1.0, 1.0) and schedule.states[-1] == AlchemicalState(
         1.0, 0.0, 0.0
     )
+    # started one from another, the windows of the first iteration are run by the pool too, one at a
+    # time: every window is run where the workers and their water relocation moves are (review of
+    # 723b12f: these windows ran in the Context of the leg, which makes no moves when a pool has them)
+    pool.calls.clear()
+    sequential = AlsSettings(overlap_threshold=0.04, candidates=21, initial_windows={"discharge": 2, "vanish": 3},
+                             window_ps=0.2, equilibration_ps=0.02, sample_interval_ps=0.02, max_windows=6,
+                             start_configurations="sequential")
+    schedule, _configs = adaptive_schedule(*make(23), ["discharge", "vanish"], 300.0, 2.0, sequential,
+                                           lambda m: None, pool=pool)
+    assert [len(c) for c in pool.calls[:4]] == [1, 1, 1, 1]
+    assert sum(len(c) for c in pool.calls) == schedule.provenance["windows_simulated"]
 
 
 @pytest.mark.parametrize("start", ["walk", "sequential"])

@@ -1,5 +1,5 @@
 # 水モデル OPC: 文献の調査、ベンチマークでの比較、既定値の判断
-Status: In progress (2026-11-24: TYK2 16 本を OPC で実行し終えた。A2A の二重層 + OPC は 4k と 4e の 2 本で止めた。オーナーの指示で、拘束は二重層 + TIP3P の MD で決め、FEP は水中 + OPC で行う実験に切り替える (`membrane.complex_leg: water`、`membrane.water`)。既定値は TIP3P のまま)
+Status: In progress (2026-11-24: TYK2 16 本を OPC で実行し終えた。A2A の二重層 + OPC は 4k と 4e の 2 本で止め、拘束は二重層 + TIP3P、FEP は水中 + OPC の実験 (`membrane.complex_leg: water`、`membrane.water`) も 4k と 4e の 2 本で止めた。オーナーの指示で、A2A を全て二重層 + OPC に戻し、水の relocation の移動 (`sampling.relocation_mc`、PR #10 を merge) を入れて 17 本を流し直す。既定値は TIP3P のまま、移動の既定も off のまま)
 Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/protocol.md` ("Systems"); `benchmarks/results/`
 
 ## Context
@@ -301,3 +301,48 @@ e77a6c5 の run の `resolved_config.yaml` との違いは `forcefield.water`、
   PHE 168 とのスタッキングだった。二重層の平衡化の面積の変化は -1.66 %。両方のレグが cuPotential で走った。
   複合体レグの往復は 0 回。二重層 + OPC の run(0e3b2a9)は -20.61 ± 0.47(複合体レグ 47.34)。2 本の実験値との
   差の平均: 水中 OPC -7.02、水中 TIP3P -2.33、二重層 TIP3P -5.10、二重層 OPC -8.07。
+
+### 2026-11-24: 水中 + OPC の実験を 2 本で止め、二重層 + OPC に水の relocation の移動を足して A2A をやり直す(オーナーの指示)
+
+- 水中 + OPC の 2 本の結果(上の表): 4k -17.50 ± 0.73、4e -20.16 ± 0.57。FEP を水中で行っても、OPC では
+  TIP3P より結合が強く出る(水中 TIP3P -12.11、-16.17)。3 本目の 4g は途中で止めた(結果は無い)。
+- オーナーの指示: A2A を全て二重層 + OPC に戻し、別の PR(#10、`feat/relocation-mc`)にある RelocationMC を
+  取り込んで、A2A をもう一度流す。
+- 設定(セットの設定との違いはこの 2 つと出力先だけ):
+  - `forcefield.water: amber14/opc.xml`。`membrane.complex_leg` は既定の `bilayer`、`membrane.water` は書かない
+    (拘束の MD も alchemical run も二重層 + OPC、溶媒レグも OPC)。
+  - `sampling.relocation_mc`: `enabled: true`、`trial_poses: 4096`、`inner_fraction: 0.5`(`interval_ps: 4.0`、
+    `radius_margin_nm: 0.3` は既定)。2026-11-23 に移動を評価した run(4k、TIP3P、`runs/acc_reloc2_a2a_4k`)と同じ値。
+    既定の「16384 個を箱全体に一様」は、4k の消去端の測定で受理が 0 回だった(`docs/configuration.md`)。
+- 実装: `feat/relocation-mc`(PR #10 の head 5e00631)をこのブランチに merge した。移動のコードは水 1 個あたりの
+  サイト数を一般に扱う(仮想サイトは質量 0 のサイトとして剛体のまま動く)。OPC のためのテストを足した:
+  - unit: `test_a_four_site_water_is_moved_as_one_body_with_its_virtual_site`(OPC の系から作った仕様は水 1 個に
+    4 サイト、仮想サイトの質量は 0。提案された姿勢で拘束の距離は 1e-12 nm まで変わらず、仮想サイトは System が
+    置く位置に 1e-9 nm 以内。逆向きの提案の比は順向きの逆数)。
+  - GPU: 移動の 3 本のテスト(`moves_leg`)を TIP3P と OPC の両方で実行する。
+- 見つけて直したこと(4 サイトの水でだけ起きる): 受理された移動で、質量 0 の仮想サイトに速度が入っていた
+  (重心の速度 v に対して v - R v)。仮想サイトは自分の速度を持たないので、速度の更新は質量のある 3 原子だけに
+  した(`RelocationMover.attempt`)。直す前のコードで落ちることを確かめたテスト:
+  `test_a_water_that_is_moved_keeps_its_shape_and_the_velocity_of_its_centre_of_mass`(3 サイトと 4 サイト)。
+- GPU テストの変更(`rest2_leg` のテストと同じ理由、同じ形): 移動した水のエネルギーの変化を「プラグインと
+  stock OpenMM が 0.1 kT 以内」で比べるテストは OPC で落ちた(0.16 kT)。stock OpenMM(倍精度、Ewald 1e-6)を
+  基準に測ると(`spikes/m32_relocated_water_on_the_backends.py`、3 つの窓で 40 回ずつ)、プラグインは最大
+  0.024 kT(TIP3P)と 0.035 kT(OPC)、stock OpenMM は 0.079 と 0.225 kT。差は stock の PME の誤差で、
+  プラグインは基準に合っている。テストを「各バックエンドが基準に対して `MOVE_LEVEL_KT`(プラグイン 0.1、
+  stock 0.5 kT)以内」に直した(`test_the_energy_change_of_a_relocated_water_is_that_of_a_tight_ewald_sum`)。
+  run は全てのレグがプラグインで走る。
+- レビュー(書いた本人でない読み手、15 分、4 サイトの水と二重層で移動が誤る入力を作る目的): P1 と P2 は無し。
+  確かめられたこと: OPC の水は残基の中で O、H1、H2、M の順、M は質量 0、sigma 0.0891 nm、epsilon 0 で、
+  水の中の 6 つの例外は全て 0。代わりのエネルギーの Lennard-Jones は epsilon > 0 の組だけなので 0 除算は無い。
+  領域とアンカーは酸素だけで決まる。サイト数を 3 と決め打ちした箇所は無い。merge した `SETTINGS_ADDED` で、
+  merge の前の run の記録は既定値として読まれる。P3(テスト): 代わりのエネルギーから 4 点目の電荷を落としても
+  落ちるテストが無かった → 4 サイトのテストに、OpenMM の reaction field のエネルギーとの一致を足した
+  (その変異で落ちることを確かめた)。GPU では確かめていない点(プラグインが仮想サイトをどう扱うか)は、
+  GPU テストと先の測定(`spikes/m31_water_models_on_the_backends.py`)が持つ。
+- 別件で直した GPU テスト: `test_replica_exchange_with_rest2[opc-openmm]` が、同じコードの 4 回の実行のうち
+  1 回落ちた。「反復のあいだにレプリカの状態が変わった」という判定が、stock OpenMM の GPU 上の MD が実行ごとに
+  同じにならないことに左右されていた(1 つの組が 1 反復の中で何度も入れ替わると、半分の確率で元に戻る。5 回の
+  実行で、状態が変わったのは 9 回の境目のうち 2〜5 回)。判定を「隣り合う窓の交換が受理された回数」に直した
+  (水とバックエンドごとに 5 回の実行で 97〜205 回。水準はその最少の 3 分の 1 の 30 回)。
+- 比較対象: 実験値、e77a6c5 の run(二重層 + TIP3P、移動なし)、二重層 + OPC で移動なしの run(0e3b2a9: 4k
+  -19.15 ± 0.35、4e -20.61 ± 0.47)。4k には TIP3P で移動を入れた run もある(-16.61 ± 0.37、複合体レグ 41.00)。

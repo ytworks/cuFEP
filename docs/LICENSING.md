@@ -50,5 +50,8 @@ OpenMM (MIT and LGPL parts), OpenFF Toolkit and force fields (MIT / CC-BY), Ambe
 (mixed open-source licences), pymbar (MIT), MDTraj (LGPL), PDBFixer (MIT), RDKit (BSD),
 ProLIF (Apache-2.0) and MDAnalysis (LGPL-3.0-or-later), through which ProLIF reads the frames
 of a trajectory. ProLIF brings gemmi (MPL-2.0), pandas, networkx, dill, multiprocess and psutil
-(BSD-3-Clause) and tqdm (MPL-2.0 and MIT). The licences are those that the packages of the
+(BSD-3-Clause) and tqdm (MPL-2.0 and MIT). CuPy (MIT) computes the trial energies of the water
+relocation moves on the GPU; it compiles its kernels with NVRTC and the headers of the CUDA
+runtime (the conda-forge packages `cuda-nvrtc`, `cuda-cudart-dev`, under NVIDIA's CUDA licence)
+and `cuda-cccl` (Apache-2.0 with LLVM exceptions). The licences are those that the packages of the
 image state (`docker/environment.yml`: ProLIF 2.2.3, MDAnalysis 2.11).

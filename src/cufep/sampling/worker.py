@@ -59,6 +59,8 @@ class LegSpec:
     #: positions *within frame_atoms* of the ligand heavy atoms and the protein C-alpha atoms
     frame_ligand: list[int] = field(default_factory=list)
     frame_ca: list[int] = field(default_factory=list)
+    #: water relocation moves (:class:`cufep.sampling.relocation_mc.RelocationSpec`), or None
+    relocation: object | None = None
 
     def __post_init__(self) -> None:
         self.check_segment(self.steps_per_iteration, "the MD of one replica in one iteration")
@@ -258,7 +260,7 @@ def tail_summary(lrc: dict) -> dict:
 
 
 #: what a random stream of a worker is for
-INTEGRATOR_STREAM, BAROSTAT_STREAM = 0, 1
+INTEGRATOR_STREAM, BAROSTAT_STREAM, RELOCATION_STREAM = 0, 1, 2
 
 
 def stream_seed(seed: int, start: int, worker_id: int, purpose: int = INTEGRATOR_STREAM) -> int:
@@ -329,17 +331,29 @@ class ReplicaWorker:
         if spec.lrc is not None:
             from cufep.alchemy.lrc import TailEnergy
             self.lrc = TailEnergy.from_dict(spec.lrc)
+        # water relocation moves: a mover on this Context, with a random stream of its own, and
+        # the number of MD steps of a replica for which one move is attempted
+        self.mover, self.relocation_steps = None, 0
+        if spec.relocation is not None:
+            from cufep.sampling.relocation_mc import RelocationMover
+            from cufep.steps import md_steps
+
+            self.mover = RelocationMover(spec.relocation, self.context,
+                                         stream_seed(spec.seed, start, worker_id, RELOCATION_STREAM))
+            self.relocation_steps = md_steps(spec.relocation.interval_ps, spec.timestep_fs)
 
     def describe(self) -> str:
         platform = self.context.getPlatform()
         names = platform.getPropertyNames()
         device = platform.getPropertyValue(self.context, "DeviceName") if "DeviceName" in names else platform.getName()
         index = platform.getPropertyValue(self.context, "DeviceIndex") if "DeviceIndex" in names else "-"
-        return f"{self.spec.backend}/{platform.getName()} on {device} (index {index})"
+        moves = "" if self.mover is None else f"; water relocation moves, their trial energies on {self.mover.engine}"
+        return f"{self.spec.backend}/{platform.getName()} on {device} (index {index}){moves}"
 
     def run(self, cur: int, assignments: list[tuple[int, int]], iteration: int, record: bool,
             steps: int | None = None) -> dict:
         """Advance replicas ``[(replica, state_index), ...]`` by one iteration."""
+        from cufep.sampling.relocation_mc import attempts_due
         from cufep.sampling.states import set_state
 
         u = self._u
@@ -362,6 +376,13 @@ class ReplicaWorker:
             set_state(self.context, state)
             if n_steps > 0:
                 self.integrator.step(n_steps)
+            if self.mover is not None and n_steps > 0:
+                # the water relocation moves in the state the replica is simulated in, before the
+                # energies of this iteration are taken (cufep.sampling.relocation_mc)
+                for _ in range(attempts_due(iteration, n_steps, self.relocation_steps)):
+                    move = self.mover.attempt(state)
+                    out.setdefault("relocation", []).append(
+                        (int(state_index), move["direction"], bool(move["accepted"])))
             st = self.context.getState(getPositions=True, getVelocities=True)
             pos = st.getPositions(asNumpy=True).value_in_unit(u.nanometer)
             new_box = st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer)
@@ -431,7 +452,8 @@ def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker
                 conn.send(("done", result))
             elif msg[0] == "window":                     # one window of the adaptive precalculation
                 from cufep.alchemy.schedule import run_window
-                conn.send(("done", run_window(worker.context, worker.integrator, msg[1])))
+                conn.send(("done", run_window(worker.context, worker.integrator, msg[1], worker.mover,
+                                              worker.relocation_steps)))
             else:
                 conn.send(("error", f"unknown command {msg[0]!r}"))
     except EOFError:
