@@ -71,6 +71,88 @@ def test_reported_ions_are_the_ions_in_the_topology(peptides_in_water):
     assert (after["NA"], after["CL"], after["water"], after["charge"]) == (1, 1, before["water"] - 1, 0.0)
 
 
+def test_a_bilayer_is_built_with_three_site_waters_and_ends_with_the_sites_of_the_water_model(peptides_in_water,
+                                                                                               monkeypatch):
+    """Review of the bilayer with a 4-site water: no test ran ``add_membrane`` itself. It runs here with
+    ``amber14/opc.xml`` on waters that come with their extra site, as crystal waters do after the preparation
+    of the protein. ``Modeller.addMembrane`` is replaced by what matters of it: it makes a System of what it is
+    given with the force field it is given, so it stops at a water whose sites are not those of that force
+    field, and it adds 3-site waters as its lipid patch does. The cut of the bilayer is left out (there are no
+    lipids). At the end every water has the site of OPC where the System puts it and a System of the run can
+    be made; with a 3-site model no other force field is asked for."""
+    from cufep.config.schema import Config
+    from cufep.prep import membrane
+    from cufep.prep.water import water_model_of
+
+    build, tip3p = peptides_in_water
+    opc = app.ForceField("amber14/protein.ff14SB.xml", "amber14/opc.xml")
+
+    def add_membrane_of_openmm(self, forcefield, **_settings):
+        forcefield.createSystem(self.topology)
+        patch, positions = app.Topology(), []
+        chain = patch.addChain()
+        for k in range(3):
+            residue = patch.addResidue("HOH", chain)
+            atoms = [patch.addAtom(name, app.Element.getBySymbol(name[0]), residue) for name in ("O", "H1", "H2")]
+            patch.addBond(atoms[0], atoms[1])
+            patch.addBond(atoms[0], atoms[2])
+            positions += [mm.Vec3(0.3 * k + dx, dy, 3.0) for dx, dy in ((0.0, 0.0), (0.0957, 0.0), (-0.024, 0.0927))]
+        box = self.topology.getPeriodicBoxVectors()
+        self.add(patch, positions * u.nanometer)
+        self.topology.setPeriodicBoxVectors(box)
+
+    monkeypatch.setattr(app.Modeller, "addMembrane", add_membrane_of_openmm)
+    monkeypatch.setattr(membrane, "trim_membrane", lambda modeller, padding_nm, log: {})
+
+    def built(water, forcefield, forcefield_with_water):
+        modeller = build()
+        # the two peptides, 0.8 nm apart along z, stand for a protein that spans the bilayer: z is stretched
+        # about the point between them (a System, the ions and the virtual sites do not depend on the geometry)
+        pos = np.asarray(modeller.positions.value_in_unit(u.nanometer))
+        z = np.array([pos[a.index, 2] for a in modeller.topology.atoms() if a.residue.name == "ALA"])
+        pos[:, 2] = 4.0 * (pos[:, 2] - 0.5 * (z.min() + z.max()))
+        modeller.positions = pos * u.nanometer
+        if water_model_of(water).sites > 3:
+            membrane.add_extra_sites(modeller, forcefield)       # the waters of the input have their site
+        cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                     "membrane": {"enabled": True, "orientation": "input"},
+                                     "forcefield": {"water": water}, "thermodynamics": {"ionic_strength_M": 0.5}})
+        n_water = sum(r.name == "HOH" for r in modeller.topology.residues())
+        info = membrane.add_membrane(modeller, forcefield, cfg, log=lambda m: None,
+                                     forcefield_with_water=forcefield_with_water)
+        waters = [r for r in modeller.topology.residues() if r.name == "HOH"]
+        assert info["n_sodium"] == info["n_chloride"] >= 1
+        assert len(waters) == n_water + 3 - info["n_sodium"] - info["n_chloride"]
+        return modeller, info, waters
+
+    asked = []
+
+    def with_water(water_file):
+        asked.append(water_file)
+        return app.ForceField("amber14/protein.ff14SB.xml", water_file)
+
+    modeller, info, waters = built("amber14/opc.xml", opc, with_water)
+    assert len(asked) == 1 and water_model_of(asked[0]).sites == 3
+    assert {len(list(r.atoms())) for r in waters} == {4} and info["water_sites_added"] == len(waters) > 100
+    system = opc.createSystem(modeller.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,
+                              constraints=app.HBonds, rigidWater=True)
+    sites = [i for i in range(system.getNumParticles()) if system.isVirtualSite(i)]
+    assert len(sites) == len(waters)
+    ctx = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    ctx.setPositions(modeller.positions)
+    placed = np.asarray(ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer))
+    ctx.computeVirtualSites()
+    computed = np.asarray(ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer))
+    assert np.max(np.abs(computed - placed)[sites]) < 1e-6       # nm
+
+    def never(water_file):
+        raise AssertionError("a 3-site water model needs no other force field")
+
+    modeller, info, waters = built("amber14/tip3p.xml", tip3p, never)
+    assert {len(list(r.atoms())) for r in waters} == {3} and "water_sites_added" not in info
+    tip3p.createSystem(modeller.topology)
+
+
 def test_how_the_bilayer_changed_is_given_as_numbers_without_a_verdict():
     """The owner, 2026-11-20: no verdict with a level of cuFEP's own. How the area of the bilayer and the
     waters near the ligand changed from the third to the fourth quarter of its equilibration are numbers;

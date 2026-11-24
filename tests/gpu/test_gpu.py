@@ -31,6 +31,58 @@ def test_check_environment_passes():
     assert any("stock OpenMM on GPU 0: OK" in line for line in lines)
 
 
+#: How far a backend may lie from stock OpenMM in double precision with an Ewald tolerance of 1e-6, at the
+#: tolerance a leg runs with (5e-4): the differences between the windows, in kT. Measured on 31
+#: configurations of ``rest2_leg`` with each water (spikes/m31_water_models_on_the_backends.py, 2026-11-24):
+#: the plugin at most 0.022 (TIP3P) and 0.044 (OPC), stock OpenMM at most 0.118 and 0.156; the levels are
+#: about twice the largest. The plugin against stock, which these tests held to 0.1 kT on one configuration
+#: each, is the two errors together, mostly that of stock PME: it reached 0.126 and 0.152, above 0.1 on 1
+#: and 5 of the 31 configurations (0.114 on the configuration of ``rest2_leg`` with OPC)
+EWALD_LEVEL_KT = {"cupotential": 0.1, "openmm": 0.3}
+#: the same for the plugin's potential energy and its forces on the atoms (virtual sites left out), relative.
+#: Between windows everything that does not depend on lambda cancels: the energy among the waters, and the
+#: forces a virtual site hands on to its atoms (review of 29fb9df)
+PLUGIN_ENERGY_LEVEL = 1e-4
+PLUGIN_FORCE_LEVEL = 1e-3
+
+
+def assert_backends_give_the_energies_of_a_tight_ewald_sum(alch_system, states, pos, box, pressure=None):
+    """Each backend gives the differences between the windows that a tight Ewald sum gives, so the two
+    agree and neither is held to the error of the other's PME; the plugin also its potential energy and
+    its forces, in the configuration as it is loaded."""
+    import openmm.unit as u
+
+    tight = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(alch_system))
+    for force in tight.getForces():
+        if isinstance(force, mm.NonbondedForce):
+            force.setEwaldErrorTolerance(1e-6)
+    atoms = [i for i in range(alch_system.getNumParticles()) if not alch_system.isVirtualSite(i)]
+    rows, energy, forces = {}, {}, {}
+    for name, backend, system in (("reference", get_backend("openmm", precision="double"), tight),
+                                  ("openmm", get_backend("openmm"), alch_system),
+                                  ("cupotential", get_backend("cupotential"), alch_system)):
+        ctx = backend.make_context(backend.prepare_system(system),
+                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        state = ctx.getState(getEnergy=True, getForces=True)
+        energy[name] = state.getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)
+        forces[name] = state.getForces(asNumpy=True).value_in_unit(u.kilojoule_per_mole / u.nanometer)[atoms]
+        rows[name] = StateEnergyEvaluator(ctx, states, 300.0, pressure).reduced_potentials()[0]
+        del ctx
+    reference = rows["reference"] - rows["reference"][0]
+    measured = {}
+    for name, level in EWALD_LEVEL_KT.items():
+        error = (rows[name] - rows[name][0]) - reference
+        measured[name] = float(np.max(np.abs(error)))
+        assert measured[name] < level, (name, error)                     # kT
+    measured["energy"] = abs(energy["cupotential"] - energy["reference"]) / abs(energy["reference"])
+    measured["forces"] = float(np.linalg.norm(forces["cupotential"] - forces["reference"])
+                               / np.linalg.norm(forces["reference"]))
+    assert measured["energy"] < PLUGIN_ENERGY_LEVEL, measured
+    assert measured["forces"] < PLUGIN_FORCE_LEVEL, measured
+
+
 @pytest.fixture(scope="module")
 def big_water_leg():
     """A 3.2 nm water box (large enough for the plugin) with one water as the ligand."""
@@ -67,21 +119,8 @@ def big_water_leg():
 
 @needs_plugin
 def test_backends_agree_at_every_state(big_water_leg):
-    import openmm.unit as u
-
     alch, schedule, pos, box, _ = big_water_leg
-    rows = {}
-    for name in ("openmm", "cupotential"):
-        backend = get_backend(name)
-        ctx = backend.make_context(backend.prepare_system(alch.system),
-                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
-        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
-        ctx.setPositions(pos)
-        rows[name] = StateEnergyEvaluator(ctx, schedule.states, 300.0, 1.0).reduced_potentials()[0]
-        del ctx
-    diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
-    assert np.max(np.abs(diff)) < 0.1          # kT; stock PME itself is only this accurate (docs/M0_REPORT.md)
-    assert abs(rows["cupotential"][0] - rows["openmm"][0]) / abs(rows["openmm"][0]) < 1e-4
+    assert_backends_give_the_energies_of_a_tight_ewald_sum(alch.system, schedule.states, pos, box, pressure=1.0)
 
 
 @needs_cuda
@@ -295,41 +334,42 @@ def test_rest2_state_energies_match_setting_each_state(rest2_leg, backend):
     assert np.max(np.abs(error)) < 0.02, error         # kT, single-precision energies of a 3,300-atom box
 
 
-#: How far the differences between the windows of ``rest2_leg`` may lie from those of stock OpenMM in double
-#: precision with an Ewald tolerance of 1e-6, in kT, for each backend at the tolerance a leg runs with (5e-4).
-#: Measured on 31 configurations of each water (spikes/m31_water_models_on_the_backends.py, 2026-11-24): the
-#: plugin at most 0.022 (TIP3P) and 0.044 (OPC), stock OpenMM at most 0.118 and 0.156. The levels are about
-#: twice the largest. The plugin against stock, which this test held to 0.1 kT on its one configuration, is
-#: the two errors together, mostly that of stock PME: it reached 0.126 and 0.152, above 0.1 on 1 and 5 of
-#: the 31 configurations, and is 0.114 on the configuration of this test with OPC
-EWALD_LEVEL_KT = {"cupotential": 0.1, "openmm": 0.3}
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_md_with_the_barostat_leaves_every_virtual_site_in_its_place_and_the_water_rigid(rest2_leg, backend):
+    """Review of 29fb9df: the plugin has an integrator and a barostat of its own, and no test held what they
+    do to a virtual site. After NPT MD on each backend the box has changed, every constraint has its length
+    and every virtual site is where the System puts it (``computeVirtualSites`` moves none). In the
+    configurations a leg stored after its MD on the plugin with OPC these are 5e-8 nm and 5e-10 nm."""
+    import openmm.unit as u
+
+    alch, _schedule, pos, box, _ = rest2_leg
+    be = get_backend(backend)
+    system = be.prepare_system(alch.system)
+    system.addForce(be.make_isotropic_barostat(1.0 * u.bar, 300 * u.kelvin, 5, seed=3))
+    integ = be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=3)
+    ctx = be.make_context(system, integ, 0)
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300 * u.kelvin, 5)
+    integ.step(1000)                                   # 200 attempts to change the volume
+    state = ctx.getState(getPositions=True)
+    assert abs(state.getPeriodicBoxVolume().value_in_unit(u.nanometer ** 3) - np.linalg.det(box)) > 1e-3
+    x = np.asarray(state.getPositions(asNumpy=True).value_in_unit(u.nanometer))
+    constraints = [system.getConstraintParameters(k) for k in range(system.getNumConstraints())]
+    i, j = np.array([c[0] for c in constraints]), np.array([c[1] for c in constraints])
+    length = np.array([c[2].value_in_unit(u.nanometer) for c in constraints])
+    assert np.abs(np.linalg.norm(x[i] - x[j], axis=1) - length).max() < 1e-6          # nm
+    ctx.computeVirtualSites()
+    moved = np.asarray(ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer)) - x
+    assert np.abs(moved).max() < 1e-6                                                # nm
 
 
 @needs_plugin
 def test_rest2_backends_agree(rest2_leg):
-    """Each backend gives the differences between the windows that a tight Ewald sum gives, in 3-site
-    water and in OPC: so the two agree, and neither is held to the error of the other's PME."""
-    import openmm.unit as u
-
+    """With REST2, in 3-site water and in OPC, whose fourth site is a virtual site."""
     alch, schedule, pos, box, _ = rest2_leg
-    tight = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(alch.system))
-    for force in tight.getForces():
-        if isinstance(force, mm.NonbondedForce):
-            force.setEwaldErrorTolerance(1e-6)
-    rows = {}
-    for name, backend, system in (("reference", get_backend("openmm", precision="double"), tight),
-                                  ("openmm", get_backend("openmm"), alch.system),
-                                  ("cupotential", get_backend("cupotential"), alch.system)):
-        ctx = backend.make_context(backend.prepare_system(system),
-                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
-        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
-        ctx.setPositions(pos)
-        rows[name] = StateEnergyEvaluator(ctx, schedule.states, 300.0, 1.0).reduced_potentials()[0]
-        del ctx
-    reference = rows["reference"] - rows["reference"][0]
-    errors = {name: (rows[name] - rows[name][0]) - reference for name in EWALD_LEVEL_KT}
-    for name, level in EWALD_LEVEL_KT.items():
-        assert np.max(np.abs(errors[name])) < level, (name, errors[name])   # kT; no dispersion correction here
+    assert_backends_give_the_energies_of_a_tight_ewald_sum(alch.system, schedule.states, pos, box, pressure=1.0)
 
 
 @needs_plugin
@@ -365,8 +405,7 @@ def test_backends_agree_with_annihilated_electrostatics_and_the_squared_soft_cor
         error = (rows[name] - rows[name][0]) - (direct - direct[0])
         assert np.max(np.abs(error)) < 0.02, (name, error)
         del ctx
-    diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
-    assert np.max(np.abs(diff)) < 0.1, diff
+    assert_backends_give_the_energies_of_a_tight_ewald_sum(alch.system, schedule.states, pos, box)
 
 
 @needs_cuda
@@ -394,7 +433,6 @@ def test_replica_exchange_with_rest2(tmp_path, rest2_leg, backend):
 def test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends():
     """Review of PR 1 (P2): `cufep validate` compares the System that a run samples, with REST2 and its region;
     here the pocket region holds the whole second peptide and the windows in the middle carry the scale 1.5."""
-    import openmm.unit as u
     from conftest import build_dipeptides_in_water
 
     from cufep.config.schema import Config
@@ -407,17 +445,7 @@ def test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends(
                                  "sampling": {"rest2": {"scale": 1.5, "region": "pocket", "pocket_cutoff_nm": 5.0}}})
     built, schedule = validation_system(cfg, system, prep, box, "complex")
     assert built.rest2_on and built.hot_atoms == sorted(other)
-    rows = {}
-    for name in ("openmm", "cupotential"):
-        backend = get_backend(name)
-        ctx = backend.make_context(backend.prepare_system(built.alch.system),
-                                   backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
-        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
-        ctx.setPositions(pos)
-        rows[name] = StateEnergyEvaluator(ctx, schedule.states, 300.0, None).reduced_potentials()[0]
-        del ctx
-    diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
-    assert np.max(np.abs(diff)) < 0.1, diff
+    assert_backends_give_the_energies_of_a_tight_ewald_sum(built.alch.system, schedule.states, pos, box)
 
 
 # ------------------------------------------------------------------- MD for the restraint

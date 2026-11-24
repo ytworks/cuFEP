@@ -87,6 +87,11 @@ leaflets that differ by more than 10 % and of such waters, and refused a prepare
 a water or an ion closer than 0.15 nm to another molecule, levels of cuFEP's own that are gone.
 `Modeller.addMembrane` relaxes the lipids with a short MD whose random seed OpenMM does not
 let the caller set, so two preparations of one membrane system are not identical.
+The bilayer is built with 3-site waters whatever `forcefield.water` is: `Modeller.addMembrane`
+makes a System of its lipid patch, whose waters have 3 sites. With a water model of more sites
+(OPC, TIP4P-Ew) the build uses the force field with `amber14/tip3p.xml`, waters that came with
+the input lose their extra site for it, and at the end every water gets the extra site of the
+model, at the place its virtual site has; the pre-equilibration then runs with the model itself.
 
 ## Thermodynamic cycle
 

@@ -690,7 +690,7 @@ def configuration_problems(cfg: "Config") -> list[str]:
         problems.append(f"analysis.lrc_cutoff_nm = {cfg.analysis.lrc_cutoff_nm:g} nm must be larger than "
                         f"dynamics.cutoff_nm = {cfg.dynamics.cutoff_nm:g} nm: the tail correction (analysis.lrc = "
                         f"{cfg.analysis.lrc}) adds the dispersion beyond the cutoff, from the cutoff outwards")
-    water = water_problem(cfg.forcefield.water, membrane=bool(cfg.membrane.enabled))
+    water = water_problem(cfg.forcefield.water)
     if water:
         problems.append(water)
     problems += initial_window_problems(cfg)

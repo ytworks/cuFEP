@@ -510,9 +510,8 @@ def test_the_tail_correction_must_begin_beyond_the_real_space_cutoff(tmp_path):
 def test_the_water_model_is_one_cufep_can_build(tmp_path):
     """Review of PR 1 (P2): ``amber14/tip4pew.xml`` was solvated with 3-site waters and createSystem failed."""
     load_config(write(tmp_path, {**BASE, "forcefield": {"water": "amber14/tip4pew.xml"}}))
-    with pytest.raises(Exception, match="3-site"):
-        load_config(write(tmp_path, {**BASE, "forcefield": {"water": "amber14/tip4pew.xml"},
-                                     "membrane": {"enabled": True}}))
+    # a bilayer is built with 3-site waters and takes a 4-site model too: they get their site afterwards
+    load_config(write(tmp_path, {**BASE, "forcefield": {"water": "amber14/opc.xml"}, "membrane": {"enabled": True}}))
     with pytest.raises(Exception, match="not a water model cuFEP can build"):
         load_config(write(tmp_path, {**BASE, "forcefield": {"water": "amber14/tip5p.xml"}}))
 

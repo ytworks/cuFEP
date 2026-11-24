@@ -2,7 +2,8 @@
 states and the forces of the cuPotential plugin those of stock OpenMM, and how far is each from a
 tight Ewald reference? (plan docs/plans/2026-11-24-opc-water-model.md)
 
-    scripts/in_docker.sh --gpus 0 python spikes/m31_water_models_on_the_backends.py [--frames 10]
+    scripts/in_docker.sh --gpus 0 python spikes/m31_water_models_on_the_backends.py --frames 30
+    scripts/in_docker.sh --gpus 0 python spikes/m31_water_models_on_the_backends.py --npt-ns 0.5
 
 The system and the lambda windows are those of the GPU test ``test_rest2_backends_agree``
 (``tests/gpu/test_gpu.py``): two alanine dipeptides in a 3.2 nm box of water, one the ligand, with
@@ -17,7 +18,9 @@ stock OpenMM. For every configuration four Contexts give the reduced potential o
 Printed per water model: the difference between windows (relative to the first) of the plugin against
 stock, which is what the test holds to 0.1 kT, and of each against the tight reference; the potential
 energy and the forces of the plugin against stock in double precision; the forces on the virtual
-sites. No time is measured.
+sites. With ``--npt-ns`` instead: NPT MD of the box on each backend, with the integrator and the barostat
+of that backend (the plugin has its own), and the box volumes of the two beside each other; at the end
+of each run where the virtual sites are and whether the constraints hold. No time is measured.
 """
 from __future__ import annotations
 
@@ -143,12 +146,63 @@ def measure(water: str, n_frames: int) -> None:
               f"plugin {on_sites['cupo']:.3g}")
 
 
+def npt(water: str, ns: float) -> None:
+    """NPT MD of the same box on each backend, with its own integrator and barostat: the box volume,
+    and at the end where the virtual sites are and whether the constraints hold."""
+    system, top, pos, box, _ligand, _other = build_dipeptides_in_water(box_nm=3.2, water=water,
+                                                                       dispersion_correction=True)
+    n = system.getNumParticles()
+    sites = np.array([i for i in range(n) if system.isVirtualSite(i)], dtype=int)
+    mass = sum(system.getParticleMass(i).value_in_unit(u.amu) for i in range(n))
+    cons = [system.getConstraintParameters(k) for k in range(system.getNumConstraints())]
+    ci, cj = np.array([c[0] for c in cons]), np.array([c[1] for c in cons])
+    cd = np.array([c[2].value_in_unit(u.nanometer) for c in cons])
+    print(f"\n== NPT, {water}: {n} particles, {len(sites)} virtual sites, {ns} ns after 50 ps, 300 K, 1 bar, 2 fs")
+    volumes = {}
+    for key, name in (("stock", "openmm"), ("cupo", "cupotential")):
+        backend = get_backend(name)
+        prepared = backend.prepare_system(system)
+        prepared.addForce(backend.make_isotropic_barostat(1.0 * u.bar, 300 * u.kelvin, 25, seed=5))
+        integ = backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=5)
+        ctx = backend.make_context(prepared, integ, 0)
+        load(ctx, pos, box)
+        ctx.setVelocitiesToTemperature(300 * u.kelvin, 9)
+        integ.step(25000)
+        vols = []
+        for _ in range(int(round(ns * 1000))):                       # one volume per ps
+            integ.step(500)
+            vols.append(ctx.getState().getPeriodicBoxVolume().value_in_unit(u.nanometer ** 3))
+        vols = np.array(vols)
+        blocks = vols[: len(vols) // 10 * 10].reshape(10, -1).mean(axis=1)
+        sem = blocks.std(ddof=1) / np.sqrt(10)
+        volumes[key] = (vols.mean(), sem)
+        x = np.asarray(ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer))
+        broken = np.abs(np.linalg.norm(x[ci] - x[cj], axis=1) - cd).max()
+        text = f"  {key:5s} volume {vols.mean():.4f} +- {sem:.4f} nm3 (10 blocks; sd {vols.std(ddof=1):.3f}), " \
+               f"density {mass / vols.mean() * 1.66053907e-3:.4f} g/cm3; at the end constraints off by {broken:.1e} nm"
+        if len(sites):
+            ctx.computeVirtualSites()
+            y = np.asarray(ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer))
+            text += f", virtual sites off their place by {np.abs(y[sites] - x[sites]).max():.1e} nm"
+        print(text, flush=True)
+        del ctx, integ
+    (vs, es), (vc, ec) = volumes["stock"], volumes["cupo"]
+    print(f"  plugin minus stock: {vc - vs:+.4f} +- {np.hypot(es, ec):.4f} nm3 "
+          f"({100 * (vc - vs) / vs:+.3f} +- {100 * np.hypot(es, ec) / vs:.3f} %)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--frames", type=int, default=10, help="configurations of MD after the one of the test")
+    parser.add_argument("--frames", type=int, default=10,
+                        help="configurations of MD after the one of the test (30 for the numbers of the plan)")
+    parser.add_argument("--npt-ns", type=float, default=0.0,
+                        help="instead of the energies: NPT MD of this length on each backend, the box volumes")
     args = parser.parse_args()
     for water in ("amber14/tip3p.xml", "amber14/opc.xml"):
-        measure(water, args.frames)
+        if args.npt_ns > 0:
+            npt(water, args.npt_ns)
+        else:
+            measure(water, args.frames)
     return 0
 
 

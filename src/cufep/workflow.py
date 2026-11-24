@@ -1674,8 +1674,15 @@ def prepare_ligand(cfg: Config, ligand, protein, lig_dir: Path, membrane: bool, 
         warnings.append(f"{n_removed} water(s) overlapping the ligand were removed")
     membrane_info: dict = {}
     if membrane:
+        from dataclasses import replace
+
         from cufep.prep.membrane import add_membrane
-        membrane_info = add_membrane(modeller, forcefield, cfg, log)
+
+        # the bilayer is built with a 3-site water if the water model has more sites: add_membrane asks for it
+        membrane_info = add_membrane(
+            modeller, forcefield, cfg, log,
+            forcefield_with_water=lambda water: make_forcefield(replace(ffspec, water=water), [ligand],
+                                                                include_lipid=True))
         warnings += [f"membrane: {w}" for w in membrane_info.pop("warnings", [])]
         barostat = "membrane"
     else:

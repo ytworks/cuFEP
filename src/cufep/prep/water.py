@@ -7,6 +7,12 @@ file, extra sites included: a 4-site file cannot use a box of 3-site waters (cre
 with "no template found" for HOH). Measured with OpenMM 8.4 for every file below against the
 boxes tip3p, spce and tip4pew: the 3-site files take a tip3p or spce box, the 4-site files only
 a tip4pew box. Files outside this table are refused before anything is prepared.
+
+A bilayer (``membrane.enabled``) is built with 3-site waters whatever the model:
+``Modeller.addMembrane`` makes a System of its lipid patch, whose waters have 3 sites, and cuFEP
+adds 3-site waters to the protein's cavities inside it. With a model of more sites the bilayer is
+built with the force field of :data:`BILAYER_BUILD_WATER`, and every water gets its extra site
+afterwards (:func:`cufep.prep.membrane.add_membrane`), as a crystal water does.
 """
 from __future__ import annotations
 
@@ -30,28 +36,21 @@ WATER_MODELS: dict[str, WaterModel] = {
     "amber14/opc.xml": WaterModel("tip4pew", 4),
 }
 
+#: the 3-site water file with which a bilayer is built when the water model has more sites
+BILAYER_BUILD_WATER = "amber14/tip3p.xml"
 
-def water_problem(water_file: str, membrane: bool) -> str | None:
-    """Why ``forcefield.water`` cannot be built, or None.
 
-    The bilayer of ``membrane.enabled`` comes with the 3-site waters of OpenMM's lipid patch, and
-    cuFEP adds 3-site waters to the protein's cavities inside it, so a membrane run needs a
-    3-site water model.
-    """
-    model = WATER_MODELS.get(str(water_file))
-    if model is None:
+def water_problem(water_file: str) -> str | None:
+    """Why ``forcefield.water`` cannot be built, or None."""
+    if str(water_file) not in WATER_MODELS:
         return (f"forcefield.water = {water_file!r} is not a water model cuFEP can build; use one of "
                 + ", ".join(WATER_MODELS))
-    if membrane and model.sites != 3:
-        return (f"forcefield.water = {water_file!r} has {model.sites} sites per water, and the bilayer of "
-                "membrane.enabled is built with 3-site waters; use one of "
-                + ", ".join(name for name, m in WATER_MODELS.items() if m.sites == 3))
     return None
 
 
 def water_model_of(water_file: str) -> WaterModel:
     """The table entry of ``forcefield.water``; ValueError if it has none."""
-    problem = water_problem(water_file, membrane=False)
+    problem = water_problem(water_file)
     if problem:
         raise ValueError(problem)
     return WATER_MODELS[str(water_file)]

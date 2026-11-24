@@ -1,5 +1,5 @@
 # 水モデル OPC: 文献の調査、ベンチマークでの比較、既定値の判断
-Status: In progress (2026-11-24: 計画を承認。GPU テストを OPC に広げ、落ちた 1 本をオーナーの決定で Ewald 1e-6 の基準に対する形に直した(下の「記録」)。unit 707 本、GPU 31 本が通った。TYK2 の run を 1 本ずつ始める。二重層の 4 サイトの水は未実装)
+Status: In progress (2026-11-24: GPU テストを OPC に広げ、バックエンドを比べるテストをオーナーの決定で Ewald 1e-6 の基準に対する形に直した。二重層と 4 サイトの水を実装した(二重層の MD はまだ)。TYK2 の run を OPC で 1 本ずつ実行中、結果は下の「記録」)
 Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/protocol.md` ("Systems"); `benchmarks/results/`
 
 ## Context
@@ -72,7 +72,7 @@ Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/pro
   10 本が通り、`test_rest2_backends_agree[opc]` が落ちた。プラグインと stock OpenMM の、窓のあいだの
   エネルギー差の違いが最大 0.114 kT(テストの水準は 0.1 kT。TIP3P の同じテストは 0.013 kT)。
   OPC での他の 4 本(状態ごとのエネルギー、レプリカ交換、両方のバックエンド)は通った。
-- 切り分け(`spikes/m31_water_models_on_the_backends.py`、テストの配置とそれに続く MD の 30 配置、
+- 切り分け(`spikes/m31_water_models_on_the_backends.py --frames 30`、テストの配置とそれに続く MD の 30 配置、
   8 窓)。Ewald の許容誤差 1e-6・倍精度の stock OpenMM を基準にした、窓のあいだの差の誤差 (kT):
 
   | 水 | stock (5e-4) 最大 / 平均 | プラグイン 最大 / 平均 | プラグイン対 stock 最大(0.1 を超えた配置) |
@@ -81,13 +81,13 @@ Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/pro
   | OPC | 0.156 / 0.044 | 0.044 / 0.015 | 0.152 (31 のうち 5) |
 
   隣り合う窓のあいだでは、プラグインは最大 0.011 (TIP3P) と 0.021 (OPC)、stock は 0.058 と 0.076。
-  力の相対差(基準に対して): プラグイン 3.2e-4 (TIP3P) と 4.6e-4 (OPC)、stock 6.8e-4 と 1.09e-3。
+  力の相対差(基準に対して): プラグイン 3.2e-4 (TIP3P) と 4.6e-4 (OPC)、許容誤差 5e-4・倍精度の stock 6.8e-4 と 1.09e-3。
   仮想サイトの上の力は 2 つのバックエンドで同じ値。MD は GPU の上なので、テストの配置のほかは実行ごとに
   変わる。
 - 読み取れること: プラグインは 4 サイトの水でも基準に stock より近い。0.1 kT を超える分は、許容誤差
   5e-4 の stock の PME の誤差で、TIP3P でも配置によって超える。OPC では両方のバックエンドの誤差が
   TIP3P の 1.3〜2 倍になる。
-- 計画の「一致しなければ止めて報告」に従い、TYK2 の run は始めていない。テストの水準は変えていない。
+- オーナーが承認した手順(2 つのバックエンドが一致しなければ止めて報告する)に従い、TYK2 の run は始めていない。テストの水準は変えていない。
 
 ### 2026-11-24: テストを Ewald 1e-6 の基準に対する形に直した(オーナーの決定)
 
@@ -99,3 +99,78 @@ Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/pro
   (`test_backends_agree_at_every_state`、`test_backends_agree_with_annihilated_electrostatics_and_the_squared_soft_core`、
   `test_the_system_of_a_validation_with_a_rest2_pocket_agrees_on_both_backends`)は変えていない。
 - unit テスト 707 本、GPU テスト 31 本が通った(イメージ `cufep:dev`、GPU 1 枚)。`scripts/lint.sh` も通った。
+
+### 2026-11-24: 29fb9df のレビュー(書いた本人でない読み手、15 分)と対応
+
+- P1「プラグインは独自の積分器とバロスタット(`nv.LangevinMiddleIntegrator`、`nv.MonteCarloBarostat`)を
+  使う。動力学のあいだ仮想サイトがどうなるかを、どのテストも測定も見ていない」。故障は見つからなかった:
+  - ejm_31 の溶媒レグがプラグインの MD の後に保存した 39 配置(平衡化の終わり、窓の開始配置 19、
+    レプリカ交換 2400 回後の 19 レプリカ): 仮想サイトは定義の位置から最大 4.7e-10 nm、拘束のずれは最大
+    5.4e-8 nm(TIP3P の run e77a6c5 の同じレグで 5.5e-8 nm)。
+  - NPT の箱の体積、プラグイン引く stock。ejm_31 の溶媒の箱(run の平衡化 0.5 ns の 25 フレームと、
+    同じ系を CPU の stock OpenMM で 1 ns): OPC -0.008 ± 0.053 nm3(25.777 と 25.785)、TIP3P
+    -0.013 ± 0.054 nm3(25.946 と 25.959)。テストの箱(`spikes/m31_water_models_on_the_backends.py
+    --npt-ns 0.5`、GPU、各 0.5 ns): OPC +0.09 ± 0.08 %(密度 0.997 と 0.998 g/cm3)、TIP3P
+    -0.15 ± 0.08 %(0.9865 と 0.985)。
+  - テストを足した: `test_md_with_the_barostat_leaves_every_virtual_site_in_its_place_and_the_water_rigid`
+    (それぞれのバックエンドで NPT の MD の後、拘束と仮想サイトの位置を 1e-6 nm で保つ。両方の水)。
+- P2「窓のあいだの差では、lambda によらない項(水どうしのエネルギー、仮想サイトが渡す力)が消える」。
+  基準に対するプラグインのポテンシャルエネルギー(相対 1e-4)と原子の上の力(相対 1e-3、仮想サイトを
+  除く)もテストで保つ。5 つの系での値: エネルギー 4e-6 から 2e-5、力 2.9e-4 から 3.8e-4。
+- P3「プラグイン対 stock を 1 配置で 0.1 kT のテストが 3 本残る」。4 本とも一つの関数
+  (`assert_backends_give_the_energies_of_a_tight_ewald_sum`)を通すようにした。その 5 つの系での
+  窓のあいだの差: プラグイン 0.006 から 0.009 kT、stock 0.002 から 0.110 kT。
+- P3「stock を基準に対して保つ 0.3 kT は OpenMM どうしの比較で、cuFEP の変更では落ちない」。オーナーが
+  決めた形(それぞれのバックエンドを基準に対して保つ)のまま残した。
+- P3 記録の誤り 3 点(承認された手順の引用、力の比較の stock が倍精度であること、31 配置のコマンド)を
+  上の記録で直した。
+
+### 2026-11-24: 二重層と 4 サイトの水
+
+- `membrane.enabled` と 4 サイトの水の組の拒否を外した。二重層は水モデルによらず 3 サイトの水で組む
+  (`cufep.prep.water.BILAYER_BUILD_WATER`)。入力と一緒に来た水は組む前に追加のサイトを外し、空洞の水と
+  イオンも 3 サイトの力場で置き、最後に全ての水へ水モデルのサイトを足す(`add_membrane`、
+  `strip_extra_sites`、`add_extra_sites`)。`docs/configuration.md`、`docs/protocol.md` ("Systems")。
+- unit テスト: `test_a_bilayer_is_built_with_three_site_waters_and_ends_with_the_sites_of_the_water_model`
+  (`add_membrane` 自体を、`Modeller.addMembrane` だけを置き換えて実行する。下の 2 回目のレビューを参照)。
+- A2A の 4k の複合体を OPC で準備した(CPU、`cufep:dev` と作業ツリー、準備だけ): 88,049 粒子、POPC
+  91 + 91、水 14,720 個が全て 4 原子で仮想サイト 14,720、Na+ 41 と Cl- 51、電荷の合計 0。書かれたサイトと
+  System の位置の差 0 nm。最小化 300 回と 1 fs の MD 200 ステップでエネルギーは有限、拘束後の O-H は
+  0.8724 A(OPC の値)。二重層の平衡化と alchemical run はまだ実行していない。
+
+### 2026-11-24: 二重層の変更のレビュー(書いた本人でない読み手、15 分)と対応
+
+- P1 は無し(4 サイトの水と二重層の組で、間違った数値や停止になる入力は作れなかった)。
+- P2「`add_membrane` の配線を実行するテストが無い」。水モデルのサイト数で決める部分を `add_membrane` の
+  中へ移し(`forcefield_with_water` を必要なときだけ呼ぶ)、`add_membrane` 自体を実行するテストにした。
+  `Modeller.addMembrane` だけを、渡された力場で System を作って 3 サイトの水を足す関数に置き換える。
+  サイトを外す行を消す、イオンを run の力場で置く、サイト数の判断を外す、最後にサイトを足さない、の
+  4 通りに壊すと、どれもこのテストが落ちることを 1 回ずつ確かめた。
+- P2「結晶水の経路が端から端まで走っていない」。A2A の入力に水の酸素を 3 個足して 4k の複合体を
+  準備した(CPU、準備だけ): 結晶水 3 個を保持、87,845 粒子、POPC 90 + 90、水 14,736 個が全て 4 原子、
+  Na+ 41 と Cl- 51、電荷の合計 0、サイトと System の位置の差 0 nm。1 fs の MD 200 ステップでエネルギーは
+  有限。最小化 300 回は、3 回の試行のうち 2 回でエネルギーを下げ(-1,036,680 から -1,086,254 kJ/mol)、
+  1 回は変えなかった(CPU プラットフォーム)。
+- P3: `docs/configuration.md` に、3 サイトの水で組む方法と Lipid21 を TIP3P 以外の水と組むことが cuFEP
+  独自であること(Lipid21 の論文は TIP3P で検証している)を書いた。`PROGRESS.md` を更新した。
+- 変えていない点: 作った設定の記録を持たない古い `prep.json` は、水モデルが違っても矛盾が見つからなければ
+  使われる(水溶性の系でも同じで、この変更より前からの動作。結果には由来を確かめられなかったと出る)。
+- unit テスト 708 本、GPU テスト 35 本が通った(イメージ `cufep:dev`。GPU テストは run の実行中に GPU 1 枚で)。
+
+### 2026-11-24: TYK2、OPC、1 本ずつ(イメージ `cufep:29fb9df`、GPU 8 枚)
+
+設定は `runs/configs/tyk2_opc_29fb9df.yaml`(イメージの中で `benchmark_config("tyk2", "full")` に水だけを
+足したもの)。run が書いた `resolved_config.yaml` と e77a6c5 の run のものとの違いは、
+`forcefield.water`、PR #9 で増えた設定 4 つ(既定値)、出力先だけ。箱はどちらも十二面体。
+
+| リガンド | 実験値 | OPC | TIP3P (e77a6c5) | 複合体レグ OPC / TIP3P | 溶媒レグ OPC / TIP3P | 拘束 | 窓 複合体 / 溶媒 | 最小の overlap | 独立なサンプルが 50 未満の窓 |
+|---|---|---|---|---|---|---|---|---|---|
+| ejm_31 | -9.54 | -9.30 ± 0.57 | -10.08 ± 0.37 | 40.90 ± 0.55 / 40.43 | 21.05 ± 0.14 / 19.79 | VAL 981 の水素結合 (800 フレーム中 755) | 35 / 19 | 0.156 / 0.182 | 溶媒レグ (最少 11) |
+| ejm_49 | -7.75 | -8.57 ± 0.54 | -11.84 ± 0.57 | 40.43 ± 0.52 / 43.12 | 21.30 ± 0.18 / 20.78 | VAL 981 の水素結合 (800 フレーム中 768) | 33 / 17 | 0.157 / 0.163 | 複合体レグ (最少 26) |
+
+- ejm_31: 両方のレグが cuPotential で走り、stock OpenMM への切り替えは無い。TIP3P のほかの計算:
+  今の複合体レグの既定値での 3 回が -9.36、-9.63、-9.33(平均 -9.44、標準偏差 0.17)、溶媒レグは
+  4 回で 20.23、20.13、20.77、20.44。複合体レグの往復は 0 回。
+- ejm_49: 両方のレグが cuPotential で走った。TIP3P のほかの計算(e77a6c5 と同じ設定、2 回): -8.92 ± 0.44、
+  -9.40 ± 0.29(3 回の平均 -10.05、標準偏差 1.57)。複合体レグ 40.91、40.87、溶媒レグ 21.46、20.89。
+  複合体レグの往復は 0 回。
