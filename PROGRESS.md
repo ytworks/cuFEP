@@ -65,13 +65,13 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 Open items:
 - Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done; A2A with OPC, in the bilayer and with the complex leg in water, was stopped after 4k and 4e each (Change Log).
-  Next, by the owner's order: all of A2A in the bilayer with OPC and the water relocation moves (`sampling.relocation_mc`, merged from PR #10). Defaults unchanged: TIP3P, the moves off.
+  With the water relocation moves 4k did not change (-19.16 ± 0.59 against -19.15 ± 0.35); that run was stopped. Plan `docs/plans/2026-11-24-gcmc-water.md` (in progress): GCMC of water in the complex leg, default off; the risk check passed, the implementation is next. Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
   one way of starting the windows (below). Not adopted, defaults unchanged: longer production,
   `alchemy.annihilate_electrostatics`, `alchemy.softcore_b` 2, `analysis.detect_equilibration`,
-  REST2 off, a longer bilayer equilibration, water relocation moves (PR #10; in the branch of PR #15, off). One
+  REST2 off, a longer bilayer equilibration, water relocation moves (PR #10 closed; in the branch of PR #15, off). One
   calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied:
   the decoupled-side windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
@@ -111,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [design] Plan: grand canonical Monte Carlo of water in the complex leg; the relocation run is stopped
+- What: A2A in the bilayer with OPC and the water relocation moves (image of 9989cdb): 4k -19.16 ± 0.59
+  kcal/mol, without the moves -19.15 ± 0.35 (experiment -11.54); moves accepted 117 of 19,247 into
+  the sphere and 67 of 19,503 out of it. Stopped on the owner's order during 4e. New plan: GCMC with
+  ghost waters (grand), batches of trials on the GPU and a second test with the energy of the
+  simulation, the complex leg at constant volume, TIP3P and OPC; default off. Risk check passed
+  (`spikes/m33`): waters switched off and on in a live Context give the energies of a System built
+  so, on both backends. Found by it: with REST2 the two backends treat the dispersion correction
+  differently, up to 0.55 kT between windows (TIP3P), 0 at both ends; the GPU tests have it off.
+- Why: the owner's order of 2026-11-24, after the moves that keep the number of waters changed nothing.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` ("記録")
 
 ### 2026-11-24 — [progress] A2A in water with OPC stopped after two; the water relocation moves are merged and take a 4-site water
 - What: restraint from the bilayer in TIP3P, alchemical run in water with OPC (image of 02f3d7a): 4k
