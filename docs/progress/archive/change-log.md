@@ -5,6 +5,66 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-24 — [progress] `membrane.complex_leg: water` on A2A: the short run, and 4k
+- What: image of a34bbe2, eight GPUs, the settings of the set (5 ns per window, one calculation).
+  A short run of 4k passed the checks of the plan from its files (systems of 61,452 and 73,275
+  atoms, the restraint from the bilayer, the same command again computes nothing). 4k (experiment
+  -11.54): -12.11 ± 0.53 kcal/mol; complex leg 36.60 ± 0.50, solvent leg 14.90 ± 0.18; restraint
+  ASN 253 (784 of 800 frames); lowest overlap 0.154 and 0.171; fewest independent samples 12
+  (complex leg) and 193. In the bilayer: -20.32 ± 0.52 (e77a6c5, windows started one from another)
+  and -14.49, -13.07, -16.50 (the walk; complex leg 38.78, 37.36, 40.90). The other 16 follow.
+- Why: the plan (one ligand at a time, each reported).
+- Refs: the plan ("記録"), `runs/benchmark_a2a_full_water_a34bbe2` (untracked), PR #14
+
+### 2026-11-23 — [design] `membrane.complex_leg`: the restraint from the bilayer, the alchemical run in water
+- What: a setting, default `bilayer` (no default, number of the analysis or stored result changes).
+  With `water` the preparation writes two complexes of one pose (`prep/complex.*` in water,
+  `prep/complex_bilayer.*`); the pre-equilibration of the bilayer (`restraint_equil.npz`) and the
+  MD of the restraint run in the bilayer, the alchemical run on the complex in water; the anchors
+  are the same atoms, held to the rules at the start of the alchemical run; only with
+  `restraints.selection: interactions`. cuFEP's own, off by default. A review by a reader who
+  did not write it: no wrong number found, five points, four fixed. Unit tests 714 passed, GPU
+  tests 26 passed (the image `cufep:dev`). No run with the setting yet.
+- Why: the plan of this day (the owner's order).
+- Refs: PR #14, `docs/configuration.md`, `docs/protocol.md` ("Systems"), `tests/unit/test_complex_leg_in_water.py`
+
+### 2026-11-23 — [design] Plan: the bilayer for the MD of the restraint only, the complex leg in water
+- What: the owner's order. A setting `membrane.complex_leg: bilayer | water` (default `bilayer`,
+  the behaviour of today): with `water` the MD from which the restraint is chosen runs in the
+  bilayer and the alchemical run of the complex leg in water. To be run on the A2A set one ligand
+  at a time and compared with the run of e77a6c5 (the owner's decision). Not implemented yet.
+- Why: to see whether the bilayer in the alchemical run is behind the larger errors of A2A.
+- Refs: `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md`
+
+### 2026-11-23 — [design] The accuracy plan is closed: the walk is the one way of starting the windows
+- What: the owner's decision. Adopted: `lambda_schedule.adaptive.start_configurations`, default
+  the walk (E1). The A2A ligands whose complex leg the run of e77a6c5 had started one window
+  from another, with the walk, kcal/mol: 4k -20.32 to -14.69 (mean of three), 4n -19.17 to
+  -17.38, 4c -18.75 to -15.19, 4q -14.11 to -12.52, 4r -16.17 to -15.95. Not adopted (off by
+  default): annihilated electrostatics (16 TYK2 ligands: mean signed error -0.43, RMSE after
+  removing it 1.77, tau 0.20), the squared soft-core, equilibration detection; water relocation
+  moves stay in PR #10 (4k -16.61, ejm_49 -11.42 with them). No remedy for the relaxation of the
+  pocket at the decoupled end. The full sets were not run again (stopped after one ligand).
+- Why: only E1 changed results beyond the scatter of one calculation (1.57 and 1.72).
+- Refs: the plan (steps 5 and 6, "結論"), PR #9, PR #10, `spikes/m27_paired_runs.py`, `spikes/m30_ligands_against_a_run.py`
+
+### 2026-11-23 — [amendment] Fourth review by Codex (93d42ee): two more paths of a given schedule
+- What: review 6016033556 (two P2), both fixed. With `--reschedule` a given file inside an
+  archive of the leg that was begun and not completed is refused too. A schedule a leg has
+  without start configurations gets the record of this leg before the walk through its windows.
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [amendment] Third review by Codex (6b1a609): a given schedule is read, not copied first
+- What: review 6015941311 (two P2), both fixed. A leg that is given its windows
+  (`lambda_schedule.file`) reads the schedule and writes its `schedule.yaml` with the start
+  configurations of the walk, not before it: a run stopped during the walk leaves no windows
+  that look like those of an earlier version, and the schedule names this leg. With
+  `--reschedule` only a file that is set aside is refused, not the one in `previous_<n>/`.
+  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
 ### 2026-11-23 — [amendment] Second review by Codex (8dc042e): the origin of windows, a given schedule of the leg itself
 - What: review 6015842320 (four P2); three fixed, one answered. `--reschedule` with
   `lambda_schedule.file` naming a file of the leg that is set aside is refused before anything is
