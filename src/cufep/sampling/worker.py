@@ -59,9 +59,19 @@ class LegSpec:
     #: positions *within frame_atoms* of the ligand heavy atoms and the protein C-alpha atoms
     frame_ligand: list[int] = field(default_factory=list)
     frame_ca: list[int] = field(default_factory=list)
+    #: grand canonical moves of water (:class:`cufep.sampling.gcmc.GcmcSpec`), or None. The System of such a
+    #: leg has the ghosts of the start switched off, and the leg has no barostat
+    gcmc: object | None = None
+    #: water relocation moves (:class:`cufep.sampling.relocation_mc.RelocationSpec`), or None
+    relocation: object | None = None
 
     def __post_init__(self) -> None:
         self.check_segment(self.steps_per_iteration, "the MD of one replica in one iteration")
+
+    @property
+    def n_switched_waters(self) -> int:
+        """The waters of the leg that grand canonical moves switch (0 without the moves)."""
+        return 0 if self.gcmc is None else len(self.gcmc.waters)
 
     @property
     def has_barostat(self) -> bool:
@@ -202,12 +212,14 @@ def owned_directory(base: str, _before_lock=None) -> tuple[str, int]:
 class SharedArrays:
     """Replica state and energies in memory-mapped files shared with the workers."""
 
-    FIELDS = ("pos", "vel", "box", "u", "vol")
+    #: ``won``: which waters of each replica interact (1 or 0; legs with grand canonical moves of water)
+    FIELDS = ("pos", "vel", "box", "u", "vol", "won")
 
     def __init__(self, n_replicas: int, n_atoms: int, n_states: int, names: dict | None = None,
-                 fallback_dir: str | None = None) -> None:
+                 fallback_dir: str | None = None, n_waters: int = 0) -> None:
         self.shapes = {"pos": (2, n_replicas, n_atoms, 3), "vel": (2, n_replicas, n_atoms, 3),
-                       "box": (2, n_replicas, 3, 3), "u": (n_replicas, n_states), "vol": (n_replicas,)}
+                       "box": (2, n_replicas, 3, 3), "u": (n_replicas, n_states), "vol": (n_replicas,),
+                       "won": (2, n_replicas, max(1, int(n_waters)))}
         self.owner = names is None
         self._owner_lock = None
         if self.owner:
@@ -224,9 +236,10 @@ class SharedArrays:
             mode = "r+"
         self._maps = {k: np.memmap(self._paths[k], dtype=np.float64, mode=mode, shape=self.shapes[k])
                       for k in self.FIELDS}
-        self.pos, self.vel, self.box, self.u, self.vol = (self._maps[k] for k in self.FIELDS)
+        self.pos, self.vel, self.box, self.u, self.vol, self.won = (self._maps[k] for k in self.FIELDS)
         if self.owner:
             self.vel[:] = np.nan          # NaN velocities = "draw from Maxwell-Boltzmann"
+            self.won[:] = 1.0
 
     @property
     def names(self) -> dict:
@@ -237,7 +250,7 @@ class SharedArrays:
         return os.path.dirname(self._paths["pos"])
 
     def close(self) -> None:
-        self.pos = self.vel = self.box = self.u = self.vol = None
+        self.pos = self.vel = self.box = self.u = self.vol = self.won = None
         self._maps = {}
         if self.owner and self.directory:
             shutil.rmtree(self.directory, ignore_errors=True)
@@ -258,7 +271,7 @@ def tail_summary(lrc: dict) -> dict:
 
 
 #: what a random stream of a worker is for
-INTEGRATOR_STREAM, BAROSTAT_STREAM = 0, 1
+INTEGRATOR_STREAM, BAROSTAT_STREAM, RELOCATION_STREAM, GCMC_STREAM = 0, 1, 2, 3
 
 
 def stream_seed(seed: int, start: int, worker_id: int, purpose: int = INTEGRATOR_STREAM) -> int:
@@ -329,17 +342,45 @@ class ReplicaWorker:
         if spec.lrc is not None:
             from cufep.alchemy.lrc import TailEnergy
             self.lrc = TailEnergy.from_dict(spec.lrc)
+        # water relocation moves: a mover on this Context, with a random stream of its own, and
+        # the number of MD steps of a replica for which one move is attempted
+        self.mover, self.relocation_steps = None, 0
+        if spec.relocation is not None:
+            from cufep.sampling.relocation_mc import RelocationMover
+            from cufep.steps import md_steps
+
+            self.mover = RelocationMover(spec.relocation, self.context,
+                                         stream_seed(spec.seed, start, worker_id, RELOCATION_STREAM))
+            self.relocation_steps = md_steps(spec.relocation.interval_ps, spec.timestep_fs)
+        # grand canonical moves of water: a mover that also holds which waters interact in this Context
+        self.gcmc, self.gcmc_steps = None, 0
+        if spec.gcmc is not None:
+            from cufep.sampling.gcmc import GcmcMover
+            from cufep.steps import md_steps
+
+            self.gcmc = GcmcMover(spec.gcmc, self.context, stream_seed(spec.seed, start, worker_id, GCMC_STREAM))
+            self.gcmc_steps = md_steps(spec.gcmc.interval_ps, spec.timestep_fs)
+
+    def window_mover(self) -> tuple:
+        """(mover, MD steps between its moves) for a window of the precalculation in this Context."""
+        if self.gcmc is not None:
+            return self.gcmc, self.gcmc_steps
+        return self.mover, self.relocation_steps
 
     def describe(self) -> str:
         platform = self.context.getPlatform()
         names = platform.getPropertyNames()
         device = platform.getPropertyValue(self.context, "DeviceName") if "DeviceName" in names else platform.getName()
         index = platform.getPropertyValue(self.context, "DeviceIndex") if "DeviceIndex" in names else "-"
-        return f"{self.spec.backend}/{platform.getName()} on {device} (index {index})"
+        moves = "" if self.mover is None else f"; water relocation moves, their trial energies on {self.mover.engine}"
+        if self.gcmc is not None:
+            moves = f"; grand canonical moves of water, their trial energies on {self.gcmc.engine}"
+        return f"{self.spec.backend}/{platform.getName()} on {device} (index {index}){moves}"
 
     def run(self, cur: int, assignments: list[tuple[int, int]], iteration: int, record: bool,
             steps: int | None = None) -> dict:
         """Advance replicas ``[(replica, state_index), ...]`` by one iteration."""
+        from cufep.sampling.relocation_mc import attempts_due
         from cufep.sampling.states import set_state
 
         u = self._u
@@ -360,8 +401,24 @@ class ReplicaWorker:
                 self.context.setVelocities(vel)
             state = self.states[state_index]
             set_state(self.context, state)
+            if self.gcmc is not None:                    # the waters that interact in this replica
+                self.gcmc.set_on(arrays.won[cur, replica] > 0.5)
             if n_steps > 0:
                 self.integrator.step(n_steps)
+            if self.mover is not None and n_steps > 0:
+                # the water relocation moves in the state the replica is simulated in, before the
+                # energies of this iteration are taken (cufep.sampling.relocation_mc)
+                for _ in range(attempts_due(iteration, n_steps, self.relocation_steps)):
+                    move = self.mover.attempt(state)
+                    out.setdefault("relocation", []).append(
+                        (int(state_index), move["direction"], bool(move["accepted"])))
+            if self.gcmc is not None and n_steps > 0:
+                # the grand canonical moves in the state the replica is simulated in (cufep.sampling.gcmc)
+                from cufep.sampling.gcmc import COUNTS
+
+                for _ in range(attempts_due(iteration, n_steps, self.gcmc_steps)):
+                    counts = self.gcmc.attempt(state)
+                    out.setdefault("gcmc", []).append((int(state_index), [int(counts[key]) for key in COUNTS]))
             st = self.context.getState(getPositions=True, getVelocities=True)
             pos = st.getPositions(asNumpy=True).value_in_unit(u.nanometer)
             new_box = st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer)
@@ -374,10 +431,15 @@ class ReplicaWorker:
             arrays.box[nxt, replica] = new_box
             arrays.u[replica] = reduced
             arrays.vol[replica] = volume
+            off = None
+            if self.gcmc is not None:
+                on = self.gcmc.on
+                arrays.won[nxt, replica] = on
+                off = self.gcmc.waters[~on].reshape(-1)
             if record and state_index == 0:
                 rec = {"replica": replica}
                 if self.lrc is not None:
-                    rec["lrc_du"] = float(self.lrc.energy(np.asarray(pos), np.asarray(new_box)))
+                    rec["lrc_du"] = float(self.lrc.energy(np.asarray(pos), np.asarray(new_box), off=off))
                 if self.spec.frame_atoms:
                     rec["frame"] = np.asarray(pos[self.spec.frame_atoms], dtype=np.float32)
                     rec["box"] = np.asarray(new_box, dtype=np.float32)
@@ -418,7 +480,8 @@ def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker
     worker = None
     try:
         if shm_names:                                    # none for workers that only run single windows
-            arrays = SharedArrays(len(spec.states), spec.n_atoms, len(spec.states), names=shm_names)
+            arrays = SharedArrays(len(spec.states), spec.n_atoms, len(spec.states), names=shm_names,
+                                  n_waters=spec.n_switched_waters)
         worker = ReplicaWorker(spec, device, arrays, worker_id, start)
         conn.send(("ready", worker.describe()))
         while True:
@@ -431,14 +494,21 @@ def worker_main(conn, spec: LegSpec, device: int | None, shm_names: dict, worker
                 conn.send(("done", result))
             elif msg[0] == "window":                     # one window of the adaptive precalculation
                 from cufep.alchemy.schedule import run_window
-                conn.send(("done", run_window(worker.context, worker.integrator, msg[1])))
+                conn.send(("done", run_window(worker.context, worker.integrator, msg[1], *worker.window_mover())))
             else:
                 conn.send(("error", f"unknown command {msg[0]!r}"))
     except EOFError:
         pass
     except Exception as exc:  # noqa: BLE001 - report every failure to the controller
+        # what the water moves of the leg cannot go on with (no ghost water left, a cell too small for the
+        # sphere) is not a failure of this worker: the controller stops the leg with the reason
+        from cufep.sampling.relocation_mc import RelocationError
+
         try:
-            conn.send(("error", f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=6)}"))
+            if isinstance(exc, RelocationError):
+                conn.send(("refused", str(exc)))
+            else:
+                conn.send(("error", f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=6)}"))
         except Exception:  # noqa: BLE001
             pass
     finally:

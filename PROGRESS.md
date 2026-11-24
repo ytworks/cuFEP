@@ -31,7 +31,7 @@ OpenMM, on all GPUs of a machine, from two files.
 
 ## Current Status
 
-Snapshot date: 2026-11-23. `main` holds PR #1 (the engine of plan
+Snapshot date: 2026-11-25. `main` holds PR #1 (the engine of plan
 `docs/plans/2026-11-18-abfe-engine.md`), PR #2 (the README and the harness), PR #3 (wording fixes
 and ruff), PR #4 (plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`: benchmarks
 with the settings of the examples, the full sets, an accuracy wiki), PR #6 (plan
@@ -48,12 +48,12 @@ from the pose that was given, and the TYK2 example three times with the present 
 complex leg (below). PR #8, merged on the owner's order of 2026-11-22, added one run of both full
 benchmark sets with the present defaults and the accuracy pages written from it (the row "Benchmarks").
 PR #9, merged on the owner's order of 2026-11-23 (the accuracy plan, done): the windows of a leg
-start from the walk whatever number of workers it has; three settings that stay off by default.
+start from the walk whatever number of workers it has; three settings that stay off by default. PR #15, merged on the owner's order of 2026-11-25 (the plans of 2026-11-24, done): a bilayer with a 4-site water, `membrane.complex_leg` and `membrane.water`, water relocation moves and grand canonical moves of water, all off by default; no default changed.
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 707 passed (2026-11-23, the branch of PR #9 with the four settings of the accuracy plan, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 26 passed (2026-11-23, one GPU, the same tree and image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
+| Unit tests (CPU) | 750 passed (2026-11-25, the branch `feat/opc-water` with `sampling.gcmc`, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 55 passed (2026-11-25, one GPU, the same tree, image `cufep:dev`, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); the tests of `rest2_leg`, of the water relocation moves and of the grand canonical moves run with TIP3P and with OPC; none builds a bilayer |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7. In the full TYK2 run with the present defaults (e77a6c5, PR #8): -10.08 ± 0.37 (complex leg 40.43, solvent leg 19.79; 33 and 18 windows; lowest overlap 0.154 and 0.189; a window with fewer than 50 independent samples in the complex leg) |
 | Starts of the complex leg (plan `docs/plans/2026-11-21-als-initial-window-design.md`, PR #7) | A is the default since 2026-11-22 (the owner's choice), so its three runs are runs of the TYK2 example as it is now. TYK2 example, three starts of the complex leg, three calculations each with the same YAML and seed (image of 5e2cf33, 4 GPUs each; the overlap of a pair alone, threshold 0.30; solvent leg as the default), kcal/mol. A (30 windows, those of mode fixed): -9.36 ± 0.56, -9.63 ± 0.37, -9.33 ± 0.51; mean -9.44, standard deviation 0.17. B (30 windows, denser at vanish 0.7 to 0.9): -10.01 ± 0.34, -9.64 ± 0.52, -11.71 ± 0.53; -10.45, 1.11. C (59 windows placed as B): -11.43 ± 0.46, -6.41 ± 0.59, -7.64 ± 0.43; -8.50, 2.62. The four runs of the row above: -10.39, 2.09. Complex leg, standard deviation: 0.20, 1.23, 2.20 (1.86). Lowest overlap 0.141 to 0.153 (A), 0.128 to 0.129 (B), 0.081 to 0.085 (C); a window with fewer than 50 independent samples in the complex leg of 2, 1 and 1 of the three runs; 0 or 1 round trip in the complex leg of every run. Three runs give a standard deviation only roughly. Tables: the plan (`spikes/m19_window_runs.py`) |
@@ -64,16 +64,16 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- The wiki pages (`docs/wiki/`, rewritten in PR #8) are not yet on the GitHub Wiki: it has no
-  page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
-  and the measurements that would separate the causes of cuFEP's larger errors.
-- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9): of the remedies it
-  tried, one changed results and is adopted, the walk as the one way of starting the windows
-  (below). Not adopted, defaults unchanged: `alchemy.annihilate_electrostatics`,
-  `alchemy.softcore_b` 2, `analysis.detect_equilibration`, longer production, REST2 off, a longer
-  bilayer equilibration, water relocation moves (PR #10, not merged). One calculation varies by a
-  standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied: the decoupled-side
-  windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
+- Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
+  With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
+- The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
+  the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
+- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
+  one way of starting the windows (below). Not adopted, defaults unchanged: longer production,
+  `alchemy.annihilate_electrostatics`, `alchemy.softcore_b` 2, `analysis.detect_equilibration`,
+  REST2 off, a longer bilayer equilibration, water relocation moves (PR #10 closed; in the branch of PR #15, off). One
+  calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied:
+  the decoupled-side windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -112,65 +112,87 @@ Open items:
 
 ## Change Log
 
-### 2026-11-23 — [design] The accuracy plan is closed: the walk is the one way of starting the windows
-- What: the owner's decision. Adopted: `lambda_schedule.adaptive.start_configurations`, default
-  the walk (E1). The A2A ligands whose complex leg the run of e77a6c5 had started one window
-  from another, with the walk, kcal/mol: 4k -20.32 to -14.69 (mean of three), 4n -19.17 to
-  -17.38, 4c -18.75 to -15.19, 4q -14.11 to -12.52, 4r -16.17 to -15.95. Not adopted (off by
-  default): annihilated electrostatics (16 TYK2 ligands: mean signed error -0.43, RMSE after
-  removing it 1.77, tau 0.20), the squared soft-core, equilibration detection; water relocation
-  moves stay in PR #10 (4k -16.61, ejm_49 -11.42 with them). No remedy for the relaxation of the
-  pocket at the decoupled end. The full sets were not run again (stopped after one ligand).
-- Why: only E1 changed results beyond the scatter of one calculation (1.57 and 1.72).
-- Refs: the plan (steps 5 and 6, "結論"), PR #9, PR #10, `spikes/m27_paired_runs.py`, `spikes/m30_ligands_against_a_run.py`
+### 2026-11-25 — [design] The owner's decision: the runs stop, no default changes for now
+- What: after the four runs with grand canonical moves of water (the entry below) the owner stops the
+  evaluation on A2A; the remaining 15 ligands are not run. No default changes for now: the water
+  stays TIP3P, `sampling.gcmc` and `sampling.relocation_mc` stay off. The two plans are closed.
+- Why: the owner's decision. In the four runs the binding stayed 5 to 8 kcal/mol too strong.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` (`Status:`)
 
-### 2026-11-23 — [amendment] Fourth review by Codex (93d42ee): two more paths of a given schedule
-- What: review 6016033556 (two P2), both fixed. With `--reschedule` a given file inside an
-  archive of the leg that was begun and not completed is refused too. A schedule a leg has
-  without start configurations gets the record of this leg before the walk through its windows.
-- Why: the review after the push (the working agreement of PR #9).
-- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+### 2026-11-25 — [progress] A2A with grand canonical moves of water: 4k and 4e, TIP3P and OPC
+- What: image of 8252ccd, one calculation each on eight GPUs, the set's settings with
+  `sampling.gcmc.enabled: true` (kcal/mol; experiment -11.54 and -12.07). 4k: TIP3P -17.32 ± 0.42
+  (without the moves -20.32 ± 0.52 in the run of e77a6c5; three other runs -14.49, -13.07, -16.50),
+  OPC -19.96 ± 0.29 (-19.15 ± 0.35). 4e: TIP3P -17.21 ± 0.36 with the restraint on ASN 253 (without,
+  on ASN 253, -16.85 ± 0.64; on PHE 168, e77a6c5, -13.50 ± 0.34), OPC -18.26 ± 0.54 (-20.61 ± 0.47,
+  both on PHE 168). The moves were made in every run (5 to 20 thousand insertions and as many
+  deletions); the sphere holds 7 to 9 waters where the ligand is coupled and 16 to 21 where it is
+  decoupled. No GPU error, no worker restarted. The rest of the set waits for the owner.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md` ("記録"), `runs/benchmark_a2a_full_gcmc_{tip3p,opc}_8252ccd`
 
-### 2026-11-23 — [amendment] Third review by Codex (6b1a609): a given schedule is read, not copied first
-- What: review 6015941311 (two P2), both fixed. A leg that is given its windows
-  (`lambda_schedule.file`) reads the schedule and writes its `schedule.yaml` with the start
-  configurations of the walk, not before it: a run stopped during the walk leaves no windows
-  that look like those of an earlier version, and the schedule names this leg. With
-  `--reschedule` only a file that is set aside is refused, not the one in `previous_<n>/`.
-  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
-- Why: the review after the push (the working agreement of PR #9).
-- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+### 2026-11-25 — [progress] Grand canonical moves of water in the complex leg (`sampling.gcmc`, default off)
+- What: ghost waters switched in the live Context, the acceptance of Ross 2017 (eq 1, 2, 7), batches of
+  trials with the stand-in energy and a second test with the energy of the simulation, every replica
+  with the list of its waters, the alchemical run of the leg without a barostat in the mean cell of
+  its pre-equilibration; TIP3P and OPC. The two numbers of the water: TIP3P -6.09 kcal/mol and 30.345
+  A^3 (grand's; measured here -6.125 ± 0.053, 30.319 ± 0.009), OPC -8.05 and 30.000 (measured). A short
+  run of 4k end to end: the sphere holds about 7 waters where the ligand is coupled and 14 where it is
+  decoupled. Unit tests 750, GPU tests 55 passed; a short review: no P1, two P2 fixed.
+- Why: the owner's order (plan `docs/plans/2026-11-24-gcmc-water.md`); no benchmark result with it yet.
+- Refs: the plan ("記録"), `docs/configuration.md` (`sampling.gcmc`), `docs/protocol.md` ("Grand canonical moves of water")
 
-### 2026-11-23 — [amendment] Second review by Codex (8dc042e): the origin of windows, a given schedule of the leg itself
-- What: review 6015842320 (four P2); three fixed, one answered. `--reschedule` with
-  `lambda_schedule.file` naming a file of the leg that is set aside is refused before anything is
-  moved. Windows of adaptive lambda scheduling that a leg had without start configurations get
-  the note that their origin is not recorded also when a file is named. That note is read from
-  the files of the leg whenever its result is made (`cufep analyze` too). Not changed: a leg whose
-  windows 2861b93, a commit inside this pull request, sampled first (no such directory exists).
-  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
-- Why: the review after the push (the working agreement of PR #9).
-- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+### 2026-11-25 — [design] Plan: grand canonical Monte Carlo of water in the complex leg; the relocation run is stopped
+- What: A2A in the bilayer with OPC and the water relocation moves (image of 9989cdb): 4k -19.16 ± 0.59
+  kcal/mol, without the moves -19.15 ± 0.35 (experiment -11.54); moves accepted 117 of 19,247 into
+  the sphere and 67 of 19,503 out of it. Stopped on the owner's order during 4e. New plan: GCMC with
+  ghost waters (grand), batches of trials on the GPU and a second test with the energy of the
+  simulation, the complex leg at constant volume, TIP3P and OPC; default off. Risk check passed
+  (`spikes/m33`): waters switched off and on in a live Context give the energies of a System built
+  so, on both backends. Found by it: with REST2 the two backends treat the dispersion correction
+  differently, up to 0.55 kT between windows (TIP3P), 0 at both ends; the GPU tests have it off.
+- Why: the owner's order of 2026-11-24, after the moves that keep the number of waters changed nothing.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` ("記録")
 
-### 2026-11-23 — [amendment] Review by Codex of 2861b93: records that hold through other versions and interruptions
-- What: review 6015499088 (one P1, seven P2), each fixed. A result that lacks
-  `annihilate_electrostatics` takes it from its samples, before a run and in the combination; a
-  stored ligand result is shown again only if it compared the conditions of the cycle this
-  version compares. Samples without recorded conditions refuse a treatment their version did not
-  have. A given schedule of another REST2 scale is refused before the leg takes it. A leg whose
-  archive was not completed is refused until `--reschedule` completes it. Windows of an earlier
-  version that a run samples first get its record, and the result keeps saying that their origin
-  is not recorded. `windows_run_concurrently` is true only if windows ran at the same time.
-- Why: the review after the push (the working agreement of PR #9).
-- Refs: PR #9 (the review and its answer), `docs/protocol.md`, `tests/unit/test_workflow.py`
+### 2026-11-24 — [progress] A2A in water with OPC stopped after two; the water relocation moves are merged and take a 4-site water
+- What: restraint from the bilayer in TIP3P, alchemical run in water with OPC (image of 02f3d7a): 4k
+  -17.50 ± 0.73 and 4e -20.16 ± 0.57 kcal/mol (experiment -11.54, -12.07; in water with TIP3P -12.11,
+  -16.17); stopped on the owner's order. `feat/relocation-mc` (PR #10) is merged into this branch
+  (`sampling.relocation_mc`, default off). With a 4-site water an accepted move gave the virtual site a
+  velocity: fixed, only the atoms with a mass are turned. The energy change of a moved water against a
+  tight Ewald sum: the plugin within 0.035 kT, stock OpenMM 0.225 kT with OPC (GPU test, m32). A short
+  review: no P1 or P2. Unit tests 738, GPU tests 43 passed. Next: A2A in the bilayer with OPC and the moves.
+- Why: the owner's order of 2026-11-24: all of A2A back to the bilayer with OPC, with the moves.
+- Refs: the plan ("記録"), `docs/protocol.md` ("Water relocation moves"), `tests/unit/test_relocation_mc.py`
 
-### 2026-11-23 — [progress] Accuracy plan, step 5: the bilayer equilibrated 100 ns; the control of E3 to 10 ns
-- What: one run each, image of e77a6c5, kcal/mol. 4k (experiment -11.54) with
-  `membrane.equilibration_ns: 100`: -19.84 ± 0.41, complex leg 44.32 ± 0.40 against 38.78, 37.36,
-  40.90 of the three runs with 10 ns (the walk) and 44.87 of the benchmark run (windows started
-  one from another); the area of the bilayer no longer changes at the end of the 100 ns (-0.008 %
-  between its last two quarters; -0.9 to -2.5 % after 10 ns). The control of E3 continued to
-  10 ns: complex leg 35.39 ± 0.66 against 40.74 of the first repeat continued to 10 ns; the two
-  ways of starting the windows do not come closer. No cause is established by one run each.
-- Why: step 5 of the plan (controls whose condition was met).
-- Refs: the plan ("手順 5 の結果", "手順 5 までのまとめ"), `runs/acc_*` (untracked)
+### 2026-11-24 — [design] `membrane.water`: the restraint from the bilayer in TIP3P, the alchemical run in water with OPC
+- What: the owner's order after A2A with OPC in the bilayer, stopped after two ligands: 4k
+  -19.15 ± 0.35 and 4e -20.61 ± 0.47 kcal/mol (experiment -11.54 and -12.07; the TIP3P run of
+  e77a6c5 -20.32 and -13.50), the box area 4 to 7 % larger than with TIP3P. `membrane.complex_leg`
+  of the closed PR #14 is merged into this branch, and `membrane.water` (cuFEP's own, default null:
+  `forcefield.water`) gives the system with the bilayer a water model of its own, accepted only
+  with `complex_leg: water`. 4k is prepared so: complex in water 18,989 OPC waters, bilayer 14,729
+  TIP3P waters. A short review: no P1. Unit tests 716 passed; GPU tests 35 passed before its fixes.
+- Why: the owner: OPC may not go with the bilayer. Lipid21 is validated with TIP3P.
+- Refs: the plan ("記録"), `docs/configuration.md` (`membrane.water`), `tests/unit/test_complex_leg_in_water.py`
+
+### 2026-11-24 — [progress] TYK2 with OPC: 16 ligands, one calculation each
+- What: image of 29fb9df, eight GPUs, one ligand at a time, the settings of the set with
+  `forcefield.water: amber14/opc.xml`. All 32 legs on the plugin, none NOT RELIABLE (lowest
+  overlap 0.099), a window below 50 independent samples in 15 of 16. Against experiment, OPC and
+  the run of e77a6c5 (TIP3P), 95 % bootstrap intervals: mean signed error +1.33 [0.67, 2.01] and
+  -1.20 [-1.83, -0.60]; RMSE 1.92 [1.27, 2.53] and 1.73 [1.10, 2.30]; after removing the mean
+  1.38 [0.85, 1.72] and 1.25 [0.75, 1.62]; Kendall tau 0.33 [-0.10, 0.69] and 0.47 [0.12, 0.75].
+  OPC binds 2.53 kcal/mol weaker on average: solvent leg +1.32 (all 16), complex leg -1.20.
+- Why: the plan. The owner decides about A2A and the default; nothing is changed.
+- Refs: the plan ("記録"), `runs/benchmark_tyk2_full_opc_29fb9df` (untracked)
+
+### 2026-11-24 — [design] A bilayer takes a 4-site water; the plugin's MD with virtual sites checked; ejm_31
+- What: `membrane.enabled` no longer refuses a 4-site water: the bilayer is built with 3-site waters
+  and every water gets its extra site afterwards (cuFEP's own way; A2A 4k prepared with OPC, no MD
+  of it yet). A review of 29fb9df asked what the plugin's own integrator and barostat do to a
+  virtual site: in 39 stored configurations of ejm_31 the sites are within 5e-10 nm of their place,
+  and the NPT volume is that of stock OpenMM (OPC -0.008 ± 0.053 of 25.8 nm3; test box +0.09 ± 0.08 %).
+  A GPU test holds sites and constraints after NPT MD; the four tests of the backends share one
+  function. ejm_31 with OPC: -9.30 ± 0.57 kcal/mol (TIP3P -10.08 ± 0.37; experiment -9.54).
+- Why: the plan (A2A needs the bilayer); the reviews before the push.
+- Refs: the plan ("記録"), `docs/configuration.md`, `docs/protocol.md` ("Systems"), `tests/unit/test_membrane.py`

@@ -87,6 +87,43 @@ leaflets that differ by more than 10 % and of such waters, and refused a prepare
 a water or an ion closer than 0.15 nm to another molecule, levels of cuFEP's own that are gone.
 `Modeller.addMembrane` relaxes the lipids with a short MD whose random seed OpenMM does not
 let the caller set, so two preparations of one membrane system are not identical.
+The bilayer is built with 3-site waters whatever its water model is: `Modeller.addMembrane`
+makes a System of its lipid patch, whose waters have 3 sites. Waters that came with the input
+lose their extra sites for the build in every case. With a water model of more sites (OPC,
+TIP4P-Ew) the build uses the force field with `amber14/tip3p.xml`, and at the end every water
+gets the extra site of the model, at the place its virtual site has; the pre-equilibration
+then runs with the model itself.
+
+With `membrane.complex_leg: water` (cuFEP's own, off by default: an option to see what the
+bilayer does to a result) the bilayer is built for the choice of the restraint alone. The
+preparation then writes two complexes of the pose that was given: the complex in the bilayer
+(`prep/complex_bilayer.*`) and the complex in water (`prep/complex.*`), built as a run without
+a bilayer builds it. The complex in the bilayer is pre-equilibrated as every bilayer system is
+(`restraint_equil.npz` in the directory of the leg), and the MD from which the restraint is
+chosen (`restraints.selection: interactions`, the only selection this can be used with) starts
+from there. The alchemical run of the complex leg is made on the complex in water, after the
+pre-equilibration of a complex in water (`equil.npz`): nothing stands in for the bilayer
+around the protein. The six anchors are the same atoms in both systems; the build of a
+bilayer can remove a crystal water or an ion that comes before the ligand, so the two number
+the ligand differently, and the anchors are named again as the complex in water numbers them.
+The preparation stops, before it writes anything, unless protein and ligand are the same
+atoms with the same bonds in both. Every candidate for the anchors is held to the rules of the
+anchors at the configuration the alchemical run starts from, as in every other calculation.
+With this setting the system with the bilayer can have a water model of its own
+(`membrane.water`, cuFEP's own; by default it is `forcefield.water`): no free energy is
+computed in the bilayer, so the complex of the alchemical run and the solvent leg stay in one
+water model, `forcefield.water`, and the bilayer can stay in the one Lipid21 was validated with
+(TIP3P). The restraint, its six atoms and its reference values, then comes from an MD in
+another water than the alchemical run (with `restraints.force_constants: auto` its force
+constants too). With the alchemical run in the bilayer another water
+model than `forcefield.water` is refused when the configuration is read.
+The result of the complex leg says in which system the MD of its restraint was made
+(`restraint_choice`). Its `bilayer` numbers are those of the pre-equilibration in the bilayer,
+and `ligand_rmsd_from_input_A` is measured over the MD in the bilayer, as it is measured over
+the MD of the restraint in every other calculation. The solvent leg is prepared and run as
+without the setting; on stock OpenMM `solvation.box_shape: auto` gives its box the shape of
+the complex in water (a dodecahedron) where a bilayer in the alchemical run gives a cube, and
+with the cuPotential plugin it is a cube in both cases.
 
 ## Thermodynamic cycle
 
@@ -619,6 +656,129 @@ dispersion correction when an epsilon offset changes, the cuPotential plugin doe
 therefore differ by a constant per window in the scaled windows; the end states and the
 free energy are not affected, and a leg is sampled by one backend.
 
+## Water relocation moves
+
+Water exchanges slowly between a buried binding site and the bulk. At the decoupled end of the
+A2A complex leg of 4k the number of water molecules in the place of the ligand kept rising for 20
+to 30 ns of plain MD, far longer than a lambda window is sampled (plan
+`docs/plans/2026-11-22-accuracy-causes-and-fixes.md`). With `sampling.relocation_mc.enabled: true`
+the complex leg makes water relocation moves: RelocationMC of Ding et al. (arXiv:2603.22274 v3,
+"RelocationMC water-sampling protocol" and its appendix), a Monte Carlo move that takes a whole
+water molecule from the rest of the cell into a sphere around the ligand, or out of it. The number
+of particles and the cell do not change, so no chemical potential is needed, and the replicas,
+their exchange and MBAR are what they are without the moves. The default is off.
+
+The sphere is centred on the geometric centre of the heavy atoms of the ligand and has the radius
+of the paper: half the largest distance between two heavy atoms of the ligand in the prepared
+pose, plus 0.3 nm (`radius_margin_nm`). One move, with x the configuration and beta = 1 / kT:
+
+1. A direction is chosen: out of the sphere or into it. The source region S is where the water
+   is taken, the target region T the other one.
+2. Every water M of S has a score s_M, its interaction with everything else. The water D that is
+   moved is chosen with probability exp(beta s_D) / Z_S(x), Z_S(x) the sum of exp(beta s_M) over
+   the waters of S: a water that is held weakly is preferred.
+3. K anchors are drawn (`trial_poses`), each with an independent uniform orientation of the
+   conformation of D, and sorted into the two regions afterwards. A trial pose i has the weight
+   w_i = exp(-beta u_i) / h(i): u_i is its interaction with everything but D, h the density its
+   anchor was drawn with. Among the poses of T one, C, is chosen with probability w_C / W_f, W_f
+   the sum of the weights of the poses of T.
+4. The reverse pool is the same K poses with the chosen one replaced by the pose D has; W_r is
+   the sum of the weights of its poses of S. Z_T(y) is the sum of exp(beta s_M) over the waters
+   of T in the proposed configuration y, the moved water among them.
+5. The move is accepted with probability min(1, r),
+   ln r = ln(g_r / g_f) + ln Z_S(x) - ln Z_T(y) + beta (s_C - s_D) + ln W_f - ln W_r
+   - beta [dU - (u_C - u_D)], with dU = U(y) - U(x) the change of the potential energy of the
+   simulation and g_f, g_r the probabilities of the two directions.
+6. An accepted water keeps the velocity of its centre of mass, and its velocities relative to it
+   are turned with the molecule. A move that is not accepted changes nothing.
+
+Where cuFEP follows the paper and where it differs:
+
+| point | the paper | cuFEP |
+|---|---|---|
+| the energies u of the trial poses and the scores s | computed by a CUDA kernel: the direct-space and reciprocal-space PME interaction of every pose, so that dU - (u_C - u_D) is a correction of the finite mesh only | OpenMM gives no energy per molecule. u is a stand-in: Lennard-Jones and reaction-field Coulomb (dielectric 78.5) within the cutoff of the run, the ligand with its charges times `lambda_electrostatics` and its soft-core at `lambda_sterics`, without REST2; s is the same within 0.5 nm. Both are computed by kernels on the CUDA device of the Context (CuPy, double precision, the atoms found through a grid of cells); on a platform without CUDA the same function is computed by NumPy on the processor, which is the reference of the tests and much slower. What the stand-in misses is in dU - (u_C - u_D), which uses the potential energy of the Context in the state the replica is simulated in (its lambda values and its REST2 scale). The ratio above is a Metropolis-Hastings ratio for any u and s, so the moves keep the distribution of that state exactly; a poor stand-in costs acceptance, not correctness |
+| the anchors | uniform in the whole cell ("draws K independent candidate anchors uniformly from the complete periodic box"), so that h is constant, cancels, and no volume appears; K = 16384 | the same by default. With `inner_fraction` that share of the anchors is drawn uniformly in the sphere and the rest uniformly outside it; h then differs between the two regions and stays in the weights (the paper's w_i = exp(-beta u_i) / h_0(i) before h_0 is cancelled). In a cell much larger than the sphere few uniform anchors fall into it (0.3 % for 4k) |
+| the point of a water that is put on an anchor, and that decides its region | not said | the oxygen, for both |
+| the probabilities of the two directions | g_f and g_r, not given | 1/2 each |
+| the cell | orthorhombic (a limit of the kernel) | any cell |
+| when a move is attempted | every 1000 MD steps (4 ps), in the protein-ligand leg | in the complex leg, one for every `interval_ps` (4 ps) of the MD of a replica: after the MD of the iteration in which a multiple of the interval was passed (an iteration is 2.5 ps), in the equilibration and the production of the replica exchange, and in the windows of the precalculation of adaptive lambda scheduling |
+| which waters | all relocatable waters have "identical, lambda-invariant nonbonded parameters" and no interaction within themselves; for a charged ligand the alchemical waters are left out | every water (residue HOH); the same two conditions are checked, and a system that does not meet them is refused. cuFEP has no charged ligands |
+| a water with a virtual site (a 4-site model such as OPC) | the protocol of the paper uses TIP3P, three sites | all sites of the water are turned and shifted as one body, so the virtual site is where the System puts it for the new places of the three atoms; it has no mass, so it does not count in the centre of mass and gets no velocity |
+
+What is recorded: the samples of the leg hold, per iteration and lambda window, the moves
+attempted and accepted in each direction (`relocations`), and the result of the leg gives their
+sums over the production by window (`relocation_mc`), as numbers without a verdict. The settings
+of the moves are among the conditions of the samples of the complex leg: a leg sampled with them
+is not continued without them or with other ones.
+
+## Grand canonical moves of water
+
+The water relocation moves keep the number of waters of the system: a water that enters the place
+of the ligand is taken from the rest of the cell. With `sampling.gcmc.enabled: true` the complex
+leg instead makes grand canonical Monte Carlo moves of water in a sphere around the ligand: water
+molecules are inserted into the sphere and deleted from it, in equilibrium with a reservoir of
+bulk water. The default is off. The method is that of grand (Samways, Bruce Macdonald and Essex,
+J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Theory Comput. 2017,
+13, 6373); the sentences it rests on are quoted in `docs/configuration.md` (`sampling.gcmc`).
+
+- **Ghost waters.** The System keeps its particles. A water that is deleted stays in it as a
+  ghost, a molecule without nonbonded interactions, and an insertion puts a ghost at a place in
+  the sphere and gives it its interactions. The ghosts of the start are waters of the prepared
+  system, those whose oxygen is farthest from the ligand (`ghost_waters`); they are switched off
+  from the pre-equilibration on. Switching is done in the Context while it runs (charge and
+  epsilon of every site of the water in the nonbonded force and in the soft-core force of the
+  ligand); a Context switched so gives the energies and forces of a System built so, on both
+  backends (`spikes/m33_ghost_waters_on_the_backends.py`, the tests). With no ghost left an
+  insertion cannot be tried, and the leg stops with that reason (as grand does); it is not taken
+  for a failure of a worker or of the backend. A ghost is still a molecule for the Monte Carlo
+  barostat of the pre-equilibration, which counts it in the ideal-gas term of a volume move: 72
+  ghosts in 810 nm3 are 3.7 bar, by which the pressure of the waters that interact is lower than
+  the one recorded.
+- **The move.** With probability 1/2 an insertion, else a deletion. An insertion puts the oxygen
+  of a ghost at a point drawn uniformly in the sphere, the molecule turned at random; a deletion
+  takes one of the N waters that interact and have their oxygen in the sphere. The acceptance is
+
+      P(insert) = min[1, exp(B) exp(-beta dE) / (N + 1)]
+      P(delete) = min[1, N exp(-B) exp(-beta dE)]
+      B = beta mu'_sol + ln(V_sphere / V°)
+
+  with mu'_sol the excess chemical potential of water in bulk water and V° its standard volume.
+  The sphere is centred on the geometric centre of the heavy atoms of the ligand and follows it.
+- **Batches and two tests.** A single insertion into liquid water is accepted about once in ten
+  thousand trials. One move is therefore `attempts` trials, evaluated in batches of `batch_size`
+  from one configuration with an approximate potential (the stand-in energy of the water
+  relocation moves, on the GPU of the Context): the first trial of a batch that is accepted is
+  tested again with the potential energy of the simulation, min(1, exp(-beta [(U(j) - U(i)) -
+  (U'(j) - U'(i))])), and applied if it passes; the rest of the batch is thrown away and the count
+  of trials goes on from that trial. Each trial is so one Metropolis step with the full potential,
+  and the approximate potential decides only how many trials pass.
+- **Constant volume.** The grand canonical ensemble has a fixed volume, so the alchemical run of
+  the leg (the precalculation of the lambda windows and the replica exchange) has no barostat.
+  The pre-equilibration and the MD for the restraint keep theirs; the cell is then fixed at the
+  mean cell of the second half of the pre-equilibration, every molecule shifted whole into it.
+  The solvent leg is as without the moves, at constant pressure. The free energy of the complex
+  leg is then one at constant volume and constant chemical potential of the water in the sphere,
+  that of the solvent leg one at constant pressure; the result records the pressure at which the
+  cell of the complex leg was equilibrated as the pressure of that leg.
+- **Replica exchange and MBAR.** Every replica carries the list of its waters that interact
+  through the exchange, and its worker gives that list to the Context before the MD. The
+  energies of a configuration in all windows are taken in one Context with its own waters, so
+  the term of the chemical potential, -mu N, is the same in every window: it cancels in the
+  exchange between windows and in MBAR, whose formulas are those of a leg without the moves.
+  REST2, adaptive lambda scheduling (whose windows make the moves too) and the checks of the
+  analysis are unchanged. The tail correction of the ligand leaves out the waters that are
+  switched off in each configuration.
+
+What is recorded: the samples of the leg hold, per iteration and lambda window, the trials of an
+insertion and of a deletion, how many were made, and the number of waters in the sphere after the
+move (`gcmc`); the checkpoint holds the waters of every replica; the result of the leg gives the
+sums over the production by window and the mean, lowest and highest number of waters in the
+sphere (`gcmc`), as numbers without a verdict. The settings of the moves, with the two numbers of
+the water as they were used, are among the conditions of the samples of the complex leg.
+
+Not in this version: nonequilibrium insertions (GCNCMC), moves in the whole cell, moves in the
+solvent leg, the moves together with the water relocation moves.
+
 ## Checks of the analysis
 
 ### Free energy and uncertainty of a leg
@@ -1057,7 +1217,12 @@ belong together:
   chosen and the restraint are used again only if the
   input files and the settings that went into them are the same (a trajectory also only if the
   pre-equilibration it started from is the one that is there). Only the lambda windows of a
-  leg can be determined again in place, with `--reschedule`.
+  leg can be determined again in place, with `--reschedule`. With `membrane.complex_leg: water`
+  the trajectories start from the pre-equilibration of the complex in the bilayer
+  (`restraint_equil.npz`), and the restraint is held to two files: to that one, and to the
+  pre-equilibration of the complex in water from which the alchemical run starts
+  (`equil.npz`), at which its anchors were held to the rules. A directory prepared with one
+  value of the setting is refused by a run with the other before anything is written.
 - A lambda schedule from a file (`lambda_schedule.file`) must be one of the same leg and of the
   REST2 scale of the run: its stages, its two end states and its scale are checked before the
   leg takes it over, and before the run writes anything. Give a directory as written by `cufep
@@ -1203,9 +1368,9 @@ The absolute binding protocol of OpenFE, from its documentation and source code 
 | replica exchange | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
 | MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns; a complex leg with the default `restraints.selection: interactions`: 0.25 + 0.5 ns with the heavy atoms of protein and ligand held and no free MD (a bilayer: 0.25 + 1.0 + 10 ns, held), from the end of which the alchemical run and the four trajectories of 3 ns for the restraint start |
 | restraint | Boresch, atoms chosen automatically, fixed force constants | from the interactions of unrestrained MD of the complex by default (`restraints.selection: interactions`); as OpenFE with `auto` |
-| water sampling | none | none |
+| water sampling | none | none by default; in the complex leg, grand canonical Monte Carlo of water in a sphere around the ligand with `sampling.gcmc` ("Grand canonical moves of water"), or water relocation moves between that sphere and the bulk with `sampling.relocation_mc` (RelocationMC of Ding et al.; "Water relocation moves") |
 | GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
-| membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP |
+| membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP. `membrane.complex_leg: water` (cuFEP's own, off by default) keeps the bilayer for the MD of the restraint and makes the alchemical run of the complex leg in water |
 
 Further differences:
 
@@ -1219,7 +1384,7 @@ Further differences:
 | soft-core | alpha 0.5, powers a 1, b 1, c 6 | the same by default; `alchemy.softcore_b: 2` for the squared (1 - lambda) |
 | decorrelation of the samples | one statistical inefficiency for all windows, from the reduced potential summed over the replicas (openmmtools) | one per lambda window, the larger of those of its energy differences to the two neighbouring windows (alchemlyb's default takes the next window only) |
 
-Sources: Midgley et al. 2025;
+Sources: Midgley et al. 2025; Ding et al., arXiv:2603.22274 v3 (the water relocation moves);
 OpenFE 1.13 source and documentation (the plots are those of `multistate_analysis.py`); SOMD2 documentation (oversubscription factor); Mey et
 al., "Best Practices for Alchemical Free Energy Calculations", LiveCoMS 2020; Grossfield et
 al., "Best Practices for Quantification of Uncertainty and Sampling Quality in Molecular
@@ -1233,7 +1398,8 @@ reliability and efficiency of binding free energy calculations", J. Comput. Aide
 Neutral ligands only. No cofactors yet. No symmetry correction (the ligand's graph
 symmetry number is reported); a small symmetric ligand that turns over in its pocket leaves
 the unrestrained window without overlap, which the result line reports. Symmetric POPC-type
-bilayers only. No grand canonical water sampling. REST2 covers the ligand and the residues
+bilayers only. Grand canonical water sampling only as an option of the complex leg, in a sphere
+around the ligand (`sampling.gcmc`, off by default). REST2 covers the ligand and the residues
 within 0.4 nm of it by default; a slow rearrangement further away, such as a side chain
 behind the first shell, is sampled faster only if its residues are named
 (`sampling.rest2.residues`).

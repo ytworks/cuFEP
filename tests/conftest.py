@@ -139,7 +139,11 @@ def water_ligand_system():
     # relax a little so that energies are ordinary numbers
     integ = mm.LangevinMiddleIntegrator(300 * u.kelvin, 1 / u.picosecond, 0.002 * u.picoseconds)
     integ.setRandomNumberSeed(1)
-    ctx = mm.Context(system, integ, mm.Platform.getPlatformByName("CPU"))
+    # one thread and deterministic forces: the same configuration in every run. With the threads of the
+    # machine it was another one each time, and a test of the water relocation moves whose proposal makes
+    # discrete choices from it (which water, which pose) failed once in many runs (2026-11-25)
+    ctx = mm.Context(system, integ, mm.Platform.getPlatformByName("CPU"),
+                     {"Threads": "1", "DeterministicForces": "true"})
     ctx.setPositions(mod.positions)
     mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 200)
     ctx.setVelocitiesToTemperature(300 * u.kelvin, 1)
@@ -166,8 +170,10 @@ def dipeptides_in_water():
     return build_dipeptides_in_water()
 
 
-def build_dipeptides_in_water(box_nm: float = 2.4, dispersion_correction: bool = False):
-    """Two alanine dipeptides in a small TIP3P box: molecules with torsions and 1-4 pairs.
+def build_dipeptides_in_water(box_nm: float = 2.4, dispersion_correction: bool = False,
+                              water: str = "amber14/tip3p.xml"):
+    """Two alanine dipeptides in a small box of water (TIP3P unless ``water`` names another file
+    of ``cufep.prep.water``): molecules with torsions and 1-4 pairs.
 
     Returns (system, topology, positions_nm, box_nm, atoms of the second peptide, atoms of the
     first). The second peptide plays the ligand, the first one the environment that can be hot.
@@ -176,6 +182,8 @@ def build_dipeptides_in_water(box_nm: float = 2.4, dispersion_correction: bool =
     import openmm as mm
     import openmm.app as app
     import openmm.unit as u
+
+    from cufep.prep.water import water_model_of
 
     top, pos = app.Topology(), []
     for shift in ((0.4, 0.6, 0.6), (0.4, 1.5, 1.4)):
@@ -191,7 +199,7 @@ def build_dipeptides_in_water(box_nm: float = 2.4, dispersion_correction: bool =
             if previous_c is not None:
                 top.addBond(previous_c, local["N"])
             previous_c = local["C"] if res_name != "NME" else None
-    ff = app.ForceField("amber14/protein.ff14SB.xml", "amber14/tip3p.xml")
+    ff = app.ForceField("amber14/protein.ff14SB.xml", water)
     mod = app.Modeller(top, pos * u.nanometer)
     # the same configuration in every run and on every machine. OpenMM puts a new hydrogen at a random place
     # next to its atom (Python's random) and minimises: with a fixed seed and the Reference platform that is
@@ -204,7 +212,7 @@ def build_dipeptides_in_water(box_nm: float = 2.4, dispersion_correction: bool =
     random.seed(20261121)
     try:
         mod.addHydrogens(ff, platform=mm.Platform.getPlatformByName("Reference"))
-        mod.addSolvent(ff, boxSize=mm.Vec3(box_nm, box_nm, box_nm) * u.nanometer)
+        mod.addSolvent(ff, model=water_model_of(water).box, boxSize=mm.Vec3(box_nm, box_nm, box_nm) * u.nanometer)
     finally:
         random.setstate(state)
     system = ff.createSystem(mod.topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,

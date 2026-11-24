@@ -148,11 +148,14 @@ def _is_of_the_restraint(report_file: Path, restraint_file: Path) -> bool:
         reference = [report["reference_values"][name] for name in ("r", "theta_A", "theta_B")]
         of_restraint = [stored["restraint"]["r0"], *np.degrees([stored["restraint"]["theta_a0"],
                                                                 stored["restraint"]["theta_b0"]])]
+        # the anchors as the analysis numbered them: those of the restraint, or, where the MD was made on another
+        # prepared system than the alchemical run (membrane.complex_leg: water), those the record keeps of it
+        anchors = stored["info"].get("md_system") or stored["restraint"]
         return (stored["info"].get("selection") == "interactions"
                 and (report.get("start") is None or stored["info"].get("start") == report.get("start"))
                 and bool(np.allclose(reference, of_restraint, atol=1e-6))
-                and [int(i) for i in stored["restraint"]["host_atoms"]] == [int(i) for i in chosen["host_atoms"]]
-                and [int(i) for i in stored["restraint"]["guest_atoms"]] == [int(i) for i in chosen["guest_atoms"]])
+                and [int(i) for i in anchors["host_atoms"]] == [int(i) for i in chosen["host_atoms"]]
+                and [int(i) for i in anchors["guest_atoms"]] == [int(i) for i in chosen["guest_atoms"]])
     except (OSError, ValueError, KeyError, TypeError):
         return False
 

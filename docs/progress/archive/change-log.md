@@ -5,6 +5,205 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-24 — [design] Plan: the water model OPC against TIP3P on the benchmark sets
+- What: the owner's order. Only the water changes (`forcefield.water: amber14/opc.xml`, ff14SB
+  kept); TYK2, then A2A, one ligand at a time against the run of e77a6c5; the default stays TIP3P
+  until the owner decides. The GPU fixture `rest2_leg` is built with TIP3P and OPC, and
+  `test_rest2_backends_agree` holds each backend to stock OpenMM with an Ewald tolerance of 1e-6
+  (the plugin to 0.1 kT, stock at 5e-4 to 0.3 kT; the owner's decision): on 31 configurations the
+  plugin is within 0.022 (TIP3P) and 0.044 kT (OPC) of it, stock within 0.118 and 0.156.
+- Why: Li & Minkara 2024 (protein-glycan ABFE: RMSE 4.17 with TIP3P, 1.85 with OPC). The plugin
+  against stock was 0.114 kT with OPC on the one configuration of the test: stock PME's error.
+- Refs: `docs/plans/2026-11-24-opc-water-model.md`, `spikes/m31_water_models_on_the_backends.py`
+### 2026-11-24 — [design] The plan of `membrane.complex_leg` is dropped: PR #14 closed without a merge
+- What: the owner's decision after the two ligands of the entry below. The setting, its tests and
+  its documents stay on the branch `feat/complex-leg-in-water` and are not in `main`.
+- Why: the owner's decision.
+- Refs: the plan (`Status:`), PR #14
+
+### 2026-11-24 — [progress] The A2A runs with `membrane.complex_leg: water` were stopped after two ligands
+- What: the owner's order, during the third ligand (4g, no result). In water against the bilayer
+  run of e77a6c5, kcal/mol: 4k -12.11 ± 0.53 against -20.32 ± 0.52 (its windows there were started
+  one from another; with the walk -14.49, -13.07, -16.50), 4e -16.17 ± 0.47 against -13.50 ± 0.34
+  (experiment -11.54 and -12.07). No statistics of the set. The setting is in PR #14, off by
+  default; nothing is merged, and what becomes of it waits for the owner's decision.
+- Why: the owner's order.
+- Refs: the plan ("記録"), `runs/benchmark_a2a_full_water_a34bbe2`, `runs/a2a_water_a34bbe2.log` (untracked)
+
+### 2026-11-24 — [progress] `membrane.complex_leg: water` on A2A: the short run, and 4k
+- What: image of a34bbe2, eight GPUs, the settings of the set (5 ns per window, one calculation).
+  A short run of 4k passed the checks of the plan from its files (systems of 61,452 and 73,275
+  atoms, the restraint from the bilayer, the same command again computes nothing). 4k (experiment
+  -11.54): -12.11 ± 0.53 kcal/mol; complex leg 36.60 ± 0.50, solvent leg 14.90 ± 0.18; restraint
+  ASN 253 (784 of 800 frames); lowest overlap 0.154 and 0.171; fewest independent samples 12
+  (complex leg) and 193. In the bilayer: -20.32 ± 0.52 (e77a6c5, windows started one from another)
+  and -14.49, -13.07, -16.50 (the walk; complex leg 38.78, 37.36, 40.90). The other 16 follow.
+- Why: the plan (one ligand at a time, each reported).
+- Refs: the plan ("記録"), `runs/benchmark_a2a_full_water_a34bbe2` (untracked), PR #14
+
+### 2026-11-23 — [design] `membrane.complex_leg`: the restraint from the bilayer, the alchemical run in water
+- What: a setting, default `bilayer` (no default, number of the analysis or stored result changes).
+  With `water` the preparation writes two complexes of one pose (`prep/complex.*` in water,
+  `prep/complex_bilayer.*`); the pre-equilibration of the bilayer (`restraint_equil.npz`) and the
+  MD of the restraint run in the bilayer, the alchemical run on the complex in water; the anchors
+  are the same atoms, held to the rules at the start of the alchemical run; only with
+  `restraints.selection: interactions`. cuFEP's own, off by default. A review by a reader who
+  did not write it: no wrong number found, five points, four fixed. Unit tests 714 passed, GPU
+  tests 26 passed (the image `cufep:dev`). No run with the setting yet.
+- Why: the plan of this day (the owner's order).
+- Refs: PR #14, `docs/configuration.md`, `docs/protocol.md` ("Systems"), `tests/unit/test_complex_leg_in_water.py`
+
+### 2026-11-23 — [design] Plan: the bilayer for the MD of the restraint only, the complex leg in water
+- What: the owner's order. A setting `membrane.complex_leg: bilayer | water` (default `bilayer`,
+  the behaviour of today): with `water` the MD from which the restraint is chosen runs in the
+  bilayer and the alchemical run of the complex leg in water. To be run on the A2A set one ligand
+  at a time and compared with the run of e77a6c5 (the owner's decision). Not implemented yet.
+- Why: to see whether the bilayer in the alchemical run is behind the larger errors of A2A.
+- Refs: `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md`
+
+### 2026-11-23 — [design] The accuracy plan is closed: the walk is the one way of starting the windows
+- What: the owner's decision. Adopted: `lambda_schedule.adaptive.start_configurations`, default
+  the walk (E1). The A2A ligands whose complex leg the run of e77a6c5 had started one window
+  from another, with the walk, kcal/mol: 4k -20.32 to -14.69 (mean of three), 4n -19.17 to
+  -17.38, 4c -18.75 to -15.19, 4q -14.11 to -12.52, 4r -16.17 to -15.95. Not adopted (off by
+  default): annihilated electrostatics (16 TYK2 ligands: mean signed error -0.43, RMSE after
+  removing it 1.77, tau 0.20), the squared soft-core, equilibration detection; water relocation
+  moves stay in PR #10 (4k -16.61, ejm_49 -11.42 with them). No remedy for the relaxation of the
+  pocket at the decoupled end. The full sets were not run again (stopped after one ligand).
+- Why: only E1 changed results beyond the scatter of one calculation (1.57 and 1.72).
+- Refs: the plan (steps 5 and 6, "結論"), PR #9, PR #10, `spikes/m27_paired_runs.py`, `spikes/m30_ligands_against_a_run.py`
+
+### 2026-11-23 — [progress] E1 and E3 verified ligand by ligand; the full benchmarks run again with E1 alone
+- What: E1 (the windows of a leg start from the walk): the complex legs of four A2A ligands
+  that the run of e77a6c5 had started one window from another, made again, kcal/mol: 4k -20.32
+  to -14.69 (mean of three), 4n -19.17 to -17.38, 4c -18.75 to -15.19, 4q -14.11 to -12.52; all
+  towards experiment, by 3.1 on average. E3 (the decoupled-side windows from the relaxed
+  decoupled end): the complex leg of ejm_49 changed by -5.65, that of 4k by +0.47 ± 0.63 (its
+  pocket does not close). The owner stopped both verifications there and decided: no remedy for
+  E3 in this plan; both full sets run again with E1 alone (image of 41760a1, the head of PR #9,
+  A2A first), to be compared with the run of e77a6c5. No result yet.
+- Why: the owner's order of 2026-11-23 (verify what had an effect, then end the session).
+- Refs: the plan ("E1 の検証", "E3 の検証"), `runs/acc_e1_a2a`, `runs/acc_e3_a2a_4k`, `runs/configs/chain_full_benchmarks_e1.sh` (untracked)
+
+### 2026-11-23 — [progress] Water relocation moves, one whole calculation per ligand; what is verified next
+- What: with the moves (4096 trial poses, half of the anchors in the sphere), all eight GPUs,
+  kcal/mol: 4k -16.61 ± 0.37 (without them -14.49, -13.07, -16.50; experiment -11.54), ejm_49
+  -11.42 ± 0.52 (-11.84, -8.92, -9.40; -7.75). On ejm_49 the sections of the coupled side rise
+  as moves are accepted, more into the sphere than out of it (the entry below said the reason
+  was not established); checks on that leg found no bias (`spikes/m29_*`). A third ligand was
+  stopped by the owner; the default stays off. The owner's order for the rest of the session:
+  verify E1 (the walk for the legs the benchmark started one window from another) and E3 (the
+  decoupled-side windows from the relaxed decoupled end), one ligand at a time on eight GPUs.
+- Why: step 6 of the plan; the owner judges after every ligand.
+- Refs: the plan ("評価 2"), PR #10, `runs/acc_reloc2_a2a_4k`, `runs/acc_moves_tyk2` (untracked)
+
+### 2026-11-23 — [progress] Water relocation moves on ejm_49: the complex leg from two start constructions
+- What: one run each, image of ecf0e0e, 4096 trial poses, half of the anchors in the sphere, the
+  windows and start configurations of the runs they are compared with, kcal/mol. Started by the
+  walk: 43.09 ± 0.75 (without the moves 40.91 ± 0.36); its 7 decoupled-side windows started from
+  the relaxed decoupled end: 39.29 ± 0.35 (35.26 ± 0.48). The two differ by 3.80 (5.65), of which
+  3.22 (4.55) between sterics 0.25 and 0, where at the end of the run the place of the ligand
+  holds about 20 waters in the one and 8 to 10 protein atoms in the other. About 2 % of the
+  moves were accepted (394 to 472 of 22 thousand each way). The sections up to the charges off
+  are 2.1 to 2.8 larger with the moves in both; why is not established.
+- Why: step 6 of the plan (the control of E3 again with the moves, the owner's order).
+- Refs: the plan ("評価 1"), `spikes/m28_complex_leg_sections.py`, `runs/acc_reloc2_*` (untracked)
+
+### 2026-11-23 — [amendment] Water relocation moves: the trial energies on the GPU; three corrections
+- What: the stand-in energies of a proposal were computed by NumPy on a processor core, which
+  made a leg with the moves several times slower; the three runs started with it were stopped
+  (no result). They are now computed by kernels on the CUDA device of the Context (CuPy, added to
+  the image; the same numbers to rounding; the NumPy function is the reference of the tests).
+  Corrected, each with a test that fails before: with a pool, windows started one from another
+  ran without moves; an interval shorter than an iteration gave one attempt per iteration; the
+  cell was compared with the sphere only when the leg was built.
+- Why: the owner's order of 2026-11-23 (an implementation that slows a leg is not usable).
+- Refs: `docs/configuration.md`, `docs/protocol.md`, `tests/gpu/test_gpu.py`, the plan ("手順 6")
+
+### 2026-11-23 — [progress] The TYK2 set with annihilated electrostatics: one calculation per ligand
+- What: `alchemy.annihilate_electrostatics: true`, the rest as the full run of e77a6c5 (image of
+  41760a1, eight GPUs, exit 0, 16 of 16 with a result, none NOT RELIABLE), kcal/mol, 95 %
+  bootstrap intervals over ligands: mean signed error -0.43 [-1.31, 0.41] (e77a6c5: -1.20), RMSE
+  after removing it 1.77 [1.16, 2.17] (1.25), Kendall tau 0.20 [-0.12, 0.48] (0.47). Ligand by
+  ligand the two runs differ by +0.76 on average (standard deviation 2.03, standard error 0.51;
+  -2.67 to +4.72). ejm_49: -9.33 ± 0.42 (the first run with this setting: -7.71). Both legs are
+  about 197 larger. No default is changed. The runs with relocation moves have started.
+- Why: the owner's order of 2026-11-23 (step 6 of the plan).
+- Refs: the plan ("手順 6"), `spikes/m27_paired_runs.py`, `runs/acc_annihilate_tyk2_full` (untracked)
+
+### 2026-11-23 — [design] Water relocation moves in the complex leg (`sampling.relocation_mc`), default off
+- What: RelocationMC of Ding et al. (arXiv:2603.22274 v3), written from the paper: a whole water
+  is moved between a sphere around the ligand and the rest of the cell; the move, its acceptance
+  ratio and the velocities are the paper's. cuFEP's own: the energies of the trial poses and the
+  scores are a stand-in (Lennard-Jones and reaction-field Coulomb on the processor) and the
+  acceptance uses the potential energy of the Context in the state of the replica; the anchors
+  can be drawn with a share in the sphere (`inner_fraction`; default the paper's uniform draw);
+  any cell. Attempted in the replica exchange and in the precalculation; counted by window in the
+  result. Unit tests 725 passed, the three GPU tests of the moves passed. No calculation yet.
+- Why: step 4d of the plan; the owner's order of 2026-11-23 (implement it, then decide the rest).
+- Refs: `docs/protocol.md` ("Water relocation moves"), `docs/configuration.md`, branch `feat/relocation-mc`
+
+### 2026-11-23 — [progress] The owner's decisions after step 5; the TYK2 set with annihilated electrostatics started
+- What: the owner (2026-11-23): implement RelocationMC first and decide the rest by its result;
+  `membrane.equilibration_ns` stays 10 ns (100 ns is too long); no run with a softer distance
+  restraint and none with crystal waters; run the 16 TYK2 ligands once with
+  `alchemy.annihilate_electrostatics: true`; after RelocationMC, the control of E3 again with it.
+  Started: that TYK2 set, image of 41760a1, eight GPUs (`runs/acc_annihilate_tyk2_full`). No
+  result yet.
+- Why: step 6 of the plan (the owner decides the defaults and what is implemented next).
+- Refs: the plan, PR #9, `runs/configs/chain_acc_annihilate_tyk2_full.sh` (untracked)
+
+### 2026-11-23 — [amendment] Fourth review by Codex (93d42ee): two more paths of a given schedule
+- What: review 6016033556 (two P2), both fixed. With `--reschedule` a given file inside an
+  archive of the leg that was begun and not completed is refused too. A schedule a leg has
+  without start configurations gets the record of this leg before the walk through its windows.
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [amendment] Third review by Codex (6b1a609): a given schedule is read, not copied first
+- What: review 6015941311 (two P2), both fixed. A leg that is given its windows
+  (`lambda_schedule.file`) reads the schedule and writes its `schedule.yaml` with the start
+  configurations of the walk, not before it: a run stopped during the walk leaves no windows
+  that look like those of an earlier version, and the schedule names this leg. With
+  `--reschedule` only a file that is set aside is refused, not the one in `previous_<n>/`.
+  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [amendment] Second review by Codex (8dc042e): the origin of windows, a given schedule of the leg itself
+- What: review 6015842320 (four P2); three fixed, one answered. `--reschedule` with
+  `lambda_schedule.file` naming a file of the leg that is set aside is refused before anything is
+  moved. Windows of adaptive lambda scheduling that a leg had without start configurations get
+  the note that their origin is not recorded also when a file is named. That note is read from
+  the files of the leg whenever its result is made (`cufep analyze` too). Not changed: a leg whose
+  windows 2861b93, a commit inside this pull request, sampled first (no such directory exists).
+  Unit tests 707 passed, GPU tests 26 passed (the image `cufep:dev`).
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [amendment] Review by Codex of 2861b93: records that hold through other versions and interruptions
+- What: review 6015499088 (one P1, seven P2), each fixed. A result that lacks
+  `annihilate_electrostatics` takes it from its samples, before a run and in the combination; a
+  stored ligand result is shown again only if it compared the conditions of the cycle this
+  version compares. Samples without recorded conditions refuse a treatment their version did not
+  have. A given schedule of another REST2 scale is refused before the leg takes it. A leg whose
+  archive was not completed is refused until `--reschedule` completes it. Windows of an earlier
+  version that a run samples first get its record, and the result keeps saying that their origin
+  is not recorded. `windows_run_concurrently` is true only if windows ran at the same time.
+- Why: the review after the push (the working agreement of PR #9).
+- Refs: PR #9 (the review and its answer), `docs/protocol.md`, `tests/unit/test_workflow.py`
+
+### 2026-11-23 — [progress] Accuracy plan, step 5: the bilayer equilibrated 100 ns; the control of E3 to 10 ns
+- What: one run each, image of e77a6c5, kcal/mol. 4k (experiment -11.54) with
+  `membrane.equilibration_ns: 100`: -19.84 ± 0.41, complex leg 44.32 ± 0.40 against 38.78, 37.36,
+  40.90 of the three runs with 10 ns (the walk) and 44.87 of the benchmark run (windows started
+  one from another); the area of the bilayer no longer changes at the end of the 100 ns (-0.008 %
+  between its last two quarters; -0.9 to -2.5 % after 10 ns). The control of E3 continued to
+  10 ns: complex leg 35.39 ± 0.66 against 40.74 of the first repeat continued to 10 ns; the two
+  ways of starting the windows do not come closer. No cause is established by one run each.
+- Why: step 5 of the plan (controls whose condition was met).
+- Refs: the plan ("手順 5 の結果", "手順 5 までのまとめ"), `runs/acc_*` (untracked)
+
 ### 2026-11-23 — [progress] Accuracy plan, step 5: annihilated electrostatics, the squared soft-core, the control of E3
 - What: one run each on ejm_49 (experiment -7.75; the defaults three times: -11.84, -8.92, -9.40;
   kcal/mol; everything else as the full run). `alchemy.annihilate_electrostatics`: -7.71 ± 0.41;

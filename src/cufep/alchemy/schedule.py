@@ -359,29 +359,39 @@ def pair_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
     return np.array([stage_overlap(energies[i:i + 2], windows[i:i + 2])[0] for i in range(len(windows) - 1)])
 
 
-def _snapshot(context):
+def _snapshot(context, mover=None):
+    """(positions, box, velocities) of the Context; with a mover of grand canonical moves of water
+    (:class:`cufep.sampling.gcmc.GcmcMover`) also which waters interact in it."""
     import openmm.unit as unit
     st = context.getState(getPositions=True, getVelocities=True)
     return (st.getPositions(asNumpy=True).value_in_unit(unit.nanometer),
             st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer),
-            st.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond))
+            st.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond),
+            *(() if not hasattr(mover, "set_on") else (mover.on,)))
 
 
-def _load(context, config) -> None:
+def _load(context, config, mover=None) -> None:
     import openmm as mm
-    pos, box, vel = config
+    pos, box, vel, *water_on = config
     context.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(box)])
     context.setPositions(pos)
     context.setVelocities(vel)
+    if hasattr(mover, "set_on"):
+        # the waters that interact in this configuration; one that does not say has the ghosts of the start
+        mover.set_on(water_on[0] if water_on else mover.spec.initial_on())
 
 
-def run_window(context, integrator, task: dict) -> dict:
+def run_window(context, integrator, task: dict, mover=None, interval_steps: int = 0) -> dict:
     """One window of the precalculation in an existing Context (this process or a pool worker).
 
     ``task``: ``state`` (lambda parameters), ``config`` (positions, box, velocities) to start
     from, ``stages`` whose candidate energies are recorded, ``candidates``, ``temperature_K``,
     ``equilibration_steps``, ``n_samples`` and ``steps_per_sample``.
     Returns the energies per stage, shape (samples, candidates), and the last configuration.
+
+    With ``mover`` (:class:`cufep.sampling.relocation_mc.RelocationMover` on this Context) one
+    water relocation move is attempted for every ``interval_steps`` of the MD of the window, in
+    its equilibration and between its samples, in the state of the window.
     """
     grid = np.linspace(0.0, 1.0, int(task["candidates"]))
     state = AlchemicalState(**task["state"])
@@ -389,20 +399,32 @@ def run_window(context, integrator, task: dict) -> dict:
     # one evaluator per stage over its candidates; terms common to all candidates cancel in the overlap
     evaluators = {name: StateEnergyEvaluator(context, [stage_state(name, lam, leg_stages, peak) for lam in grid],
                                              task["temperature_K"], None) for name in task["stages"]}
-    _load(context, task["config"])
+    _load(context, task["config"], mover)
     set_state(context, state)
-    if task["equilibration_steps"] > 0:
-        integrator.step(int(task["equilibration_steps"]))
+    done = 0
+
+    def md(steps: int) -> None:
+        nonlocal done
+        steps = int(steps)
+        while steps > 0:
+            chunk = steps if mover is None else min(steps, int(interval_steps) - done % int(interval_steps))
+            integrator.step(chunk)
+            done, steps = done + chunk, steps - chunk
+            if mover is not None and done % int(interval_steps) == 0:
+                mover.attempt(state)
+
+    md(task["equilibration_steps"])
     energies = {name: np.empty((int(task["n_samples"]), len(grid))) for name in task["stages"]}
     for i in range(int(task["n_samples"])):
-        integrator.step(int(task["steps_per_sample"]))
+        md(task["steps_per_sample"])
         for name in task["stages"]:
             energies[name][i] = evaluators[name].reduced_potentials(restore=state)[0]
-    return {"energies": energies, "config": _snapshot(context)}
+    return {"energies": energies, "config": _snapshot(context, mover)}
 
 
 def adaptive_schedule(context, integrator, stages: list[str], temperature_K: float, timestep_fs: float,
-                      settings: AlsSettings | None = None, log=print, pool=None):
+                      settings: AlsSettings | None = None, log=print, pool=None, mover=None,
+                      interval_steps: int = 0):
     """Adaptive lambda scheduling for one leg, starting from the Context's current configuration.
 
     The windows of the first iteration get their start configurations as
@@ -452,7 +474,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                for k, name in enumerate(stages)}
     first = {k: list(v) for k, v in windows.items()}        # the start: the rule only adds to it
     runs: dict[tuple[int, int], dict] = {}
-    start = _snapshot(context)
+    start = _snapshot(context, mover)
 
     def task_for(nd: tuple[int, int], config) -> dict:
         member = [stages[k] for k in range(len(stages)) if nd in (node(k, 0), node(k, top)) or nd[0] == k]
@@ -465,12 +487,16 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
 
     concurrent = []                              # the numbers of windows a pool was given at a time
 
+    # the water relocation moves of a window, where this process runs it (a pool's workers have their own)
+    moves = {} if mover is None else {"mover": mover, "interval_steps": interval_steps}
+
     def run_from(todo: list[tuple[int, int]], starts: list) -> None:
         """Run windows whose start configurations are known: at the same time, or one by one."""
         tasks = [task_for(nd, config) for nd, config in zip(todo, starts)]
         if pool is not None:
             concurrent.append(len(tasks))
-        results = pool.run(tasks) if pool is not None else [run_window(context, integrator, t) for t in tasks]
+        results = pool.run(tasks) if pool is not None else [run_window(context, integrator, t, **moves)
+                                                              for t in tasks]
         for nd, result in zip(todo, results):
             runs[nd] = result
 
@@ -479,16 +505,19 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             run_from(todo, [nearest(nd) for nd in todo])
         elif s.start_configurations == "walk":            # first iteration: a short walk gives the starts
             starts, walk_steps = [], md_steps(s.walk_ps, timestep_fs)
-            _load(context, start)
+            _load(context, start, mover)
             for nd in todo:
                 set_state(context, state_of(nd))
                 integrator.step(walk_steps)
-                starts.append(_snapshot(context))
+                starts.append(_snapshot(context, mover))
             run_from(todo, starts)
         else:                                             # first iteration: each from the end of the one before
+            # run where every other window is run (a pool, if there is one): its workers make the
+            # water relocation moves of a window (review of 723b12f: these windows ran in the
+            # Context of the leg, which has no mover when a pool has them)
             config = start
             for nd in todo:
-                runs[nd] = run_window(context, integrator, task_for(nd, config))
+                run_from([nd], [config])
                 config = runs[nd]["config"]
 
     def total_windows() -> int:

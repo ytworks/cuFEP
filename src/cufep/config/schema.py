@@ -71,6 +71,25 @@ class MembraneConfig(_Section):
     padding_nm: float = 1.5
     #: unrestrained MD of the bilayer before the alchemical run (replaces pre_equilibration md_ns)
     equilibration_ns: float = 10.0
+    #: what the alchemical run of the complex leg is made in when a bilayer is built: bilayer = the
+    #: complex in the bilayer; water = the complex in water, prepared from the same pose as a soluble
+    #: complex is, while the MD from which the restraint is chosen (restraints.selection:
+    #: interactions) still runs in the bilayer. cuFEP's own, to see what the bilayer does to a result
+    complex_leg: Literal["bilayer", "water"] = "bilayer"
+    #: water model of the system with the bilayer; null = forcefield.water. Another model than
+    #: forcefield.water only with complex_leg: water, where the bilayer is the system of the MD from
+    #: which the restraint is chosen and no free energy is computed in it. cuFEP's own
+    water: str | None = None
+
+    @property
+    def in_complex_leg(self) -> bool:
+        """Whether the alchemical run of the complex leg is made in a bilayer."""
+        return bool(self.enabled) and self.complex_leg == "bilayer"
+
+    @property
+    def for_restraint_only(self) -> bool:
+        """Whether a bilayer is built for the MD of the restraint alone (``complex_leg: water``)."""
+        return bool(self.enabled) and self.complex_leg == "water"
 
 
 class ForceFieldConfig(_Section):
@@ -518,9 +537,59 @@ class Rest2Config(_Section):
     residues: list[str] = Field(default_factory=list)
 
 
+class RelocationMcConfig(_Section):
+    """Water relocation moves between a sphere around the ligand and the rest of the cell, in the
+    complex leg: RelocationMC of Ding et al. (arXiv:2603.22274 v3). A whole water molecule is
+    moved into the sphere or out of it; the number of particles and the cell do not change.
+    """
+
+    enabled: bool = False
+    #: one move is attempted for every interval of MD of a replica (the paper: every 1000 steps
+    #: of 4 fs)
+    interval_ps: float = Field(default=4.0, gt=0.0)
+    #: K, the number of trial poses of a move (the paper: 16384)
+    trial_poses: int = Field(default=16384, ge=1)
+    #: the share of the trial poses whose anchor is drawn in the sphere, the rest outside it;
+    #: uniform = all anchors uniform in the whole cell, as the paper draws them
+    inner_fraction: Literal["uniform"] | Annotated[float, Field(gt=0.0, lt=1.0)] = "uniform"
+    #: the radius of the sphere is half the largest distance between two heavy atoms of the
+    #: ligand in the prepared pose, plus this (the paper: 0.3 nm)
+    radius_margin_nm: float = Field(default=0.3, ge=0.0)
+
+
+class GcmcConfig(_Section):
+    """Grand canonical Monte Carlo of water in a sphere around the ligand, in the complex leg: water
+    molecules are inserted into the sphere and deleted from it, in equilibrium with bulk water
+    (:mod:`cufep.sampling.gcmc`). The leg then has no barostat: after its pre-equilibration at
+    constant pressure its cell is fixed.
+    """
+
+    enabled: bool = False
+    #: one move for every interval of MD of a replica (Melling et al. 2023: batches "separated by 4 ps
+    #: of MD sampling")
+    interval_ps: float = Field(default=4.0, gt=0.0)
+    #: the trials (insertions and deletions) of one move, and how many are evaluated at once (the white
+    #: paper of loch: "10000 attempted random insertions and deletions, with a batch size of 1000 trials", for
+    #: bulk-like acceptance; a quarter of that here, where a decoupled ligand leaves room: docs/configuration.md)
+    attempts: int = Field(default=2500, ge=1)
+    batch_size: int = Field(default=1000, ge=1)
+    #: the radius of the sphere is half the largest distance between two heavy atoms of the ligand in the
+    #: prepared pose, plus this (the sphere of the water relocation moves)
+    radius_margin_nm: float = Field(default=0.3, ge=0.0)
+    #: the waters that are switched off at the start, to be inserted; auto = as many as the sphere would
+    #: hold if it were all bulk water (its volume by the standard volume, rounded up)
+    ghost_waters: Literal["auto"] | Annotated[int, Field(ge=1)] = "auto"
+    #: the excess chemical potential of water in bulk water and the standard volume of a water molecule;
+    #: auto = the values of the water model (``cufep.prep.water``)
+    excess_chemical_potential_kcal_per_mol: Literal["auto"] | float = "auto"
+    standard_volume_nm3: Literal["auto"] | Annotated[float, Field(gt=0.0)] = "auto"
+
+
 class SamplingConfig(_Section):
     pre_equilibration: PreEquilibrationConfig = Field(default_factory=PreEquilibrationConfig)
     rest2: Rest2Config = Field(default_factory=Rest2Config)
+    relocation_mc: RelocationMcConfig = Field(default_factory=RelocationMcConfig)
+    gcmc: GcmcConfig = Field(default_factory=GcmcConfig)
     #: hrex = Hamiltonian replica exchange between the lambda windows; none = independent windows
     exchange: Literal["hrex", "none"] = "hrex"
     time_per_iteration_ps: float = Field(default=2.5, gt=0.0)
@@ -630,6 +699,11 @@ class Config(_Section):
             raise ValueError("; ".join(problems))
         return self
 
+    @property
+    def bilayer_water(self) -> str:
+        """The water model of the system with the bilayer: ``membrane.water``, or ``forcefield.water``."""
+        return self.forcefield.water if self.membrane.water is None else self.membrane.water
+
 
 def md_segments(cfg: "Config") -> list[tuple[str, int]]:
     """Every stretch of MD that one configuration gets in one go in an OpenMM Context it shares
@@ -690,9 +764,52 @@ def configuration_problems(cfg: "Config") -> list[str]:
         problems.append(f"analysis.lrc_cutoff_nm = {cfg.analysis.lrc_cutoff_nm:g} nm must be larger than "
                         f"dynamics.cutoff_nm = {cfg.dynamics.cutoff_nm:g} nm: the tail correction (analysis.lrc = "
                         f"{cfg.analysis.lrc}) adds the dispersion beyond the cutoff, from the cutoff outwards")
-    water = water_problem(cfg.forcefield.water, membrane=bool(cfg.membrane.enabled))
+    water = water_problem(cfg.forcefield.water)
     if water:
         problems.append(water)
+    if cfg.membrane.water is not None:
+        water = water_problem(cfg.membrane.water, "membrane.water")
+        if water:
+            problems.append(water)
+        elif cfg.membrane.water != cfg.forcefield.water and cfg.membrane.in_complex_leg:
+            # a complex leg in the bilayer and a solvent leg in another water are not the two legs of one
+            # binding free energy
+            problems.append(
+                f"membrane.water = {cfg.membrane.water!r} is another water model than forcefield.water = "
+                f"{cfg.forcefield.water!r}: the complex leg would be sampled in another water than the solvent "
+                "leg. Another water model for the bilayer is only for membrane.complex_leg: "
+                "water, where the bilayer is the system of the MD from which the restraint is chosen")
+    if cfg.membrane.for_restraint_only and cfg.restraints.selection != "interactions":
+        # the bilayer of this setting is the system of the MD from which the restraint is chosen: with another
+        # selection there is no such MD, and a bilayer would be built that nothing uses
+        problems.append(
+            f"membrane.complex_leg is 'water': the bilayer is then built for the MD from which the restraint is "
+            f"chosen, which only restraints.selection: interactions has (it is '{cfg.restraints.selection}'). Use "
+            "restraints.selection: interactions, or membrane.complex_leg: bilayer")
+    gcmc = cfg.sampling.gcmc
+    if gcmc.enabled:
+        from cufep.prep.water import bulk_water_values
+
+        if cfg.sampling.relocation_mc.enabled:
+            problems.append("sampling.gcmc and sampling.relocation_mc are both enabled: a complex leg makes one "
+                            "kind of water moves")
+        if cfg.analysis.lrc == "isotropic":
+            problems.append("sampling.gcmc with analysis.lrc: isotropic: that tail correction takes the atoms "
+                            "around the ligand as a fixed set, and the moves change which waters interact; use "
+                            "analysis.lrc: reweight")
+        if cfg.membrane.for_restraint_only:
+            problems.append("sampling.gcmc with membrane.complex_leg: water is not supported: the moves are made "
+                            "in the system whose pre-equilibration fixes the cell")
+        if gcmc.batch_size > gcmc.attempts:
+            problems.append(f"sampling.gcmc.batch_size = {gcmc.batch_size} is more than sampling.gcmc.attempts = "
+                            f"{gcmc.attempts}, the trials of one move")
+        known = bulk_water_values(cfg.forcefield.water)
+        for name, value in (("excess_chemical_potential_kcal_per_mol", gcmc.excess_chemical_potential_kcal_per_mol),
+                            ("standard_volume_nm3", gcmc.standard_volume_nm3)):
+            if value == "auto" and known is None:
+                problems.append(
+                    f"sampling.gcmc.{name} is auto and cuFEP has no value for forcefield.water = "
+                    f"{cfg.forcefield.water!r}: give the number (docs/configuration.md says how it is determined)")
     problems += initial_window_problems(cfg)
     if cfg.restraints.selection == "interactions":
         # the thresholds of the rule are numbers of frames, rounded down: none of them may be no frame

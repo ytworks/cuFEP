@@ -482,9 +482,44 @@ def add_ions(modeller, forcefield, ionic_strength_M: float, exclusion_z_nm: floa
     return {"net_charge_before_ions": total, "n_sodium": n_pos, "n_chloride": n_neg}
 
 
-def add_membrane(modeller, forcefield, cfg, log=print) -> dict:
-    """Orient the complex, build the bilayer and solvent in place, hydrate and check it."""
+def strip_extra_sites(modeller) -> int:
+    """Delete the extra sites of the water molecules (particles without an element); returns how many.
+
+    Waters that came with the input have the sites of the water model. A bilayer is built with a
+    3-site water (:data:`cufep.prep.water.BILAYER_BUILD_WATER`), whose template they match without them.
+    """
+    extra = [a for a in modeller.topology.atoms() if a.residue.name in WATER and a.element is None]
+    if extra:
+        modeller.delete(extra)
+    return len(extra)
+
+
+def add_extra_sites(modeller, forcefield) -> int:
+    """Give every water the extra sites of the water model of ``forcefield``, at the places its
+    virtual sites have for the atoms as they are; returns how many particles were added."""
+    n = modeller.topology.getNumAtoms()
+    box = modeller.topology.getPeriodicBoxVectors()
+    modeller.addExtraParticles(forcefield)
+    modeller.topology.setPeriodicBoxVectors(box)
+    return modeller.topology.getNumAtoms() - n
+
+
+def add_membrane(modeller, forcefield, cfg, log=print, forcefield_with_water=None, water=None) -> dict:
+    """Orient the complex, build the bilayer and solvent in place, hydrate and check it.
+
+    ``forcefield`` is the force field of the system that is built and ``water`` its water file
+    (``forcefield.water`` of the configuration if not given; another one where the bilayer has a
+    water model of its own, ``membrane.water``). ``forcefield_with_water(file)`` is the same force
+    field with another water file. It is asked for when ``water`` has more than 3 sites:
+    ``Modeller.addMembrane`` makes a System of its lipid patch, whose waters have 3 sites, so the
+    bilayer, the waters of the cavities and the ions are then built with the 3-site water of
+    :data:`cufep.prep.water.BILAYER_BUILD_WATER`, and every water gets the extra site of
+    ``forcefield`` at the end. Waters that came with the input lose their extra sites for the
+    build in every case: they have those of ``forcefield.water``, whatever the water of this system is.
+    """
     import openmm as mm
+
+    from cufep.prep.water import BILAYER_BUILD_WATER, water_model_of
 
     orientation = choose_orientation(modeller, cfg.membrane.orientation, log)
     info: dict = {"orientation_method": "input" if orientation is None else orientation.method}
@@ -501,20 +536,31 @@ def add_membrane(modeller, forcefield, cfg, log=print) -> dict:
         raise MembraneError("the protein does not span z = 0 +/- 1 nm; the membrane orientation is wrong. "
                             "With `membrane.orientation: input` the PDB must have the membrane normal along z "
                             "and the membrane centre at z = 0.")
-    n_before = modeller.topology.getNumAtoms()
+    water_file = cfg.bilayer_water if water is None else water
+    more_sites = water_model_of(water_file).sites > 3
+    strip_extra_sites(modeller)
+    n_before = modeller.topology.getNumAtoms()             # of the complex without the extra sites of its waters
+    build = forcefield
+    if more_sites:
+        build = forcefield_with_water(BILAYER_BUILD_WATER)
     # Ions are added afterwards: the bilayer is trimmed first, which would unbalance them.
-    modeller.addMembrane(forcefield, lipidType=cfg.membrane.lipid, membraneCenterZ=0.0 * unit.nanometer,
+    modeller.addMembrane(build, lipidType=cfg.membrane.lipid, membraneCenterZ=0.0 * unit.nanometer,
                          minimumPadding=cfg.membrane.padding_nm * unit.nanometer,
                          ionicStrength=0.0 * unit.molar, neutralize=False)
     info.update(trim_membrane(modeller, cfg.membrane.padding_nm, log))
     quality = membrane_quality(modeller)
     z_limit = quality["phosphate_plane_nm"] + 0.3 if quality["phosphate_plane_nm"] > 0 else 2.0
     info["internal_waters_added"] = hydrate_protein_interior(modeller, z_limit, log=log)
-    info.update(add_ions(modeller, forcefield, cfg.thermodynamics.ionic_strength_M, z_limit + 0.2, log=log))
+    info.update(add_ions(modeller, build, cfg.thermodynamics.ionic_strength_M, z_limit + 0.2, log=log))
+    if more_sites:
+        info["water_sites_added"] = add_extra_sites(modeller, forcefield)
+        log(f"membrane: built with 3-site waters; {info['water_sites_added']} waters got the extra site of "
+            f"{water_file}")
     quality = membrane_quality(modeller)
     info.update(quality)
     up, low = quality["lipids_upper"], quality["lipids_lower"]
-    log(f"membrane: {cfg.membrane.lipid} bilayer with {up} + {low} lipids, box "
+    info["water"] = water_file
+    log(f"membrane: {cfg.membrane.lipid} bilayer with {up} + {low} lipids in {water_file}, box "
         + " x ".join(f"{x:.2f}" for x in quality["box_nm"]) + f" nm, {quality['n_atoms'] - n_before} atoms added")
     # the numbers of the bilayer (lipids per leaflet, waters in the hydrophobic core away from the protein) are
     # in info, without a verdict: earlier versions stopped below 40 lipids and warned of leaflets that differ by
