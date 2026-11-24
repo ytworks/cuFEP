@@ -5,6 +5,31 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-24 — [design] Plan: the water model OPC against TIP3P on the benchmark sets
+- What: the owner's order. Only the water changes (`forcefield.water: amber14/opc.xml`, ff14SB
+  kept); TYK2, then A2A, one ligand at a time against the run of e77a6c5; the default stays TIP3P
+  until the owner decides. The GPU fixture `rest2_leg` is built with TIP3P and OPC, and
+  `test_rest2_backends_agree` holds each backend to stock OpenMM with an Ewald tolerance of 1e-6
+  (the plugin to 0.1 kT, stock at 5e-4 to 0.3 kT; the owner's decision): on 31 configurations the
+  plugin is within 0.022 (TIP3P) and 0.044 kT (OPC) of it, stock within 0.118 and 0.156.
+- Why: Li & Minkara 2024 (protein-glycan ABFE: RMSE 4.17 with TIP3P, 1.85 with OPC). The plugin
+  against stock was 0.114 kT with OPC on the one configuration of the test: stock PME's error.
+- Refs: `docs/plans/2026-11-24-opc-water-model.md`, `spikes/m31_water_models_on_the_backends.py`
+### 2026-11-24 — [design] The plan of `membrane.complex_leg` is dropped: PR #14 closed without a merge
+- What: the owner's decision after the two ligands of the entry below. The setting, its tests and
+  its documents stay on the branch `feat/complex-leg-in-water` and are not in `main`.
+- Why: the owner's decision.
+- Refs: the plan (`Status:`), PR #14
+
+### 2026-11-24 — [progress] The A2A runs with `membrane.complex_leg: water` were stopped after two ligands
+- What: the owner's order, during the third ligand (4g, no result). In water against the bilayer
+  run of e77a6c5, kcal/mol: 4k -12.11 ± 0.53 against -20.32 ± 0.52 (its windows there were started
+  one from another; with the walk -14.49, -13.07, -16.50), 4e -16.17 ± 0.47 against -13.50 ± 0.34
+  (experiment -11.54 and -12.07). No statistics of the set. The setting is in PR #14, off by
+  default; nothing is merged, and what becomes of it waits for the owner's decision.
+- Why: the owner's order.
+- Refs: the plan ("記録"), `runs/benchmark_a2a_full_water_a34bbe2`, `runs/a2a_water_a34bbe2.log` (untracked)
+
 ### 2026-11-24 — [progress] `membrane.complex_leg: water` on A2A: the short run, and 4k
 - What: image of a34bbe2, eight GPUs, the settings of the set (5 ns per window, one calculation).
   A short run of 4k passed the checks of the plan from its files (systems of 61,452 and 73,275
