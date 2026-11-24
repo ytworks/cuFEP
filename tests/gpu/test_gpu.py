@@ -248,12 +248,18 @@ def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend)
 
 
 # ------------------------------------------------------------------------------------- REST2
-@pytest.fixture(scope="module")
-def rest2_leg():
-    """Two dipeptides in a 3.2 nm water box; one is the ligand, part of the other is hot too."""
+@pytest.fixture(scope="module", params=["amber14/tip3p.xml", "amber14/opc.xml"], ids=["tip3p", "opc"])
+def rest2_leg(request):
+    """Two dipeptides in a 3.2 nm water box; one is the ligand, part of the other is hot too.
+
+    In 3-site water and in OPC, whose fourth site is a virtual site: the states, the two backends and
+    the replica exchange below are held to the same numbers with both.
+    """
     from conftest import build_dipeptides_in_water
 
-    system, top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2)
+    system, top, pos, box, ligand, other = build_dipeptides_in_water(box_nm=3.2, water=request.param)
+    if request.param == "amber14/opc.xml":
+        assert any(system.isVirtualSite(i) for i in range(system.getNumParticles()))
     alch = make_alchemical_system(system, ligand, rest2=True, rest2_atoms=other[:12])
     schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 3, "vanish": 4}, rest2_scale=3.0)
     return alch, schedule, pos, box, ligand
@@ -289,22 +295,41 @@ def test_rest2_state_energies_match_setting_each_state(rest2_leg, backend):
     assert np.max(np.abs(error)) < 0.02, error         # kT, single-precision energies of a 3,300-atom box
 
 
+#: How far the differences between the windows of ``rest2_leg`` may lie from those of stock OpenMM in double
+#: precision with an Ewald tolerance of 1e-6, in kT, for each backend at the tolerance a leg runs with (5e-4).
+#: Measured on 31 configurations of each water (spikes/m31_water_models_on_the_backends.py, 2026-11-24): the
+#: plugin at most 0.022 (TIP3P) and 0.044 (OPC), stock OpenMM at most 0.118 and 0.156. The levels are about
+#: twice the largest. The plugin against stock, which this test held to 0.1 kT on its one configuration, is
+#: the two errors together, mostly that of stock PME: it reached 0.126 and 0.152, above 0.1 on 1 and 5 of
+#: the 31 configurations, and is 0.114 on the configuration of this test with OPC
+EWALD_LEVEL_KT = {"cupotential": 0.1, "openmm": 0.3}
+
+
 @needs_plugin
 def test_rest2_backends_agree(rest2_leg):
+    """Each backend gives the differences between the windows that a tight Ewald sum gives, in 3-site
+    water and in OPC: so the two agree, and neither is held to the error of the other's PME."""
     import openmm.unit as u
 
     alch, schedule, pos, box, _ = rest2_leg
+    tight = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(alch.system))
+    for force in tight.getForces():
+        if isinstance(force, mm.NonbondedForce):
+            force.setEwaldErrorTolerance(1e-6)
     rows = {}
-    for name in ("openmm", "cupotential"):
-        backend = get_backend(name)
-        ctx = backend.make_context(backend.prepare_system(alch.system),
+    for name, backend, system in (("reference", get_backend("openmm", precision="double"), tight),
+                                  ("openmm", get_backend("openmm"), alch.system),
+                                  ("cupotential", get_backend("cupotential"), alch.system)):
+        ctx = backend.make_context(backend.prepare_system(system),
                                    backend.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds), 0)
         ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
         ctx.setPositions(pos)
         rows[name] = StateEnergyEvaluator(ctx, schedule.states, 300.0, 1.0).reduced_potentials()[0]
         del ctx
-    diff = (rows["cupotential"] - rows["cupotential"][0]) - (rows["openmm"] - rows["openmm"][0])
-    assert np.max(np.abs(diff)) < 0.1, diff            # kT, as without REST2 (the fixture has no dispersion correction)
+    reference = rows["reference"] - rows["reference"][0]
+    errors = {name: (rows[name] - rows[name][0]) - reference for name in EWALD_LEVEL_KT}
+    for name, level in EWALD_LEVEL_KT.items():
+        assert np.max(np.abs(errors[name])) < level, (name, errors[name])   # kT; no dispersion correction here
 
 
 @needs_plugin

@@ -31,7 +31,7 @@ OpenMM, on all GPUs of a machine, from two files.
 
 ## Current Status
 
-Snapshot date: 2026-11-23. `main` holds PR #1 (the engine of plan
+Snapshot date: 2026-11-24. `main` holds PR #1 (the engine of plan
 `docs/plans/2026-11-18-abfe-engine.md`), PR #2 (the README and the harness), PR #3 (wording fixes
 and ruff), PR #4 (plan `docs/plans/2026-11-20-full-benchmarks-and-accuracy-wiki.md`: benchmarks
 with the settings of the examples, the full sets, an accuracy wiki), PR #6 (plan
@@ -52,8 +52,8 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 707 passed (2026-11-23, the branch of PR #9 with the four settings of the accuracy plan, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 26 passed (2026-11-23, one GPU, the same tree and image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`) |
+| Unit tests (CPU) | 707 passed (2026-11-24, the branch `feat/opc-water`, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 31 passed (2026-11-24, one GPU, the same tree and image, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); the five tests of `rest2_leg` run with TIP3P and with OPC |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7. In the full TYK2 run with the present defaults (e77a6c5, PR #8): -10.08 ± 0.37 (complex leg 40.43, solvent leg 19.79; 33 and 18 windows; lowest overlap 0.154 and 0.189; a window with fewer than 50 independent samples in the complex leg) |
 | Starts of the complex leg (plan `docs/plans/2026-11-21-als-initial-window-design.md`, PR #7) | A is the default since 2026-11-22 (the owner's choice), so its three runs are runs of the TYK2 example as it is now. TYK2 example, three starts of the complex leg, three calculations each with the same YAML and seed (image of 5e2cf33, 4 GPUs each; the overlap of a pair alone, threshold 0.30; solvent leg as the default), kcal/mol. A (30 windows, those of mode fixed): -9.36 ± 0.56, -9.63 ± 0.37, -9.33 ± 0.51; mean -9.44, standard deviation 0.17. B (30 windows, denser at vanish 0.7 to 0.9): -10.01 ± 0.34, -9.64 ± 0.52, -11.71 ± 0.53; -10.45, 1.11. C (59 windows placed as B): -11.43 ± 0.46, -6.41 ± 0.59, -7.64 ± 0.43; -8.50, 2.62. The four runs of the row above: -10.39, 2.09. Complex leg, standard deviation: 0.20, 1.23, 2.20 (1.86). Lowest overlap 0.141 to 0.153 (A), 0.128 to 0.129 (B), 0.081 to 0.085 (C); a window with fewer than 50 independent samples in the complex leg of 2, 1 and 1 of the three runs; 0 or 1 round trip in the complex leg of every run. Three runs give a standard deviation only roughly. Tables: the plan (`spikes/m19_window_runs.py`) |
@@ -64,16 +64,16 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- The wiki pages (`docs/wiki/`, rewritten in PR #8) are not yet on the GitHub Wiki: it has no
-  page (checked 2026-11-22; the owner creates its first page). Issue #5: the differences from Felis
-  and the measurements that would separate the causes of cuFEP's larger errors.
-- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9): of the remedies it
-  tried, one changed results and is adopted, the walk as the one way of starting the windows
-  (below). Not adopted, defaults unchanged: `alchemy.annihilate_electrostatics`,
-  `alchemy.softcore_b` 2, `analysis.detect_equilibration`, longer production, REST2 off, a longer
-  bilayer equilibration, water relocation moves (PR #10, not merged). One calculation varies by a
-  standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied: the decoupled-side
-  windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
+- Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): OPC against TIP3P on TYK2, then A2A,
+  one ligand at a time: no result yet, no bilayer with a 4-site water yet; the default stays TIP3P.
+- The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
+  the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
+- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
+  one way of starting the windows (below). Not adopted, defaults unchanged: longer production,
+  `alchemy.annihilate_electrostatics`, `alchemy.softcore_b` 2, `analysis.detect_equilibration`,
+  REST2 off, a longer bilayer equilibration, water relocation moves (PR #10, not merged). One
+  calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied:
+  the decoupled-side windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +111,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-24 — [design] Plan: the water model OPC against TIP3P on the benchmark sets
+- What: the owner's order. Only the water changes (`forcefield.water: amber14/opc.xml`, ff14SB
+  kept); TYK2, then A2A, one ligand at a time against the run of e77a6c5; the default stays TIP3P
+  until the owner decides. The GPU fixture `rest2_leg` is built with TIP3P and OPC, and
+  `test_rest2_backends_agree` holds each backend to stock OpenMM with an Ewald tolerance of 1e-6
+  (the plugin to 0.1 kT, stock at 5e-4 to 0.3 kT; the owner's decision): on 31 configurations the
+  plugin is within 0.022 (TIP3P) and 0.044 kT (OPC) of it, stock within 0.118 and 0.156.
+- Why: Li & Minkara 2024 (protein-glycan ABFE: RMSE 4.17 with TIP3P, 1.85 with OPC). The plugin
+  against stock was 0.114 kT with OPC on the one configuration of the test: stock PME's error.
+- Refs: `docs/plans/2026-11-24-opc-water-model.md`, `spikes/m31_water_models_on_the_backends.py`
 
 ### 2026-11-23 — [design] The accuracy plan is closed: the walk is the one way of starting the windows
 - What: the owner's decision. Adopted: `lambda_schedule.adaptive.start_configurations`, default
