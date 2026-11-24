@@ -1,5 +1,5 @@
 # 水の grand canonical Monte Carlo (GCMC) を複合体レグに入れる
-Status: Done (2026-11-25: 実装した。`sampling.gcmc`、既定は off。A2A の評価は 4 本(4k と 4e、TIP3P と OPC)でオーナーが止めた。4 本とも結合が実験値より 5〜8 kcal/mol 強いままだった。オーナーの決定: 既定値は当面変えない。PR #15、ドラフト)
+Status: Done (2026-11-25: 実装した。`sampling.gcmc`、既定は off。A2A の評価は 4 本(4k と 4e、TIP3P と OPC)でオーナーが止めた。4 本とも結合が実験値より 5〜8 kcal/mol 強いままだった。オーナーの決定: 既定値は当面変えない。PR #15)
 Refs: this pull request (#15); `docs/protocol.md` ("Water relocation moves", "Limits of version 0.1"); `docs/configuration.md` (`sampling`); `docs/plans/2026-11-24-opc-water-model.md`; `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (E4)
 
 ## Context

@@ -1,5 +1,5 @@
 # 水モデル OPC: 文献の調査、ベンチマークでの比較、既定値の判断
-Status: Done (2026-11-25、オーナーの決定: 止める。既定値は当面変えない(水は TIP3P のまま)。経過: 2026-11-24: TYK2 16 本を OPC で実行し終えた。A2A の二重層 + OPC は 4k と 4e の 2 本で止め、拘束は二重層 + TIP3P、FEP は水中 + OPC の実験 (`membrane.complex_leg: water`、`membrane.water`) も 4k と 4e の 2 本で止めた。二重層 + OPC に水の relocation の移動 (`sampling.relocation_mc`、PR #10 を merge) を入れた run は 4k で結果が変わらず、オーナーの指示で止めた。次は GCMC (`docs/plans/2026-11-24-gcmc-water.md`)。既定値は TIP3P のまま、移動の既定も off のまま)
+Status: Done (PR #15。2026-11-25、オーナーの決定: 止める。既定値は当面変えない(水は TIP3P のまま)。経過: 2026-11-24: TYK2 16 本を OPC で実行し終えた。A2A の二重層 + OPC は 4k と 4e の 2 本で止め、拘束は二重層 + TIP3P、FEP は水中 + OPC の実験 (`membrane.complex_leg: water`、`membrane.water`) も 4k と 4e の 2 本で止めた。二重層 + OPC に水の relocation の移動 (`sampling.relocation_mc`、PR #10 を merge) を入れた run は 4k で結果が変わらず、オーナーの指示で止めた。次は GCMC (`docs/plans/2026-11-24-gcmc-water.md`)。既定値は TIP3P のまま、移動の既定も off のまま)
 Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/protocol.md` ("Systems"); `benchmarks/results/`
 
 ## Context
