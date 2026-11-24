@@ -64,8 +64,8 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): OPC against TIP3P on TYK2 (running,
-  one ligand at a time; results in the plan), then A2A; no MD of a bilayer with OPC yet; default TIP3P.
+- Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done (Change Log);
+  A2A waits for the owner's decision; no MD of a bilayer with OPC yet; the default stays TIP3P.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
@@ -111,6 +111,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-24 — [progress] TYK2 with OPC: 16 ligands, one calculation each
+- What: image of 29fb9df, eight GPUs, one ligand at a time, the settings of the set with
+  `forcefield.water: amber14/opc.xml`. All 32 legs on the plugin, none NOT RELIABLE (lowest
+  overlap 0.099), a window below 50 independent samples in 15 of 16. Against experiment, OPC and
+  the run of e77a6c5 (TIP3P), 95 % bootstrap intervals: mean signed error +1.33 [0.67, 2.01] and
+  -1.20 [-1.83, -0.60]; RMSE 1.92 [1.27, 2.53] and 1.73 [1.10, 2.30]; after removing the mean
+  1.38 [0.85, 1.72] and 1.25 [0.75, 1.62]; Kendall tau 0.33 [-0.10, 0.69] and 0.47 [0.12, 0.75].
+  OPC binds 2.53 kcal/mol weaker on average: solvent leg +1.32 (all 16), complex leg -1.20.
+- Why: the plan. The owner decides about A2A and the default; nothing is changed.
+- Refs: the plan ("記録"), `runs/benchmark_tyk2_full_opc_29fb9df` (untracked)
 
 ### 2026-11-24 — [design] A bilayer takes a 4-site water; the plugin's MD with virtual sites checked; ejm_31
 - What: `membrane.enabled` no longer refuses a 4-site water: the bilayer is built with 3-site waters
