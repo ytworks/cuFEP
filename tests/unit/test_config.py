@@ -129,8 +129,10 @@ BASE = {"system": {"protein": "p.pdb", "ligand": "l.sdf"}}
 def test_every_setting_has_a_default():
     """Only the two input files are required; nothing else is left undefined."""
     dumped = Config.model_validate(BASE).model_dump(mode="json")
+    # null where a setting names nothing of its own: all ligands, anchors that are chosen, no file of windows,
+    # and the water model of the bilayer, which is then forcefield.water
     optional = {("system", "ligand_names"), ("restraints", "host_atoms"), ("restraints", "guest_atoms"),
-                ("lambda_schedule", "file")}
+                ("lambda_schedule", "file"), ("membrane", "water")}
 
     def walk(node, path=()):
         for key, value in node.items():

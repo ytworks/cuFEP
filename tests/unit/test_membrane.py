@@ -104,7 +104,7 @@ def test_a_bilayer_is_built_with_three_site_waters_and_ends_with_the_sites_of_th
     monkeypatch.setattr(app.Modeller, "addMembrane", add_membrane_of_openmm)
     monkeypatch.setattr(membrane, "trim_membrane", lambda modeller, padding_nm, log: {})
 
-    def built(water, forcefield, forcefield_with_water):
+    def built(water, forcefield, forcefield_with_water, bilayer_water=None):
         modeller = build()
         # the two peptides, 0.8 nm apart along z, stand for a protein that spans the bilayer: z is stretched
         # about the point between them (a System, the ions and the virtual sites do not depend on the geometry)
@@ -113,12 +113,14 @@ def test_a_bilayer_is_built_with_three_site_waters_and_ends_with_the_sites_of_th
         pos[:, 2] = 4.0 * (pos[:, 2] - 0.5 * (z.min() + z.max()))
         modeller.positions = pos * u.nanometer
         if water_model_of(water).sites > 3:
-            membrane.add_extra_sites(modeller, forcefield)       # the waters of the input have their site
+            membrane.add_extra_sites(modeller, opc)              # the waters of the input have their site
         cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
-                                     "membrane": {"enabled": True, "orientation": "input"},
+                                     "membrane": {"enabled": True, "orientation": "input",
+                                                  **({} if bilayer_water is None else
+                                                     {"complex_leg": "water", "water": bilayer_water})},
                                      "forcefield": {"water": water}, "thermodynamics": {"ionic_strength_M": 0.5}})
         n_water = sum(r.name == "HOH" for r in modeller.topology.residues())
-        info = membrane.add_membrane(modeller, forcefield, cfg, log=lambda m: None,
+        info = membrane.add_membrane(modeller, forcefield, cfg, log=lambda m: None, water=bilayer_water,
                                      forcefield_with_water=forcefield_with_water)
         waters = [r for r in modeller.topology.residues() if r.name == "HOH"]
         assert info["n_sodium"] == info["n_chloride"] >= 1
@@ -149,6 +151,12 @@ def test_a_bilayer_is_built_with_three_site_waters_and_ends_with_the_sites_of_th
         raise AssertionError("a 3-site water model needs no other force field")
 
     modeller, info, waters = built("amber14/tip3p.xml", tip3p, never)
+    assert {len(list(r.atoms())) for r in waters} == {3} and "water_sites_added" not in info
+    tip3p.createSystem(modeller.topology)
+
+    # the bilayer with a water model of its own (membrane.water), TIP3P, while the waters of the input have
+    # the site of forcefield.water: they lose it for the build and none is added
+    modeller, info, waters = built("amber14/opc.xml", tip3p, never, bilayer_water="amber14/tip3p.xml")
     assert {len(list(r.atoms())) for r in waters} == {3} and "water_sites_added" not in info
     tip3p.createSystem(modeller.topology)
 
@@ -312,7 +320,9 @@ def test_a_leg_result_gives_the_bilayer_and_the_pose_as_numbers_without_verdicts
     (archived / "equil.npz").unlink()
     (archived / "restraint.json").unlink()
     assert leg_files(archived) == {"equil.npz": legs["complex"] / "equil.npz",
-                                   "restraint.json": legs["complex"] / "restraint.json"}
+                                   "restraint.json": legs["complex"] / "restraint.json",
+                                   # the pre-equilibration of another system for the restraint, which this leg has not
+                                   "restraint_equil.npz": None}
     assert leg_result_from_samples(archived, cfg, run("complex"))["ligand_rmsd_from_input_A"] == 2.5
     for name in ("hrex", "result.json"):
         (archived / name).rename(legs["complex"] / name)

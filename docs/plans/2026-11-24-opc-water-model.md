@@ -1,5 +1,5 @@
 # 水モデル OPC: 文献の調査、ベンチマークでの比較、既定値の判断
-Status: In progress (2026-11-24: TYK2 16 本を OPC で実行し終えた(結果と統計は下の「記録」)。オーナーの決定で A2A 17 本を OPC で 1 本ずつ実行中。既定値は TIP3P のまま)
+Status: In progress (2026-11-24: TYK2 16 本を OPC で実行し終えた。A2A の二重層 + OPC は 4k と 4e の 2 本で止めた。オーナーの指示で、拘束は二重層 + TIP3P の MD で決め、FEP は水中 + OPC で行う実験に切り替える (`membrane.complex_leg: water`、`membrane.water`)。既定値は TIP3P のまま)
 Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/protocol.md` ("Systems"); `benchmarks/results/`
 
 ## Context
@@ -261,3 +261,20 @@ e77a6c5 の run の `resolved_config.yaml` との違いは `forcefield.water`、
   最後の 2 つの四半期のあいだの変化は -0.09 %。両方のレグが cuPotential で走った。拘束は TIP3P の run と同じ
   PHE 168(そちらは 800 フレーム中 785)。複合体レグの往復は 0 回。2 本の時点の実験値との差の平均: OPC -8.07、
   TIP3P -5.10。
+
+### 2026-11-24: A2A の二重層 + OPC を 2 本で止め、実験を切り替える(オーナーの指示)
+
+- 2 本の結果(上の表): 4k -19.15 ± 0.35、4e -20.61 ± 0.47(実験値 -11.54、-12.07)。実験値との差の平均は
+  OPC -8.07、e77a6c5 の TIP3P -5.10。箱の面積は OPC のほうが 4〜7 % 大きい。3 本目の 4g は溶媒レグの途中で
+  止めた(結果は無い)。
+- オーナーの指示: OPC は二重層との相性が悪いのかもしれない。FEP は二重層なしで行い、拘束条件の MD は TIP3P で
+  求め、FEP は OPC で実行する実験に切り替える。
+- 設定:
+  - `forcefield.water: amber14/opc.xml`(alchemical run の複合体と溶媒レグ)。
+  - `membrane.complex_leg: water`(閉じた PR #14 の設定。拘束は二重層の中の MD で決め、複合体レグの
+    alchemical run は水中の複合体で行う)。そのブランチ `feat/complex-leg-in-water` をこのブランチに merge した。
+  - `membrane.water: amber14/tip3p.xml`(新しい設定、cuFEP 独自、既定は null = `forcefield.water`)。二重層の
+    系の水モデル。`forcefield.water` と違う値は `complex_leg: water` のときだけ受け付ける(二重層の中では
+    自由エネルギーを計算しないので、二つのレグは同じ水のまま)。Lipid21 の論文は TIP3P で検証している。
+- 比較対象: e77a6c5 の run(二重層 + TIP3P)と、`complex_leg: water` を TIP3P で実行した 2 本
+  (イメージ a34bbe2: 4k -12.11 ± 0.53、4e -16.17 ± 0.47)。

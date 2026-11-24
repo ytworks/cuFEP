@@ -64,8 +64,8 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done (Change Log);
-  A2A with OPC is running, one ligand at a time (the owner's decision); the default stays TIP3P.
+- Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done; A2A with OPC in the bilayer was stopped after 4k and 4e (Change Log).
+  Next, by the owner's order: A2A with the restraint from the bilayer in TIP3P and the alchemical run in water with OPC (`membrane.complex_leg: water`, `membrane.water`). Default TIP3P.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
@@ -144,6 +144,51 @@ Open items:
 - Why: Li & Minkara 2024 (protein-glycan ABFE: RMSE 4.17 with TIP3P, 1.85 with OPC). The plugin
   against stock was 0.114 kT with OPC on the one configuration of the test: stock PME's error.
 - Refs: `docs/plans/2026-11-24-opc-water-model.md`, `spikes/m31_water_models_on_the_backends.py`
+### 2026-11-24 — [design] The plan of `membrane.complex_leg` is dropped: PR #14 closed without a merge
+- What: the owner's decision after the two ligands of the entry below. The setting, its tests and
+  its documents stay on the branch `feat/complex-leg-in-water` and are not in `main`.
+- Why: the owner's decision.
+- Refs: the plan (`Status:`), PR #14
+
+### 2026-11-24 — [progress] The A2A runs with `membrane.complex_leg: water` were stopped after two ligands
+- What: the owner's order, during the third ligand (4g, no result). In water against the bilayer
+  run of e77a6c5, kcal/mol: 4k -12.11 ± 0.53 against -20.32 ± 0.52 (its windows there were started
+  one from another; with the walk -14.49, -13.07, -16.50), 4e -16.17 ± 0.47 against -13.50 ± 0.34
+  (experiment -11.54 and -12.07). No statistics of the set. The setting is in PR #14, off by
+  default; nothing is merged, and what becomes of it waits for the owner's decision.
+- Why: the owner's order.
+- Refs: the plan ("記録"), `runs/benchmark_a2a_full_water_a34bbe2`, `runs/a2a_water_a34bbe2.log` (untracked)
+
+### 2026-11-24 — [progress] `membrane.complex_leg: water` on A2A: the short run, and 4k
+- What: image of a34bbe2, eight GPUs, the settings of the set (5 ns per window, one calculation).
+  A short run of 4k passed the checks of the plan from its files (systems of 61,452 and 73,275
+  atoms, the restraint from the bilayer, the same command again computes nothing). 4k (experiment
+  -11.54): -12.11 ± 0.53 kcal/mol; complex leg 36.60 ± 0.50, solvent leg 14.90 ± 0.18; restraint
+  ASN 253 (784 of 800 frames); lowest overlap 0.154 and 0.171; fewest independent samples 12
+  (complex leg) and 193. In the bilayer: -20.32 ± 0.52 (e77a6c5, windows started one from another)
+  and -14.49, -13.07, -16.50 (the walk; complex leg 38.78, 37.36, 40.90). The other 16 follow.
+- Why: the plan (one ligand at a time, each reported).
+- Refs: the plan ("記録"), `runs/benchmark_a2a_full_water_a34bbe2` (untracked), PR #14
+
+### 2026-11-23 — [design] `membrane.complex_leg`: the restraint from the bilayer, the alchemical run in water
+- What: a setting, default `bilayer` (no default, number of the analysis or stored result changes).
+  With `water` the preparation writes two complexes of one pose (`prep/complex.*` in water,
+  `prep/complex_bilayer.*`); the pre-equilibration of the bilayer (`restraint_equil.npz`) and the
+  MD of the restraint run in the bilayer, the alchemical run on the complex in water; the anchors
+  are the same atoms, held to the rules at the start of the alchemical run; only with
+  `restraints.selection: interactions`. cuFEP's own, off by default. A review by a reader who
+  did not write it: no wrong number found, five points, four fixed. Unit tests 714 passed, GPU
+  tests 26 passed (the image `cufep:dev`). No run with the setting yet.
+- Why: the plan of this day (the owner's order).
+- Refs: PR #14, `docs/configuration.md`, `docs/protocol.md` ("Systems"), `tests/unit/test_complex_leg_in_water.py`
+
+### 2026-11-23 — [design] Plan: the bilayer for the MD of the restraint only, the complex leg in water
+- What: the owner's order. A setting `membrane.complex_leg: bilayer | water` (default `bilayer`,
+  the behaviour of today): with `water` the MD from which the restraint is chosen runs in the
+  bilayer and the alchemical run of the complex leg in water. To be run on the A2A set one ligand
+  at a time and compared with the run of e77a6c5 (the owner's decision). Not implemented yet.
+- Why: to see whether the bilayer in the alchemical run is behind the larger errors of A2A.
+- Refs: `docs/plans/2026-11-23-complex-leg-without-the-bilayer.md`
 
 ### 2026-11-23 — [design] The accuracy plan is closed: the walk is the one way of starting the windows
 - What: the owner's decision. Adopted: `lambda_schedule.adaptive.start_configurations`, default

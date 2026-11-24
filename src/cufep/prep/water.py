@@ -40,10 +40,10 @@ WATER_MODELS: dict[str, WaterModel] = {
 BILAYER_BUILD_WATER = "amber14/tip3p.xml"
 
 
-def water_problem(water_file: str) -> str | None:
-    """Why ``forcefield.water`` cannot be built, or None."""
+def water_problem(water_file: str, setting: str = "forcefield.water") -> str | None:
+    """Why the water model of ``setting`` cannot be built, or None."""
     if str(water_file) not in WATER_MODELS:
-        return (f"forcefield.water = {water_file!r} is not a water model cuFEP can build; use one of "
+        return (f"{setting} = {water_file!r} is not a water model cuFEP can build; use one of "
                 + ", ".join(WATER_MODELS))
     return None
 

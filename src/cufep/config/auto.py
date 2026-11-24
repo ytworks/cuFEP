@@ -42,9 +42,15 @@ def resolve(cfg: Config, protein=None) -> tuple[Config, AutoReport]:
 
     # ---- box --------------------------------------------------------------------------
     if out.solvation.box_shape == "auto":
-        out.solvation.box_shape = "cube" if membrane else "dodecahedron"
+        # the shape of the boxes of water. A bilayer is built in a rectangular box of its own whatever this says
+        # (cufep.prep.membrane), so with membrane.complex_leg: water the complex of the alchemical run gets the
+        # box of a complex in water
+        in_leg = bool(out.membrane.in_complex_leg)
+        out.solvation.box_shape = "cube" if in_leg else "dodecahedron"
         report.add("solvation.box_shape", out.solvation.box_shape,
-                   "bilayers need a rectangular box" if membrane else
+                   "bilayers need a rectangular box" if in_leg else
+                   "fewest atoms for a complex in water (OpenFE's default); the bilayer of the MD for the "
+                   "restraint has its rectangular box (membrane.complex_leg: water)" if membrane else
                    "fewest atoms for a soluble system (OpenFE's default)")
 
     # ---- backend --------------------------------------------------------------------------
