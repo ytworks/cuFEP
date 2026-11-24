@@ -1,5 +1,5 @@
 # 水モデル OPC: 文献の調査、ベンチマークでの比較、既定値の判断
-Status: In progress (2026-11-24: TYK2 16 本を OPC で 1 本ずつ実行し終えた。結果と統計は下の「記録」。A2A に進むかと既定値はオーナーの判断待ち。二重層と 4 サイトの水は実装済みで、二重層の MD はまだ)
+Status: In progress (2026-11-24: TYK2 16 本を OPC で実行し終えた(結果と統計は下の「記録」)。オーナーの決定で A2A 17 本を OPC で 1 本ずつ実行中。既定値は TIP3P のまま)
 Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/protocol.md` ("Systems"); `benchmarks/results/`
 
 ## Context
@@ -240,3 +240,10 @@ Refs: this pull request; `docs/configuration.md` (`forcefield.water`); `docs/pro
 - OPC の誤差は 16 本のうち 13 本がプラス(結合が弱い側)。大きいものは jmc_28 +4.40、jmc_27 +3.52、
   ejm_43 +2.25、ejm_46 +2.24、ejm_50 +2.10。
 - どの指標も二つの run の区間は重なっている。
+
+### 2026-11-24: A2A、OPC、1 本ずつ(イメージ `cufep:0e3b2a9`、GPU 8 枚)
+
+オーナーの決定(2026-11-24、TYK2 の統計を見て): A2A に進み、17 本を全部実行する。設定は
+`runs/configs/a2a_opc_0e3b2a9.yaml`(イメージの中で `benchmark_config("a2a", "full")` に水だけを足したもの)。
+e77a6c5 の run の `resolved_config.yaml` との違いは `forcefield.water`、PR #9 で増えた設定 4 つ(既定値)、
+出力先だけ。二重層の平衡化は 10 ns。OPC での二重層の MD はこの run が初めて。順番は 4k、4e、残り 15 本。

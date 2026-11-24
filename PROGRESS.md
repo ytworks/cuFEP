@@ -65,7 +65,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 Open items:
 - Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done (Change Log);
-  A2A waits for the owner's decision; no MD of a bilayer with OPC yet; the default stays TIP3P.
+  A2A with OPC is running, one ligand at a time (the owner's decision); the default stays TIP3P.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
