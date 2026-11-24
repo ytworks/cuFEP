@@ -65,7 +65,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 Open items:
 - Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done; A2A with OPC, in the bilayer and with the complex leg in water, was stopped after 4k and 4e each (Change Log).
-  With the water relocation moves 4k did not change (-19.16 ± 0.59 against -19.15 ± 0.35); that run was stopped. Plan `docs/plans/2026-11-24-gcmc-water.md` (in progress): GCMC of water in the complex leg (`sampling.gcmc`), default off, implemented; next A2A one ligand at a time with TIP3P and OPC. The error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
+  With the water relocation moves 4k did not change (-19.16 ± 0.59 against -19.15 ± 0.35); that run was stopped. Plan `docs/plans/2026-11-24-gcmc-water.md` (in progress): GCMC of water in the complex leg (`sampling.gcmc`), default off, implemented; 4k and 4e ran with TIP3P and OPC (Change Log): all four still bind 5 to 8 kcal/mol too strongly, the rest of the set waits for the owner. The error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
@@ -111,6 +111,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [progress] A2A with grand canonical moves of water: 4k and 4e, TIP3P and OPC
+- What: image of 8252ccd, one calculation each on eight GPUs, the set's settings with
+  `sampling.gcmc.enabled: true` (kcal/mol; experiment -11.54 and -12.07). 4k: TIP3P -17.32 ± 0.42
+  (without the moves -20.32 ± 0.52 in the run of e77a6c5; three other runs -14.49, -13.07, -16.50),
+  OPC -19.96 ± 0.29 (-19.15 ± 0.35). 4e: TIP3P -17.21 ± 0.36 with the restraint on ASN 253 (without,
+  on ASN 253, -16.85 ± 0.64; on PHE 168, e77a6c5, -13.50 ± 0.34), OPC -18.26 ± 0.54 (-20.61 ± 0.47,
+  both on PHE 168). The moves were made in every run (5 to 20 thousand insertions and as many
+  deletions); the sphere holds 7 to 9 waters where the ligand is coupled and 16 to 21 where it is
+  decoupled. No GPU error, no worker restarted. The rest of the set waits for the owner.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md` ("記録"), `runs/benchmark_a2a_full_gcmc_{tip3p,opc}_8252ccd`
 
 ### 2026-11-25 — [progress] Grand canonical moves of water in the complex leg (`sampling.gcmc`, default off)
 - What: ghost waters switched in the live Context, the acceptance of Ross 2017 (eq 1, 2, 7), batches of
