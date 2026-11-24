@@ -346,3 +346,13 @@ e77a6c5 の run の `resolved_config.yaml` との違いは `forcefield.water`、
   (水とバックエンドごとに 5 回の実行で 97〜205 回。水準はその最少の 3 分の 1 の 30 回)。
 - 比較対象: 実験値、e77a6c5 の run(二重層 + TIP3P、移動なし)、二重層 + OPC で移動なしの run(0e3b2a9: 4k
   -19.15 ± 0.35、4e -20.61 ± 0.47)。4k には TIP3P で移動を入れた run もある(-16.61 ± 0.37、複合体レグ 41.00)。
+- run: イメージ `cufep:9989cdb`(この merge のコミット)、GPU 8 枚、1 本ずつ、設定
+  `runs/configs/a2a_opc_relocation_9989cdb.yaml`、出力 `runs/benchmark_a2a_full_opc_relocation_9989cdb`。
+  二重層 + OPC で移動なしの run(0e3b2a9)の設定との違いは、`sampling.relocation_mc` の節と出力先だけ
+  (`membrane.complex_leg: bilayer` と `membrane.water: null` は、その後に増えた設定の既定値)。
+  unit テスト 738 本、GPU テスト 43 本が通ったツリー。
+
+結果(kcal/mol、1 リガンド 1 計算)。「二重層 OPC」は移動なしの 0e3b2a9 の run、「二重層 TIP3P」は e77a6c5 の run:
+
+| リガンド | 実験値 | 二重層 OPC + 移動(この run) | 二重層 OPC | 二重層 TIP3P | 複合体レグ この run / OPC / TIP3P | 溶媒レグ この run / TIP3P | 拘束 | 窓 複合体 / 溶媒 | 最小の overlap | 独立なサンプルが 50 未満の窓 | 移動の受理 中へ / 外へ |
+|---|---|---|---|---|---|---|---|---|---|---|---|
