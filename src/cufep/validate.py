@@ -114,7 +114,7 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
     from cufep.backends import get_backend
     from cufep.backends.cupotential import CuPotentialBackend
     from cufep.sampling.states import StateEnergyEvaluator
-    from cufep.workflow import load_prepared, prepare_ligand
+    from cufep.workflow import leg_system, load_prepared, prepare_ligand
 
     prepare_ligand(
         resolved, ligand, protein, lig_dir, bool(resolved.membrane.enabled), resolved.solvation.box_shape, echo
@@ -126,7 +126,9 @@ def _compare(resolved, ligand, protein, lig_dir, device: int, echo) -> bool:
     for leg in ("complex", "solvent"):
         results[leg] = None
         prep = load_prepared(lig_dir / "prep", leg)
-        system = mm.XmlSerializer.deserialize(prep["system_xml"])
+        # the System of the leg as a run makes its MD and its alchemical System of it (with
+        # sampling.gcmc: the ghost waters of the start switched off)
+        system, _moves = leg_system(resolved, prep, leg)
         stock = get_backend("openmm")
         barostat = info["complex_barostat"] if leg == "complex" else "isotropic"
         # brief relaxation on stock OpenMM, then a few frames at three states

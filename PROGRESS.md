@@ -52,8 +52,8 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 738 passed (2026-11-24, the branch `feat/opc-water` with the water relocation moves of PR #10 merged, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 43 passed (2026-11-24, one GPU, the same tree, image `cufep:dev`, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); the tests of `rest2_leg` and of the water relocation moves run with TIP3P and with OPC; none builds a bilayer |
+| Unit tests (CPU) | 750 passed (2026-11-25, the branch `feat/opc-water` with `sampling.gcmc`, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 55 passed (2026-11-25, one GPU, the same tree, image `cufep:dev`, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); the tests of `rest2_leg`, of the water relocation moves and of the grand canonical moves run with TIP3P and with OPC; none builds a bilayer |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7. In the full TYK2 run with the present defaults (e77a6c5, PR #8): -10.08 ± 0.37 (complex leg 40.43, solvent leg 19.79; 33 and 18 windows; lowest overlap 0.154 and 0.189; a window with fewer than 50 independent samples in the complex leg) |
 | Starts of the complex leg (plan `docs/plans/2026-11-21-als-initial-window-design.md`, PR #7) | A is the default since 2026-11-22 (the owner's choice), so its three runs are runs of the TYK2 example as it is now. TYK2 example, three starts of the complex leg, three calculations each with the same YAML and seed (image of 5e2cf33, 4 GPUs each; the overlap of a pair alone, threshold 0.30; solvent leg as the default), kcal/mol. A (30 windows, those of mode fixed): -9.36 ± 0.56, -9.63 ± 0.37, -9.33 ± 0.51; mean -9.44, standard deviation 0.17. B (30 windows, denser at vanish 0.7 to 0.9): -10.01 ± 0.34, -9.64 ± 0.52, -11.71 ± 0.53; -10.45, 1.11. C (59 windows placed as B): -11.43 ± 0.46, -6.41 ± 0.59, -7.64 ± 0.43; -8.50, 2.62. The four runs of the row above: -10.39, 2.09. Complex leg, standard deviation: 0.20, 1.23, 2.20 (1.86). Lowest overlap 0.141 to 0.153 (A), 0.128 to 0.129 (B), 0.081 to 0.085 (C); a window with fewer than 50 independent samples in the complex leg of 2, 1 and 1 of the three runs; 0 or 1 round trip in the complex leg of every run. Three runs give a standard deviation only roughly. Tables: the plan (`spikes/m19_window_runs.py`) |
@@ -65,7 +65,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 Open items:
 - Plan `docs/plans/2026-11-24-opc-water-model.md` (in progress): TYK2 with OPC is done; A2A with OPC, in the bilayer and with the complex leg in water, was stopped after 4k and 4e each (Change Log).
-  With the water relocation moves 4k did not change (-19.16 ± 0.59 against -19.15 ± 0.35); that run was stopped. Plan `docs/plans/2026-11-24-gcmc-water.md` (in progress): GCMC of water in the complex leg, default off; the risk check passed, the implementation is next. Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
+  With the water relocation moves 4k did not change (-19.16 ± 0.59 against -19.15 ± 0.35); that run was stopped. Plan `docs/plans/2026-11-24-gcmc-water.md` (in progress): GCMC of water in the complex leg (`sampling.gcmc`), default off, implemented; next A2A one ligand at a time with TIP3P and OPC. The error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
   the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
@@ -111,6 +111,17 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [progress] Grand canonical moves of water in the complex leg (`sampling.gcmc`, default off)
+- What: ghost waters switched in the live Context, the acceptance of Ross 2017 (eq 1, 2, 7), batches of
+  trials with the stand-in energy and a second test with the energy of the simulation, every replica
+  with the list of its waters, the alchemical run of the leg without a barostat in the mean cell of
+  its pre-equilibration; TIP3P and OPC. The two numbers of the water: TIP3P -6.09 kcal/mol and 30.345
+  A^3 (grand's; measured here -6.125 ± 0.053, 30.319 ± 0.009), OPC -8.05 and 30.000 (measured). A short
+  run of 4k end to end: the sphere holds about 7 waters where the ligand is coupled and 14 where it is
+  decoupled. Unit tests 750, GPU tests 55 passed; a short review: no P1, two P2 fixed.
+- Why: the owner's order (plan `docs/plans/2026-11-24-gcmc-water.md`); no benchmark result with it yet.
+- Refs: the plan ("記録"), `docs/configuration.md` (`sampling.gcmc`), `docs/protocol.md` ("Grand canonical moves of water")
 
 ### 2026-11-25 — [design] Plan: grand canonical Monte Carlo of water in the complex leg; the relocation run is stopped
 - What: A2A in the bilayer with OPC and the water relocation moves (image of 9989cdb): 4k -19.16 ± 0.59

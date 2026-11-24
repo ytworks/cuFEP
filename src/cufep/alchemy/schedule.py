@@ -359,20 +359,26 @@ def pair_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
     return np.array([stage_overlap(energies[i:i + 2], windows[i:i + 2])[0] for i in range(len(windows) - 1)])
 
 
-def _snapshot(context):
+def _snapshot(context, mover=None):
+    """(positions, box, velocities) of the Context; with a mover of grand canonical moves of water
+    (:class:`cufep.sampling.gcmc.GcmcMover`) also which waters interact in it."""
     import openmm.unit as unit
     st = context.getState(getPositions=True, getVelocities=True)
     return (st.getPositions(asNumpy=True).value_in_unit(unit.nanometer),
             st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer),
-            st.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond))
+            st.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond),
+            *(() if not hasattr(mover, "set_on") else (mover.on,)))
 
 
-def _load(context, config) -> None:
+def _load(context, config, mover=None) -> None:
     import openmm as mm
-    pos, box, vel = config
+    pos, box, vel, *water_on = config
     context.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(box)])
     context.setPositions(pos)
     context.setVelocities(vel)
+    if hasattr(mover, "set_on"):
+        # the waters that interact in this configuration; one that does not say has the ghosts of the start
+        mover.set_on(water_on[0] if water_on else mover.spec.initial_on())
 
 
 def run_window(context, integrator, task: dict, mover=None, interval_steps: int = 0) -> dict:
@@ -393,7 +399,7 @@ def run_window(context, integrator, task: dict, mover=None, interval_steps: int 
     # one evaluator per stage over its candidates; terms common to all candidates cancel in the overlap
     evaluators = {name: StateEnergyEvaluator(context, [stage_state(name, lam, leg_stages, peak) for lam in grid],
                                              task["temperature_K"], None) for name in task["stages"]}
-    _load(context, task["config"])
+    _load(context, task["config"], mover)
     set_state(context, state)
     done = 0
 
@@ -413,7 +419,7 @@ def run_window(context, integrator, task: dict, mover=None, interval_steps: int 
         md(task["steps_per_sample"])
         for name in task["stages"]:
             energies[name][i] = evaluators[name].reduced_potentials(restore=state)[0]
-    return {"energies": energies, "config": _snapshot(context)}
+    return {"energies": energies, "config": _snapshot(context, mover)}
 
 
 def adaptive_schedule(context, integrator, stages: list[str], temperature_K: float, timestep_fs: float,
@@ -468,7 +474,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                for k, name in enumerate(stages)}
     first = {k: list(v) for k, v in windows.items()}        # the start: the rule only adds to it
     runs: dict[tuple[int, int], dict] = {}
-    start = _snapshot(context)
+    start = _snapshot(context, mover)
 
     def task_for(nd: tuple[int, int], config) -> dict:
         member = [stages[k] for k in range(len(stages)) if nd in (node(k, 0), node(k, top)) or nd[0] == k]
@@ -499,11 +505,11 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             run_from(todo, [nearest(nd) for nd in todo])
         elif s.start_configurations == "walk":            # first iteration: a short walk gives the starts
             starts, walk_steps = [], md_steps(s.walk_ps, timestep_fs)
-            _load(context, start)
+            _load(context, start, mover)
             for nd in todo:
                 set_state(context, state_of(nd))
                 integrator.step(walk_steps)
-                starts.append(_snapshot(context))
+                starts.append(_snapshot(context, mover))
             run_from(todo, starts)
         else:                                             # first iteration: each from the end of the one before
             # run where every other window is run (a pool, if there is one): its workers make the

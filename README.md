@@ -318,7 +318,8 @@ Version 0.1:
 - no symmetry correction: the graph symmetry number of the ligand is reported, and a small
   symmetric ligand that turns over in its pocket leaves the unrestrained window without overlap,
   which the result reports;
-- symmetric POPC-type bilayers only; no grand canonical water sampling;
+- symmetric POPC-type bilayers only; grand canonical water sampling only as an option of the complex leg
+  (`sampling.gcmc`, off by default);
 - REST2 covers the ligand and the residues within 0.4 nm of it; a slow rearrangement further away
   is sampled faster only if its residues are named (`sampling.rest2.residues`).
 

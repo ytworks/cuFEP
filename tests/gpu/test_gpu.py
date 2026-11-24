@@ -709,3 +709,160 @@ def test_replica_exchange_with_water_relocation_moves(tmp_path, moves_leg, backe
     attempted = moves[:, :, 0] + moves[:, :, 2]
     assert moves.shape == (10, k, 4) and attempted.sum(axis=1).tolist() == [0, k] * 5
     assert (moves[:, :, 1] <= moves[:, :, 0]).all() and (moves[:, :, 3] <= moves[:, :, 2]).all()
+
+
+# ------------------------------------------------------------------- grand canonical moves of water
+@pytest.fixture(scope="module", params=["amber14/tip3p.xml", "amber14/opc.xml"], ids=["tip3p", "opc"])
+def gcmc_leg(request):
+    """Two dipeptides in a 3.2 nm water box, one of them the ligand, as a leg with grand canonical moves of
+    water is made of it: the specification of the moves from the system with every water, the alchemical
+    System from the system with the ghosts of the start switched off. The excess chemical potential is 4
+    kcal/mol above that of water, so that the few moves of a test insert waters."""
+    from conftest import build_dipeptides_in_water
+
+    from cufep.sampling.gcmc import gcmc_spec, ghosts_off
+
+    system, top, pos, box, ligand, _other = build_dipeptides_in_water(box_nm=3.2, water=request.param)
+    cutoff = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce)).getCutoffDistance()._value
+    moves = gcmc_spec(system, top, pos, box, ligand, cutoff, 0.5, 1, 300.0, interval_ps=0.4, attempts=400,
+                      batch_size=200, radius_margin_nm=0.3, excess_chemical_potential_kcal_per_mol=-2.0,
+                      standard_volume_nm3=0.0303, ghost_waters=None)
+    plain = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
+    ghosts_off(plain, moves.waters[moves.ghosts].reshape(-1))
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 3})
+    return make_alchemical_system(plain, ligand), make_alchemical_system(system, ligand), schedule, pos, box, \
+        ligand, moves
+
+
+def test_the_trial_energies_with_ghosts_on_the_gpu_are_those_of_the_processor(gcmc_leg):
+    """The trials of the grand canonical moves are evaluated by the kernels on the CUDA device of the
+    Context, with the waters that are switched off left out: the energies of poses of a water and of waters
+    where they are equal those of the NumPy stand-in, in a triclinic cell, with the ligand at intermediate
+    lambda values."""
+    from cufep.sampling.relocation_mc import GpuStandIn, StandIn, random_rotations
+
+    _alch, _all_on, _schedule, pos, box, _ligand, moves = gcmc_leg
+    pos = np.asarray(pos, dtype=float)
+    box = np.asarray(box, dtype=float) + np.array([[0.0, 0.0, 0.0], [0.6, 0.0, 0.0], [0.3, 0.5, 0.0]])
+    rng = np.random.default_rng(5)
+    on = moves.initial_on()
+    on[rng.choice(np.flatnonzero(on), size=40, replace=False)] = False       # ghosts all over the cell
+    active = np.ones(len(pos), dtype=bool)
+    active[moves.waters[~on].reshape(-1)] = False
+    ghost = int(np.flatnonzero(~on)[0])
+    local = pos[moves.waters[ghost]] - pos[moves.waters[ghost][0]]
+    poses = (rng.random((256, 3)) @ box)[:, None, :] + np.einsum("kij,sj->ksi", random_rotations(rng, 256), local)
+    which = np.flatnonzero(on)[::37]
+    gpu = GpuStandIn(moves, 0)
+    for lambda_electrostatics, lambda_sterics in ((1.0, 1.0), (0.4, 1.0), (0.0, 0.3)):
+        reference = StandIn(moves, pos, box, lambda_electrostatics, lambda_sterics, active=active)
+        device = gpu.load(pos, box, lambda_electrostatics, lambda_sterics, active=active)
+        for a, b in ((reference.pose_energies(poses, ghost, moves.cutoff_nm),
+                      device.pose_energies(poses, ghost, moves.cutoff_nm)),
+                     (reference.water_energies(which, moves.cutoff_nm), device.water_energies(which, moves.cutoff_nm))):
+            assert a.shape == b.shape and np.isfinite(a).all()
+            assert np.allclose(a, b, rtol=1e-9, atol=1e-9)
+        everything = gpu.load(pos, box, lambda_electrostatics, lambda_sterics).water_energies(which, moves.cutoff_nm)
+        assert np.abs(everything - reference.water_energies(which, moves.cutoff_nm)).max() > 1.0   # (ghosts count)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_waters_switched_in_a_context_give_the_energies_of_a_system_built_so(gcmc_leg, backend):
+    """A Context of the leg (its System has the ghosts of the start off) whose ghosts are switched on gives
+    the energies of the System with every water, in every window, and switched back those it had: on stock
+    OpenMM to its single precision, on the plugin too (measured: the same numbers; the risk check of the
+    plan, spikes/m33_ghost_waters_on_the_backends.py). With OPC the charge that is switched is on a
+    virtual site."""
+    import openmm.unit as u
+
+    from cufep.sampling.gcmc import WaterSwitch
+
+    alch, all_on, schedule, pos, box, _ligand, moves = gcmc_leg
+    be = get_backend(backend)
+
+    def context_of(system):
+        ctx = be.make_context(be.prepare_system(system),
+                              be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds, seed=3), 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        return ctx
+
+    def numbers(ctx):
+        ctx.setPositions(pos)
+        energy = ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)
+        return energy, StateEnergyEvaluator(ctx, schedule.states, 300.0, None).reduced_potentials()[0]
+
+    leg, every = context_of(alch.system), context_of(all_on.system)
+    (e_leg, u_leg), (e_every, u_every) = numbers(leg), numbers(every)
+    assert abs(e_every - e_leg) > 100.0                                    # kJ/mol: the ghosts of the start
+    switch = WaterSwitch(leg, moves)
+    assert switch.apply(np.ones(len(moves.waters), dtype=bool)) == len(moves.ghosts)
+    e_on, u_on = numbers(leg)
+    assert e_on == pytest.approx(e_every, abs=0.05) and np.allclose(u_on, u_every, rtol=0.0, atol=0.02)
+    assert switch.apply(moves.initial_on()) == len(moves.ghosts)
+    e_off, u_off = numbers(leg)
+    assert e_off == pytest.approx(e_leg, abs=0.05) and np.allclose(u_off, u_leg, rtol=0.0, atol=0.02)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_replica_exchange_with_grand_canonical_moves_of_water(tmp_path, gcmc_leg, backend):
+    """Replica exchange with worker processes and the moves, without a barostat: every replica makes one
+    move after the MD of an iteration in which the interval was passed (0.4 ps: every second iteration of
+    50 steps of 4 fs), in the state it is simulated in, with the waters it has; the samples hold the counts
+    by window, the checkpoint the waters of every replica, the energies stay finite and the cell is the one
+    the leg started in. A leg that is resumed goes on with the waters it had."""
+    alch, _all_on, schedule, pos, box, ligand, moves = gcmc_leg
+    devices = [0, 1] if _gpu_count() >= 2 else [0]
+    spec = LegSpec(name="gpu-gcmc", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=alch.system.getNumParticles(),
+                   backend=backend, temperature_K=300.0, pressure_bar=None, barostat="none", timestep_fs=4.0,
+                   steps_per_iteration=50, seed=3, frame_atoms=list(ligand), gcmc=moves)
+    k, n_waters = len(schedule.states), len(moves.waters)
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=devices, log=lambda m: None) as s:
+        s.initialize(pos, box)
+        s.run(10, record_stride=2, checkpoint_stride=5)
+    data = read_samples(tmp_path / "hrex")
+    own = data["u"][np.arange(10)[:, None], np.arange(k), data["states"]]
+    assert np.all(np.isfinite(own)) and np.all(np.isfinite(data["u"][:, :, [0, k - 1]]))
+    counts = data["gcmc"]
+    assert counts.shape == (10, k, 5)
+    assert (counts[:, :, 0] + counts[:, :, 2]).sum(axis=1).tolist() == [0, k * moves.attempts] * 5
+    assert (counts[::2, :, 4] == -1).all() and (counts[1::2, :, 4] >= 0).all()
+    assert counts[:, :, 1].sum() > 0                                        # (insertions were made)
+    assert np.allclose(data["volume"], abs(np.linalg.det(box)), rtol=1e-6)  # no barostat
+    with np.load(tmp_path / "hrex" / "checkpoint.npz") as checkpoint:
+        lists = checkpoint["water_on"]
+    made = int(counts[:, :, 1].sum() - counts[:, :, 3].sum())
+    assert lists.shape == (k, n_waters) and int(lists.sum()) == k * (n_waters - len(moves.ghosts)) + made
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=devices, log=lambda m: None) as s:
+        assert s.restore() and np.array_equal(s.arrays.won[s.cur] > 0.5, lists)
+        s.run(2, record_stride=2, checkpoint_stride=2)
+    assert read_samples(tmp_path / "hrex")["gcmc"].shape == (12, k, 5)
+
+
+@needs_cuda
+def test_a_leg_whose_ghosts_run_out_stops_and_no_worker_is_restarted(tmp_path, gcmc_leg):
+    """A worker that cannot try an insertion because no ghost is left says so, and the sampler stops the leg
+    with that reason (:class:`cufep.sampling.hrex.MovesError`). It is not a failure of the worker: before,
+    the worker was restarted and its replicas run again with other random numbers, and a second such stop
+    counted as a failure of the backend, after which a leg is repeated on stock OpenMM (review of the
+    moves, 2026-11-25)."""
+    from dataclasses import replace
+
+    from cufep.sampling.hrex import MovesError, WorkerError
+
+    alch, _all_on, schedule, pos, box, ligand, moves = gcmc_leg
+    eager = replace(moves, excess_chemical_potential_kj_per_mol=40.0)        # insertions at once
+    spec = LegSpec(name="gpu-gcmc", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=alch.system.getNumParticles(),
+                   backend="openmm", temperature_K=300.0, pressure_bar=None, barostat="none", timestep_fs=4.0,
+                   steps_per_iteration=100, seed=3, frame_atoms=list(ligand), gcmc=eager)
+    one_ghost = np.ones(len(moves.waters), dtype=bool)
+    one_ghost[moves.ghosts[0]] = False
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[0], log=lambda m: None) as s:
+        s.initialize(pos, box, water_on=one_ghost)
+        with pytest.raises(MovesError, match="no ghost water is left") as stopped:
+            s.run(20, record_stride=2, checkpoint_stride=5)
+        assert not isinstance(stopped.value, WorkerError) and s.restarts == 0

@@ -29,6 +29,12 @@ class SamplerError(RuntimeError):
     the samples are :class:`cufep.sampling.storage.StorageError`, which is not a SamplerError."""
 
 
+class MovesError(SamplerError):
+    """The water moves of the leg cannot go on (no ghost water is left for an insertion, the cell became
+    too small for the sphere): the leg stops with the reason. Not a failure of a worker or of the
+    backend: nothing is restarted or repeated for it."""
+
+
 class WorkerError(SamplerError):
     """A worker process failed, hung or did not start: the only kind of failure that says
     something about the backend (and so the only one after which a leg may be repeated on
@@ -128,6 +134,8 @@ class _Process:
             msg = self.parent.recv()
         except (EOFError, OSError) as exc:
             raise WorkerError(f"worker {self.worker_id} (device {self.device}) died") from exc
+        if msg[0] == "refused":
+            raise MovesError(msg[1])
         if msg[0] != "done":
             raise WorkerError(f"worker {self.worker_id} (device {self.device}): {msg[1]}")
         return msg[1]
@@ -216,6 +224,8 @@ class WindowPool:
                     msg = worker.parent.recv()
                 except (EOFError, OSError) as exc:
                     raise WorkerError(f"a worker of the lambda precalculation died (device {worker.device})") from exc
+                if msg[0] == "refused":
+                    raise MovesError(msg[1])
                 if msg[0] != "done":
                     raise WorkerError(f"lambda precalculation on device {worker.device}: {msg[1]}")
                 results[busy.pop(pos)] = msg[1]
@@ -291,7 +301,8 @@ class ReplicaExchangeSampler:
         except Exception:
             self.storage.close()
             raise
-        self.arrays = SharedArrays(self.k, spec.n_atoms, self.k, fallback_dir=str(self.storage.dir))
+        self.arrays = SharedArrays(self.k, spec.n_atoms, self.k, fallback_dir=str(self.storage.dir),
+                                   n_waters=spec.n_switched_waters)
         #: the storage holds samples of an earlier version whose conditions are not recorded: they
         #: are not continued, and nothing is written to their file
         self.unrecorded = self.conditions_of_storage == "unrecorded"
@@ -432,8 +443,12 @@ class ReplicaExchangeSampler:
             self.storage.set_meta(lrc_s6=tail._s6, lrc_s12=tail._s12, lrc_cutoff_nm=tail.cutoff_nm)  # noqa: SLF001
 
     # -- state ------------------------------------------------------------------------
-    def initialize(self, positions: np.ndarray, boxes: np.ndarray, velocities: np.ndarray | None = None) -> None:
+    def initialize(self, positions: np.ndarray, boxes: np.ndarray, velocities: np.ndarray | None = None,
+                   water_on: np.ndarray | None = None) -> None:
         """Start the run: set replica coordinates, one configuration for all or one per replica.
+
+        ``water_on`` (a leg with grand canonical moves of water): which waters interact, for all
+        replicas or per replica; None: the ghosts of the start.
 
         The storage is emptied: samples of a run that was interrupted before its first
         checkpoint would otherwise stay in front of the samples of this one. A checkpoint of
@@ -459,6 +474,11 @@ class ReplicaExchangeSampler:
         else:
             v = np.asarray(velocities, dtype=float)
             self.arrays.vel[self.cur] = np.broadcast_to(v, (self.k, *v.shape)) if v.ndim == 2 else v
+        if self.spec.gcmc is not None:
+            on = self.spec.gcmc.initial_on() if water_on is None else np.asarray(water_on, dtype=bool)
+            if on.shape[-1] != self.arrays.won.shape[-1] or on.ndim > 2 or (on.ndim == 2 and len(on) != self.k):
+                raise SamplerError("the list of the waters that interact does not match this leg")
+            self.arrays.won[self.cur] = np.broadcast_to(on, (self.k, on.shape[-1]))
         self.checkpoint(must=True)
 
     def restore(self) -> bool:
@@ -474,6 +494,12 @@ class ReplicaExchangeSampler:
         self.arrays.pos[self.cur] = ckpt["positions"]
         self.arrays.vel[self.cur] = ckpt["velocities"]
         self.arrays.box[self.cur] = ckpt["boxes"]
+        if self.spec.gcmc is not None:
+            on = ckpt.get("water_on")
+            if on is None or on.shape != self.arrays.won[0].shape:
+                raise SamplerError("the checkpoint does not say which waters of each replica interact, as a leg "
+                                   "with grand canonical moves of water needs")
+            self.arrays.won[self.cur] = on
         # the rows the checkpoint names: iterations that were run without being stored have none
         # (a checkpoint of an earlier version does not say, and then every iteration had a row)
         extra = ckpt.get("extra") or {}
@@ -515,7 +541,8 @@ class ReplicaExchangeSampler:
         """
         self.storage.write_checkpoint(
             self.arrays.pos[self.cur], self.arrays.vel[self.cur], self.arrays.box[self.cur], self.state_of_replica,
-            self.iteration, extra={"start": self.start_number, "rows": self.storage.n_iterations})
+            self.iteration, extra={"start": self.start_number, "rows": self.storage.n_iterations},
+            water_on=None if self.spec.gcmc is None else self.arrays.won[self.cur] > 0.5)
         self.last_checkpoint = int(self.iteration)
         return True
 
@@ -622,10 +649,20 @@ class ReplicaExchangeSampler:
                             column = 0 if direction == "in" else 2
                             relocations[state_index, column] += 1
                             relocations[state_index, column + 1] += int(accepted)
+                # the grand canonical moves of water: cufep.sampling.gcmc.COUNTS by state, the number of
+                # waters in the sphere that of the last move of the iteration (-1: no move)
+                gcmc = None
+                if self.spec.gcmc is not None:
+                    gcmc = np.zeros((len(sampled_states), 5), dtype="i8")
+                    gcmc[:, 4] = -1
+                    for res in results:
+                        for state_index, counts in (res or {}).get("gcmc", ()):
+                            gcmc[state_index, :4] += np.asarray(counts[:4], dtype="i8")
+                            gcmc[state_index, 4] = int(counts[4])
                 # records carry the row of their iteration: iterations that are not stored (a warm-up
                 # with store=False) have no row
                 row = self.storage.append(u, sampled_states, self.arrays.vol.copy(), swaps=swaps,
-                                          relocations=relocations)
+                                          relocations=relocations, gcmc=gcmc)
                 for res in results:
                     if res.get("recorded"):
                         self.storage.append_record(row, res["recorded"])

@@ -139,7 +139,11 @@ def water_ligand_system():
     # relax a little so that energies are ordinary numbers
     integ = mm.LangevinMiddleIntegrator(300 * u.kelvin, 1 / u.picosecond, 0.002 * u.picoseconds)
     integ.setRandomNumberSeed(1)
-    ctx = mm.Context(system, integ, mm.Platform.getPlatformByName("CPU"))
+    # one thread and deterministic forces: the same configuration in every run. With the threads of the
+    # machine it was another one each time, and a test of the water relocation moves whose proposal makes
+    # discrete choices from it (which water, which pose) failed once in many runs (2026-11-25)
+    ctx = mm.Context(system, integ, mm.Platform.getPlatformByName("CPU"),
+                     {"Threads": "1", "DeterministicForces": "true"})
     ctx.setPositions(mod.positions)
     mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 200)
     ctx.setVelocitiesToTemperature(300 * u.kelvin, 1)

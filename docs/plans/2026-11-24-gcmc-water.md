@@ -105,3 +105,103 @@ Refs: this pull request (#15); `docs/protocol.md` ("Water relocation moves", "Li
 run は分散補正あり(`src/cufep/prep/forcefield.py`)、GPU テストの系は分散補正なしなので、テストはこれを見ていない。
 この項は配置によらず(体積だけに依存)、REST2 の強さが 1 の両端では 0 なので、交換の判定と両端のあいだの自由エネルギーは
 変えない。対処(テストを分散補正ありにする、プラグインと stock の差として記録する)は、オーナーに報告してから決める。
+
+### 2026-11-25: 出典の確認
+
+書いた本人でない読み手が出典を集めて規則を書き出した(引用つき)。読めたもの: Ross 2017(本文の全部、式 1〜4、6、7)、
+grand のソース(`samplers.py` の基底クラス、球のサンプラー、標準のサンプラー、`utils.add_ghosts`、例)、loch の white paper
+(全部)と README、Melling 2023(理論と方法の部分)。取得できなかったもの: Ross 2015(JACS)、grand の論文の本文
+(Samways 2020)、Ross 2020(要旨だけ)、Gelb 2003。試行をまとめて評価する方式と 2 回目の判定の式は、loch の white paper の
+記述を出典にした(`docs/configuration.md` にその旨を書いた)。
+
+実装に効いた点:
+
+- 受理の式と B は Ross 2017 の式 1、2、7(grand のソースと同じ)。Ross 2017 は 2015 の平衡の条件を「erroneously stated」と
+  訂正しているので、2017 の式 7 を使う。
+- N は「ghost でない水で、酸素が球の中にあるもの」。呼ぶたびに位置から数え直す(MD で出入りした水も数える)。球の中心は
+  基準の原子に付いて動く。N = 0 の削除は何もしないが試行として数える。ghost が尽きたら grand は止まる。
+- grand は barostat があると止まる。箱は grand の例では NPT の最後のフレーム(「平均」と書いた出典は無い)。cuFEP は平衡化の
+  後半の平均の箱に固定する(独自、計画のとおり)。
+- 挿入した水の速度: grand は位置だけを置く(ghost のときの速度のまま)。cuFEP も同じ。
+- grand は TIP3P だけ(`assert ff.lower() == "tip3p"`)。4 サイトの水、膜、消去の途中のリガンド、ハミルトニアンの違う
+  レプリカの交換は、読めた出典には無い(Ross 2017 の交換は B だけが違うレプリカ)。これらは cuFEP 独自として記録した。
+- grand の μ'ex と V° の既定値(-6.09 kcal/mol、30.345 Å³)は grand の設定(分散補正なし、Lennard-Jones を 1.0〜1.2 nm で
+  切り替え)の値で、コードにも「may need to be changed for specific simulation parameters」とある。OPC の値はどの出典にも無い。
+
+### 2026-11-25: 実装
+
+- `src/cufep/sampling/gcmc.py`(新規): `GcmcSpec`、`gcmc_spec`、`ghosts_off`、`WaterSwitch`、`GcmcMover`。試行のエネルギーは
+  `relocation_mc.py` の stand-in(`active` で ghost を除く、`water_energies` を追加)。
+- 各レプリカの水の一覧: `SharedArrays.won`、`ReplicaWorker.run`(MD の前に Context に入れ、移動のあと書き戻す)、checkpoint
+  (`water_on`)、`start_configs.npz`、precalculation の窓の配置(`alchemy/schedule.py`)。
+- `workflow.py`: `leg_system`(準備した系から ghost を切った系と移動の仕様)、`alchemical_box` と `positions_in_cell`
+  (平衡化の後半の平均の箱に固定)、`leg_spec`(barostat なし)、`samples_settings` と `equil_made_with`(記録)、
+  `pressure_of_samples`、`gcmc_numbers`。`alchemy/lrc.py`: tail correction は各配置の ghost を除く。
+- 設定 `sampling.gcmc`(既定 off): `interval_ps` 4、`attempts` 10000、`batch_size` 1000、`radius_margin_nm` 0.3、
+  `ghost_waters` auto、`excess_chemical_potential_kcal_per_mol` auto、`standard_volume_nm3` auto。
+- テスト: unit(`tests/unit/test_gcmc.py`)と GPU(`tests/gpu/test_gpu.py` の末尾)。相互作用の無い水で球の中の水の数が
+  Poisson 分布(平均 e^B、井戸があれば e^(B+1))になること、切り替えた Context がそう作った系と同じエネルギーと力を出すこと、
+  stand-in が ghost を除くこと、レグを通した記録と再開、precalculation の窓、設定の拒否、固定した箱。
+- 別件: unit テストの共有の水の系(`tests/conftest.py` の `water_ligand_system`)が実行ごとに違う配置だった(CPU の
+  スレッド)。relocation のテスト 1 本がそれで 1 回落ちたので、1 スレッドで決定的な力にした。
+
+### 2026-11-25: μ'ex と V°(`spikes/m34_water_chemical_potential.py`)と、バルクの水での確認(`spikes/m35_bulk_water_gcmc.py`)
+
+cuFEP の設定(PME、カットオフ 0.9 nm、分散補正、298.15 K、1 bar)、cuPotential、2 回ずつ。μ'ex は水 1 個の消去
+(25 窓、窓あたり 3 ns、MBAR と tail)、V° は 1 bar の 2 ns の体積(誤差はブロックから):
+
+| 水 | μ'ex (kcal/mol) | V° (Å³) | 公表値 | 使う値 |
+|---|---|---|---|---|
+| TIP3P(水 1,386 個) | -6.125 ± 0.053、-6.129 ± 0.049 | 30.319 ± 0.009、30.343 ± 0.005(stock OpenMM: 30.343、30.328) | -6.09、30.345(grand) | 公表値(誤差の中で一致) |
+| OPC(水 1,384 個) | -8.051 ± 0.068、-8.046 ± 0.074 | 29.995 ± 0.009、30.003 ± 0.006(stock OpenMM: 30.044、30.042) | 無い | -8.05、30.000(cuFEP の測定) |
+
+- μ'ex は tail を含む値。移動で切り替わる水は NonbondedForce の分散補正の中に入るので、その分(TIP3P -0.113、
+  OPC -0.164 kcal/mol)を含む値が run と整合する。MBAR だけの値は -6.013 と -7.886。
+- 最小の overlap は 0.089〜0.091、独立なサンプルは窓あたり 1,030 以上。
+- バルクの水での確認(1 bar の密度の箱、球 0.8 nm、4 ns、4 fs): 球の中の水の数は TIP3P(μ'ex -6.125)70.34 ± 0.26
+  (V_球/V° = 70.67)、TIP3P(-6.04)70.63 ± 0.15、OPC(-8.05)71.48 ± 0.17(71.46)、OPC(-7.93)71.75 ± 0.17。箱全体の
+  水の数は開始から -0.38 %、-0.18 %、+0.20 %、+0.40 %。箱全体の数は grand canonical ensemble では 0.7 % ほど揺らぎ、
+  ゆっくり変わるので、数 ns の run ではこの違いを見分けられない(1 fs と 2 fs の run も -0.5 %〜+0.8 % の中)。
+- **μ'ex の誤差が結果に効く大きさ**: 複合体レグの自由エネルギーは、μ'ex の誤差 × (リガンドを消したときに球に増える水の数)
+  だけ変わる(溶媒レグは圧力一定で、この項が無い)。0.05 kcal/mol と水 7 個なら 0.35 kcal/mol。いまの μ'ex の標準誤差は
+  2 回の平均で TIP3P 0.036、OPC 0.050 kcal/mol。小さくするには水の箱の消去を長くする(1 回きりの計算)。
+
+### 2026-11-25: 通しの確認(A2A 4k、短い設定、開発中のツリー)
+
+準備、ghost を切った平衡化、拘束の MD、precalculation(30 窓、プールのワーカーが移動を行う)、HREX(GPU 4 枚、
+ワーカー 16、30 レプリカ)、解析まで通った(窓あたり 0.075 ns なので自由エネルギーの値に意味は無い)。ghost は水 14,709 個の
+うち 72 個、球は 8.0 Å、B = -6.011。移動: 挿入 359,928 回中 261、削除 360,072 回中 249。球の中の水の数の平均は、
+結合した側の窓で 7 前後、リガンドを消した側の最後の 3 窓で 13.5、13.3、14.2。箱は平衡化の後半の平均(8.4664 ×
+8.4664 × 9.8789 nm)に固定され、結果の圧力は 1 bar と記録された。
+
+### 2026-11-25: 実装のレビュー(書いた本人でない読み手、20 分)と対応
+
+P1 は無し(移動が誤った分布を出す入力は作れなかった。受理の因子、ghost の選び方、2 段の判定、バッチと 1 回ずつの試行の
+等価、ワーカーでの一覧の受け渡し、固定した箱、tail correction を読んで確認)。
+
+- P2: ghost が尽きたときの停止が、ワーカーの失敗として扱われていた(ワーカーを作り直して別の乱数でやり直し、2 回目は
+  バックエンドの失敗として stock OpenMM でのやり直しになる)。→ 移動が続けられないという停止(`RelocationError` と
+  `GcmcError`)は、ワーカーが「refused」として返し、sampler は `MovesError` で理由を出して止める。作り直しもやり直しも
+  しない。relocation の「箱が球に対して小さくなった」も同じ扱いになった。テスト: unit(inline)と GPU(ワーカープロセス)。
+- P2: stand-in のエネルギーが 0 でない系での受理のテストが無かった(分布のテストは相互作用の無い水)。→ 2 本足した。
+  (1) 1 回のバッチの各試行の受理が、独立に計算した stand-in のエネルギーで、公表の式どおりであること(決定的)。
+  (2) リガンドとも互いにも相互作用する分子で、stand-in を使う mover と、stand-in を使わない mover(毎回シミュレーションの
+  エネルギーだけで判定)が同じ水の数を出すこと(4.51 と 4.49、6 本ずつの鎖の標準偏差 0.19 と 0.24)。コードを変えた
+  写しで落ちることを確かめた: 2 回目の判定で stand-in を引かない(水 15.0)、削除の符号を逆にする(23.2)、挿入の符号を
+  逆にする((1) が落ちる)。
+- P3: MC barostat は ghost を分子として数える(72 個、810 nm³ で 3.7 bar)。`docs/protocol.md` に書いた。
+- P3: `cufep validate` が ghost を切らない系を作っていた。→ `leg_system` を通す。
+- P3(仮説): ghost のサイトがリガンドの原子に重なるとソフトコアの力が NaN になるか。→ GPU で確かめた: 距離 1e-6 nm
+  までは両方のバックエンド、全ての窓でエネルギーも力も有限。NaN は距離が厳密に 0 のときだけ。対処なし。
+
+### 2026-11-25: 移動 1 回の試行数の既定と、止まった短い run
+
+- 既定の `attempts` を 2500 にした(loch の例は 10000)。試行が 1 つ通るたびに Context のパラメータを書き換える必要があり、
+  4k の複合体レグでは 10000 回の試行で、結合した側の窓で 1 回の移動あたり 1.3 個、リガンドを消した側の窓で 16 個の水が
+  出入りした(その窓の球の中の水は 14 個前後)。4 分の 1 でも、結合した側で 3 回に 1 回、消した側で 1 回の移動あたり 4 個が
+  出入りする。根拠は `docs/configuration.md` に書いた。配置が変わらないあいだは、試行によらない計算(stand-in への配置の
+  転送、球の中の水、削除の候補のエネルギー)を使い回し、通らなかった試行を Context から戻す書き換えも次の試行と
+  まとめるようにした(結果は変えない)。
+- 短い確認の run(GPU 8 枚、ワーカー 31、MPS)5 回のうち 1 回が、反復 84 で「CUDA_ERROR_LAUNCH_FAILED」になり、その GPU の
+  MPS が落ちてレグが失敗した。同じ設定をもう一度流すと最後まで走った。1 プロセスで同じレグの移動を 450 回ずつ 3 通り
+  行っても起きなかった。原因は分かっていない。本番の run で同じ失敗が出たら、そのレグは checkpoint から続けられる。

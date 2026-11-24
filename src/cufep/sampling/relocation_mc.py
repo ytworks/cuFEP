@@ -196,7 +196,10 @@ class StandIn:
     (the module's docstring): Lennard-Jones and reaction-field Coulomb within a radius."""
 
     def __init__(self, spec: RelocationSpec, positions: np.ndarray, box: np.ndarray, lambda_electrostatics: float,
-                 lambda_sterics: float) -> None:
+                 lambda_sterics: float, active: np.ndarray | None = None) -> None:
+        """``active`` (per atom; None: every atom): an atom that is not active has no charge and no
+        Lennard-Jones here, as a water that is switched off has none in the simulation
+        (:mod:`cufep.sampling.gcmc`)."""
         self.spec = spec
         self.positions = np.asarray(positions, dtype=float)
         self.set_groups(len(self.positions), np.asarray(spec.waters))
@@ -204,7 +207,10 @@ class StandIn:
         self.charge = np.array(spec.charge, dtype=float)
         self.charge[spec.ligand] *= float(lambda_electrostatics)
         self.sigma = np.asarray(spec.sigma, dtype=float)
-        self.epsilon = np.asarray(spec.epsilon, dtype=float)
+        self.epsilon = np.array(spec.epsilon, dtype=float)
+        if active is not None:
+            off = ~np.asarray(active, dtype=bool)
+            self.charge[off], self.epsilon[off] = 0.0, 0.0
         # the soft-core of the ligand: x = 1 / (alpha (1 - lambda)^b + (r / sigma)^6), times lambda
         self.soft = np.zeros(len(self.charge))
         self.soft[spec.ligand] = float(spec.softcore_alpha) * (1.0 - float(lambda_sterics)) ** int(spec.softcore_b)
@@ -281,6 +287,20 @@ class StandIn:
         atoms = np.asarray(self.spec.waters)[int(moved)]
         return self.energies(np.asarray(poses, dtype=float).reshape(-1, 3), np.tile(q, k), np.tile(sigma, k),
                              np.tile(epsilon, k), float(radius_nm), skip=atoms).reshape(k, n_s).sum(axis=1)
+
+    def water_energies(self, which: np.ndarray, radius_nm: float) -> np.ndarray:
+        """The energy of each of the waters ``which``, where it is, with everything else within
+        ``radius_nm``."""
+        which = np.asarray(which, dtype=np.int64)
+        waters = np.asarray(self.spec.waters)
+        n_s = waters.shape[1]
+        if not len(which):
+            return np.zeros(0)
+        q, sigma, epsilon = self._site_parameters()
+        m = len(which)
+        per_site = self.energies(self.positions[waters[which].reshape(-1)], np.tile(q, m), np.tile(sigma, m),
+                                 np.tile(epsilon, m), float(radius_nm), own=np.repeat(which, n_s))
+        return per_site.reshape(m, n_s).sum(axis=1)
 
     def with_waters(self, poses: np.ndarray, moved: int) -> np.ndarray:
         """(pose, water): the energy of the water ``moved`` in each of ``poses`` with every other
@@ -445,8 +465,9 @@ class GpuStandIn:
         self.parameters = {}                     # by (lambda_electrostatics, lambda_sterics): on the device
 
     def load(self, positions: np.ndarray, box: np.ndarray, lambda_electrostatics: float,
-             lambda_sterics: float) -> GpuStandIn:
-        """The configuration and the alchemical state the next numbers are of."""
+             lambda_sterics: float, active: np.ndarray | None = None) -> GpuStandIn:
+        """The configuration and the alchemical state the next numbers are of; ``active`` as in
+        :class:`StandIn`."""
         cp, spec = self.cp, self.spec
         box = np.asarray(box, dtype=np.float64)
         inverse = np.linalg.inv(box)
@@ -475,6 +496,11 @@ class GpuStandIn:
                     + self.positions[:, 2:3] * rows[2])
             self.frac = frac - cp.floor(frac)
             self.par = self.parameters[key]
+            if active is not None:
+                off = cp.asarray(np.flatnonzero(~np.asarray(active, dtype=bool)))
+                self.par = self.par.copy()
+                self.par[off, 0] = 0.0                    # no charge
+                self.par[off, 2] = 0.0                    # no Lennard-Jones (the square root of epsilon)
             self.grids = {}
         return self
 
@@ -524,6 +550,18 @@ class GpuStandIn:
             own = cp.full(k * self.n_s, int(moved), dtype=cp.int32)
             per_site = self._sites(sites, cp.tile(self.site_par, (k, 1)), own, radius_nm)
             return cp.asnumpy(per_site.reshape(k, self.n_s).sum(axis=1))
+
+    def water_energies(self, which: np.ndarray, radius_nm: float) -> np.ndarray:
+        cp = self.cp
+        which = np.asarray(which, dtype=np.int64)
+        m = len(which)
+        if not m:
+            return np.zeros(0)
+        with self.device:
+            index = self.water_index.reshape(self.n_w, self.n_s)[cp.asarray(which)].reshape(-1)
+            own = cp.asarray(np.repeat(which, self.n_s).astype(np.int32))
+            per_site = self._sites(self.positions[index], cp.tile(self.site_par, (m, 1)), own, radius_nm)
+            return cp.asnumpy(per_site.reshape(m, self.n_s).sum(axis=1))
 
     def with_waters(self, poses: np.ndarray, moved: int) -> np.ndarray:
         cp = self.cp

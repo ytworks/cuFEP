@@ -711,6 +711,74 @@ sums over the production by window (`relocation_mc`), as numbers without a verdi
 of the moves are among the conditions of the samples of the complex leg: a leg sampled with them
 is not continued without them or with other ones.
 
+## Grand canonical moves of water
+
+The water relocation moves keep the number of waters of the system: a water that enters the place
+of the ligand is taken from the rest of the cell. With `sampling.gcmc.enabled: true` the complex
+leg instead makes grand canonical Monte Carlo moves of water in a sphere around the ligand: water
+molecules are inserted into the sphere and deleted from it, in equilibrium with a reservoir of
+bulk water. The default is off. The method is that of grand (Samways, Bruce Macdonald and Essex,
+J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Theory Comput. 2017,
+13, 6373); the sentences it rests on are quoted in `docs/configuration.md` (`sampling.gcmc`).
+
+- **Ghost waters.** The System keeps its particles. A water that is deleted stays in it as a
+  ghost, a molecule without nonbonded interactions, and an insertion puts a ghost at a place in
+  the sphere and gives it its interactions. The ghosts of the start are waters of the prepared
+  system, those whose oxygen is farthest from the ligand (`ghost_waters`); they are switched off
+  from the pre-equilibration on. Switching is done in the Context while it runs (charge and
+  epsilon of every site of the water in the nonbonded force and in the soft-core force of the
+  ligand); a Context switched so gives the energies and forces of a System built so, on both
+  backends (`spikes/m33_ghost_waters_on_the_backends.py`, the tests). With no ghost left an
+  insertion cannot be tried, and the leg stops with that reason (as grand does); it is not taken
+  for a failure of a worker or of the backend. A ghost is still a molecule for the Monte Carlo
+  barostat of the pre-equilibration, which counts it in the ideal-gas term of a volume move: 72
+  ghosts in 810 nm3 are 3.7 bar, by which the pressure of the waters that interact is lower than
+  the one recorded.
+- **The move.** With probability 1/2 an insertion, else a deletion. An insertion puts the oxygen
+  of a ghost at a point drawn uniformly in the sphere, the molecule turned at random; a deletion
+  takes one of the N waters that interact and have their oxygen in the sphere. The acceptance is
+
+      P(insert) = min[1, exp(B) exp(-beta dE) / (N + 1)]
+      P(delete) = min[1, N exp(-B) exp(-beta dE)]
+      B = beta mu'_sol + ln(V_sphere / V°)
+
+  with mu'_sol the excess chemical potential of water in bulk water and V° its standard volume.
+  The sphere is centred on the geometric centre of the heavy atoms of the ligand and follows it.
+- **Batches and two tests.** A single insertion into liquid water is accepted about once in ten
+  thousand trials. One move is therefore `attempts` trials, evaluated in batches of `batch_size`
+  from one configuration with an approximate potential (the stand-in energy of the water
+  relocation moves, on the GPU of the Context): the first trial of a batch that is accepted is
+  tested again with the potential energy of the simulation, min(1, exp(-beta [(U(j) - U(i)) -
+  (U'(j) - U'(i))])), and applied if it passes; the rest of the batch is thrown away and the count
+  of trials goes on from that trial. Each trial is so one Metropolis step with the full potential,
+  and the approximate potential decides only how many trials pass.
+- **Constant volume.** The grand canonical ensemble has a fixed volume, so the alchemical run of
+  the leg (the precalculation of the lambda windows and the replica exchange) has no barostat.
+  The pre-equilibration and the MD for the restraint keep theirs; the cell is then fixed at the
+  mean cell of the second half of the pre-equilibration, every molecule shifted whole into it.
+  The solvent leg is as without the moves, at constant pressure. The free energy of the complex
+  leg is then one at constant volume and constant chemical potential of the water in the sphere,
+  that of the solvent leg one at constant pressure; the result records the pressure at which the
+  cell of the complex leg was equilibrated as the pressure of that leg.
+- **Replica exchange and MBAR.** Every replica carries the list of its waters that interact
+  through the exchange, and its worker gives that list to the Context before the MD. The
+  energies of a configuration in all windows are taken in one Context with its own waters, so
+  the term of the chemical potential, -mu N, is the same in every window: it cancels in the
+  exchange between windows and in MBAR, whose formulas are those of a leg without the moves.
+  REST2, adaptive lambda scheduling (whose windows make the moves too) and the checks of the
+  analysis are unchanged. The tail correction of the ligand leaves out the waters that are
+  switched off in each configuration.
+
+What is recorded: the samples of the leg hold, per iteration and lambda window, the trials of an
+insertion and of a deletion, how many were made, and the number of waters in the sphere after the
+move (`gcmc`); the checkpoint holds the waters of every replica; the result of the leg gives the
+sums over the production by window and the mean, lowest and highest number of waters in the
+sphere (`gcmc`), as numbers without a verdict. The settings of the moves, with the two numbers of
+the water as they were used, are among the conditions of the samples of the complex leg.
+
+Not in this version: nonequilibrium insertions (GCNCMC), moves in the whole cell, moves in the
+solvent leg, the moves together with the water relocation moves.
+
 ## Checks of the analysis
 
 ### Free energy and uncertainty of a leg
@@ -1300,7 +1368,7 @@ The absolute binding protocol of OpenFE, from its documentation and source code 
 | replica exchange | Hamiltonian, 2.5 ps per iteration | Hamiltonian, 2.5 ps per iteration; REST2 on the ligand and the residues within 0.4 nm of it (`sampling.rest2`) |
 | MD before the alchemical run | 0.25 + 0.5 + 5 ns | 0.25 + 0.5 + 5 ns; a complex leg with the default `restraints.selection: interactions`: 0.25 + 0.5 ns with the heavy atoms of protein and ligand held and no free MD (a bilayer: 0.25 + 1.0 + 10 ns, held), from the end of which the alchemical run and the four trajectories of 3 ns for the restraint start |
 | restraint | Boresch, atoms chosen automatically, fixed force constants | from the interactions of unrestrained MD of the complex by default (`restraints.selection: interactions`); as OpenFE with `auto` |
-| water sampling | none | none by default; water relocation moves between a sphere around the ligand and the bulk in the complex leg with `sampling.relocation_mc` (RelocationMC of Ding et al.; "Water relocation moves") |
+| water sampling | none | none by default; in the complex leg, grand canonical Monte Carlo of water in a sphere around the ligand with `sampling.gcmc` ("Grand canonical moves of water"), or water relocation moves between that sphere and the bulk with `sampling.relocation_mc` (RelocationMC of Ding et al.; "Water relocation moves") |
 | GPUs | one GPU per run | replicas spread over all GPUs, several per GPU under MPS |
 | membrane | prepared by the user | switched on in the configuration; oriented, built and hydrated by cuFEP. `membrane.complex_leg: water` (cuFEP's own, off by default) keeps the bilayer for the MD of the restraint and makes the alchemical run of the complex leg in water |
 
@@ -1330,7 +1398,8 @@ reliability and efficiency of binding free energy calculations", J. Comput. Aide
 Neutral ligands only. No cofactors yet. No symmetry correction (the ligand's graph
 symmetry number is reported); a small symmetric ligand that turns over in its pocket leaves
 the unrestrained window without overlap, which the result line reports. Symmetric POPC-type
-bilayers only. No grand canonical water sampling. REST2 covers the ligand and the residues
+bilayers only. Grand canonical water sampling only as an option of the complex leg, in a sphere
+around the ligand (`sampling.gcmc`, off by default). REST2 covers the ligand and the residues
 within 0.4 nm of it by default; a slow rearrangement further away, such as a side chain
 behind the first shell, is sampled faster only if its residues are named
 (`sampling.rest2.residues`).

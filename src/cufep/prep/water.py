@@ -54,3 +54,28 @@ def water_model_of(water_file: str) -> WaterModel:
     if problem:
         raise ValueError(problem)
     return WATER_MODELS[str(water_file)]
+
+
+#: What grand canonical moves of water (``sampling.gcmc``) need of a water model, with the settings a run
+#: has (PME, the real-space cutoff of 0.9 nm, the dispersion correction, 298.15 K, 1 bar): the excess
+#: chemical potential of a water in bulk water, kcal/mol (minus the free energy of decoupling one water
+#: from the liquid), and the standard volume, nm^3 (the mean volume of the liquid per molecule). Both are
+#: of the water model AND of how its interactions are cut: the values of the literature for TIP3P, -6.09
+#: kcal/mol and 30.345 A^3 (Samways et al. 2020; the defaults of grand), are of grand's settings, without
+#: a dispersion correction and with Lennard-Jones switched off between 1.0 and 1.2 nm, and none is
+#: published for OPC. Measured with cuFEP itself on the cuPotential backend, two runs each (25 windows of 3
+#: ns, 1,386 and 1,384 waters): TIP3P -6.125 ± 0.053 and -6.129 ± 0.049 kcal/mol, 30.319 ± 0.009 and
+#: 30.343 ± 0.005 A^3; OPC -8.051 ± 0.068 and -8.046 ± 0.074 kcal/mol, 29.995 ± 0.009 and 30.003 ± 0.006
+#: A^3. For TIP3P the values of the literature agree with the measured ones within their errors and are
+#: used; for OPC the measured ones
+#: (``spikes/m34_water_chemical_potential.py``; ``docs/configuration.md`` gives them with their errors).
+#: A model without an entry needs both numbers in the configuration.
+BULK_WATER: dict[str, tuple[float, float]] = {
+    "amber14/tip3p.xml": (-6.09, 0.030345),
+    "amber14/opc.xml": (-8.05, 0.030000),
+}
+
+
+def bulk_water_values(water_file: str) -> tuple[float, float] | None:
+    """(excess chemical potential in kcal/mol, standard volume in nm^3) of the water model, or None."""
+    return BULK_WATER.get(str(water_file))

@@ -61,6 +61,7 @@ class TailEnergy:
             setattr(self, name, np.asarray(getattr(self, name), dtype=float))
         sig = 0.5 * (self.lig_sigma[:, None] + self.env_sigma[None, :])
         eps = np.sqrt(self.lig_epsilon[:, None] * self.env_epsilon[None, :])
+        self._s6_env, self._s12_env = np.sum(eps * sig ** 6, axis=0), np.sum(eps * sig ** 12, axis=0)
         self._s6 = float(np.sum(eps * sig ** 6))
         self._s12 = float(np.sum(eps * sig ** 12))
 
@@ -105,11 +106,14 @@ class TailEnergy:
         box = np.asarray(box, dtype=float)
         return max(float(self.cutoff_nm), min(float(self.long_cutoff_nm), 0.49 * min(box[0, 0], box[1, 1], box[2, 2])))
 
-    def energy(self, positions: np.ndarray, box: np.ndarray) -> float:
-        """dU_tail in kJ/mol for one configuration (positions in nm, box rows a, b, c)."""
+    def energy(self, positions: np.ndarray, box: np.ndarray, off: np.ndarray | None = None) -> float:
+        """dU_tail in kJ/mol for one configuration (positions in nm, box rows a, b, c). ``off``:
+        atoms that do not interact in this configuration (the waters that grand canonical moves
+        have switched off, :mod:`cufep.sampling.gcmc`); they are left out of both parts."""
         box = np.asarray(box, dtype=float)
         r_long = self.outer_radius(box)
         rc2, rl2 = self.cutoff_nm ** 2, r_long ** 2
+        here = np.ones(len(self.env), dtype=bool) if off is None or not len(off) else ~np.isin(self.env, off)
         env_pos = positions[self.env]
         total = 0.0
         for k, i in enumerate(self.ligand):
@@ -117,7 +121,7 @@ class TailEnergy:
                 continue
             d = minimum_image(env_pos - positions[i], box)
             r2 = np.einsum("ij,ij->i", d, d)
-            m = (r2 > rc2) & (r2 < rl2)
+            m = (r2 > rc2) & (r2 < rl2) & here
             if not m.any():
                 continue
             sig = 0.5 * (self.lig_sigma[k] + self.env_sigma[m])
@@ -125,7 +129,9 @@ class TailEnergy:
             x6 = (sig * sig / r2[m]) ** 3
             total += float(np.sum(4.0 * eps * (x6 * x6 - x6)))
         volume = float(abs(np.linalg.det(box)))
-        total += (16.0 * np.pi / volume) * (self._s12 / (9.0 * r_long ** 9) - self._s6 / (3.0 * r_long ** 3))
+        s6, s12 = (self._s6, self._s12) if here.all() else (float(self._s6_env[here].sum()),
+                                                            float(self._s12_env[here].sum()))
+        total += (16.0 * np.pi / volume) * (s12 / (9.0 * r_long ** 9) - s6 / (3.0 * r_long ** 3))
         return total
 
     def summary(self) -> dict:
