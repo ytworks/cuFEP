@@ -264,12 +264,20 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                        box_safety=1.3 if barostat == "membrane" else None, settings=settings,
                        mps_thread_percentage=thread_percentage(job.oversubscription), **more)
 
-    def from_pre_equilibration(schedule, pool_spec) -> list:
+    from cufep.sampling.states import stage_state
+
+    pool_spec_states = [stage_state("morph", 0.0).to_dict(), stage_state("morph", 1.0).to_dict()]
+
+    def from_pre_equilibration(schedule) -> list:
         """The start of every window: the end of the pre-equilibration, minimised in the state of the window
         (OpenFE's minimisation, ``MINIMIZE_STEPS``) and ``START_MD_PS`` of MD in it, all windows at the same time on
         the GPUs the leg is granted (in this process one after another where it has no workers). The atoms unique
         to the other ligand do not interact at lambda 0, so water can sit where they are: a window in which they
-        interact starts from that only after its minimisation."""
+        interact starts from that only after its minimisation. The minimisation and this MD run on stock OpenMM, as
+        the minimisation, NVT and NPT of every pre-equilibration do (cufep.sampling.equilibrate): OpenMM's
+        minimiser moves to a Context of the CPU platform where the forces are very large, and the cuPotential
+        plugin has no kernels there (the ejm_31 -> ejm_49 complex leg of the second run of the TYK2 example
+        failed so). Only the start configurations come from it; the samples are of the backend of the leg."""
         from cufep.alchemy.schedule import run_window
         from cufep.steps import md_steps
 
@@ -277,6 +285,7 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
         tasks = [{"state": state.to_dict(), "config": start, "stages": [], "candidates": 2, "temperature_K": T,
                   "equilibration_steps": md_steps(START_MD_PS, timestep_fs), "n_samples": 0, "steps_per_sample": 1,
                   "minimize_steps": MINIMIZE_STEPS} for state in schedule.states]
+        start_spec = spec_of(pool_spec_states, "openmm", seed=seed + 29)
         devices = list(job.devices)
         if job.control is not None:
             work = md_work(START_MD_PS, hybrid.system.getNumParticles(), iteration_ps)
@@ -285,10 +294,10 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                 what=f"the start of {len(tasks)} lambda windows")
             devices = granted or devices
         if not job.inline and len(devices) >= 2:
-            with WindowPool(pool_spec, devices[:len(tasks)], log) as pool:
+            with WindowPool(start_spec, devices[:len(tasks)], log) as pool:
                 done = pool.run(tasks)
         else:
-            ctx, integ = precalculation_context(pool_spec)
+            ctx, integ = precalculation_context(start_spec)
             done = [run_window(ctx, integ, task) for task in tasks]
             del ctx, integ
         return [d["config"] for d in done]
@@ -313,7 +322,6 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
         return ctx, integ
 
     def run_with(backend: str):
-        from cufep.sampling.states import stage_state
 
         hrex_dir = leg_dir / "hrex"
         sched_file, start_file = leg_dir / "schedule.yaml", leg_dir / "start_configs.npz"
@@ -328,8 +336,7 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has")
         else:
             t0 = time.perf_counter()
-            pool_spec = spec_of([stage_state("morph", 0.0).to_dict(), stage_state("morph", 1.0).to_dict()], backend,
-                                seed=seed + 23)
+            pool_spec = spec_of(pool_spec_states, backend, seed=seed + 23)
             a = ls.adaptive
             own_precalculation = ls.mode == "adaptive" and (a.legs == "each" or job.leg == "solvent")
             ctx = integ = None
@@ -341,9 +348,10 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                 schedule = schedule_from_windows(STAGES, {"morph": values},
                                                  {"morph": values if isinstance(values, int) else len(values)},
                                                  rest2_scale)
-                cfgs = from_pre_equilibration(schedule, pool_spec)
+                cfgs = from_pre_equilibration(schedule)
                 how = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
-                       "minimize_steps": MINIMIZE_STEPS, "windows": "given"}
+                       "minimize_steps": MINIMIZE_STEPS, "start_backend": "openmm",
+                       "windows": "given"}
             elif own_precalculation:
                 als = AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
                                   candidates=a.candidates, initial_windows={"morph": a.initial_windows},
@@ -370,9 +378,10 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                        "windows": "chosen by this precalculation"}
             else:
                 schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
-                cfgs = from_pre_equilibration(schedule, pool_spec)
+                cfgs = from_pre_equilibration(schedule)
                 how = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
-                       "minimize_steps": MINIMIZE_STEPS, "windows": "those of the solvent leg"}
+                       "minimize_steps": MINIMIZE_STEPS, "start_backend": "openmm",
+                       "windows": "those of the solvent leg"}
             del ctx, integ
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}
             configs = publish_windows(leg_dir, schedule, cfgs, record, leg=job.leg, edge=job.ligand,
