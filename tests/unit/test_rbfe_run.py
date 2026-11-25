@@ -105,7 +105,7 @@ def _config(tmp_path, out_dir, mode: str, legs: str = "each"):
 @pytest.mark.parametrize("mode, legs", [("adaptive", "each"), ("adaptive", "solvent"), ("fixed", "each")])
 def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_path, monkeypatch, mode, legs):
     from cufep.rbfe import leg as leg_module
-    from cufep.rbfe.leg import HybridLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
 
     # the start of the windows a leg does not choose, made short for the test (5000 steps of minimisation of every
     # window take minutes on one processor)
@@ -120,7 +120,7 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     edge_dir = out_dir / "edges" / "toluene~phenol"
     info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     assert info["legs"]["complex"]["core_atoms"] == info["legs"]["solvent"]["core_atoms"] >= 11
-    jobs = [HybridLegJob(ligand="toluene~phenol", leg=leg, repeat=0, lig_dir=str(edge_dir), devices=[None],
+    jobs = [EdgeLegJob(edge="toluene~phenol", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
                          config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True)
             for leg in ("solvent", "complex")]
     results = [run_hybrid_leg_safe(job) for job in jobs]

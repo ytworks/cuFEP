@@ -2318,6 +2318,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
         start_configurations_of,
         start_record,
         stored_windows,
+        windows_settings,
     )
 
     def config(**sections):
@@ -2336,7 +2337,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
 
     # the run that made them goes on from them
     check_leg_reuse(default, lig, "solvent", 0, {"made_from": {}}, 5.0)
-    got, configs, made = stored_windows(leg, "solvent", stages, default, log.append)
+    got, configs, made = stored_windows(leg, "solvent", stages, windows_settings(default), log.append)
     assert made["settings"] == {"alchemy": {"softcore_alpha": 0.5}, "rest2": default.sampling.rest2.model_dump()}
     assert "origin_not_recorded" not in made and made["start_configurations"] == "walk"
     assert len(got.states) == n and [c[0, 0] for c in configs[0]] == list(range(n)) and log == []
@@ -2352,7 +2353,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
         with pytest.raises(WorkflowError, match=refusal):
             check_leg_reuse(other, lig, "solvent", 0, {"made_from": {}}, 5.0)
         with pytest.raises(WorkflowError, match=refusal):
-            stored_windows(leg, "solvent", stages, other, log.append)
+            stored_windows(leg, "solvent", stages, windows_settings(other), log.append)
         check_leg_reuse(other, lig, "solvent", 0, {"made_from": {}}, 5.0, reschedule=True)     # the leg starts anew
     # another lambda_schedule is not a reason: a leg keeps the windows it has (its log says so)
     check_leg_reuse(config(lambda_schedule={"adaptive": {"start_configurations": "sequential"}}), lig, "solvent", 0,
@@ -2364,7 +2365,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     np.savez(leg / "start_configs.npz", **arrays)
     squared = config(alchemy={"softcore_b": 2})
     check_leg_reuse(squared, lig, "solvent", 0, {"made_from": {}}, 5.0)
-    got, configs, made = stored_windows(leg, "solvent", stages, squared, log.append)
+    got, configs, made = stored_windows(leg, "solvent", stages, windows_settings(squared), log.append)
     assert made == {} and "did not record the settings they were made with" in log[-1]
     assert start_configurations_of(leg) is None
     # the run that samples them first gives them its record, which says that their origin is not
@@ -2373,7 +2374,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     adopted = adopt_windows(leg, got, configs, squared, made)
     assert adopted["origin_not_recorded"] == "the lambda windows and their start configurations"
     assert adopted["settings"]["alchemy"] == {"softcore_alpha": 0.5, "softcore_b": 2}
-    later = stored_windows(leg, "solvent", stages, squared, log.append)[2]
+    later = stored_windows(leg, "solvent", stages, windows_settings(squared), log.append)[2]
     assert later == adopted and np.array_equal(np.load(leg / "start_configs.npz")["positions"], arrays["positions"])
     with pytest.raises(WorkflowError, match="alchemy.softcore_b: 2 -> not given"):
         check_leg_reuse(default, lig, "solvent", 0, {"made_from": {}}, 5.0)
@@ -2391,7 +2392,7 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
         with pytest.raises(KeyboardInterrupt):
             publish_windows(again, schedule, cfgs, start_record(default, schedule, how), leg="solvent")
     assert (again / "start_configs.npz").exists() and not (again / "schedule.yaml").exists()
-    assert stored_windows(again, "solvent", stages, default, log.append) is None
+    assert stored_windows(again, "solvent", stages, windows_settings(default), log.append) is None
     # windows are given to that leg (lambda_schedule.file), the very ones of the precalculation: its
     # start configurations are not taken for them. A run with another System, which the check
     # before the run lets pass (it sees no windows yet), is then not refused in the leg either
@@ -2485,11 +2486,12 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
     # b9e7be2, 8dc042e and 6b1a609, each of a way the copy that came first went wrong)
     took = given_schedule(tmp_path / "given.yaml", "solvent", stages, default.sampling.rest2.scale)
     assert len(took.states) == n and not (again / "schedule.yaml").exists()
-    assert stored_windows(again, "solvent", stages, other, log.append) is None      # the walk makes them
+    # the walk makes them
+    assert stored_windows(again, "solvent", stages, windows_settings(other), log.append) is None
     check_leg_reuse(other, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
     publish_windows(again, took, cfgs, start_record(other, took, given_windows_record(50.0, took, False)),
                     leg="solvent", repeat=0)
-    _schedule, _configs, made = stored_windows(again, "solvent", stages, other, log.append)
+    _schedule, _configs, made = stored_windows(again, "solvent", stages, windows_settings(other), log.append)
     assert made["windows"] == "given" and "origin_not_recorded" not in made
     assert made["settings"]["alchemy"]["softcore_b"] == 2 and Schedule.load(again / "schedule.yaml").leg == "solvent"
     # start configurations that are not those of the windows a leg has are never taken for them:
@@ -2499,10 +2501,10 @@ def test_lambda_windows_are_taken_over_only_with_the_system_and_the_windows_they
                   fixed_schedule(stages, {"discharge": 3, "vanish": 5}, default.sampling.rest2.scale)):
         given.save(again / "schedule.yaml", leg="solvent")
         check_leg_reuse(other, tmp_path / "again", "solvent", 0, {"made_from": {}}, 5.0)
-        assert stored_windows(again, "solvent", stages, default, log.append) is None
+        assert stored_windows(again, "solvent", stages, windows_settings(default), log.append) is None
         assert "are not those of the lambda windows" in log[-1]
     np.savez(again / "start_configs.npz", **arrays)
-    assert stored_windows(again, "solvent", stages, default, log.append) is None
+    assert stored_windows(again, "solvent", stages, windows_settings(default), log.append) is None
     assert f"({n} configurations, {len(given.states)} windows)" in log[-1]
 
     # a leg whose archive (--reschedule) was begun and not completed is not run as it is (review of

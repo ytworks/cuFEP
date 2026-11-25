@@ -117,7 +117,7 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
 
 
 def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None) -> dict:
-    from cufep.rbfe.leg import HybridLegJob
+    from cufep.rbfe.leg import EdgeLegJob
     from cufep.rbfe.prep import prepare_edge
     from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
 
@@ -152,7 +152,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
                                               out_dir / "edges" / edge_name(a, b), box_shape, log)
     cfg_dict = rcfg.model_dump(mode="json")
     repeats = rcfg.sampling.repeats
-    jobs = [HybridLegJob(ligand=edge_name(a, b), leg=leg, repeat=r, lig_dir=str(out_dir / "edges" / edge_name(a, b)),
+    jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
                          devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
                          reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]))
             for a, b in selected for r in range(repeats) for leg in ("solvent", "complex")
@@ -165,7 +165,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     results, monitor, mps_used = execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor, log)
     for r in results:
         if "error" in r:
-            log(f"FAILED {r.get('ligand')}/r{r.get('repeat')}/{r.get('leg')}: {r['error']}")
+            log(f"FAILED {r.get('edge')}/r{r.get('repeat')}/{r.get('leg')}: {r['error']}")
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log)
     summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, experiment)
     write_results(out_dir, summary)

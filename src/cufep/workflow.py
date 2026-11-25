@@ -22,11 +22,13 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 
 from cufep import jsonio
 from cufep.config.schema import CommonConfig, Config, WindowsConfig
+from cufep.engine.jobs import Job
 from cufep.files import publish, publish_npz, publish_text, publish_with
 
 KCAL = 4.184
@@ -839,20 +841,21 @@ def starts_are_of(made: dict, schedule) -> bool:
     return made.get("states") is None or made["states"] == [state.to_dict() for state in schedule.states]
 
 
-def check_windows_settings(made: dict, cfg: Config, where: Path, log=print) -> bool:
+def check_windows_settings(made: dict, settings: dict, where: Path, log=print) -> bool:
     """Refuse lambda windows and start configurations that were made with another System than this
     run gives (review of dd075d6: a leg that had its windows and no samples yet took them over
     after ``alchemy.annihilate_electrostatics`` was changed, and its result described windows that
     adaptive lambda scheduling had chosen with the other System). Files of a version that did not
     record the settings are used as they are, and False is returned: a run that samples such
     windows for the first time says in its result that their origin could not be checked. The
-    one check for the check before a run and for the run of a leg."""
+    one check for the check before a run and for the run of a leg. ``settings``: those of this run
+    (:func:`windows_settings` for the ABFE; a relative leg has its own)."""
     stored = made.get("settings")
     if stored is None:
         log(f"the lambda windows of this leg and their start configurations: {where} was written by a version that "
             "did not record the settings they were made with; they are used as they are")
         return False
-    differing = settings_differences(stored, windows_settings(cfg))
+    differing = settings_differences(stored, settings)
     if differing:
         raise WorkflowError(
             f"the lambda windows of this leg and their start configurations ({where}) were made with other settings "
@@ -1159,7 +1162,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         if start_file.exists():
             made = start_record_of(start_file)
             if starts_are_of(made, schedule):         # start configurations of other windows are made again
-                check_windows_settings(made, cfg, start_file, quiet)
+                check_windows_settings(made, windows_settings(cfg), start_file, quiet)
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
         return
@@ -2082,30 +2085,25 @@ class JobControl:
         self._send({"event": "serial"})
 
 
-@dataclass
-class LegJob:
+@dataclass(kw_only=True)
+class LegJob(Job):
+    """A leg of a ligand of the ABFE: ``lig_dir`` is the directory of the ligand."""
+
     ligand: str
-    leg: str                       # complex | solvent
-    repeat: int
     lig_dir: str
-    devices: list
-    config: dict
-    production_ns: float
-    reschedule: bool = False
-    inline: bool = False
-    #: size of the system, and how many workers of this job one GPU runs at the same time
-    n_atoms: int = 0
-    oversubscription: int = 1
-    #: set in the job's own process when a scheduler is in charge of the GPUs
-    control: JobControl | None = None
+
+    unit_key: ClassVar[str] = "ligand"
 
     @property
-    def leg_dir(self) -> Path:
-        return Path(self.lig_dir) / f"repeat_{self.repeat}" / self.leg
+    def name(self) -> str:
+        return self.ligand
 
     @property
-    def tag(self) -> str:
-        return f"{self.ligand}/r{self.repeat}/{self.leg}"
+    def unit_dir(self) -> Path:
+        return Path(self.lig_dir)
+
+    def runner(self):
+        return run_leg_safe
 
 
 #: what a leg directory holds of its lambda windows and its replica-exchange run
@@ -2317,9 +2315,10 @@ def _read_json(path: Path) -> dict | None:
 
 
 def _leg_identity(leg_dir: Path, job=None) -> dict:
-    """Ligand, repeat and leg of a leg directory ``<ligand>/repeat_<n>/<leg>``."""
+    """What a leg is of, its leg and its repeat: those of its job (:meth:`cufep.engine.jobs.Job.identity`), else
+    those of a leg directory ``<ligand>/repeat_<n>/<leg>`` of the ABFE."""
     if job is not None:
-        return {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat}
+        return job.identity()
     repeat = leg_dir.parent.name.removeprefix("repeat_")
     return {"ligand": leg_dir.parent.parent.name, "leg": leg_dir.name, "repeat": int(repeat) if repeat.isdigit() else 0}
 
@@ -2408,8 +2407,7 @@ def read_result(job: LegJob) -> dict:
     state, data = leg_state(job.leg_dir)
     if data is not None:
         return dict(_leg_identity(job.leg_dir, job), **data) if state == "failed" else data
-    return {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat,
-            "error": "the job process ended without writing a result (killed?)"}
+    return {**job.identity(), "error": "the job process ended without writing a result (killed?)"}
 
 
 def record_ended_job(job: LegJob, exit_code: int | None) -> dict:
@@ -2649,9 +2647,7 @@ def sample_leg(spec, hrex_dir: Path, job, configs, n_equil: int, total: int, cfg
 def run_leg(job: LegJob) -> dict:
     """Run (or resume, or extend) one leg and return its result dictionary."""
     import openmm as mm
-    import openmm.unit as u
 
-    from cufep.alchemy.candidates import initial_window_indices
     from cufep.alchemy.restraints import (
         BoreschRestraint,
         RestraintSearchSettings,
@@ -2659,23 +2655,24 @@ def run_leg(job: LegJob) -> dict:
         ligand_symmetry_number,
         with_force_constants_from_fluctuations,
     )
-    from cufep.alchemy.schedule import Schedule, adaptive_schedule, schedule_from_windows
+    from cufep.alchemy.schedule import Schedule, schedule_from_windows
+    from cufep.engine.leg import (
+        adaptive_windows,
+        chosen_backend,
+        finish_leg,
+        leg_context,
+        open_leg,
+        pre_equilibrated,
+        with_fallback,
+    )
     from cufep.mps import thread_percentage
-    from cufep.sampling.hrex import WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
-    from cufep.sampling.storage import stored_backend, stored_conditions
-    from cufep.sampling.worker import LegSpec, backend_of
+    from cufep.sampling.storage import stored_conditions
+    from cufep.sampling.worker import LegSpec
 
     cfg = Config.model_validate(job.config)
-    leg_dir = job.leg_dir
-    leg_dir.mkdir(parents=True, exist_ok=True)
-    log = _Log(leg_dir / "log.txt", prefix=f"[{job.tag}] ")
-    if job.reschedule:
-        previous = archive_leg(leg_dir)
-        if previous is not None:
-            log(
-                f"the lambda windows are determined again; the windows and samples this leg had are in {previous.name}/"
-            )
+    run = open_leg(job, cfg)
+    leg_dir, log, seed, notes, timing, timed = run.leg_dir, run.log, run.seed, run.notes, run.timing, run.timed
     is_complex = job.leg == "complex"
     lig_dir = Path(job.lig_dir)
     prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())
@@ -2692,27 +2689,16 @@ def run_leg(job: LegJob) -> dict:
             f"{len(gcmc.waters)} waters are ghosts at the start (those farthest from the ligand); the alchemical "
             "run has no barostat")
     T = cfg.thermodynamics.temperature_K
-    seed = leg_seed(cfg, job.repeat, job.leg)
-    device0 = job.devices[0] if job.devices else None
+    device0 = run.device0
     barostat = prep_info["complex_barostat"] if is_complex else "isotropic"
-    notes: list[str] = []
-    timing: dict = {"phases": {}, "started": time.time()}
-
-    def timed(name: str, t_start: float) -> None:
-        timing["phases"][name] = timing["phases"].get(name, 0.0) + (time.perf_counter() - t_start)
 
     # ---- 1. pre-equilibration: plain MD of the fully interacting system -------------------
     equil_file = leg_dir / "equil.npz"
     in_membrane = is_complex and barostat == "membrane"
-    if not equil_file.exists():
-        t0 = time.perf_counter()
-        run_pre_equilibration(cfg, job.leg, prep, system, barostat, prep_info.get("membrane_info", {}), seed,
-                              equil_file, device0, log)
-        timed("pre_equilibration", t0)
-    eq = np.load(equil_file)
+    eq, equil_recorded = pre_equilibrated(run, prep, system, barostat, prep_info.get("membrane_info", {}))
     # files of this leg that an earlier version wrote without a record of what they were made from
     origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
-    if not check_equil_file(eq, equil_file, cfg, job.leg, in_membrane, seed, log):
+    if not equil_recorded:
         origin_not_recorded.append("the pre-equilibration")
     elif "platform" not in json.loads(str(eq["made_with"])):
         origin_not_recorded.append("the platform of the pre-equilibration")
@@ -2844,15 +2830,8 @@ def run_leg(job: LegJob) -> dict:
             + f"; {alch.rest2_torsions} torsion terms scaled; "
             f"{rest2.scale:g} times the temperature in the middle of the leg"
         )
-    backend_name, bnotes = _choose_backend(cfg, alch.system, log)
-    notes += bnotes
     # samples of two backends are never mixed: a leg that has samples goes on with their backend
-    made_with = stored_backend(leg_dir / "hrex")
-    if made_with is not None and made_with != backend_name:
-        log(f"this leg goes on with {made_with}, the backend its samples were made with "
-            f"(this run would have chosen {backend_name})")
-        notes.append(f"the leg was continued on {made_with}, the backend its samples were made with")
-        backend_name = made_with
+    backend_name = chosen_backend(run, alch.system)
     stages = list(STAGES_COMPLEX if is_complex else STAGES_SOLVENT)
     pressure = cfg.thermodynamics.pressure_bar
     iteration_ps = cfg.sampling.time_per_iteration_ps
@@ -2887,7 +2866,7 @@ def run_leg(job: LegJob) -> dict:
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
             given = given_schedule(src, job.leg, stages, rest2.scale if rest2_on else 1.0)
-        stored = stored_windows(leg_dir, job.leg, stages, cfg, log)
+        stored = stored_windows(leg_dir, job.leg, stages, windows_settings(cfg), log)
         if stored is not None:
             schedule, configs, made = stored
             # windows without a record of their settings and without samples are sampled by this run
@@ -2927,24 +2906,13 @@ def run_leg(job: LegJob) -> dict:
                 relocation=built.relocation,
                 gcmc=built.gcmc,
             )
-            backend = backend_of(pool_spec)
-            prepared = backend.prepare_system(alch.system)
-            if gcmc is not None:
-                pass                                   # the cell is fixed (alchemical_box)
-            elif barostat == "membrane":
-                prepared.addForce(backend.make_membrane_barostat(pressure * u.bar, T * u.kelvin,
-                                                                  cfg.dynamics.barostat_frequency, seed=seed + 5))
-            else:
-                prepared.addForce(backend.make_isotropic_barostat(pressure * u.bar, T * u.kelvin,
-                                                                  cfg.dynamics.barostat_frequency, seed=seed + 5))
-            integ = backend.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond,
-                                            timestep_fs * u.femtoseconds, seed=seed + 6)
-            ctx = backend.make_context(prepared, integ, device0)
+            # (with grand canonical moves the cell is fixed, alchemical_box, and the spec has no barostat)
             start_box = alchemical_box(eq, gcmc)
-            ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in start_box])
-            ctx.setPositions(eq["positions"] if gcmc is None else
-                             positions_in_cell(eq["positions"], eq["box"], start_box, ctx.getMolecules()))
-            ctx.setVelocities(eq["velocities"])
+            ctx, integ = leg_context(
+                pool_spec, alch.system, start_box,
+                eq["positions"] if gcmc is None else
+                (lambda c: positions_in_cell(eq["positions"], eq["box"], start_box, c.getMolecules())),
+                eq["velocities"], device0, seed)
             t0 = time.perf_counter()
             if given is not None or sched_file.exists() or ls.mode_of(job.leg) == "fixed":
                 # the windows are given: only make a start configuration for each of them
@@ -2961,22 +2929,10 @@ def run_leg(job: LegJob) -> dict:
                 made_with = given_windows_record(ls.fixed_walk_ps, schedule, found_in_leg)
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
-                # the windows of an iteration run at the same time on the GPUs the scheduler grants
-                n_first = sum(len(initial_window_indices(als.initial_windows[st], als.candidates))
-                              for st in stages) - (len(stages) - 1)
-                devices = list(job.devices)
-                if job.control is not None:
-                    work = md_work(als.window_ps + als.equilibration_ps, alch.system.getNumParticles(),
-                                   cfg.sampling.time_per_iteration_ps)
-                    granted = job.control.request_devices(
-                        n_first, n_first * work / max(1, job.oversubscription), pinned=True,
-                        what=f"the precalculation of the lambda schedule ({n_first} lambda windows)")
-                    devices = granted or devices
-                # with workers the windows that have their start configurations run at the same time,
-                # without them one after another in this process: the same windows from the same
-                # start configurations either way (adaptive_schedule)
-                if job.inline or len(devices) < 2:
-                    # (the water relocation moves of a window are then made by a mover on this Context)
+
+                def inline_mover():
+                    """The water moves of a window made by a mover on this Context, for the windows that run in
+                    this process."""
                     mover, interval_steps = None, 0
                     if built.relocation is not None:
                         from cufep.sampling.relocation_mc import RelocationMover
@@ -2992,11 +2948,11 @@ def run_leg(job: LegJob) -> dict:
 
                         mover = GcmcMover(built.gcmc, ctx, stream_seed(seed + 23, 0, 0, GCMC_STREAM))
                         interval_steps = md_steps(built.gcmc.interval_ps, timestep_fs)
-                    schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, mover=mover,
-                                                       interval_steps=interval_steps)
-                else:
-                    with WindowPool(pool_spec, devices[:n_first], log) as pool:
-                        schedule, cfgs = adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, log, pool=pool)
+                    return mover, interval_steps
+
+                # the windows of an iteration run at the same time on the GPUs the scheduler grants
+                schedule, cfgs = adaptive_windows(run, pool_spec, ctx, integ, stages, als,
+                                                  alch.system.getNumParticles(), inline_mover)
                 made_with = {"start_configurations": als.start_configurations,
                              **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {}),
                              "windows": "chosen by this precalculation"}
@@ -3040,23 +2996,7 @@ def run_leg(job: LegJob) -> dict:
         return sample_leg(spec, hrex_dir, job, configs, n_equil, n_equil + n_prod, cfg, log, timing, timed,
                           ckpt_stride, unrecorded), schedule
 
-    # a leg that has samples from an earlier run is continued, never repeated from its start
-    had_samples = stored_conditions(leg_dir / "hrex")[0] > 0
-    try:
-        samples, schedule = run_with(backend_name)
-    except Exception as exc:  # noqa: BLE001  classified here; everything that is not repeated is raised
-        refusal = backend_fallback_refusal(exc, backend_name, cfg.backend.fallback, had_samples)
-        if refusal is not None:
-            if refusal == "the leg had samples from an earlier run":
-                raise WorkflowError(leg_with_samples_stays_on_its_backend(exc)) from exc
-            raise
-        kept = set_aside_failed_backend(leg_dir)
-        log(f"cuPotential run failed ({str(exc)[:300]}); repeating this leg on stock OpenMM; what the failed run "
-            f"left is kept in {kept.name}/")
-        notes.append("the cuPotential run failed; the whole leg was repeated on stock OpenMM "
-                     f"(samples from the two backends are never mixed; the failed run is kept in {kept.name}/)")
-        backend_name = "openmm"
-        samples, schedule = run_with(backend_name)
+    (samples, schedule), backend_name = with_fallback(run, backend_name, run_with)
 
     # ---- 6. analysis ------------------------------------------------------------------------------
     t_analysis = time.perf_counter()
@@ -3070,10 +3010,7 @@ def run_leg(job: LegJob) -> dict:
     result = leg_result_from_samples(leg_dir, cfg, run_record, samples=samples, schedule=schedule)
     analysis_dict, correction, total = result["analysis"], result["lrc"], result["delta_g_decouple"]
     timed("analysis", t_analysis)
-    timing.update(finished=time.time(), backend=backend_name, atoms=alch.system.getNumParticles(),
-                  ligand=job.ligand, leg=job.leg, repeat=job.repeat)
-    publish_text(leg_dir / "timing.json", json.dumps(timing, indent=1))
-    write_leg_result(leg_dir, result)
+    finish_leg(run, result, backend_name, alch.system.getNumParticles(), {"ligand": job.ligand})
 
     def number(value, digits: int = 2, scale: float = 1.0) -> str:
         return "none" if value is None else f"{value / scale:.{digits}f}"
@@ -3327,7 +3264,7 @@ def adopt_windows(leg_dir: Path, schedule, configs: tuple, cfg: Config, made: di
     return record
 
 
-def stored_windows(leg_dir: Path, leg: str, stages: list[str], cfg: Config, log=print):
+def stored_windows(leg_dir: Path, leg: str, stages: list[str], settings: dict, log=print):
     """The lambda windows a leg has with the start configurations of their replicas, if this run
     can go on from them: ``(schedule, (positions, boxes, velocities), the record written with the
     start configurations)``, the record empty for files of a version that wrote none. None if the
@@ -3348,7 +3285,7 @@ def stored_windows(leg_dir: Path, leg: str, stages: list[str], cfg: Config, log=
             f"({len(configs[0])} configurations, {len(schedule.states)} windows): they are made again for these "
             "windows")
         return None
-    check_windows_settings(made, cfg, start_file, log)
+    check_windows_settings(made, settings, start_file, log)
     return schedule, configs, made
 
 
@@ -3804,120 +3741,38 @@ def run_record_of(result: dict | None, leg_dir: Path | None = None) -> dict:
 
 def leg_result_from_samples(leg_dir: Path, analysis, run: dict, samples: dict | None = None, schedule=None,
                             n_equilibration: int | None = None) -> dict:
-    """The result of a leg from the samples in its directory. Needs no GPU.
+    """The result of a leg of the ABFE from the samples in its directory. Needs no GPU.
 
-    ``analysis`` gives the settings of :func:`analysis_settings` (a whole configuration, or its
-    ``analysis`` section alone), and nothing else of a configuration enters: temperature, length
-    of an iteration and the end of the equilibration are those of the samples, so that a leg
-    cannot be analysed as if it had been run under the settings of another run. ``run`` holds
-    what only the run of the leg knows (:data:`_RUN_KEYS` and its notes). The notes of the
-    pre-equilibration and of the restraint are made from the files of the leg
-    (:func:`notes_of_leg_files`). The same function serves a leg that has just been sampled,
-    ``cufep analyze``, and a result that is made again because the method or the settings of
-    the analysis have changed.
+    The analysis of the samples is that of every leg (:func:`cufep.engine.leg.path_result`): the free energy
+    along the path of the leg, here the free energy of decoupling (``delta_g_decouple``), with its checks.
+    ``analysis`` gives the settings of :func:`analysis_settings` (a whole configuration, or its ``analysis``
+    section alone) and nothing else of a configuration enters; ``run`` holds what only the run of the leg knows
+    (:data:`_RUN_KEYS` and its notes). The notes of the pre-equilibration and of the restraint are made from the
+    files of the leg (:func:`notes_of_leg_files`). The ABFE adds what its restraint and its moves of water give:
+    the release of the restraint, the end the ligand is decoupled to, the symmetry number, the numbers of the
+    moves. The same function serves a leg that has just been sampled, ``cufep analyze``, and a result that is
+    made again because the method or the settings of the analysis have changed.
     """
-    from cufep.alchemy.schedule import Schedule
-    from cufep.analysis.mbar import NoCorrection, analyze_leg
-    from cufep.analysis.structure import structural_analysis
-    from cufep.sampling.storage import equilibration_boundary, read_samples
+    from cufep.engine.leg import path_result
 
-    settings = analysis_settings(analysis)
-    a = settings.analysis
-    if samples is None:
-        samples = read_samples(leg_dir / "hrex")
-    attrs = samples["attrs"]
-    if "temperature_K" not in attrs or "iteration_ps" not in attrs:
-        raise WorkflowError(f"the samples in {leg_dir} do not record their temperature and the length of an iteration")
-    temperature, iteration_ps = float(attrs["temperature_K"]), float(attrs["iteration_ps"])
-    if n_equilibration is None:
-        n_equilibration = equilibration_boundary(attrs, leg_dir)
-        if n_equilibration is None:
-            raise WorkflowError(f"the samples in {leg_dir} are of a run that did not finish and do not record where "
-                                "its production begins")
-    problems = analysis_problems(attrs, settings)
-    if problems:
-        raise WorkflowError(f"the samples in {leg_dir} cannot be analysed with these settings: {'; '.join(problems)}")
-    if schedule is None and (leg_dir / "schedule.yaml").exists():
-        schedule = Schedule.load(leg_dir / "schedule.yaml")
-    # the production that is analysed: from the end of the equilibration of the run, or with
-    # analysis.detect_equilibration from where the detection puts it; the free energy and the
-    # numbers of the structure are of the same iterations
-    first, detected = production_start(samples, n_equilibration, a)
-    try:
-        res = analyze_leg(samples, temperature, n_equilibration=first, n_fractions=a.convergence_points,
-                          n_blocks=a.convergence_blocks, error_blocks=a.error_blocks,
-                          part_error_blocks=a.part_error_blocks, tail=a.lrc, min_overlap=a.min_overlap)
-    except NoCorrection as exc:
-        raise WorkflowError(f"the samples in {leg_dir}: {exc}") from exc
-    correction = res.correction
-    structure = structural_analysis(samples, first)
-    conditions = attrs.get("conditions") if isinstance(attrs.get("conditions"), dict) else {}
-    # the notes of the pre-equilibration and the restraint, and what their files say as numbers
-    notes, file_numbers = notes_of_leg_files(leg_dir)
-    # what the run noted besides, without the verdicts of earlier versions
-    notes += [n for n in (run.get("notes") or []) if n not in notes and not str(n).startswith(_ANALYSIS_NOTES)]
-    origin_not_recorded = list(run.get("origin_not_recorded") or [])
-    # what the files of the leg say of its windows, whoever asks (review of 8dc042e: `cufep analyze`
-    # of a leg that was stopped before its first result did not have the note of its run)
-    windows_origin = windows_origin_of(leg_dir)
-    if windows_origin and windows_origin not in origin_not_recorded:
-        origin_not_recorded.append(windows_origin)
-    # the pressure is the one the samples were made under; samples that do not record it have none
-    pressure = pressure_of_samples(conditions)
-    release, release_analytical = restraint_release_of(leg_dir, attrs, temperature)
-    # the outer radius to which the tail energy of these samples was recorded; the energies cannot
-    # be turned into those of another radius
-    tail = conditions.get("lrc") if isinstance(conditions.get("lrc"), dict) else {}
-    result = {
-        "ligand": run.get("ligand"), "leg": run.get("leg"), "repeat": run.get("repeat"), "backend": run.get("backend"),
-        "temperature_K": temperature, "pressure_bar": pressure,
-        "prepared_systems_sha256": run.get("prepared_systems_sha256"),
-        "timestep_fs": run.get("timestep_fs"), "n_states": res.n_states,
-        "production_ns": float(res.n_iterations_used * iteration_ps / 1000.0),
-        "n_iterations_stored": int(samples["u"].shape[0]), "n_equilibration_iterations": int(n_equilibration),
-        # with analysis.detect_equilibration: the iterations of the production that the detection left
-        # out after the equilibration of the run, with the statistical inefficiency and the number of
-        # uncorrelated samples of the effective energy from there on (None: the detection is off)
-        "equilibration_detected": detected,
-        # decoupling with the full LJ range (MBAR minus the tail correction of the same iterations),
-        # its standard error (cufep.analysis.mbar.TimeRangeEstimator), and the MBAR part alone
-        "delta_g_decouple": res.delta_g, "delta_g_error": res.delta_g_error,
-        "delta_g_mbar": res.delta_g_mbar, "delta_g_mbar_error": res.delta_g_mbar_error,
-        "lrc": correction, "lrc_method": a.lrc, "lrc_long_cutoff_nm": tail.get("long_cutoff_nm"),
-        "lrc_reweight": res.lrc_reweight,
-        "lrc_isotropic": res.lrc_isotropic, "lrc_error": res.correction_error, "structure": structure,
-        # numbers of the files of the leg, without a verdict
-        "bilayer": file_numbers["bilayer"], "ligand_rmsd_from_input_A": file_numbers["ligand_rmsd_from_input_A"],
-        "restraint_choice": file_numbers["restraint_choice"],
-        "restraint_release": release, "restraint_release_analytical": release_analytical,
-        # the end the ligand is decoupled to: with the electrostatics inside it kept, or annihilated
-        "annihilate_electrostatics": electrostatics_annihilated(conditions),
-        "ligand_symmetry_number": run.get("ligand_symmetry_number", 1), "analysis": res.to_dict(), "units": "kJ/mol",
-        "analysis_record": analysis_record(settings), "run": run,
-    }
-    result["quality"] = leg_quality(result["analysis"], a)
-    result["lambda_windows"] = schedule.windows() if schedule is not None else {}
-    # what this leg used although an earlier version had written it without saying what it was made from
-    result["origin_not_recorded"] = origin_not_recorded
-    if origin_not_recorded:
-        notes.append("written by an earlier version of cuFEP without a record of what it was made from, and used "
-                     f"as it is: {', '.join(origin_not_recorded)}. Nothing in these files contradicts this run; "
-                     "that they were made with its settings could not be checked")
-    if schedule is not None:
-        notes += [n for n in schedule.notes if n not in notes]
-    result["notes"] = notes + quality_warnings(result, a)
-    # windows that adaptive lambda scheduling added to its start, per stage (None: fixed windows)
-    start = schedule.provenance.get("initial_windows") if schedule is not None and schedule.mode == "adaptive" else None
-    result["lambda_windows_added"] = (
-        {name: len(values) - int(start[name]) for name, values in schedule.windows().items() if name in start}
-        if start else None)
-    # how the windows got the configurations their replicas started from (None: the files do not say)
-    result["start_configurations"] = start_configurations_of(leg_dir)
-    # the water relocation moves of the production that is analysed, by lambda window (None: none)
-    result["relocation_mc"] = relocation_numbers(samples, first)
-    # the grand canonical moves of water of that production, by lambda window (None: none)
-    result["gcmc"] = gcmc_numbers(samples, first)
-    result["rest2"] = run.get("rest2")
+    path, of = path_result(leg_dir, analysis, run, {"ligand": run.get("ligand")}, samples=samples,
+                           schedule=schedule, n_equilibration=n_equilibration, files=notes_of_leg_files)
+    release, release_analytical = restraint_release_of(leg_dir, of["attrs"], of["temperature"])
+    result = {}
+    for key, value in path.items():
+        # the free energy along the path of a leg of the ABFE: decoupling with the full LJ range
+        result["delta_g_decouple" if key == "delta_g" else key] = value
+        if key == "restraint_choice":
+            result.update({
+                "restraint_release": release, "restraint_release_analytical": release_analytical,
+                # the end the ligand is decoupled to: with the electrostatics inside it kept, or annihilated
+                "annihilate_electrostatics": electrostatics_annihilated(of["conditions"]),
+                "ligand_symmetry_number": run.get("ligand_symmetry_number", 1)})
+        elif key == "start_configurations":
+            # the water relocation moves and the grand canonical moves of water of the production that is
+            # analysed, by lambda window (None: none)
+            result["relocation_mc"] = relocation_numbers(of["samples"], of["first"])
+            result["gcmc"] = gcmc_numbers(of["samples"], of["first"])
     return result
 
 
@@ -3965,7 +3820,7 @@ def overlap_below_level(result: dict, cfg) -> list[dict]:
     return out
 
 
-def quality_warnings(result: dict, cfg) -> list[str]:
+def quality_warnings(result: dict, cfg, command: str = "cufep run CONFIG --ligand NAME") -> list[str]:
     """Warnings about a finished leg, from its checks. None of them changes what is run.
 
     The verdicts are the two checks of :func:`cufep.analysis.mbar.quality_checks`, made again from
@@ -3979,7 +3834,7 @@ def quality_warnings(result: dict, cfg) -> list[str]:
     q = leg_quality(a, cfg)
     leg = result.get("leg", "LEG")
     windows = result.get("lambda_windows") or {}
-    longer = f"cufep run CONFIG --ligand NAME --leg {leg} --production-ns NS (or sampling.production_ns)"
+    longer = f"{command} --leg {leg} --production-ns NS (or sampling.production_ns)"
 
     def place(k: int) -> str:
         where = window_stage(windows, min(k, max(0, a.get("n_states", k + 2) - 2)))
@@ -3993,11 +3848,11 @@ def quality_warnings(result: dict, cfg) -> list[str]:
     if a.get("not_determined"):
         # the leg has no free energy; the ligand counts it as failed (combine_ligand)
         out.append(f"NO FREE ENERGY: {a['not_determined']}. Give the lambda windows more overlap and run this "
-                   f"leg again: cufep run CONFIG --ligand NAME --leg {leg} --reschedule")
+                   f"leg again: {command} --leg {leg} --reschedule")
     ov = q["overlap"]
     all_ok = ov.get("all_ok", ov["ok"])            # the matrix of all iterations, equal numbers per window
     more_windows = (f"lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) "
-                    f"and run this leg again: cufep run CONFIG --ligand NAME --leg {leg} --reschedule")
+                    f"and run this leg again: {command} --leg {leg} --reschedule")
     if not all_ok:
         lowest = "not defined" if ov["lowest"] is None else f"{ov['lowest']:.3f}"
         if ov.get("windows"):
