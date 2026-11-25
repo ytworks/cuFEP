@@ -597,6 +597,19 @@ def test_start_configurations_made_again_are_the_start_of_samples_started_anew_l
                                              devices=[None], config=independent.model_dump(mode="json"),
                                              production_ns=2 * rcfg.sampling.production_ns, inline=True))
     assert "error" in refused and (leg_dir / "start_configs.npz").read_bytes() == starts
+    # seventh review: stopped right after the replica exchange wrote the checkpoint of its new start; the retry restores
+    # that checkpoint, and the result says the start made again
+    from cufep.sampling import hrex
+
+    initialize = hrex.ReplicaExchangeSampler.initialize
+
+    def stopped(self, *args, **kwargs):
+        initialize(self, *args, **kwargs)
+        raise RuntimeError("stopped after the checkpoint of the start")
+
+    monkeypatch.setattr(hrex.ReplicaExchangeSampler, "initialize", stopped)
+    assert "stopped" in run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))["error"]
+    monkeypatch.setattr(hrex.ReplicaExchangeSampler, "initialize", initialize)
     anew = run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))           # not complete: started anew
     assert "error" not in anew, anew
     assert anew["start_configurations"] == PRE_EQUILIBRATION_START

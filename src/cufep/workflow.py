@@ -2608,12 +2608,14 @@ def sample_leg(spec, hrex_dir: Path, job, configs, n_equil: int, total: int, cfg
             timed("sampling", t_sampling)
             return read_samples(hrex_dir)
         if not sampler.restore():
-            sampler.initialize(*configs)
-            # the samples start from these configurations now: their record says how they were made (sixth
-            # review of PR #18: switched before, it was lost when the replica exchange then refused the leg)
+            # the samples start from these configurations: their record says how they were made. After the
+            # replica exchange accepted the leg (a refusal keeps the start of earlier samples, sixth review of
+            # PR #18) and before initialize writes the checkpoint of the start, from which a retry restores
+            # without coming here again (seventh review)
             from cufep.engine.leg import record_the_start_used
 
             record_the_start_used(Path(hrex_dir).parent)
+            sampler.initialize(*configs)
         else:
             log(f"resumed at iteration {sampler.iteration}")
         # before the first iteration: what an analysis of an interrupted run needs to know
@@ -3033,8 +3035,14 @@ def run_leg(job: LegJob) -> dict:
             if "the samples" not in origin_not_recorded:
                 origin_not_recorded.append("the samples")
 
-        return sample_leg(spec, hrex_dir, job, configs, n_equil, n_equil + n_prod, cfg, log, timing, timed,
-                          ckpt_stride, unrecorded), schedule
+        samples = sample_leg(spec, hrex_dir, job, configs, n_equil, n_equil + n_prod, cfg, log, timing, timed,
+                             ckpt_stride, unrecorded)
+        # what the record of the start configurations says now (the replica exchange may have started from start
+        # configurations made again, whose start is known: seventh review of PR #18)
+        origin_not_recorded[:] = [item for item in origin_not_recorded if item not in WINDOWS_ORIGINS]
+        if windows_origin_of(leg_dir):
+            origin_not_recorded.append(windows_origin_of(leg_dir))
+        return samples, schedule
 
     (samples, schedule), backend_name = with_fallback(run, backend_name, run_with)
 

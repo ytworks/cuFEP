@@ -268,6 +268,12 @@ def record_the_start_used(leg_dir: Path) -> None:
         return
     record = {**{key: value for key, value in made.items()
                  if key not in START_KEYS and key != "start_configurations_made_again"}, **again}
+    # the start of these samples is known now: what is not recorded is at most the origin of the windows (seventh
+    # review of PR #18: the mark of an earlier version said the start configurations too)
+    from cufep.workflow import WINDOWS_ORIGINS
+
+    if record.get("origin_not_recorded") == WINDOWS_ORIGINS[0]:
+        record["origin_not_recorded"] = WINDOWS_ORIGINS[1]
     with np.load(start_file) as start:
         arrays = {key: start[key] for key in start.files if key != "made_with"}
     publish_npz(start_file, made_with=_json.dumps(record), **arrays)

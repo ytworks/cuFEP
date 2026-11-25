@@ -218,6 +218,28 @@ def test_an_abfe_leg_keeps_its_windows_by_the_checks_of_the_engine(tmp_path, mon
         assert "error" not in unknown, unknown
         assert unknown["start_configurations"] is None
 
+        # seventh review: start configurations of an earlier version (adopted: their origin is not recorded), the
+        # checkpoint lost, one window short, a longer production: the replica exchange starts anew from start
+        # configurations made again, whose start is known; what is not recorded is the origin of the windows only
+        import json as _json
+
+        import numpy as np
+
+        from cufep.workflow import WINDOWS_ORIGINS, start_record_of
+
+        made = start_record_of(leg_dir / "start_configs.npz")
+        made = {**{k: v for k, v in made.items() if k != "start_configurations_made_again"},
+                "start_configurations": "walk", "walk_ps": 0.2, "origin_not_recorded": WINDOWS_ORIGINS[0]}
+        with np.load(leg_dir / "start_configs.npz") as start:
+            arrays = {key: start[key][:-1] for key in start.files if key != "made_with"}
+        np.savez(leg_dir / "start_configs.npz", made_with=_json.dumps(made), **arrays)
+        (leg_dir / "hrex" / "checkpoint.npz").unlink()
+        longer = cfg.model_copy(update={"sampling": cfg.sampling.model_copy(update={"production_ns": 0.01})})
+        anew = run_leg_safe(job(longer))
+        assert "error" not in anew, anew
+        assert anew["start_configurations"].startswith("walk of the given windows")
+        assert anew["origin_not_recorded"] == [WINDOWS_ORIGINS[1]]
+
         # fifth review: a finished leg whose schedule is lost is refused by the run before its result is set aside
         from cufep import run as run_module
         from cufep.config.auto import AutoReport
