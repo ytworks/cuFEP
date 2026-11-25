@@ -43,11 +43,10 @@ def test_the_complex_leg_is_pre_equilibrated_with_the_solute_held_and_no_free_md
     from cufep.workflow import pre_equilibration_parts
 
     rcfg = RbfeConfig.model_validate(_minimal())
-    assert pre_equilibration_parts(rcfg.shared(), "complex", False) == (0.0, True)
+    assert pre_equilibration_parts(rcfg, "complex", False) == (0.0, True)
     in_bilayer = RbfeConfig.model_validate(_minimal(membrane={"enabled": True}))
-    assert pre_equilibration_parts(in_bilayer.shared(), "complex", True) == (in_bilayer.membrane.equilibration_ns, True)
-    assert pre_equilibration_parts(rcfg.shared(), "solvent", False) == (rcfg.sampling.pre_equilibration.solvent.md_ns,
-                                                                         False)
+    assert pre_equilibration_parts(in_bilayer, "complex", True) == (in_bilayer.membrane.equilibration_ns, True)
+    assert pre_equilibration_parts(rcfg, "solvent", False) == (rcfg.sampling.pre_equilibration.solvent.md_ns, False)
 
 
 def test_complex_legs_alone_that_take_the_windows_of_a_solvent_leg_without_them_are_refused(tmp_path):

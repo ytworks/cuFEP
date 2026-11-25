@@ -29,12 +29,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from typing import ClassVar
 
 import numpy as np
 import openmm as mm
 import openmm.unit as unit
 
 from cufep.alchemy.factory import MAIN_GROUP, REST2_DQ, REST2_DS, REST2_GROUP, SOFTCORE_GROUP
+from cufep.engine.protocol import HYBRID, canonical_stage, rest2_scale_along_leg
 from cufep.rbfe.hybrid import (
     HYBRID_GROUP,
     HYBRID_HOT_GROUP,
@@ -71,6 +73,8 @@ def lambda_functions(x: float) -> dict[str, float]:
 
 @dataclass(frozen=True)
 class HybridState:
+    #: the protocol of the state (cufep.engine.protocol)
+    protocol: ClassVar[str] = HYBRID
     lambda_hybrid: float = 0.0
     #: REST2: effective temperature of the hot region relative to that of the run (as AlchemicalState)
     rest2_scale: float = 1.0
@@ -94,6 +98,8 @@ class HybridState:
 
 
 def validate_hybrid_states(states: list[HybridState]) -> None:
+    if not all(isinstance(s, HybridState) for s in states):
+        raise ValueError("the states are not all hybrid states")
     if len(states) < 2:
         raise ValueError("at least two thermodynamic states are needed")
     for s in states:
@@ -253,5 +259,39 @@ class HybridEnergyEvaluator:
         return self.beta * energy, volume
 
 
+class _Hybrid:
+    """The protocol of a relative transformation through a hybrid topology (:mod:`cufep.engine.protocol`)."""
+
+    name = HYBRID
+    stages = (MORPH,)
+    stage_parameter = {MORPH: LAMBDA_STERICS_CORE}
+
+    @staticmethod
+    def leg_stages(leg: str) -> tuple[str, ...]:
+        return (MORPH,)
+
+    @staticmethod
+    def stage_state(stage: str, lam: float, stages=None, rest2_scale: float = 1.0) -> HybridState:
+        if canonical_stage(stage) != MORPH:
+            raise ValueError(f"'{stage}' is not the stage of a relative transformation")
+        lam = float(min(1.0, max(0.0, lam)))
+        scale = 1.0 if rest2_scale == 1.0 else rest2_scale_along_leg(stages or [MORPH], MORPH, lam, rest2_scale)
+        return HybridState(lam, scale)
+
+    @staticmethod
+    def state_from_dict(d: dict) -> HybridState:
+        return HybridState(**d)
+
+    @staticmethod
+    def evaluator(context, states, temperature_K: float, pressure_bar: float | None) -> "HybridEnergyEvaluator":
+        return HybridEnergyEvaluator(context, states, temperature_K, pressure_bar)
+
+    @staticmethod
+    def validate(states) -> None:
+        validate_hybrid_states(states)
+
+
+PROTOCOL = _Hybrid()
+
 __all__ = ["HybridState", "HybridEnergyEvaluator", "lambda_functions", "validate_hybrid_states", "MORPH",
-           "STERIC_LAMBDAS"]
+           "STERIC_LAMBDAS", "PROTOCOL"]

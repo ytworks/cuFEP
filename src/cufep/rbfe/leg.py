@@ -192,7 +192,7 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
     )
 
     rcfg = RbfeConfig.model_validate(job.config)
-    cfg = rcfg.shared()
+    cfg = rcfg                                  # the sections the engine of a leg reads (CommonConfig)
     leg_dir = job.leg_dir
     leg_dir.mkdir(parents=True, exist_ok=True)
     log = _Log(leg_dir / "log.txt", prefix=f"[{job.tag}] ")
@@ -260,10 +260,10 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                        barostat_frequency=cfg.dynamics.barostat_frequency, exchange=cfg.sampling.exchange,
                        friction_per_ps=cfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
                        steps_per_iteration=plan.steps_per_iteration, cpu_threads=cfg.resources.cpu_threads_per_worker,
-                       box_safety=1.3 if barostat == "membrane" else None, settings=settings,
+                       box_safety=1.3 if barostat == "membrane" else None, settings=settings, protocol=HYBRID,
                        mps_thread_percentage=thread_percentage(job.oversubscription), **more)
 
-    from cufep.sampling.states import stage_state
+    from cufep.engine.protocol import HYBRID, stage_state
 
     pool_spec_states = [stage_state("morph", 0.0).to_dict(), stage_state("morph", 1.0).to_dict()]
 
@@ -283,7 +283,7 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
         start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
         tasks = [{"state": state.to_dict(), "config": start, "stages": [], "candidates": 2, "temperature_K": T,
                   "equilibration_steps": md_steps(START_MD_PS, timestep_fs), "n_samples": 0, "steps_per_sample": 1,
-                  "minimize_steps": MINIMIZE_STEPS} for state in schedule.states]
+                  "minimize_steps": MINIMIZE_STEPS, "protocol": HYBRID} for state in schedule.states]
         start_spec = spec_of(pool_spec_states, "openmm", seed=seed + 29)
         devices = list(job.devices)
         if job.control is not None:

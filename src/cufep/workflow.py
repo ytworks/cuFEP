@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from cufep import jsonio
-from cufep.config.schema import Config, WindowsConfig
+from cufep.config.schema import CommonConfig, Config, WindowsConfig
 from cufep.files import publish, publish_npz, publish_text, publish_with
 
 KCAL = 4.184
@@ -437,22 +437,24 @@ def prep_contradictions(info: dict, ligand_name: str, membrane: bool, box_shape:
     return [f"{key}: {info[key]} -> {value}" for key, value in expected.items() if key in info and info[key] != value]
 
 
-def pre_equilibration_parts(cfg: Config, leg: str, in_membrane: bool) -> tuple[float, bool]:
+def pre_equilibration_parts(cfg: CommonConfig, leg: str, in_membrane: bool) -> tuple[float, bool]:
     """``(the MD in ns that follows NVT and NPT in the pre-equilibration of a leg, whether the solute
     is held by position restraints through all of it)``.
 
     The MD is ``sampling.pre_equilibration.<leg>.md_ns``, and for a bilayer at least
-    ``membrane.equilibration_ns``; nothing is held in it. A complex leg whose restraint is chosen
-    from interactions (``restraints.selection: interactions``) is different: its trajectories
-    start from the pose that was given, as in the method of Ding et al., which starts them from
-    the minimised input. The heavy atoms of protein and ligand are held through NVT and NPT while
-    the solvent and the box settle, and no free MD follows: the four trajectories are that MD. A
-    bilayer that was just built still needs ``membrane.equilibration_ns`` to close around the
+    ``membrane.equilibration_ns``; nothing is held in it. A leg whose configuration holds its solute
+    (:meth:`cufep.config.schema.CommonConfig.holds_solute`) is different: the heavy atoms of protein
+    and ligand are held through NVT and NPT while the solvent and the box settle, and no free MD
+    follows. In the ABFE that is a complex leg whose restraint is chosen from interactions
+    (``restraints.selection: interactions``): its trajectories start from the pose that was given, as
+    in the method of Ding et al., which starts them from the minimised input, and are that MD; in a
+    relative calculation the complex leg, as OpenFE starts its relative legs from the minimised input
+    pose. A bilayer that was just built still needs ``membrane.equilibration_ns`` to close around the
     protein, and the solute is held through it (the owner's decision of 2026-11-21, after two runs
     of the A2A example chose their restraints from two different states the ligand had reached in
     10 ns of free MD)."""
     pre = cfg.sampling.pre_equilibration.complex if leg == "complex" else cfg.sampling.pre_equilibration.solvent
-    if leg == "complex" and cfg.restraints.selection == "interactions":
+    if cfg.holds_solute(leg):
         return (float(cfg.membrane.equilibration_ns) if in_membrane else 0.0), True
     return float(max(pre.md_ns, cfg.membrane.equilibration_ns) if in_membrane else pre.md_ns), False
 
@@ -3717,7 +3719,7 @@ def unrecorded_samples_problems(attrs: dict, n_stored: int, leg_dir: Path, cfg: 
     ``states`` are those of the leg's lambda schedule (None if there is none), ``timestep_fs``
     the time step the leg uses.
     """
-    from cufep.sampling.states import state_from_dict
+    from cufep.engine.protocol import state_from_dict
     from cufep.sampling.storage import _same, equilibration_boundary
 
     def normal(sequence):

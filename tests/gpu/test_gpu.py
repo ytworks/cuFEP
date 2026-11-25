@@ -10,9 +10,10 @@ from cufep.alchemy.factory import make_alchemical_system
 from cufep.alchemy.schedule import fixed_schedule
 from cufep.backends import get_backend
 from cufep.backends.cupotential import CuPotentialBackend
+from cufep.engine.protocol import make_state_evaluator
 from cufep.envcheck import check_environment
 from cufep.sampling.hrex import ReplicaExchangeSampler
-from cufep.sampling.states import StateEnergyEvaluator, make_state_evaluator
+from cufep.sampling.states import StateEnergyEvaluator
 from cufep.sampling.storage import read_samples
 from cufep.sampling.worker import LegSpec
 

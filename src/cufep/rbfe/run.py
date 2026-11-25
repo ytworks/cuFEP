@@ -119,19 +119,16 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
 def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None) -> dict:
     from cufep.rbfe.leg import HybridLegJob
     from cufep.rbfe.prep import prepare_edge
-    from cufep.run import execute_jobs, plan, write_timing
+    from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
 
     t_run = time.time()
     ligands = ligands_of(rcfg)
     if len(ligands) < 2:
         raise WorkflowError("a relative calculation needs at least two ligands")
-    resolved, report, protein, ligands = plan(rcfg.shared(), log, ligands)
-    # the settings auto resolved for the shared sections are those of the relative run
-    rcfg = RbfeConfig.model_validate({**rcfg.model_dump(mode="json"),
-                                      "backend": resolved.backend.model_dump(mode="json"),
-                                      "resources": resolved.resources.model_dump(mode="json"),
-                                      "solvation": resolved.solvation.model_dump(mode="json"),
-                                      "output": {"dir": str(out_dir)}})
+    resolved, report, protein = prepare_protein_and_settings(rcfg, rcfg.system.protein, log)
+    names = [lig.name for lig in ligands]
+    log(f"{len(ligands)} ligand(s): {', '.join(names[:8])}{' ...' if len(names) > 8 else ''}")
+    rcfg = RbfeConfig.model_validate({**resolved.model_dump(mode="json"), "output": {"dir": str(out_dir)}})
     for key, value, reason in report.decisions:
         log(f"auto: {key} = {value} ({reason})")
     for w in report.warnings:

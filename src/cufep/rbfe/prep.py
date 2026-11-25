@@ -121,7 +121,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
             if membrane:
                 from cufep.prep.membrane import add_membrane
 
-                membrane_info = add_membrane(modeller, forcefield, cfg.shared(), log, water=cfg.forcefield.water)
+                membrane_info = add_membrane(modeller, forcefield, cfg, log, water=cfg.forcefield.water)
                 notes.extend(f"membrane: {w}" for w in membrane_info.pop("warnings", []))
             else:
                 solvate(modeller, forcefield, SolvationSpec(padding_nm=cfg.solvation.padding_complex_nm,
