@@ -387,7 +387,15 @@ record always holds the elements of the overlap matrix of the windows of the sta
 (`superdiagonal`), and with `overlap_matrix: pair` also the overlap of each pair alone
 (`pair_overlap`), which the rule read. Both are of the samples of the precalculation and of the
 windows of one stage. The analysis of the production checks another number: the element of the
-matrix of all windows of the leg, from the samples of the production. The
+matrix of all windows of the leg, from the samples of the production. With them `schedule.yaml`
+holds the thermodynamic length of every stage (`thermodynamic_length`), from the same samples of
+the precalculation and in kT: per window the standard deviation of the gradient of the energy
+with respect to lambda (the central difference of the two candidates next to the window) and
+its integral over lambda from the start of the stage by the trapezoidal rule (the metric of
+Clark et al., J. Chem. Theory Comput. 2024, 20, 7806, eq 19, as the source of A3FE computes
+it), per pair of neighbouring windows their distance and the acceptance of an exchange between
+them, as the mean over all pairs of their samples. These are numbers of the record: the rule
+does not read them. The
 last configuration of each window is the start of its replica; replica exchange then runs
 its own equilibration before the production. How the windows were started is written with the
 start configurations (`start_configs.npz`, which is written before `schedule.yaml`, so that a
@@ -1112,6 +1120,12 @@ neighbouring windows over the production, as the samples record them per iterati
 earlier versions do not, and have none. `neighbour_transition_fraction` is the fraction of
 iterations after which a replica had moved to a neighbouring window, which earlier versions
 reported as the acceptance; it misses moves that are undone within one iteration of mixing.
+`neighbour_distance` is the thermodynamic length between each pair of neighbouring windows over
+the production, in kT: the root of the mean of the two variances of the energy difference
+between the two windows, in the samples of each. If that difference is normally distributed, an
+exchange between two windows a length d apart is accepted with probability erfc(d / 2) and the
+overlap of the two alone is 0.40 for d = 1 and 0.22 for d = 2. `stage_length` is the sum of the
+lengths of the pairs of each stage. No level is applied to either.
 
 ### When a leg carries a message
 

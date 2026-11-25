@@ -1,5 +1,5 @@
 # λ スケジュール: 熱力学的長さによる配置と重なりの床
-Status: Planned (2026-11-25: 計画のみ承認。実装は未着手。「質問」7 件はオーナーの判断待ち)
+Status: In progress (2026-11-25: 段階 0、1、2 を実施。窓の選び方は何も変えていない (段階 3 の新方式は未実装)。「質問」7 件はオーナーの判断待ち)
 Refs: this pull request; `docs/protocol.md` ("Adaptive lambda scheduling"); `docs/configuration.md` (`lambda_schedule.adaptive`); `docs/plans/2026-11-21-als-initial-window-design.md`
 
 ## Context
@@ -42,7 +42,8 @@ JCIM 2025, 65, 512) から、熱力学的長さによる配置 (A3FE: Clark et a
    行える。保存ファイルからはできない (本計算の u は窓だけ)。
 2. **Opt-PSO の出典は Zhang, Giese, Lee, York (JCTC 2024, 20, 3935)。** 窓数を固定し、隣接重なりの分散を最小に
    する方法で、目標値は無い (要約取得のみ、全文は段階 0)。
-3. **vanish 端点で σ² が発散するかは未確認。** cuFEP のソフトコアは Beutler 形 (α 0.5)。段階 1 で測る。
+3. **vanish 端点で σ² の発散は見えない。** cuFEP のソフトコアは Beutler 形 (α 0.5)。保存済み 66 脚では長さの密度は
+   λ 0.6 から 0.9 で最大で、端では下がる (「記録」の段階 1)。
 
 既知の実測 (`docs/plans/2026-11-21-als-initial-window-design.md`): complex 脚の往復は 13 実行すべてで 0〜1 回で、
 最低隣接受理率が 0.07 でも 0.47 でも変わらない。受理率が最も高い C が ΔG のばらつきも最大だった。
@@ -53,9 +54,12 @@ JCIM 2025, 65, 512) から、熱力学的長さによる配置 (A3FE: Clark et a
 
 1. **提案。** `initial_windows` の窓を今と同じ事前計算で走らせる (変更なし)。
 2. **計量。** 各提案窓で σ = sd[(u(λ+Δλ) − u(λ−Δλ)) / 2Δλ] を自分のサンプルから取る (Δλ = 0.01、端は片側差分)。
-   候補格子上で線形補間して積分し、累積長 Λ(λ) とステージ長 L を得る (kT)。A3FE 式 19 (g = 1) と同じ量。
-3. **配置。** s = 2·erfcinv(a\*)、区間数 K = ceil(L/s)。Λ が等間隔になる候補に窓を置く (両端は固定、s は脚の
-   全ステージで共通)。窓は提案より減ってよい。合計が `max_windows` を超えるなら L に比例して K を減らし、注記を残す。
+   提案窓の上で台形則で積分し、累積長 Λ とステージ長 L を得る (kT)。A3FE 式 19 (g = 1) の量で、A3FE のソースと
+   同じ計算 (「記録」の段階 0)。
+3. **配置。** s = 2·erfcinv(a\*)、区間数 K = ceil(L/s)。Λ の等分点を、提案窓の間の線形補間で λ に戻し (A3FE と
+   同じ)、最も近い候補に置く (両端は固定、s は脚の全ステージで共通)。窓は提案より減ってよい。合計が `max_windows` を
+   超えるなら L に比例して K を減らし、注記を残す。A3FE は区間数を round(L/s) で取る。cuFEP は ceil にする
+   (独自: 区間の長さが s を超えないようにする)。
 4. **実測と修復。** 既存のループに戻る。新しい窓だけ走らせ、`pair_overlap` を測り、脚の `overlap_threshold` 以下の
    区間に `als_step` が 1 窓ずつ足す。停止条件と注記は今のまま。
 5. **記録。** `schedule.yaml` の provenance に、方式、a\*、s (kT と kcal/mol)、ステージごとの L と σ、提案の窓、
@@ -63,7 +67,8 @@ JCIM 2025, 65, 512) から、熱力学的長さによる配置 (A3FE: Clark et a
 
 組み合わせ (A3FE の計量、プレプリントの受理率目標、Midgley の規則での修復) は cuFEP 独自として文書に記す。
 
-ガウス近似での換算 (手計算。段階 1 の単体テストで固定する):
+ガウス近似での換算 (`cufep.alchemy.thermodynamic_length` の関数の値。関数は調和窓のサンプルに対して単体テストで
+確かめてある):
 
 | 隣接窓の長さ d (kT) | 交換受理率 erfc(d/2) | pair 重なり | stage 行列の要素 (等間隔) |
 |---|---|---|---|
@@ -164,7 +169,7 @@ lambda_schedule:
 | 段階 | 内容 | 検証 |
 |---|---|---|
 | 0 | 出典の全文確認と規則の書き下し (A3FE の SI、Minh、Rizzi、Nguyen & Minh、Zhang et al.、プレプリント)。`PROGRESS.md` に記入。コード無し | `check_progress_size.py`、`check_names.py` |
-| 1 | 測定の関数 (新モジュール `src/cufep/alchemy/thermodynamic_length.py`: 勾配の sd、累積長、受理率の予測、ガウス換算)。スパイク `spikes/m35_thermodynamic_length.py` で保存済み 66 脚の本計算 u から、ステージ長、ペアごとの d、ガウス予測対実測、s ごとの予測窓数、事前計算と本計算の pair 重なりの差を出す。挙動は変えない | 単体テスト: 調和窓で長さ = 両端の距離、受理率 = erfc(d/2)、既存の固定値 0.400 / 0.223。既存テスト全通過。GPU 不要。表を報告 |
+| 1 | 測定の関数 (新モジュール `src/cufep/alchemy/thermodynamic_length.py`: 勾配の sd、累積長、受理率の予測、ガウス換算)。スパイク `spikes/m36_thermodynamic_length.py` で保存済み 66 脚の本計算 u から、ステージ長、ペアごとの d、ガウス予測対実測、s ごとの予測窓数、事前計算と本計算の pair 重なりの差を出す。挙動は変えない | 単体テスト: 調和窓で長さ = 両端の距離、受理率 = erfc(d/2)、既存の固定値 0.400 / 0.223。既存テスト全通過。GPU 不要。表を報告 |
 | 2 | 記録の追加。既定の ALS の事前計算で σ、累積長、最終窓の予測受理率を provenance に書く。本計算の解析にペアごとの長さと予測を数として足す (判定なし) | provenance と解析の新しい数の単体テスト。ゴールデン不変 (`ANALYSIS_VERSION` 据え置き)。`m9_als_variants.py` で保存済みの脚の事前計算だけやり直す (GPU 1 台)。GPU テスト |
 | 3 | 新方式 (opt-in)。config、`configuration_problems`、`als_settings`、純関数 `place_by_length`、`adaptive_schedule` の分岐 (提案の後に窓を置き換え、既存ループで実測と修復)、provenance、`lambda_window_table`、文書 | 単体テスト: 等長に置かれ窓数が s どおり、提案より減る場合、床を割るペアだけ修復 (二峰の合成系)、設定エラー、既定 `als` の窓が不変。入口ごとの同一状態 (再開、`analyze`、`benchmark freeze`、`--reschedule`)。GPU テスト (プール)。スモーク階層が終了コード 0。書いていない者の短い差分レビュー |
 | 4 | 検証実行 (Verification) と記録。既定は変えない | 結果をこの計画の「記録」、`PROGRESS.md`、`docs/configuration.md` に書く |
@@ -208,7 +213,7 @@ lambda_schedule:
 | 実行ごとのばらつきが増える (start B、C で起きた。原因不明) | V2 |
 | 事前計算のコスト増 (最終の窓のほぼ全部が新規) | `windows_simulated` と `timing.json` の `lambda_schedule` |
 | solvent 脚の σ が雑音 (100 サンプル/窓) で配置が揺れる | 段階 1 の合成テスト。段階 2 で同じ脚の事前計算を 2 回 |
-| vanish 端点で σ が大きく、窓が端に集まるか `max_windows` に当たる | V0 のステージ長。実行時は注記 |
+| vanish 端点で σ が大きく、窓が端に集まるか `max_windows` に当たる | V0 で測った: ステージ長は 17 から 22 kT で、端に集まらない (「記録」の段階 1)。実行時は注記 |
 | 設定の食い違い (目標が床より下、stage の明示) | 設定エラーとそのテスト |
 | 入口による違い (再開、`analyze`、`freeze`、`--reschedule`) | 段階 3 の入口横断テスト |
 | 窓が必要以上に近く、解析の stage 行列が 0.03 を割る | 換算表では d ≥ 0.11 (a\* ≤ 0.94) で起きない。V1 の `min_overlap` |
@@ -227,10 +232,119 @@ lambda_schedule:
 6. 「Opt-PSO (Lee et al.)」は Zhang, Giese, Lee, York の論文を指すか。
 7. 検証は solvent 脚も新方式にする案でよいか。
 
-未確認 (作業で埋める):
+未確認:
 
-- A3FE の SI (S1、S2、S10)、Minh、Rizzi、Nguyen & Minh、Zhang et al. の全文 (段階 0)。計画の時点で読んだのは
-  A3FE 本文の 2.1、3.3、4.2.1 節とプレプリントの S1.8 節。
+- A3FE の SI (S1、S2、S10)、Minh、Rizzi、Nguyen & Minh、Zhang et al. の全文。読んだものは「記録」の段階 0。
 - cuPotential のパラメータ微分への対応 (計画は依存しない)。
-- vanish 端点での σ の振る舞い (V0)。
-- 換算表の数値 (段階 1 の単体テスト)。
+- 事前計算の勾配から取る長さ (段階 2 で記録する)。「記録」の段階 1 の長さは本計算の隣接窓の距離の和。
+
+## 記録
+
+### 段階 0: 出典 (2026-11-25)
+
+- **A3FE の論文** (Clark et al., JCTC 2024, 20, 7806)。本文の 2.1、2.1.1、3.3、4.1.2、4.2.1 節を読んだ。式は Europe PMC の
+  XML では画像で、規則は文面とソースから取った。
+  - 2.1.1: "The windows can then be spaced according to eqs 19 or 18 by ensuring that the areas under the [...] curves
+    between each value of λ are equal. [...] We specify a constant thermodynamic speed".
+  - 4.1.2: "we select λ values to achieve minimum variance using eq 19 based on a short set of initial simulations of
+    negligible cost. [...] a single replicate run with 0.1 ns sampling per window. This is effectively equivalent to
+    selecting states to achieve equal and sufficient overlap when statistical inefficiency is ignored."
+  - 4.2.1: "A speed of 2.0 kcal mol–1 appeared close to the maximum, because low off-diagonal overlaps were observed
+    (according to the rule-of-thumb that off-diagonal values should not be lower than 0.03)." "If this method were used
+    with replica exchange, benefits would still be expected at relatively high thermodynamic speeds, but the need for a
+    sufficiently high exchange rate may favor lower speeds." "This protocol requires that the λ-schedule for the trial
+    simulations is sufficiently dense to faithfully capture variations in [...] with λ."
+- **A3FE のソース** (github.com/michellab/a3fe、main、2026-11-25 に取得、GPL-3。規則を読むだけでコードは写さない)、
+  `a3fe/analyse/process_grads.py`:
+  1. `get_integrated_error(er_type="root_var")`: 各 λ の勾配の分散の平方根を、走らせた λ の上で台形則で積分する。
+  2. `calculate_optimal_lam_vals`: 値の数は round(全長 / delta_er) + 1、最少 2。0 から全長までを等分し、各点を
+     積分値から λ への線形補間で λ に戻し、小数 3 桁に丸める。
+  3. `Stage.get_optimal_lam_vals` の説明: "A sensible default [...] for root_var is 2 kcal mol-1"。
+  4. `get_predicted_overlap_mat`: 隣接窓の重なりの予測は 1 / (2 + β²Δλ²·(両窓の分散の平均) / 2)。
+- **cuFEP が変える点**: 勾配は候補格子の中心差分 (Δλ 0.01)。単位は kT。区間数は ceil。λ は候補に丸める。
+- **Walter & Bereau** (arXiv:2610.11714 v1) の S1.8 節を全文読んだ: "During the proposal simulations we computed the
+  energy of every sampled configuration in every λ state, so the exchange acceptance can be predicted for any pair of
+  states. We used this acceptance as the measure of overlap, since it directly limits the replica exchange and requires
+  no additional simulations." "we assumed Gaussian distributed exchange energies. The acceptance of a pair then depends
+  only on the distance between the two states, analogous to a thermodynamic length. Summing these distances gives a
+  cumulative length along the leg, and equally spaced windows in this length yield a uniform acceptance."
+  "Targeting an acceptance of 0.35". 受理率と距離の式は本文に無い。erfc(d/2) は cuFEP が導いた
+  (`src/cufep/alchemy/thermodynamic_length.py` の説明、単体テスト)。全リガンド共通のスケジュールを 1 回決める方法で、
+  リガンドごとではない。
+- **Zhang, Giese, Lee, York** (JCTC 2024, 20, 3935): PMC のページの要約取得のみ。採らない方法なので全文は読んでいない。
+- 未読: A3FE の SI (S1、S2、S10)、Minh、Rizzi、Nguyen & Minh。
+
+### 段階 1: 測定の関数と、保存済みの実行の測定 V0 (2026-11-25)
+
+実装: `src/cufep/alchemy/thermodynamic_length.py` (勾配の標準偏差、台形則の累積長、隣接窓のエネルギー差、距離、
+サンプルの全ペアでの交換受理率、ガウスの換算)、`tests/unit/test_thermodynamic_length.py` (調和窓。4 件)、
+`spikes/m36_thermodynamic_length.py`。挙動は変えていない (どこからも呼ばれない)。
+
+測定: e77a6c5 の全セット 2 つ (TYK2 16、A2A 17、各 2 脚で 66 脚、隣接ペア 1581) の本計算 5 ns のサンプルから。GPU 無し。
+出力は `spikes/out/m36/full_e77a6c5/` (追跡外)。隣接窓の距離は、両窓のサンプルでのエネルギー差の分散の平均の平方根。
+ステージ長はその和。数は中央値 [5 %、95 %] で、スパイクの出力 (小数 4 桁) から丸めた。
+
+| | complex restrain | complex discharge | complex vanish | solvent discharge | solvent vanish |
+|---|---|---|---|---|---|
+| ペア数 | 174 | 330 | 521 | 177 | 379 |
+| 隣接窓の距離 (kT) | 1.07 [0.75, 1.65] | 0.67 [0.59, 0.98] | 1.31 [0.67, 1.77] | 1.60 [1.14, 2.22] | 1.55 [0.99, 2.32] |
+| 記録された受理率 | 0.45 [0.25, 0.60] | 0.63 [0.49, 0.68] | 0.38 [0.27, 0.64] | 0.26 [0.12, 0.41] | 0.31 [0.17, 0.51] |
+| 受理率 ÷ erfc(d/2) | 1.01 [0.97, 1.14] | 1.00 [0.99, 1.02] | 1.05 [0.92, 1.40] | 1.01 [0.94, 1.08] | 1.16 [0.94, 1.87] |
+| 受理率 ÷ サンプルの全ペアの平均 | 1.00 [0.97, 1.03] | 1.00 [0.98, 1.02] | 1.00 [0.97, 1.03] | 1.00 [0.96, 1.04] | 1.00 [0.97, 1.03] |
+| pair 重なり | 0.386 [0.283, 0.438] | 0.449 [0.402, 0.460] | 0.356 [0.297, 0.450] | 0.295 [0.196, 0.373] | 0.320 [0.230, 0.406] |
+| pair 重なり ÷ ガウスの値 | 1.00 [1.00, 1.06] | 1.00 [1.00, 1.00] | 1.02 [0.98, 1.18] | 1.00 [0.98, 1.03] | 1.07 [0.97, 1.37] |
+| pair 重なり ÷ A3FE の予測式 | 1.00 [0.98, 1.02] | 1.00 [0.99, 1.00] | 1.01 [0.96, 1.12] | 0.97 [0.86, 1.00] | 1.03 [0.92, 1.17] |
+| pair 重なり ÷ 事前計算の値 | 0.97 [0.84, 1.10] | 0.99 [0.95, 1.02] | 0.97 [0.83, 1.09] | (stage 行列の脚) | (stage 行列の脚) |
+| 上の窓の sd ÷ 下の窓の sd | 0.97 [0.66, 1.04] | 0.98 [0.91, 1.06] | 1.41 [0.92, 1.95] | 0.93 [0.85, 0.99] | 1.66 [0.81, 2.29] |
+| ステージ長 (kT) | 6.2 [4.8, 7.6] | 7.3 [6.2, 8.4] | 19.3 [16.7, 22.2] | 8.7 [7.5, 9.6] | 18.7 [16.9, 20.1] |
+| 今の窓数 | 6 [6, 7] | 11 [11, 11] | 16 [15, 19] | 6 [6, 7] | 12 [11, 14] |
+| 受理率 0.55 での窓数 (s 0.85 kT) | 9 [7, 10] | 10 [9, 11] | 24 [21, 28] | 12 [10, 13] | 24 [22, 25] |
+| 受理率 0.35 での窓数 (s 1.32 kT) | 6 [5, 7] | 7 [6, 8] | 16 [14, 18] | 8 [7, 9] | 16 [14, 17] |
+| 受理率 0.27 での窓数 (s 1.56 kT) | 5 [5, 6] | 6 [6, 7] | 14 [12, 16] | 7 [6, 8] | 13 [12, 14] |
+| 受理率 0.23 での窓数 (s 1.70 kT) | 5 [4, 6] | 6 [5, 6] | 13 [11, 15] | 7 [6, 7] | 13 [12, 13] |
+
+| 脚 | 今の窓数 | 0.55 | 0.35 | 0.27 | 0.23 | 最低の受理率 | 最高の受理率 | 受理率の sd ÷ 平均 | 往復 (回/ns) |
+|---|---|---|---|---|---|---|---|---|---|
+| complex (33 脚) | 31 [30, 35] | 42 [36, 46] | 28 [23, 30] | 23 [21, 27] | 22 [18, 24] | 0.24 [0.11, 0.32] | 0.68 [0.64, 0.74] | 0.28 [0.23, 0.32] | 0 [0, 0] |
+| solvent (33 脚) | 18 [17, 19] | 34 [32, 37] | 23 [21, 25] | 19 [18, 21] | 18 [17, 19] | 0.13 [0.08, 0.19] | 0.48 [0.37, 0.59] | 0.31 [0.25, 0.38] | 4.6 [2.2, 6.9] |
+
+- 受理率 0.27 は pair 重なり 0.30 に、0.55 と 0.23 は A3FE の速さ 0.5 と 1.0 kcal/mol に当たる (ガウスの換算、実行の温度 298.15 K で)。
+- complex 脚 33 のうち 32 は往復が 0 回 (最低の受理率は 0.06 から 0.34)。solvent 脚は 5 ns で 8 から 35 回。
+- pair 重なりがガウスの値の 0.878 倍以下 (受理率 0.35 の距離に置いた窓が 0.30 以下に測られる比) のペアは 1581 のうち 4
+  (complex restrain 1、complex vanish 2、solvent vanish 1)。
+- vanish の長さの密度 (kT ÷ λ、λ の 10 分の 1 ごとの中央値): complex 16.7、17.1、17.6、18.2、19.3、20.9、22.1、27.7、27.7、
+  17.0。solvent 12.3、13.9、(窓なし)、15.8、18.4、21.6、28.4、33.7、21.0、10.1。最大は complex が λ 0.7 から 0.9、solvent が
+  0.6 から 0.8 で、端 (λ 1) では下がる (`spikes/m36_thermodynamic_length.py` の出力の最後の表。ペアの中点で 10 分の 1 に分けた)。
+  complex の最後のペア (0.95 から 1) は距離 0.71、受理率 0.62 (erfc は 0.61)。
+- 距離が最大のペアは A2A の complex 脚 3 本の restrain の最初 (λ 0 から 0.2): 距離 3.5 から 4.4、pair 重なり 0.12 から 0.28
+  (4i は受理率 0.06)。
+- ステージ長は窓数に依らなかった。ejm_31 の complex vanish (`runs/tyk2_windows_{a,b,c}_5e2cf33_{1,2,3}`): A は 18〜19 窓で
+  20.65、20.31、20.06。B は 23〜24 窓で 20.01、20.45、20.20。C は 39 窓で 19.62、20.79、20.53。受理率 0.35 での complex 脚の
+  窓数は 9 本とも 27 か 28 (実際は A 33〜35、B 35、C 59)。
+
+計画への反映: 「指示の前提と違う点」の 3 (vanish 端点) は測定で決着した (発散は見えない。密度は端の手前で最大)。
+既定値 (質問 1、2) はこの表を見てオーナーが決める。
+
+短い差分レビュー (書いていない者、15 分): 窓・ステージ・λ の取り違えは無し。直したもの: この表の 7 セルの二重丸め、
+受理率の関数が数でない差 (NaN) を「必ず受理」と数えていた点 (記録の数には影響なし。保存済みの u は有限)、差を
+窓ごとに切り詰めていた点、端からの添字や範囲外の受理率を黙って受けていた点、長さの密度の表にスクリプトが無かった点。
+
+### 段階 2: 記録の追加 (2026-11-25)
+
+窓は変えない。規則も判定も長さを読まない。
+
+- 事前計算: `schedule.yaml` の provenance に `thermodynamic_length` を足した。ステージごとに、最終の窓の `lambda`、
+  `gradient_sd` (候補格子の中心差分の標準偏差)、`length` (台形則の累積)、隣接ペアの `pair_distance` と
+  `exchange_acceptance` (2 窓のサンプルの全ペアの平均)。`cufep.alchemy.thermodynamic_length.stage_record`。
+- 解析: 脚の結果に `neighbour_distance` (隣接窓の距離) と `stage_length` (ステージごとの和) を足した。
+  `ANALYSIS_VERSION` とゴールデンの数は変えていない (固定された項目の外)。前の結果には無い (空)。
+- テスト: 調和窓の事前計算で記録が既知の値になること (`test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_a_pair_alone`
+  に追加)、交換する調和窓 6 つの解析で距離とステージ長が既知の値になること
+  (`test_the_analysis_of_a_leg_gives_the_lengths_between_its_windows`)。
+- 機能確認: TYK2 のスモーク階層 (jmc_23、4 GPU、作業ツリーを載せた `cufep:dev`、`runs/benchmark_tyk2_smoke_tl_stage2`)。
+  終了コード 0。両脚の `schedule.yaml` に記録があり、その `lambda` は窓と一致。結果に 2 つの数がある。スモーク階層は
+  事前計算 10 ps、本計算 0.1 ns なので、数はプロトコルのものではない (complex の vanish: 事前計算の勾配から 14.8 kT、
+  本計算の距離の和 20.4 kT)。
+- 計画との違い: `spikes/m9_als_variants.py` での事前計算のやり直しはしていない。このスパイクは REST2 と今の既定の
+  開始に追随しておらず、今の事前計算を再現しない。実パイプラインはスモーク階層で通した。既定の長さ (complex
+  500 + 500 ps) の事前計算の勾配から取る長さと本計算の距離の和の比較は、段階 4 の実行で行う。

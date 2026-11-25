@@ -59,6 +59,7 @@ import yaml
 
 from cufep.alchemy.candidates import initial_indices, initial_window_indices
 from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS
+from cufep.alchemy.thermodynamic_length import stage_record
 from cufep.sampling.states import (
     R_GAS,
     STAGE_ALIASES,
@@ -570,6 +571,13 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             notes.append(f"adaptive lambda scheduling stopped in the {name} stage at the limit of "
                          f"{s.max_windows} windows with neighbouring windows still below the overlap threshold")
     values = {name: [i / top for i in windows[k]] for k, name in enumerate(stages)}
+    # the thermodynamic length of every stage, from the samples of its windows: numbers for the
+    # record, which the rule does not read (cufep.alchemy.thermodynamic_length)
+    lengths = {}
+    for k, name in enumerate(stages):
+        measured = stage_record([runs[node(k, i)]["energies"][name] for i in windows[k]], windows[k], 1.0 / top)
+        lengths[name] = {"lambda": [round(i / top, 6) for i in windows[k]],
+                         **{key: [round(float(v), 4) for v in series] for key, series in measured.items()}}
     schedule = _assemble(stages, values, "adaptive", s.rest2_scale, notes=notes,
                          provenance={"method": "adaptive lambda scheduling", "overlap_threshold": s.overlap_threshold,
                                      # the matrix the threshold was compared with (a schedule written
@@ -593,7 +601,12 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                                      "initial_windows": {n: len(first[k]) for k, n in enumerate(stages)},
                                      "initial_lambda": {n: [round(i / top, 6) for i in first[k]]
                                                         for k, n in enumerate(stages)},
-                                     "windows_simulated": len(runs), "iterations": records})
+                                     "windows_simulated": len(runs), "iterations": records,
+                                     # per stage and window the standard deviation of the gradient
+                                     # of the energy with respect to lambda and the length from the
+                                     # start of the stage, per pair of neighbouring windows their
+                                     # distance and the acceptance of an exchange between them, kT
+                                     "thermodynamic_length": lengths})
     configs = []
     for k, _name in enumerate(stages):
         for j, i in enumerate(windows[k]):

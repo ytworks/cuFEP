@@ -167,6 +167,12 @@ class LegAnalysis:
     #: back (what earlier versions reported as the acceptance; it misses moves undone within one
     #: iteration of mixing)
     neighbour_transition_fraction: list[float] = field(default_factory=list)
+    #: the thermodynamic length between neighbouring windows over the production, in kT, from the
+    #: energy difference between the two in the samples of each
+    #: (cufep.alchemy.thermodynamic_length.pair_distance), and for every stage the sum over its
+    #: pairs. Numbers without a level; empty in results written before they were reported
+    neighbour_distance: list[float] = field(default_factory=list)
+    stage_length: dict[str, float] = field(default_factory=dict)
     #: the whole overlap matrix of the windows (overlap_neighbour is its first off-diagonal),
     #: from all iterations with the same number of samples in every window
     overlap_matrix: list[list[float]] = field(default_factory=list)
@@ -1321,11 +1327,16 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         error, bar_blocks, bar_error_note = estimator.bar_error(0, n, error_blocks)
         bar_error = float("nan") if error is None else float(error)
 
-    stages = {}
+    from cufep.alchemy.thermodynamic_length import pair_differences, pair_distance
+
+    distances = [pair_distance(x, y) for x, y in pair_differences(u, states)]
+    stages, lengths = {}, {}
     state_dicts = attrs.get("states", [])
-    if isinstance(state_dicts, list) and len(state_dicts) == n_states and not not_determined:
+    if isinstance(state_dicts, list) and len(state_dicts) == n_states:
         for name, (a, b) in stage_boundaries(state_dicts).items():
-            stages[name] = float((f_k[b] - f_k[a]) * kt)
+            lengths[name] = float(sum(distances[a:b]))
+            if not not_determined:
+                stages[name] = float((f_k[b] - f_k[a]) * kt)
 
     def whole_correction(method: str) -> float | None:
         """The correction of the whole production by another method, for comparison."""
@@ -1358,6 +1369,7 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
         overlap_neighbour=neighbour, min_overlap=float(min(neighbour)) if neighbour else 1.0,
         round_trips=count_round_trips(states), neighbour_transition_fraction=neighbour_swap_fraction(states),
         swap_acceptance_neighbour=swap_acceptance(samples, n_equilibration, n),
+        neighbour_distance=distances, stage_length=lengths,
         overlap_matrix=np.round(overlap, 4).tolist(),
         overlap_used_matrix=[] if used is None else np.round(used, 4).tolist(),
         overlap_used_weighted_by_number=[] if by_number is None else np.round(by_number, 4).tolist(),

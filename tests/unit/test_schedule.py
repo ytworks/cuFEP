@@ -3,6 +3,8 @@
 The adaptive rule is the one of Midgley et al., J. Chem. Inf. Model. 2025, 65, 512; the
 module docstring of cufep.alchemy.schedule states it step by step.
 """
+import math
+
 import numpy as np
 import openmm as mm
 import pytest
@@ -293,6 +295,16 @@ def test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_
     assert min(last["pair_overlap"]) > 0.33 and len(last["pair_overlap"]) == len(last["superdiagonal"])
     assert max(np.diff(values)) < 0.045 and 26 <= len(values) <= 32            # 1.2 widths or less, and no more
     assert max(last["superdiagonal"][1:-1]) < 0.26                             # what the matrix of the stage reads
+    # the thermodynamic length of the stage is recorded with its windows (the rule does not read it):
+    # 30 widths per unit of lambda, so that is the standard deviation of the gradient in every window,
+    # the stage is 30 long, and neighbours d widths apart would exchange with probability erfc(d / 2)
+    length = by_pair.provenance["thermodynamic_length"]["vanish"]
+    apart = 30.0 * np.diff(values)
+    assert length["lambda"] == [round(v, 6) for v in values]
+    assert length["gradient_sd"] == pytest.approx([30.0] * len(values), rel=0.1)
+    assert length["length"][0] == 0.0 and length["length"][-1] == pytest.approx(30.0, rel=0.03)
+    assert length["pair_distance"] == pytest.approx(apart, rel=0.1)
+    assert length["exchange_acceptance"] == pytest.approx([math.erfc(d / 2.0) for d in apart], abs=0.05)
 
     by_stage = precalculation_of_harmonic_windows(ctx, integ, "stage", max_windows=28)
     last = by_stage.provenance["iterations"][-1]
