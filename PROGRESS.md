@@ -104,13 +104,24 @@ Open items:
   in two defaults at once (`restraints.selection`, the start of the complex leg): their
   difference does not by itself show the effect of either. How much one calculation varies is
   measured for ejm_31 (the item on the complex leg above), ejm_49 and 4k (the item on the plan).
-- `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
-  5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
-  decision (`.claude/rules/fep-invariants.md`).
-- The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4, CUDA 13.4,
-  ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
+- `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and 5 A: a stop
+  of cuFEP's own without a published basis, kept until the owner decides (`.claude/rules/fep-invariants.md`).
+- The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4, CUDA 13.4, ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
+- Plan `docs/plans/2026-11-25-thermodynamic-length-schedule.md` (planned; nothing implemented, nothing run): an opt-in placement of the lambda
+  windows at equal thermodynamic length with the present rule as the repair; no default changes. Seven questions wait for the owner (the plan).
 
 ## Change Log
+
+### 2026-11-25 — [design] Plan: lambda windows placed by thermodynamic length, the present rule as the repair
+- What: the owner's order: a development plan, no implementation yet. Opt-in
+  (`lambda_schedule.adaptive.method: thermodynamic_length`, defaults unchanged): proposal windows,
+  placed again at equal thermodynamic length from the candidate energies the precalculation already
+  computes (Clark et al., JCTC 2024, 20, 7806, eq 19), then repaired by the present rule on the overlap
+  of a pair; the spacing from a target exchange acceptance (provisional). Five stages in one pull
+  request (the owner), the first two without a GPU. Seven questions wait for the owner. Not run.
+- Why: the present rule only adds windows and leaves their spacing uneven; with replica exchange the
+  spacing is bounded by the exchange, so the paper's case for windows as wide as possible does not carry over.
+- Refs: `docs/plans/2026-11-25-thermodynamic-length-schedule.md`, this pull request
 
 ### 2026-11-25 — [design] The owner's decision: the runs stop, no default changes for now
 - What: after the four runs with grand canonical moves of water (the entry below) the owner stops the
