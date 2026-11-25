@@ -357,7 +357,9 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
     from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
 
     lig_a, lig_b = _molecules(smiles_b, core_b)
-    field = make_forcefield(ForceFieldSpec(), [lig_a, lig_b])
+    # each end state with its own ligand alone, as cufep.rbfe.prep builds them
+    field = make_forcefield(ForceFieldSpec(), [lig_a])
+    field_b = make_forcefield(ForceFieldSpec(), [lig_b])
     top_a = lig_a.offmol.to_topology().to_openmm()
     pos_a = lig_a.offmol.conformers[0].m_as("nanometer") + 1.0
     modeller = app.Modeller(top_a, pos_a * u.nanometer)
@@ -369,7 +371,7 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
     modeller_b.delete([next(modeller_b.topology.residues())])
     top_b = lig_b.offmol.to_topology().to_openmm()
     modeller_b.add(top_b, (lig_b.offmol.conformers[0].m_as("nanometer") + 1.0) * u.nanometer)
-    system_b = create_system(field, modeller_b.topology, spec)
+    system_b = create_system(field_b, modeller_b.topology, spec)
     for system in (system_a, system_b):
         for f in system.getForces():
             if isinstance(f, mm.NonbondedForce):

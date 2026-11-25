@@ -125,3 +125,51 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
     edge = summary["edges"][0]
     assert edge["ddg"] == pytest.approx(-1.5) and edge["se"] == pytest.approx(0.3 * math.sqrt(2))
     assert summary["dg"]["values"]["b"]["dg"] - summary["dg"]["values"]["a"]["dg"] == pytest.approx(-1.5)
+
+
+def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float = 298.15, pressure: float = 1.0):
+    return {"delta_g": dg_kcal * 4.184, "delta_g_error": None if se_kcal is None else se_kcal * 4.184,
+            "temperature_K": temperature, "pressure_bar": pressure, "lrc_method": "none",
+            "prepared_systems_sha256": "abc", "n_states": 9, "backend": "openmm", "notes": [],
+            "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}}}
+
+
+def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
+    import json
+
+    for leg, result in (("complex", complex_), ("solvent", solvent)):
+        leg_dir = out_dir / "edges" / edge / f"repeat_{repeat}" / leg
+        leg_dir.mkdir(parents=True)
+        (leg_dir / "result.json").write_text(json.dumps(result))
+
+
+def test_legs_of_other_conditions_or_without_a_standard_error_give_no_ddg_and_the_network_goes_on(tmp_path):
+    """Review of PR #17: the legs of an edge run at 298 K and 310 K (two runs of --leg in one directory) were
+    subtracted, and a leg whose standard error could not be determined (null) stopped the whole combination with a
+    TypeError. Such an edge gets no ddG, says why, and the other edges are combined."""
+    from cufep.rbfe.run import combine_network
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "b~c", 0, _leg_result(-8.0, temperature=310.0), _leg_result(-9.0))
+    _write_legs(tmp_path, "a~c", 0, _leg_result(-7.0, se_kcal=None), _leg_result(-6.0))
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")], 1, {})
+    edges = {e["edge"]: e for e in summary["edges"]}
+    assert edges["a~b"]["ddg"] == pytest.approx(-1.5)
+    assert "ddg" not in edges["b~c"] and any("temperature" in item for item in edges["b~c"]["inconsistent_legs"])
+    assert "ddg" not in edges["a~c"]
+    assert edges["a~c"]["repeats"][0]["no_standard_error"] == ["complex"]
+
+
+def test_the_free_energies_of_the_legs_in_the_table_give_its_ddg(tmp_path):
+    """Review of PR #17: with two repeats (complex, solvent) = (1, 0) and (5, 0) kcal/mol the table gave the ddG of
+    both (3) next to the legs of the first (1 and 0). The legs are the means over the same repeats as the ddG."""
+    import csv
+
+    from cufep.rbfe.run import combine_network, write_results
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(1.0), _leg_result(0.0))
+    _write_legs(tmp_path, "a~b", 1, _leg_result(5.0), _leg_result(0.0))
+    write_results(tmp_path, combine_network(tmp_path, ["a", "b"], [("a", "b")], 2, {}))
+    row = next(csv.DictReader((tmp_path / "edges.csv").open()))
+    assert float(row["ddg_kcal_mol"]) == pytest.approx(3.0)
+    assert float(row["complex_dg"]) - float(row["solvent_dg"]) == pytest.approx(3.0)

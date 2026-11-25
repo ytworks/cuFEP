@@ -31,6 +31,9 @@ def test_documented_defaults_are_the_defaults_of_the_code(repo):
     ({"network": {"edges": [["a", "a"]]}}, "to itself"),
     ({"network": {"edges": [["a", "b"], ["b", "a"]]}}, "twice"),
     ({"analysis": {"lrc": "reweight"}}, "lrc"),
+    # review of PR #17: nine windows to start with and at most two
+    ({"lambda_schedule": {"adaptive": {"max_windows": 2}}}, "max_windows"),
+    ({"lambda_schedule": {"adaptive": {"initial_windows": 12, "candidates": 11}}}, "initial_windows"),
 ])
 def test_settings_a_relative_run_cannot_take_are_refused_when_read(more, message):
     with pytest.raises(ValueError, match=message):
@@ -68,3 +71,22 @@ def test_complex_legs_alone_that_take_the_windows_of_a_solvent_leg_without_them_
     for name in ("schedule.yaml", "start_configs.npz"):
         (solvent / name).write_text("")
     check_windows_of_the_solvent_leg(paper, tmp_path, edges, ["complex"])
+
+
+@pytest.mark.parametrize("failed, missing, code", [([], ["a~b"], 0), (["a~b/r1/complex"], [], 1)])
+def test_the_exit_code_is_that_of_the_jobs_of_this_run(monkeypatch, tmp_path, failed, missing, code):
+    """Review of PR #17: the exit code said whether every edge had a ddG. A run of --leg solvent alone that
+    succeeded ended with 1 (the complex legs were not run), and a repeat that failed next to one that gave the ddG
+    ended with 0. It is 1 exactly when a job of this run failed."""
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep.rbfe import run as run_module
+
+    summary = {"edges": [{"edge": e} for e in missing] + [{"edge": "x~y", "ddg": 1.0}], "failed_in_this_run": failed}
+    monkeypatch.setattr(run_module, "run_rbfe", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(cli, "_load_rbfe", lambda path: RbfeConfig.model_validate(_minimal()))
+    (tmp_path / "c.yaml").write_text("x: 1\n")
+    result = CliRunner().invoke(cli.main, ["rbfe", "run", str(tmp_path / "c.yaml")])
+    assert result.exit_code == code, result.output
+

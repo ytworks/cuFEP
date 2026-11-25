@@ -11,6 +11,7 @@ topology of state A with the ligand replaced.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -75,11 +76,8 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     prep_dir = Path(edge_dir) / "prep"
     done = prep_dir / "prep.json"
     made_from = edge_made_from(cfg, ligand_a, ligand_b, box_shape)
-    if done.exists():
-        info = json.loads(done.read_text())
-        if info.get("made_from") != made_from:
-            raise WorkflowError(f"the prepared systems in {prep_dir} were made from other inputs or settings; "
-                                "remove the directory of the edge to prepare it again")
+    info = prepared_edge(cfg, ligand_a, ligand_b, edge_dir, box_shape)
+    if info is not None:
         return info
     prep_dir.mkdir(parents=True, exist_ok=True)
     for lig in (ligand_a, ligand_b):
@@ -99,7 +97,11 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     ffspec = ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water, lipid=cfg.forcefield.lipid,
                             ligand=cfg.forcefield.ligand)
     membrane = bool(cfg.membrane.enabled)
-    forcefield = make_forcefield(ffspec, [ligand_a, ligand_b], include_lipid=membrane)
+    # each end state with its own ligand alone: with both in one force field OpenMM matches a ligand of the same
+    # bonded graph (E/Z isomers, another pose of one molecule) to the template of the other, and its System gets
+    # the charges of the other (review of PR #17). The system is built (solvent, bilayer) with ligand A
+    forcefield = make_forcefield(ffspec, [ligand_a], include_lipid=membrane)
+    forcefield_b = make_forcefield(ffspec, [ligand_b], include_lipid=membrane)
     sysspec = SystemSpec(cutoff_nm=cfg.dynamics.cutoff_nm, hydrogen_mass_amu=cfg.dynamics.hmr_mass_amu,
                          constraints="hbonds" if cfg.dynamics.constraints in ("auto", "hbonds") else "none")
     plugin = cfg.backend.name == "cupotential"
@@ -121,7 +123,12 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
             if membrane:
                 from cufep.prep.membrane import add_membrane
 
-                membrane_info = add_membrane(modeller, forcefield, cfg, log, water=cfg.forcefield.water)
+                # a water of more than three sites: the bilayer is built with the 3-site water of the lipid patch,
+                # in a force field that add_membrane asks for (review of PR #17: none was given, TypeError)
+                membrane_info = add_membrane(
+                    modeller, forcefield, cfg, log, water=cfg.forcefield.water,
+                    forcefield_with_water=lambda file: make_forcefield(replace(ffspec, water=file), [ligand_a],
+                                                                       include_lipid=True))
                 notes.extend(f"membrane: {w}" for w in membrane_info.pop("warnings", []))
             else:
                 solvate(modeller, forcefield, SolvationSpec(padding_nm=cfg.solvation.padding_complex_nm,
@@ -135,7 +142,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
         _check_box(modeller, cfg.dynamics.cutoff_nm, what)
         modeller_b = _modeller_with_ligand_replaced(modeller, ligand_a, ligand_b)
         system_a = create_system(forcefield, modeller.topology, sysspec)
-        system_b = create_system(forcefield, modeller_b.topology, sysspec)
+        system_b = create_system(forcefield_b, modeller_b.topology, sysspec)
         return modeller, system_a, modeller_b, system_b, membrane_info
 
     info = {"ligand_a": ligand_a.name, "ligand_b": ligand_b.name, "lomap_score": score, "made_from": made_from,
@@ -171,6 +178,23 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     return info
 
 
+def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> dict | None:
+    """The record of the prepared systems of an edge if they exist and this run can take them, None if there are
+    none yet; WorkflowError if they were made from other inputs or settings. Writes nothing: a run checks every edge
+    it runs with it before it writes anything (review of PR #17)."""
+    from cufep.workflow import WorkflowError
+
+    prep_dir = Path(edge_dir) / "prep"
+    done = prep_dir / "prep.json"
+    if not done.exists():
+        return None
+    info = json.loads(done.read_text())
+    if info.get("made_from") != edge_made_from(cfg, ligand_a, ligand_b, box_shape):
+        raise WorkflowError(f"the prepared systems in {prep_dir} were made from other inputs or settings; "
+                            "remove the directory of the edge to prepare it again")
+    return info
+
+
 def edge_made_from(cfg, ligand_a, ligand_b, box_shape: str) -> dict:
     """What the prepared systems of an edge are made from: the inputs (digests) and the settings that enter."""
     import hashlib
@@ -180,7 +204,8 @@ def edge_made_from(cfg, ligand_a, ligand_b, box_shape: str) -> dict:
             "forcefield": cfg.forcefield.model_dump(mode="json"), "membrane": cfg.membrane.model_dump(mode="json"),
             "solvation": cfg.solvation.model_dump(mode="json"), "box_shape": box_shape,
             "mapping": cfg.mapping.model_dump(mode="json"), "backend": cfg.backend.name,
-            "thermodynamics": {"ionic_strength_M": cfg.thermodynamics.ionic_strength_M},
+            # the pH sets the protonation states of a protein given without hydrogens (review of PR #17)
+            "thermodynamics": {"ionic_strength_M": cfg.thermodynamics.ionic_strength_M, "ph": cfg.thermodynamics.ph},
             "dynamics": {k: getattr(cfg.dynamics, k) for k in ("cutoff_nm", "hmr_mass_amu", "constraints")}}
 
 

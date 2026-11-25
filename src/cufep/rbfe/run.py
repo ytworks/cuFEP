@@ -118,7 +118,7 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
 
 def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None) -> dict:
     from cufep.rbfe.leg import EdgeLegJob
-    from cufep.rbfe.prep import prepare_edge
+    from cufep.rbfe.prep import prepare_edge, prepared_edge
     from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
 
     t_run = time.time()
@@ -140,12 +140,16 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     if unknown:
         raise WorkflowError(f"--edge: {', '.join(unknown)} is not an edge of the run (edges: {', '.join(names)})")
     check_windows_of_the_solvent_leg(rcfg, out_dir, selected, only_legs)
+    by_name = {lig.name: lig for lig in ligands}
+    box_shape = rcfg.solvation.box_shape
+    # every prepared edge this run takes, before it writes anything: a refused run keeps the record of the run
+    # whose results the directory holds (review of PR #17)
+    for a, b in selected:
+        prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
     experiment = experiment_of(rcfg, ligands)
     write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
     publish_text(out_dir / "auto_report.md", report.to_markdown())
     protein.write_pdb(out_dir / "protein_prepared.pdb")
-    by_name = {lig.name: lig for lig in ligands}
-    box_shape = rcfg.solvation.box_shape
     infos = {}
     for a, b in selected:
         infos[edge_name(a, b)] = prepare_edge(rcfg, by_name[a], by_name[b], protein,
@@ -163,11 +167,15 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         f"{rcfg.sampling.production_ns:g} ns production")
     gpus = list(rcfg.resources.gpus) if rcfg.resources.gpus else [None]
     results, monitor, mps_used = execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor, log)
+    failed_now = []
     for r in results:
         if "error" in r:
-            log(f"FAILED {r.get('edge')}/r{r.get('repeat')}/{r.get('leg')}: {r['error']}")
+            failed_now.append(f"{r.get('edge')}/r{r.get('repeat')}/{r.get('leg')}")
+            log(f"FAILED {failed_now[-1]}: {r['error']}")
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log)
     summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, experiment)
+    # what the exit code of `cufep rbfe run` says: whether a job of this run failed (review of PR #17)
+    summary["failed_in_this_run"] = failed_now
     write_results(out_dir, summary)
     for line in result_lines(summary):
         log(line)
@@ -186,8 +194,18 @@ def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, 
 
 def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     """ddG of an edge from the results of its legs (kcal/mol); repeats are averaged, their standard deviation
-    given (as the ABFE combines repeats)."""
+    given (as the ABFE combines repeats).
+
+    A repeat counts only with both legs and the standard error of both (a leg whose error could not be determined
+    is named under ``no_standard_error``). The legs of all repeats that count must have been made under the same
+    conditions (:func:`cufep.workflow.cycle_differences`, the check of the ABFE: temperature, pressure, prepared
+    systems ...); if they were not, the edge gets no ddG and says what differs (``inconsistent_legs``) (review of
+    PR #17: legs at 298 K and 310 K were subtracted). The free energies of the legs are the means over the same
+    repeats as the ddG, which is their difference."""
+    from cufep.workflow import cycle_differences
+
     out = {"edge": edge_name(a, b), "ligand_a": a, "ligand_b": b, "repeats": []}
+    complete = []
     for r in range(repeats):
         legs = {}
         for leg in ("complex", "solvent"):
@@ -197,6 +215,11 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             out["repeats"].append({"repeat": r, "missing": [leg for leg in legs if not legs[leg]
                                                              or legs[leg].get("delta_g") is None]})
             continue
+        no_error = [leg for leg in legs if legs[leg].get("delta_g_error") is None]
+        if no_error:
+            out["repeats"].append({"repeat": r, "no_standard_error": no_error})
+            continue
+        complete += [(f"{leg} leg of repeat {r}", legs[leg]) for leg in legs]
         c, s = legs["complex"], legs["solvent"]
         ddg, se = edge_ddg(c["delta_g"], c["delta_g_error"], s["delta_g"], s["delta_g_error"])
         out["repeats"].append({
@@ -209,10 +232,17 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             "fewest_independent_samples": {leg: legs[leg]["quality"]["samples"].get("counted") for leg in legs},
             "backend": {leg: legs[leg].get("backend") for leg in legs},
             "warnings": [f"{leg}: {n}" for leg in legs for n in legs[leg].get("notes", [])]})
-    done = [r for r in out["repeats"] if "ddg" in r]
+    inconsistent, not_compared = cycle_differences(complete)
+    if inconsistent:
+        out["inconsistent_legs"] = inconsistent
+    if not_compared:
+        out["not_compared"] = not_compared
+    done = [r for r in out["repeats"] if "ddg" in r] if not inconsistent else []
     if done:
         values = [r["ddg"] for r in done]
         out["ddg"] = sum(values) / len(values)
+        out["complex_dg"] = sum(r["complex_dg"] for r in done) / len(done)
+        out["solvent_dg"] = sum(r["solvent_dg"] for r in done) / len(done)
         if len(done) > 1:
             mean = out["ddg"]
             out["ddg_std"] = math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
@@ -261,7 +291,7 @@ def write_results(out_dir: Path, summary: dict) -> None:
         for e in summary["edges"]:
             r = next((x for x in e["repeats"] if "ddg" in x), {})
             w.writerow([e["edge"], e["ligand_a"], e["ligand_b"], fmt(e.get("ddg")), fmt(e.get("se")),
-                        fmt(e.get("exp_ddg")), fmt(r.get("complex_dg")), fmt(r.get("solvent_dg")),
+                        fmt(e.get("exp_ddg")), fmt(e.get("complex_dg")), fmt(e.get("solvent_dg")),
                         (r.get("windows") or {}).get("complex", ""), (r.get("windows") or {}).get("solvent", ""),
                         fmt((r.get("lowest_overlap") or {}).get("complex")),
                         fmt((r.get("lowest_overlap") or {}).get("solvent")), "; ".join(e.get("not_reliable", [])),
@@ -288,6 +318,13 @@ def result_lines(summary: dict) -> list[str]:
             exp = f" (experiment {e['exp_ddg']:+.2f})" if e.get("exp_ddg") is not None else ""
             flag = f"; NOT RELIABLE ({', '.join(e['not_reliable'])} leg)" if e.get("not_reliable") else ""
             lines.append(f"RESULT {e['edge']}: ddG = {e['ddg']:+.2f} ± {e['se']:.2f} kcal/mol{exp}{flag}")
+        elif e.get("inconsistent_legs"):
+            lines.append(f"RESULT {e['edge']}: no ddG; its legs were not made under the same conditions "
+                         f"({'; '.join(e['inconsistent_legs'])})")
+        elif any(r.get("no_standard_error") for r in e["repeats"]):
+            legs = sorted({leg for r in e["repeats"] for leg in r.get("no_standard_error", [])})
+            lines.append(f"RESULT {e['edge']}: no ddG; the standard error of the {' and '.join(legs)} leg could not "
+                         "be determined")
         else:
             lines.append(f"RESULT {e['edge']}: no ddG")
     for c in summary["cycle_closures"]:

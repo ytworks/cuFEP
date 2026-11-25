@@ -288,3 +288,142 @@ def test_windows_without_samples_are_kept_only_for_the_settings_they_were_chosen
     assert "were made with other settings" in refused["error"], refused["error"]
     assert all((leg_dir / name).read_bytes() == data for name, data in before.items())
 
+
+def _same_graph_ligands(tmp_path, out_dir):
+    """Toluene and the same toluene 0.05 A away (one bonded graph, two records), with other charges each."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep.prep.ligand import load_ligands
+
+    a = Chem.AddHs(Chem.MolFromSmiles("Cc1ccccc1"))
+    AllChem.EmbedMolecule(a, randomSeed=11)
+    xyz = a.GetConformer().GetPositions()
+    shift = np.array([16.0, 14.0, 16.0]) - xyz.mean(axis=0)
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, extra in (("toluene", 0.0), ("toluene2", 0.05)):
+        mol = Chem.Mol(a)
+        for i, row in enumerate(xyz + shift + extra):
+            mol.GetConformer().SetAtomPosition(i, row.tolist())
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    ligands = load_ligands(tmp_path / "ligands.sdf")
+    (out_dir / "cache").mkdir(parents=True, exist_ok=True)
+    charges = {}
+    for lig, scale in zip(ligands, (1.0, 1.5)):
+        mol = lig.offmol
+        mol.assign_partial_charges("gasteiger")
+        q = np.array([float(x) for x in mol.partial_charges.m_as("elementary_charge")])
+        charges[lig.name] = scale * (q - q.mean())
+        (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
+            json.dumps({"charges": charges[lig.name].tolist()}))
+    return ligands, charges
+
+
+def test_each_end_state_has_the_charges_of_its_own_ligand(tmp_path):
+    """Review of PR #17: both ligands were registered in one force field, and OpenMM matched B (the same bonded
+    graph, as E/Z isomers have) to the template of A: System B had the charges of A, and the ddG was of other end
+    states. Each end state is built with its own ligand alone."""
+    import openmm as mm
+
+    from cufep.rbfe.prep import load_end_states, prepare_edge
+
+    out_dir = tmp_path / "run"
+    ligands, charges = _same_graph_ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~toluene2"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    for leg in ("complex", "solvent"):
+        end = load_end_states(edge_dir, leg)
+        for which, name in (("a", "toluene"), ("b", "toluene2")):
+            system = mm.XmlSerializer.deserialize(end[which]["system_xml"])
+            nb = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
+            got = [nb.getParticleParameters(i)[0].value_in_unit(mm.unit.elementary_charge)
+                   for i in end[which]["ligand"]]
+            assert np.allclose(got, charges[name], atol=1e-6), (leg, which)
+
+
+def test_a_prepared_edge_of_another_ph_is_not_taken(tmp_path):
+    """Review of PR #17: the protonation states of a PDB without hydrogens follow thermodynamics.ph, and a prepared
+    edge was taken by a run with another pH (the record of the edge did not have it)."""
+    from cufep.rbfe.prep import edge_made_from, prepare_edge
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    (edge_dir / "prep").mkdir(parents=True)
+    (edge_dir / "prep" / "prep.json").write_text(json.dumps(
+        {"made_from": edge_made_from(rcfg, ligands[0], ligands[1], "cube"), "legs": {}}))
+    other = rcfg.model_copy(update={"thermodynamics": rcfg.thermodynamics.model_copy(update={"ph": 6.0})})
+    with pytest.raises(WorkflowError, match="other inputs or settings"):
+        prepare_edge(other, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+
+def test_a_bilayer_with_a_water_of_four_sites_gets_its_force_field_for_the_lipid_patch(tmp_path, monkeypatch):
+    """Review of PR #17: with membrane.enabled and forcefield.water amber14/tip4pew.xml the bilayer is built with
+    the 3-site water of the lipid patch (add_membrane asks forcefield_with_water for it), and the relative
+    preparation gave it none: TypeError. The building of the bilayer is replaced here by solvation; what is checked
+    is that the force field of the patch can be made and holds ligand A."""
+    import openmm.unit as u
+
+    from cufep.prep import membrane
+    from cufep.prep.solvate import SolvationSpec, solvate
+    from cufep.rbfe.prep import prepare_edge
+
+    asked = []
+
+    def bilayer(modeller, forcefield, cfg, log=print, forcefield_with_water=None, water=None):
+        from cufep.prep.water import BILAYER_BUILD_WATER
+
+        patch = forcefield_with_water(BILAYER_BUILD_WATER)
+        lig = ligands[0].offmol.to_topology().to_openmm()
+        lig.setPeriodicBoxVectors(np.eye(3) * 3.0 * u.nanometer)
+        patch.createSystem(lig)                        # ligand A has its template in the force field of the patch
+        asked.append(water)
+        solvate(modeller, forcefield, SolvationSpec(padding_nm=0.8, box_shape="cube", water=water,
+                                                    ionic_strength_M=0.0, min_edge_nm=1.3))
+        return {"warnings": []}
+
+    monkeypatch.setattr(membrane, "add_membrane", bilayer)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    base = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    from cufep.rbfe.config import RbfeConfig
+
+    rcfg = RbfeConfig.model_validate({**base, "membrane": {"enabled": True},
+                                      "forcefield": {**base["forcefield"], "water": "amber14/tip4pew.xml"}})
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), out_dir / "edges" / "toluene~phenol", "cube", print)
+    assert asked == ["amber14/tip4pew.xml"]
+
+
+def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before(tmp_path, monkeypatch):
+    """Review of PR #17: a run in a finished directory with another cutoff wrote resolved_config.yaml and
+    network.json, then prepare_edge refused the prepared edge: the record of the results the directory holds was
+    lost, and `cufep rbfe analyze` read the network of the refused run. The prepared edges are checked first."""
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe.prep import edge_made_from
+    from cufep.rbfe.run import run_rbfe, write_run_files
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    from cufep.rbfe.config import RbfeConfig
+
+    rcfg = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"]]}})
+    write_run_files(out_dir, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    (edge_dir / "prep").mkdir(parents=True)
+    (edge_dir / "prep" / "prep.json").write_text(json.dumps(
+        {"made_from": edge_made_from(rcfg, ligands[0], ligands[1], "cube"), "legs": {}}))
+    before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+    other = RbfeConfig.model_validate({**rcfg.model_dump(mode="json"), "dynamics": {"cutoff_nm": 0.65}})
+    with pytest.raises(WorkflowError, match="other inputs or settings"):
+        run_rbfe(other, log=lambda line: None)
+    assert all((out_dir / name).read_bytes() == data for name, data in before.items())

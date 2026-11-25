@@ -410,9 +410,14 @@ def rbfe_run(config: str, production_ns, gpus, backend, output, edges, legs, res
         summary = run_rbfe(rcfg, reschedule=reschedule, only_edges=list(edges) or None, only_legs=list(legs) or None)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
-    failed = failed_edges(summary)
+    missing = failed_edges(summary)
+    if missing:
+        click.echo("no ddG: " + ", ".join(missing), err=True)
+    # the exit code is that of the jobs of this run: a run of some legs that all succeeded is not a failure, a
+    # failed repeat next to one that gave the ddG is (review of PR #17)
+    failed = summary.get("failed_in_this_run") or []
     if failed:
-        click.echo("no ddG: " + ", ".join(failed), err=True)
+        click.echo("failed in this run: " + ", ".join(failed), err=True)
         sys.exit(1)
 
 
