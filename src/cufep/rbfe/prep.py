@@ -126,7 +126,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
                 # a water of more than three sites: the bilayer is built with the 3-site water of the lipid patch,
                 # in a force field that add_membrane asks for (review of PR #17: none was given, TypeError)
                 membrane_info = add_membrane(
-                    modeller, forcefield, cfg.shared(), log, water=cfg.forcefield.water,
+                    modeller, forcefield, cfg, log, water=cfg.forcefield.water,
                     forcefield_with_water=lambda file: make_forcefield(replace(ffspec, water=file), [ligand_a],
                                                                        include_lipid=True))
                 notes.extend(f"membrane: {w}" for w in membrane_info.pop("warnings", []))

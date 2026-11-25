@@ -2,9 +2,10 @@
 
 Only ``system.protein`` and ``system.ligands`` are required. The sections that mean what they mean in the
 ABFE (``membrane``, ``forcefield``, ``backend``, ``thermodynamics``, ``dynamics``, ``solvation``,
-``resources``) are those of the ABFE configuration; ``sampling`` and ``analysis`` too, with the defaults of a
-relative calculation. The rest is of the relative calculation alone: the ligands and their network, the
-mapping, the hybrid topology, the lambda windows of its one coordinate and the reference of the dG.
+``resources``) are those the two configurations share (:class:`cufep.config.schema.CommonConfig`);
+``sampling`` and ``analysis`` too, with the defaults of a relative calculation. The rest is of the relative
+calculation alone: the ligands and their network, the mapping, the hybrid topology and the lambda windows of its
+one coordinate.
 ``docs/rbfe.md`` gives every setting with the basis of its default; a unit test keeps its YAML block equal to
 the defaults here.
 """
@@ -18,18 +19,13 @@ from pydantic import Field, field_validator, model_validator
 
 from cufep.config.schema import (
     AnalysisConfig,
-    BackendConfig,
-    Config,
-    DynamicsConfig,
-    ForceFieldConfig,
-    MembraneConfig,
+    CommonConfig,
+    OutputConfig,
     PrecalculationLengths,
-    ResourcesConfig,
     SamplingConfig,
-    SolvationConfig,
-    ThermodynamicsConfig,
     _of_leg,
     _Section,
+    common_problems,
 )
 
 
@@ -125,6 +121,12 @@ class HybridLambdaSchedule(_Section):
     windows: int | list[float] = 11
     adaptive: HybridAdaptiveConfig = Field(default_factory=HybridAdaptiveConfig)
 
+    def precalculated_legs(self) -> list[str]:
+        """The legs that run a precalculation of adaptive lambda scheduling."""
+        if self.mode != "adaptive":
+            return []
+        return ["complex", "solvent"] if self.adaptive.legs == "each" else ["solvent"]
+
     @field_validator("windows")
     @classmethod
     def _windows(cls, v):
@@ -174,60 +176,40 @@ class RbfeAnalysis(AnalysisConfig):
     lrc: Literal["none"] = "none"
 
 
-class RbfeOutput(_Section):
+class RbfeOutput(OutputConfig):
     dir: Path = Path("runs/cufep_rbfe")
 
 
-class RbfeConfig(_Section):
-    version: Literal[1] = 1
+class RbfeConfig(CommonConfig):
+    """The configuration of a relative calculation: the sections it shares with the ABFE
+    (:class:`cufep.config.schema.CommonConfig`, ``sampling``, ``analysis`` and ``output`` with the defaults of a
+    relative calculation) and its own."""
+
     system: RbfeSystem
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     mapping: MappingConfig = Field(default_factory=MappingConfig)
     alchemy: HybridAlchemyConfig = Field(default_factory=HybridAlchemyConfig)
     lambda_schedule: HybridLambdaSchedule = Field(default_factory=HybridLambdaSchedule)
-    membrane: MembraneConfig = Field(default_factory=MembraneConfig)
-    forcefield: ForceFieldConfig = Field(default_factory=ForceFieldConfig)
-    backend: BackendConfig = Field(default_factory=BackendConfig)
-    thermodynamics: ThermodynamicsConfig = Field(default_factory=ThermodynamicsConfig)
-    dynamics: DynamicsConfig = Field(default_factory=DynamicsConfig)
-    solvation: SolvationConfig = Field(default_factory=SolvationConfig)
     sampling: RbfeSampling = Field(default_factory=RbfeSampling)
     analysis: RbfeAnalysis = Field(default_factory=RbfeAnalysis)
-    resources: ResourcesConfig = Field(default_factory=ResourcesConfig)
     output: RbfeOutput = Field(default_factory=RbfeOutput)
 
     @model_validator(mode="after")
     def _agree(self):
+        problems = common_problems(self)
         if self.membrane.enabled and self.membrane.complex_leg != "bilayer":
-            raise ValueError("membrane.complex_leg: water is a setting of the ABFE; a relative calculation runs the "
-                             "complex leg in the bilayer")
-        self.shared()                                 # the shared sections agree as the ABFE checks them
-        problems = initial_window_problems(self.lambda_schedule)
+            problems.append("membrane.complex_leg: water is a setting of the ABFE; a relative calculation runs the "
+                            "complex leg in the bilayer")
+        problems += initial_window_problems(self.lambda_schedule)
         if problems:
             raise ValueError("; ".join(problems))
         return self
 
-    def shared(self) -> Config:
-        """The ABFE configuration of the sections the two share, for the functions they share (the
-        pre-equilibration, the replica exchange, the backends, the analysis of a leg)."""
-        return Config.model_validate({
-            "system": {"protein": str(self.system.protein), "ligand": str(self.system.ligands)},
-            "membrane": self.membrane.model_dump(mode="json"),
-            "forcefield": self.forcefield.model_dump(mode="json"),
-            "backend": self.backend.model_dump(mode="json"),
-            "thermodynamics": self.thermodynamics.model_dump(mode="json"),
-            "dynamics": self.dynamics.model_dump(mode="json"),
-            "solvation": self.solvation.model_dump(mode="json"),
-            "sampling": self.sampling.model_dump(mode="json"),
-            "analysis": self.analysis.model_dump(mode="json"),
-            "resources": self.resources.model_dump(mode="json"),
-            "output": {"dir": str(self.output.dir)},
-            # the complex leg is pre-equilibrated as the ABFE pre-equilibrates the complex leg of a restraint chosen
-            # from interactions (cufep.workflow.pre_equilibration_parts): the solute held in its pose through NVT
-            # and NPT (and through the equilibration of a new bilayer), no free MD; OpenFE starts its relative legs
-            # from the minimised input pose too, and the equilibration of the replica exchange follows
-            "restraints": {"selection": "interactions"},
-        })
+    def holds_solute(self, leg: str) -> bool:
+        """The complex leg: the pose that was given, held through NVT and NPT (and through the equilibration of a
+        new bilayer), without free MD, as OpenFE starts its relative legs from the minimised input pose; the
+        equilibration of the replica exchange follows."""
+        return leg == "complex"
 
 
 def load_rbfe_config(path: str | Path) -> RbfeConfig:

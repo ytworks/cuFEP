@@ -10,7 +10,7 @@ from cufep import jsonio, mps
 from cufep.analysis.plots import plot_interactions, plot_repeat
 from cufep.benchmarks.runner import LEG_FLAGS, flags_of
 from cufep.config.auto import AutoReport, resolve
-from cufep.config.schema import Config, check_configuration, dump_config, read_settings
+from cufep.config.schema import CommonConfig, Config, check_configuration, dump_config, read_settings
 from cufep.files import publish_text, publish_with
 from cufep.scheduler import GpuMonitor, run_jobs
 from cufep.workflow import (
@@ -38,9 +38,6 @@ from cufep.workflow import (
 
 def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, object, list]:
     """Static part of a run: prepare the protein, read the ligands, resolve ``auto`` settings."""
-    from cufep.prep.forcefield import ForceFieldSpec, make_forcefield
-    from cufep.prep.protein import prepare_protein
-
     check_configuration(cfg)
     if ligands is None:
         # the ligands first: what they are called decides where anything is written
@@ -51,8 +48,20 @@ def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, obje
     names = [lig.name for lig in ligands]
     if cfg.system.cofactors:
         raise WorkflowError("system.cofactors is not implemented yet in this version")
+    resolved, report, protein = prepare_protein_and_settings(cfg, cfg.system.protein, log)
+    log(f"{len(ligands)} ligand(s): {', '.join(names[:8])}{' ...' if len(names) > 8 else ''}")
+    return resolved, report, protein, ligands
+
+
+def prepare_protein_and_settings(cfg: CommonConfig, protein_pdb, log=print):
+    """The part of the plan of a run that the absolute and the relative calculation share: the prepared protein
+    and the configuration with its ``auto`` settings resolved (:func:`cufep.config.auto.resolve`), with the report
+    of both. Returns (the resolved configuration, of the type of ``cfg``; the report; the protein)."""
+    from cufep.prep.forcefield import ForceFieldSpec, make_forcefield
+    from cufep.prep.protein import prepare_protein
+
     ff = make_forcefield(ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water), [])
-    protein = prepare_protein(cfg.system.protein, forcefield=ff, ph=cfg.thermodynamics.ph)
+    protein = prepare_protein(protein_pdb, forcefield=ff, ph=cfg.thermodynamics.ph)
     for line in protein.report.lines():
         log(f"protein: {line}")
     resolved, report = resolve(cfg, protein)
@@ -60,8 +69,7 @@ def plan(cfg: Config, log=print, ligands=None) -> tuple[Config, AutoReport, obje
     if protein.report.protonation_assigned:
         report.warnings.append("protonation states were assigned automatically (no hydrogens in the PDB): "
                                + ", ".join(protein.report.protonation_assigned[:40]))
-    log(f"{len(ligands)} ligand(s): {', '.join(names[:8])}{' ...' if len(names) > 8 else ''}")
-    return resolved, report, protein, ligands
+    return resolved, report, protein
 
 
 def lock_output_directory(out_dir: Path):
@@ -391,11 +399,12 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
 def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, mps_used: bool, log,
                  file_name: str = "timing.json") -> None:
     """Where the time went: per phase and per job, and how busy the GPUs were (``file_name``)."""
-    legs = []
+    legs, tags = [], []
     for job in jobs:
         f = job.leg_dir / "timing.json"
         if f.exists():
             legs.append(json.loads(f.read_text()))
+            tags.append(job.tag)                 # what the leg is of, whatever its kind of job
     now = time.time()
     phases: dict[str, float] = {}
     for leg in legs:
@@ -418,11 +427,11 @@ def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, 
     util = data["gpu_utilization_percent"]["while_sampling"]
     if util and all(v is not None for v in util.values()):
         log("timing: GPU utilization while sampling: " + ", ".join(f"GPU {g} {v:.0f}%" for g, v in util.items()))
-    for leg in legs:
+    for tag, leg in zip(tags, legs):
         smp = leg.get("sampling")
         if smp and smp.get("iterations"):
             busy = smp.get("worker_busy_fraction")
-            log(f"timing: {leg['ligand']}/r{leg['repeat']}/{leg['leg']}: {smp['lambda_windows']} lambda windows, "
+            log(f"timing: {tag}: {smp['lambda_windows']} lambda windows, "
                 f"{smp['seconds_per_iteration']:.3f} s per iteration, workers busy "
                 f"{100 * busy:.0f}%" if busy is not None else "")
 

@@ -123,7 +123,7 @@ def deterministic_cpu():
 def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_path, monkeypatch, mode, legs,
                                                                              deterministic_cpu):
     from cufep.rbfe import leg as leg_module
-    from cufep.rbfe.leg import HybridLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
 
     # the start of the windows a leg does not choose, made short for the test (5000 steps of minimisation of every
     # window take minutes on one processor)
@@ -138,7 +138,7 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     edge_dir = out_dir / "edges" / "toluene~phenol"
     info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     assert info["legs"]["complex"]["core_atoms"] == info["legs"]["solvent"]["core_atoms"] >= 11
-    jobs = [HybridLegJob(ligand="toluene~phenol", leg=leg, repeat=0, lig_dir=str(edge_dir), devices=[None],
+    jobs = [EdgeLegJob(edge="toluene~phenol", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
                          config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True)
             for leg in ("solvent", "complex")]
     results = [run_hybrid_leg_safe(job) for job in jobs]
@@ -178,6 +178,125 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     write_results(out_dir, combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
                                            {"toluene": -5.0, "phenol": -5.6}))
     assert (out_dir / "edges.csv").read_text() == first
+
+
+def test_a_leg_with_samples_keeps_its_windows_when_their_start_configurations_are_made_again(tmp_path, monkeypatch,
+                                                                                            deterministic_cpu):
+    """Review of PR #18 (P1): a leg with samples and its schedule, whose start configurations are one window short,
+    run again with a configuration that asks for other windows. The windows the leg has are kept and only their
+    start configurations are made again, so that its samples are continued (here: analysed as they are); a schedule
+    that is not of this leg stops the run before any file of the leg is written."""
+    from cufep.alchemy.schedule import Schedule
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    # windows that adaptive lambda scheduling chose, started by its walk (the start the review names)
+    rcfg = _config(tmp_path, out_dir, "adaptive")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def job(cfg) -> EdgeLegJob:
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                          config=cfg.model_dump(mode="json"), production_ns=cfg.sampling.production_ns, inline=True)
+
+    first = run_hybrid_leg_safe(job(rcfg))
+    assert "error" not in first, first
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    windows = Schedule.load(leg_dir / "schedule.yaml").states
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    other = rcfg.model_copy(update={"lambda_schedule": rcfg.lambda_schedule.model_copy(
+        update={"mode": "fixed", "windows": 4})})
+    again = run_hybrid_leg_safe(job(other))
+    assert "error" not in again, again
+    assert Schedule.load(leg_dir / "schedule.yaml").states == windows
+    with np.load(leg_dir / "start_configs.npz") as start:
+        assert len(start["positions"]) == len(windows)
+    assert again["delta_g"] == first["delta_g"] and again["lambda_windows"] == first["lambda_windows"]
+    # the samples go on from their checkpoint: their start is the one they were made from (second review of PR #18)
+    assert again["start_configurations"] == first["start_configurations"]
+
+    # the schedule of another repeat, of other windows than those of the samples: refused before anything is written
+    # (second review of PR #18)
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    own = (leg_dir / "schedule.yaml").read_text()
+    other_windows = Schedule.load(leg_dir / "schedule.yaml")
+    other_windows.states = [type(s)(0.4 if 0.0 < s.lambda_hybrid < 1.0 else s.lambda_hybrid, s.rest2_scale)
+                             for s in other_windows.states]
+    other_windows.save(leg_dir / "schedule.yaml", leg="solvent")
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    before = {name: (leg_dir / name).read_bytes() for name in ("schedule.yaml", "start_configs.npz")}
+    refused = run_hybrid_leg_safe(job(other))
+    assert "not those of its samples" in refused["error"], refused["error"]
+    assert all((leg_dir / name).read_bytes() == data for name, data in before.items())
+    (leg_dir / "schedule.yaml").write_text(own)
+
+    # third review of PR #18: another way of exchange (hrex -> none) is another condition of the samples than their
+    # windows and settings; refused before anything is written, as the replica exchange would refuse it
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    before = {name: (leg_dir / name).read_bytes() for name in ("schedule.yaml", "start_configs.npz")}
+    independent = other.model_copy(update={"sampling": other.sampling.model_copy(update={"exchange": "none"})})
+    refused = run_hybrid_leg_safe(job(independent))
+    assert "other conditions" in refused["error"], refused["error"]
+    assert all((leg_dir / name).read_bytes() == data for name, data in before.items())
+
+    # a schedule of another leg: refused before anything of the leg is written
+    text = (leg_dir / "schedule.yaml").read_text().replace("leg: solvent", "leg: complex")
+    (leg_dir / "schedule.yaml").write_text(text)
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    starts = (leg_dir / "start_configs.npz").read_bytes()
+    refused = run_hybrid_leg_safe(job(other))
+    assert "cannot be used for the solvent leg" in refused["error"]
+    assert (leg_dir / "schedule.yaml").read_text() == text and (leg_dir / "start_configs.npz").read_bytes() == starts
+
+
+def test_windows_without_samples_are_kept_only_for_the_settings_they_were_chosen_with(tmp_path, monkeypatch,
+                                                                                    deterministic_cpu):
+    """Second review of PR #18: windows and start configurations one window short, without samples, run again with
+    another soft-core alpha. The record of the start configurations names the windows and the settings they were
+    made with; the run is refused before anything is written, as for a leg whose start configurations are whole."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def job(cfg) -> EdgeLegJob:
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                          config=cfg.model_dump(mode="json"), production_ns=cfg.sampling.production_ns, inline=True)
+
+    assert "error" not in run_hybrid_leg_safe(job(rcfg))
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    import shutil
+
+    shutil.rmtree(leg_dir / "hrex")                     # the windows and their start configurations, no samples
+    (leg_dir / "result.json").unlink()
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    before = {name: (leg_dir / name).read_bytes() for name in ("schedule.yaml", "start_configs.npz")}
+    softer = rcfg.model_copy(update={"alchemy": rcfg.alchemy.model_copy(update={"softcore_alpha": 0.7})})
+    refused = run_hybrid_leg_safe(job(softer))
+    assert "were made with other settings" in refused["error"], refused["error"]
+    assert all((leg_dir / name).read_bytes() == data for name, data in before.items())
 
 
 def _same_graph_ligands(tmp_path, out_dir):
@@ -313,7 +432,7 @@ def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before
         {"made_from": edge_made_from(rcfg, ligands[0], ligands[1], "cube"), "legs": {}}))
     before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
     protein = _protein()
-    monkeypatch.setattr(run_module, "plan", lambda cfg, log, ligs: (cfg, AutoReport(), protein, ligs))
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
     other = RbfeConfig.model_validate({**rcfg.model_dump(mode="json"), "dynamics": {"cutoff_nm": 0.65}})
     with pytest.raises(WorkflowError, match="other inputs or settings"):
         run_rbfe(other, log=lambda line: None)
@@ -356,7 +475,7 @@ def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_p
     (tmp_path / "protein.pdb").write_text("REMARK another protein\n")          # the receptor changes
     before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
     protein = _protein()
-    monkeypatch.setattr(run_module, "plan", lambda cfg, log, ligs: (cfg, AutoReport(), protein, ligs))
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
 
     def not_to_be_reached(*args, **kwargs):
         raise AssertionError("an edge was prepared")
@@ -365,4 +484,166 @@ def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_p
     with pytest.raises(WorkflowError, match="toluene~phenol"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     assert all((out_dir / name).read_bytes() == data for name, data in before.items())
+
+
+def test_a_leg_stopped_at_the_checkpoint_of_its_start_keeps_the_start_it_was_made_from(tmp_path, monkeypatch,
+                                                                                    deterministic_cpu):
+    """Third review of PR #18: the replica exchange writes a checkpoint of its start before its first sample. A leg
+    stopped there has no samples and goes on from that checkpoint, not from start configurations made again; its
+    result says the start it was made from (the walk), and the start configurations made again are said apart."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.sampling import hrex
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "adaptive")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    job = EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                     config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True)
+    run = hrex.ReplicaExchangeSampler.run
+
+    def stopped(self, *args, **kwargs):
+        raise RuntimeError("stopped after the checkpoint of the start")
+
+    monkeypatch.setattr(hrex.ReplicaExchangeSampler, "run", stopped)
+    assert "stopped" in run_hybrid_leg_safe(job)["error"]
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    assert (leg_dir / "hrex" / "checkpoint.npz").exists()
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    monkeypatch.setattr(hrex.ReplicaExchangeSampler, "run", run)
+    result = run_hybrid_leg_safe(job)
+    assert "error" not in result, result
+    assert result["start_configurations"].startswith("walk")
+
+
+def test_samples_started_anew_without_their_checkpoint_have_the_start_made_again(tmp_path, monkeypatch,
+                                                                              deterministic_cpu):
+    """Fourth review of PR #18: a leg with samples that are not complete and no checkpoint (it was lost), whose start
+    configurations are one window short, is started anew by the replica exchange from the start configurations made
+    again (the samples it had are not continued); its result says that start, not the walk of the samples it had."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import PRE_EQUILIBRATION_START, EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "adaptive")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def job(production_ns: float) -> EdgeLegJob:
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                          config=rcfg.model_dump(mode="json"), production_ns=production_ns, inline=True)
+
+    first = run_hybrid_leg_safe(job(rcfg.sampling.production_ns))
+    assert first["start_configurations"].startswith("walk")
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    (leg_dir / "hrex" / "checkpoint.npz").unlink()
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    longer = run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))        # not complete: started anew
+    assert "error" not in longer, longer
+    assert longer["start_configurations"] == PRE_EQUILIBRATION_START
+
+
+def test_start_configurations_made_again_are_the_start_of_samples_started_anew_later(tmp_path, monkeypatch,
+                                                                                   deterministic_cpu):
+    """Fifth review of PR #18: start configurations made again while the samples were taken up from their checkpoint
+    keep the start of those samples (the walk) and the start made again apart; when the checkpoint is lost later
+    the replica exchange starts anew from them, and the result says that start. And a leg with samples and no
+    schedule is refused by the run before its result is set aside."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import PRE_EQUILIBRATION_START, EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "adaptive")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def job(production_ns: float) -> EdgeLegJob:
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                          config=rcfg.model_dump(mode="json"), production_ns=production_ns, inline=True)
+
+    first = run_hybrid_leg_safe(job(rcfg.sampling.production_ns))
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    repaired = run_hybrid_leg_safe(job(rcfg.sampling.production_ns))           # taken up from the checkpoint
+    assert repaired["start_configurations"] == first["start_configurations"]
+    (leg_dir / "hrex" / "checkpoint.npz").unlink()
+    # sixth review: refused by the replica exchange (another way of exchange), the leg is not started anew, and the
+    # record keeps the start of its samples
+    starts = (leg_dir / "start_configs.npz").read_bytes()
+    independent = rcfg.model_copy(update={"sampling": rcfg.sampling.model_copy(update={"exchange": "none"})})
+    refused = run_hybrid_leg_safe(EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir),
+                                             devices=[None], config=independent.model_dump(mode="json"),
+                                             production_ns=2 * rcfg.sampling.production_ns, inline=True))
+    assert "error" in refused and (leg_dir / "start_configs.npz").read_bytes() == starts
+    # eighth review: the samples it had could not be emptied (the manifest was not replaced): they stay, and so does
+    # the record of their start
+    from cufep.sampling import storage as storage_module
+
+    rows = storage_module.stored_conditions(leg_dir / "hrex")[0]
+    truncate = storage_module.LegStorage.truncate
+
+    def not_emptied(self, n):
+        raise OSError("the manifest could not be replaced")
+
+    monkeypatch.setattr(storage_module.LegStorage, "truncate", not_emptied)
+    assert "manifest" in run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))["error"]
+    monkeypatch.setattr(storage_module.LegStorage, "truncate", truncate)
+    assert storage_module.stored_conditions(leg_dir / "hrex")[0] == rows
+    assert (leg_dir / "start_configs.npz").read_bytes() == starts
+
+    # seventh review: stopped right after the replica exchange wrote the checkpoint of its new start; the retry restores
+    # that checkpoint, and the result says the start made again
+    from cufep.sampling import hrex
+
+    initialize = hrex.ReplicaExchangeSampler.initialize
+
+    def stopped(self, *args, **kwargs):
+        initialize(self, *args, **kwargs)
+        raise RuntimeError("stopped after the checkpoint of the start")
+
+    monkeypatch.setattr(hrex.ReplicaExchangeSampler, "initialize", stopped)
+    assert "stopped" in run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))["error"]
+    monkeypatch.setattr(hrex.ReplicaExchangeSampler, "initialize", initialize)
+    anew = run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))           # not complete: started anew
+    assert "error" not in anew, anew
+    assert anew["start_configurations"] == PRE_EQUILIBRATION_START
+
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import run_rbfe, write_run_files
+    from cufep.workflow import WorkflowError
+
+    data = rcfg.model_dump(mode="json")
+    full = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"]]}})
+    write_run_files(out_dir, full, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
+    (leg_dir / "schedule.yaml").unlink()
+    result = (leg_dir / "result.json").read_bytes()
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+    with pytest.raises(WorkflowError, match="no schedule.yaml"):
+        run_rbfe(full, log=lambda line: None, only_legs=["solvent"])
+    assert (leg_dir / "result.json").read_bytes() == result
 

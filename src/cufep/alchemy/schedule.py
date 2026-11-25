@@ -58,18 +58,18 @@ import numpy as np
 import yaml
 
 from cufep.alchemy.candidates import initial_indices, initial_window_indices
-from cufep.sampling.states import (
-    R_GAS,
+from cufep.engine.protocol import (
+    ABFE,
     STAGE_ALIASES,
-    STAGE_PARAMETER,
-    AlchemicalState,
     canonical_stage,
     make_state_evaluator,
-    set_state,
+    protocol_of_stages,
+    stage_parameter,
     stage_state,
     state_from_dict,
     validate_states,
 )
+from cufep.sampling.states import R_GAS, set_state
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
            "initial_window_indices", "bad_sections", "choose_section", "redistribute", "als_step", "stage_overlap",
@@ -80,7 +80,7 @@ __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "
 @dataclass
 class Schedule:
     stages: list[str]
-    states: list[AlchemicalState]
+    states: list                      # the states of the protocol of the stages (cufep.engine.protocol)
     stage_of_state: list[int]         # stage in which the state is listed (a boundary belongs to the earlier one)
     stage_lambda: list[float]         # lambda of the state within that stage
     mode: str = "fixed"
@@ -103,27 +103,22 @@ class Schedule:
         ligand fully interacting (in a complex leg without the restraint) and the ligand
         decoupled (in a complex leg with the restraint).
         """
-        from cufep.sampling.states import stage_state
-
         stages = [canonical_stage(s) for s in stages]
         if self.leg is not None and self.leg != leg:
             raise ValueError(f"it was written for the {self.leg} leg")
         if list(self.stages) != stages:
             raise ValueError(f"its stages are {', '.join(self.stages)}; the {leg} leg has {', '.join(stages)}")
+
+        def described(state) -> str:
+            return ", ".join(f"{name} {value:g}" for name, value in state.to_dict().items())
+
+        # the ends: the states of the protocol at the start of the first stage and the end of the last, without REST2
         for which, state, wanted in (("first", self.states[0], stage_state(stages[0], 0.0)),
                                      ("last", self.states[-1], stage_state(stages[-1], 1.0))):
-            if not isinstance(state, AlchemicalState) or not isinstance(wanted, AlchemicalState):
-                # a hybrid state (cufep.rbfe.states): the ends are lambda 0 and 1 without REST2 scaling
-                if type(state) is not type(wanted) or state.to_dict() != wanted.to_dict():
-                    raise ValueError(f"its {which} state {state.to_dict()} is not the {which} end of the {leg} leg")
-                continue
-            have = (state.lambda_restraints, state.lambda_electrostatics, state.lambda_sterics, state.rest2_scale)
-            want = (wanted.lambda_restraints, wanted.lambda_electrostatics, wanted.lambda_sterics, 1.0)
-            if any(abs(a - b) > 1e-9 for a, b in zip(have, want)):
-                raise ValueError(
-                    f"its {which} state (restraint {have[0]:g}, electrostatics {have[1]:g}, sterics {have[2]:g}, "
-                    f"REST2 scale {have[3]:g}) is not the {'coupled' if which == 'first' else 'decoupled'} end of "
-                    f"the {leg} leg (restraint {want[0]:g}, electrostatics {want[1]:g}, sterics {want[2]:g})")
+            have, want = state.to_dict(), wanted.to_dict()
+            if type(state) is not type(wanted) or any(abs(have[k] - want[k]) > 1e-9 for k in want):
+                raise ValueError(f"its {which} state ({described(state)}) is not the {which} end of the {leg} leg "
+                                 f"({described(wanted)})")
 
     def windows(self) -> dict[str, list[float]]:
         """Lambda values per stage, both ends included."""
@@ -141,8 +136,16 @@ class Schedule:
                 "stage_lambda": [float(v) for v in self.stage_lambda], "rest2_scale": float(self.rest2_scale),
                 "provenance": self.provenance, "notes": self.notes}
 
+    @property
+    def protocol(self) -> str:
+        """The protocol of the leg the schedule is of (cufep.engine.protocol), from its stages."""
+        return protocol_of_stages(self.stages)
+
     def save(self, path: str | Path, **meta) -> None:
         data = self.to_dict()
+        # the file of a schedule of another protocol than the ABFE names it (a file that names none is of the ABFE)
+        if self.protocol != ABFE:
+            data["protocol"] = self.protocol
         data.update(meta)
         from cufep.files import publish_text
 
@@ -151,7 +154,13 @@ class Schedule:
     @classmethod
     def load(cls, path: str | Path) -> "Schedule":
         d = yaml.safe_load(Path(path).read_text())
-        states = [state_from_dict(s) for s in d["states"]]
+        # the protocol the file names; a file that names none (every file of the ABFE, and those of the relative
+        # legs of version 0.1 before the engine) is of the protocol of its stages
+        name = protocol_of_stages(d["stages"])
+        if d.get("protocol") not in (None, name):
+            raise ValueError(f"{path}: the stages {', '.join(d['stages'])} are not those of the protocol "
+                             f"{d['protocol']}")
+        states = [state_from_dict(s, name) for s in d["states"]]
         validate_states(states)
         n = len(states)
         return cls(stages=[canonical_stage(s) for s in d["stages"]], states=states,
@@ -400,7 +409,7 @@ def run_window(context, integrator, task: dict, mover=None, interval_steps: int 
     its equilibration and between its samples, in the state of the window.
     """
     grid = np.linspace(0.0, 1.0, int(task["candidates"]))
-    state = state_from_dict(task["state"])
+    state = state_from_dict(task["state"], task.get("protocol"))
     leg_stages, peak = task.get("leg_stages"), float(task.get("rest2_scale", 1.0))
     # one evaluator per stage over its candidates; terms common to all candidates cancel in the overlap
     evaluators = {name: make_state_evaluator(context, [stage_state(name, lam, leg_stages, peak) for lam in grid],
@@ -462,7 +471,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                          f"not {s.start_configurations!r}")
     by_pair = s.overlap_matrix == "pair"
     params = context.getParameters()
-    stages = [st for st in (canonical_stage(x) for x in stages) if STAGE_PARAMETER[st] in params]
+    stages = [st for st in (canonical_stage(x) for x in stages) if stage_parameter(st) in params]
     if not stages:
         raise ValueError("the Context has no alchemical parameters")
     top = s.candidates - 1
@@ -491,7 +500,8 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         member = [stages[k] for k in range(len(stages)) if nd in (node(k, 0), node(k, top)) or nd[0] == k]
         return {"state": state_of(nd).to_dict(), "config": config, "stages": member, "candidates": s.candidates,
                 "temperature_K": temperature_K, "equilibration_steps": equilibration_steps, "n_samples": n_samples,
-                "steps_per_sample": steps_per_sample, "leg_stages": list(stages), "rest2_scale": s.rest2_scale}
+                "steps_per_sample": steps_per_sample, "leg_stages": list(stages), "rest2_scale": s.rest2_scale,
+                "protocol": protocol_of_stages(stages)}
 
     def nearest(nd: tuple[int, int]):
         return runs[min(runs, key=lambda other: abs(path(other) - path(nd)))]["config"] if runs else start

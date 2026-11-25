@@ -1,0 +1,107 @@
+# レグのエンジンを分ける(ABFE と RBFE を 1 つのエンジンの上の 2 つのプロトコルにする)
+Status: Done (PR #18 into `feat/rbfe`, then PR #17 into main; the owner's order of 2026-11-26 after the reviews had no further findings)
+Refs: `docs/plans/2026-11-25-rbfe.md`; PR #17
+
+## Context
+- オーナーの問い(2026-11-25): 「無理に共通化してない? ソフトウェアとして正しいアーキテクチャか」。今の `cufep rbfe` は
+  ABFE の入口に合わせて押し込んでいる:
+  1. RBFE の設定から ABFE の `Config` を作って共通の関数に渡し(`RbfeConfig.shared()`)、前平衡化の動作を ABFE の拘束の
+     設定(`restraints.selection: interactions`)で操っている;
+  2. レグの結果を ABFE の `leg_result_from_samples` で作ってからキーを付け替え、拘束の項目を消し、メッセージを文字列置換;
+  3. `HybridLegJob` が ABFE の `LegJob` を継承し、`ligand` にエッジ名、`lig_dir` にエッジのディレクトリを入れている;
+  4. スケジューラは `getattr(job, "runner")`、状態は辞書のキー(`lambda_hybrid`)で振り分け、共通の `sampling/states.py` が
+     RBFE の stage 名とパラメータ名を知っている;
+  5. RBFE のレグ(`rbfe/leg.py`)が ABFE の `run_leg` のバックエンド選択、fallback、`LegSpec` の組み立てを写している。
+- オーナーの指示: この計画で進める。`feat/rbfe`(PR #17)をベースに別の PR にする。
+
+## Approach
+- `src/cufep/engine/`(新規、ABFE と RBFE が使う中核):
+  - `settings.py`: レグの設定(熱力学、動力学、バックエンド、前平衡化、窓、サンプリング、解析、資源)。前平衡化は
+    「溶質を固定するか」「自由な MD の ns」「二重層の平衡化の ns」を明示する。YAML の schema から作る。
+  - `protocol.py`: 状態の型、stage、状態エネルギーの評価、レグの両端、窓の推奨値をまとめたプロトコル。ABFE と hybrid の
+    2 つ。プロトコル名を `LegSpec` の設定と `schedule.yaml` に記録し、読み込みはその名前で振り分ける(辞書のキーで
+    判別しない。名前の無い古いファイルは ABFE として読む)。
+  - `leg.py`: レグの実行の中核。前平衡化 → 窓(ALS、固定、与えられた窓、窓の開始) → HREX(`sample_leg`) → バックエンドの
+    fallback → 再開 → レグの解析。返すのは経路の ΔG、誤差、検査、窓。ABFE の語を使わない。
+  - `jobs.py`: 汎用のジョブ(名前、レグ、repeat、ディレクトリ、設定、実行関数)。スケジューラはこれだけを知る。
+- ABFE: `workflow.run_leg` は系の読み込み、拘束の選択(前平衡化の後の hook)、alchemical の System、拘束の解放、
+  `result.json` の作成だけになる。`result.json`、`LegSpec.conditions()`、ディレクトリの形は今のまま。
+- RBFE: 自分の設定から直接エンジンの設定を作る。`shared()`、結果の付け替え、`HybridLegJob` の継承、文字列置換は削除。
+- 設定: 2 つの YAML に共通の節を `CommonConfig`(`config/schema.py`、節の型と同じモジュールにして循環 import を避ける)に
+  置き、ABFE の `Config` と `RbfeConfig` がそれを継承する。前平衡化で溶質を固定するかは各設定が `holds_solute(leg)` で
+  答える。YAML の形はどちらも変えない。
+
+## Invariants
+- ABFE の数値、既定値、`ANALYSIS_VERSION`(10)、YAML の形、`result.json` のキー、`LegSpec.conditions()`、既存の run
+  ディレクトリの再開と解析は変えない。RBFE の既定値と結果の形(`edges.csv`、`ligands.csv`、`summary.json`)も変えない。
+- 新しい判定は足さない。
+
+## 手順(1 つずつコミットして push)
+1. ABFE の今の振る舞いを固定するテストを先に足す: 小さな系の alchemical System の XML の checksum、`LegSpec.conditions()`、
+   `result.json` のキー、前平衡化の各部の長さ。リファクタリングの後も同じであることを確かめる。
+2. `engine/settings.py` と `engine/protocol.py`。ABFE と RBFE の設定から作る。
+3. `run_leg` の汎用の部分を `engine/leg.py` に移し、ABFE は hook と後処理だけにする。
+4. RBFE のレグをエンジンの上に載せ直し、流用していた箇所を削除する。
+5. スケジューラを汎用のジョブにする。
+6. 文書(`docs/protocol.md`、`docs/rbfe.md`)、PROGRESS、この計画の記録。
+
+## Verification
+- CPU: 単体テスト全体、手順 1 の固定テスト、golden、RBFE のエッジの一連の流れ(each、solvent、fixed)。
+- GPU: GPU テスト全体。
+- 実行: ABFE は既存の run(`runs/benchmark_tyk2_full_e77a6c5` の 1 化合物)を `cufep analyze` で読んで結果が同じこと。
+  RBFE は TYK2 の example を 1 回流し、エッジの数値が前回(image f6ac3b4)の誤差の範囲にあること。
+
+## 記録
+
+### 2026-11-25 手順 1〜6
+- 手順 1: `spikes/m38`(ABFE の 2 レグ、Reference platform、固定 seed)。リファクタリング前のコードで 2 回流して同じファイル
+  (CPU platform は deterministic forces 無しでは 2 回目で前平衡化の後の System が違った)。
+- 手順 2〜5 は計画の通り。違えた点: `CommonConfig` は `config/common.py` ではなく `config/schema.py`(節の型と同じ
+  モジュール、循環 import を避ける)。ABFE の窓の検査(`stored_windows`、`check_windows_settings`)は設定の代わりに
+  窓の設定の辞書を受け、相対レグも同じ検査を通る。手順 3〜5 は互いに同じ行に触るので 1 つのコミット(250ceb1)。
+  レグの補助関数(前平衡化、HREX、fallback の判定など)は今は `workflow.py` に残り、エンジンがそれを呼ぶ。
+- ABFE が変わらないこと: m38 の指紋が手順 2 の後(89477d2)、手順 3〜5 の後(250ceb1)ともリファクタリング前と
+  バイト単位で同じ。保存済みの ABFE の run(TYK2 ejm_31 の 2 レグ、image e77a6c5)の解析の結果の辞書が前後で同じ。
+- 見つかったこと: `feat/rbfe` のエッジのテストは CPU platform(deterministic forces 無し)と乱数で置く水素のため、
+  全体の中では 1 本目のレグの窓が繋がらず失敗し、単独では通った。deterministic forces と seed で 2 回同じ数値に
+  (`feat/rbfe` の 5b56034)。
+- 単体テスト全体(5cc23eb): 778 passed。GPU テスト(GPU 0): 61 passed、4 failed(hybrid のレグの HREX のテストが
+  `LegSpec` にプロトコルを書いておらず、worker が状態を ABFE として読んだ: テストを直した)。
+- TYK2 の相対の example を image 5cc23eb で(GPU 1〜7、全レグ プラグイン)。全レグが終わった後、run 全体の timing の
+  記録が各レグの ligand を読み `KeyError: 'ligand'` で止まった(エッジのレグには無い): ジョブの名前で書くように直し、
+  回帰テスト(直す前のコードで KeyError)。数値(`cufep rbfe analyze`、kcal/mol、前回 f6ac3b4): ejm_31→ejm_46
+  -1.75 ± 0.27(-1.86 ± 0.29)、ejm_31→ejm_49 +1.09 ± 0.44(+0.56 ± 0.32)、ejm_46→ejm_49 +2.86 ± 0.90(+2.39 ± 0.32、
+  NOT RELIABLE: complex レグの推定のサンプルの overlap、窓 9、前回は 10)。3 本とも差は二つの誤差の合成の範囲内。
+  cycle closure +0.03 ± 1.04。dG -9.31 ± 0.17、-11.06 ± 0.20、-8.22 ± 0.27(実験 -9.54、-11.31、-7.75)。
+
+### 2026-11-26 PR #18 のレビュー
+- P1(当たる、再現した): サンプルと schedule.yaml を持つ相対レグで、開始配置が窓より 1 つ少なく、YAML が別の窓の数を
+  指定すると、新しい窓を作って schedule.yaml を上書きし、サンプルとの不一致で止まった(テストで 3 窓 → 4 窓、
+  "written for a different number of replicas/states")。修正: レグが持つ窓を保ち、その開始配置だけを作り直す(ABFE と
+  同じ)。このレグのものでない schedule、schedule の無いサンプルは、何も書く前に止める。ABFE は schedule の無い
+  サンプル(手で消した場合)で新しい窓のファイルを書いてから止まるが、この PR では ABFE を変えない。
+- P2(当たる、再現した): `cufep rbfe analyze` が保存された設定全体を検証し、#17 が受理した窓
+  (0.04 ps、平衡化 0、0.02 ps ごと: 10 ステップ < barostat の 25)で集計の前に止まった。#17 は `shared()` で ABFE の
+  既定の窓を検査しており、相対の窓を検査していなかった。修正: 解析は repeat の数だけを読む。新しい run は今まで通り拒否。
+- 2 回目のレビュー(5347e04、前回の 2 件は確認済み): 開始配置を作り直す分岐に 3 件、すべて再現した。
+  1. サンプルがあるのに schedule がサンプルの窓でない(別の repeat のものを戻した、λ 0.5 → 0.4): 開始配置を書いてから
+     サンプルで止まった → 何も書く前に止める(サンプルの設定が違う場合も)。
+  2. サンプルが無く開始配置が 1 窓足りない: `stored_windows` が件数で先に戻り、窓を選んだ設定の照合が飛んだ
+     (softcore_alpha 0.85 → 0.7 で進んだ) → その窓を名指す記録の設定を、何も書く前に照合する。
+  3. サンプルはチェックポイントから続くのに、記録の開始方法を作り直しの方法に書き換えた(walk が「前平衡化から」と報告
+     された) → 元の記録を保ち、作り直しは `start_configurations_made_again` に分けて記録する。
+- 3 回目のレビュー(5aae9a5、前回の 3 件は確認済み): 2 件、再現してから修正。P: サンプルのあるレグで `sampling.exchange`
+  を hrex から none に変えると、λ と設定は一致するので開始配置と schedule を書き直してから HREX が拒否した → 本番の
+  `LegSpec.conditions()` を `conditions_differences` でサンプルの条件と照合し、書く前に止める。Q: HREX は最初のサンプルの
+  前に反復 0 のチェックポイントを書くので、サンプル 0 件でもチェックポイントから続く → サンプルの件数ではなく
+  チェックポイントの有無で元の開始方法を保つ(`goes_on_from_its_samples`)。
+- 4 回目のレビュー(ae616b2): 1 件、再現してから修正。U: サンプル行があってチェックポイントが無く完了していない
+  レグは HREX が再生成した開始配置から新規に始めるのに、元の walk を記録した → 由来の引き継ぎは実際の復元
+  (チェックポイントがあるか、全反復がそろって解析だけする)のときだけ(`restores_its_samples`)。条件の照合は行か
+  チェックポイントがあれば続ける。同じ照合を ABFE のレグにも入れた(エンジンの `check_kept_windows` など):
+  ABFE も条件の違うサンプルで開始配置を書き換えてから止まり、schedule の無いサンプルで新しい窓を書いていた(再現済み)。
+- 5 回目のレビュー(2babdd8): 4 件。V: 開始配置のファイルが無いと記録に開始方法が無く、ログが KeyError → 今回の作り方を
+  ログに出し、サンプルの開始は不明とする。W: schedule の無いサンプルを `begin_leg` が結果を退避した後で拒否していた →
+  ABFE の `check_leg_reuse` と相対の run の前で照合する。X: `lambda_schedule.file` で与えた窓でも元の開始の記録を引き継ぐ、
+  条件を記録しない旧形式のサンプルもそのまま使うものとして扱う。Y: 作り直した開始配置からチェックポイント無しで新規に
+  始めるときは、その作り方を記録する(`record_the_start_used`)。

@@ -95,6 +95,38 @@ def test_edges_that_do_not_connect_the_ligands_or_lack_an_error_are_refused():
         mle(["a", "b"], [Edge("a", "b", 1.0, 0.0)])
 
 
+def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration_would_be_refused_for(tmp_path):
+    """Review of PR #18 (P2): `cufep rbfe analyze` validated the whole stored configuration, and the windows of a
+    precalculation that #17 accepted (0.04 ps without equilibration, a sample every 0.02 ps: 10 steps, fewer than the
+    25 of the barostat) stopped it before the results of the legs were combined. It reads the number of repeats
+    only; a new run is refused for these windows as before."""
+    import json
+
+    import yaml
+
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import analyse_directory
+
+    windows = {"adaptive": {"window_ps": 0.04, "equilibration_ps": 0.0, "sample_interval_ps": 0.02}}
+    stored = {"system": {"protein": "p.pdb", "ligands": "l.sdf"}, "lambda_schedule": windows,
+              "sampling": {"repeats": 1}}
+    with pytest.raises(ValueError, match="barostat"):
+        RbfeConfig.model_validate(stored)
+    (tmp_path / "resolved_config.yaml").write_text(yaml.safe_dump(stored))
+    (tmp_path / "network.json").write_text(json.dumps({"ligands": ["a", "b"], "edges": [["a", "b"]],
+                                                       "experiment_kcal_mol": {"a": -9.0, "b": -10.0}}))
+    for leg, dg in (("complex", -12.0 * 4.184), ("solvent", -10.5 * 4.184)):
+        leg_dir = tmp_path / "edges" / "a~b" / "repeat_0" / leg
+        leg_dir.mkdir(parents=True)
+        (leg_dir / "result.json").write_text(json.dumps({
+            "delta_g": dg, "delta_g_error": 0.3 * 4.184, "n_states": 9, "backend": "openmm", "notes": [],
+            "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}}}))
+    summary = analyse_directory(tmp_path)
+    edge = summary["edges"][0]
+    assert edge["ddg"] == pytest.approx(-1.5) and edge["se"] == pytest.approx(0.3 * math.sqrt(2))
+    assert summary["dg"]["values"]["b"]["dg"] - summary["dg"]["values"]["a"]["dg"] == pytest.approx(-1.5)
+
+
 def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float = 298.15, pressure: float = 1.0,
                 overlap: float = 0.1):
     return {"delta_g": dg_kcal * 4.184, "delta_g_error": None if se_kcal is None else se_kcal * 4.184,
@@ -187,7 +219,7 @@ def test_the_lowest_overlap_in_the_table_is_that_of_all_repeats_of_the_ddg(tmp_p
     assert float(row["lowest_overlap_complex"]) == pytest.approx(0.001) and row["not_reliable"] == "complex"
 
 
-def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration_would_be_refused_for(tmp_path):
+def test_a_run_directory_is_analysed_whatever_its_initial_windows_would_be_refused_for(tmp_path):
     """Second review of PR #17: `cufep rbfe analyze` validated the whole stored configuration, so a directory that an
     earlier version ran with nine initial windows and max_windows 2 (refused now) was not analysed although its
     legs had their results. It reads the number of repeats only; a new run is refused as before."""

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, replace
+from typing import ClassVar
 
 import numpy as np
 import openmm as mm
@@ -52,6 +53,7 @@ from cufep.alchemy.factory import (
     SOFTCORE_FORCE_NAME,
     SOFTCORE_GROUP,
 )
+from cufep.engine.protocol import ABFE, canonical_stage, rest2_scale_along_leg
 
 R_GAS = 8.31446261815324e-3            # kJ/mol/K
 BAR_NM3_TO_KJ_MOL = 0.0602214076       # 1 bar nm^3 in kJ/mol
@@ -60,6 +62,8 @@ _KJ = unit.kilojoule_per_mole
 
 @dataclass(frozen=True)
 class AlchemicalState:
+    #: the protocol of the state (cufep.engine.protocol)
+    protocol: ClassVar[str] = ABFE
     lambda_restraints: float = 1.0
     lambda_electrostatics: float = 1.0
     lambda_sterics: float = 1.0
@@ -89,66 +93,9 @@ class AlchemicalState:
 #: A3FE: restrain (restraint off -> on), discharge (charges on -> off), vanish (LJ on -> off).
 STAGES_COMPLEX = ("restrain", "discharge", "vanish")
 STAGES_SOLVENT = ("discharge", "vanish")
-#: the one stage of a relative transformation (cufep.rbfe.states): the name of the stage of Sire's
-#: standard_morph schedule
-STAGES_HYBRID = ("morph",)
-#: names used by earlier versions (still accepted when reading files)
-STAGE_ALIASES = {"restraints": "restrain", "electrostatics": "discharge", "sterics": "vanish"}
 #: a global parameter that a System has if it can pass through the stage (adaptive lambda scheduling
 #: leaves out a stage whose parameter the Context does not have)
-STAGE_PARAMETER = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS,
-                   "morph": "lambda_sterics_core"}
-
-
-def canonical_stage(name: str) -> str:
-    name = STAGE_ALIASES.get(name, name)
-    if name not in STAGES_COMPLEX + STAGES_HYBRID:
-        raise ValueError(f"unknown stage '{name}'")
-    return name
-
-
-def is_hybrid_stage(name: str) -> bool:
-    return canonical_stage(name) in STAGES_HYBRID
-
-
-def state_from_dict(d: dict):
-    """The state a dictionary of :meth:`to_dict` describes: an :class:`AlchemicalState` of the ABFE, or a
-    hybrid state of a relative transformation (:class:`cufep.rbfe.states.HybridState`)."""
-    if "lambda_hybrid" in d:
-        from cufep.rbfe.states import HybridState
-
-        return HybridState(**d)
-    return AlchemicalState(**d)
-
-
-def is_hybrid(states) -> bool:
-    from cufep.rbfe.states import HybridState
-
-    return bool(states) and isinstance(states[0], HybridState)
-
-
-def make_state_evaluator(context: mm.Context, states, temperature_K: float, pressure_bar: float | None):
-    """The evaluator of all state energies for these states: :class:`StateEnergyEvaluator` for the ABFE,
-    :class:`cufep.rbfe.states.HybridEnergyEvaluator` for hybrid states."""
-    if is_hybrid(states):
-        from cufep.rbfe.states import HybridEnergyEvaluator
-
-        return HybridEnergyEvaluator(context, states, temperature_K, pressure_bar)
-    return StateEnergyEvaluator(context, states, temperature_K, pressure_bar)
-
-
-def rest2_scale_along_leg(stages, stage: str, lam: float, peak: float) -> float:
-    """REST2 temperature scale at lambda ``lam`` of ``stage`` of a leg with the given stages.
-
-    The leg is one path from 0 to 1 on which every stage takes an equal part. The scale is 1 at
-    both ends and ``peak`` in the middle, linear in between: SOMD2's rule
-    1 + (peak - 1) * (1 - 2 |x - 0.5|) with x the position on that path.
-    """
-    if peak == 1.0:
-        return 1.0
-    names = [canonical_stage(n) for n in stages]
-    x = (names.index(canonical_stage(stage)) + float(lam)) / len(names)
-    return 1.0 + (float(peak) - 1.0) * (1.0 - 2.0 * abs(x - 0.5))
+STAGE_PARAMETER = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS}
 
 
 def stage_state(stage: str, lam: float, stages=None, rest2_scale: float = 1.0) -> AlchemicalState:
@@ -159,11 +106,8 @@ def stage_state(stage: str, lam: float, stages=None, rest2_scale: float = 1.0) -
     """
     lam = float(min(1.0, max(0.0, lam)))
     stage = canonical_stage(stage)
-    if stage in STAGES_HYBRID:
-        from cufep.rbfe.states import HybridState
-
-        scale = 1.0 if rest2_scale == 1.0 else rest2_scale_along_leg(stages or [stage], stage, lam, rest2_scale)
-        return HybridState(lam, scale)
+    if stage not in STAGE_PARAMETER:
+        raise ValueError(f"'{stage}' is not a stage of the ABFE")
     if stage == "restrain":
         state = AlchemicalState(lam, 1.0, 1.0)
     elif stage == "discharge":
@@ -178,13 +122,8 @@ def stage_state(stage: str, lam: float, stages=None, rest2_scale: float = 1.0) -
 
 
 def validate_states(states: list[AlchemicalState]) -> None:
-    if is_hybrid(states):
-        from cufep.rbfe.states import HybridState, validate_hybrid_states
-
-        if not all(isinstance(s, HybridState) for s in states):
-            raise ValueError("the states mix hybrid states and states of the ABFE")
-        validate_hybrid_states(states)
-        return
+    if not all(isinstance(s, AlchemicalState) for s in states):
+        raise ValueError("the states are not all states of the ABFE")
     if len(states) < 2:
         raise ValueError("at least two thermodynamic states are needed")
     for s in states:
@@ -357,3 +296,34 @@ class StateEnergyEvaluator:
         if restore is not None:
             set_state(self.context, restore)
         return self.beta * energy, volume
+
+
+class _Abfe:
+    """The protocol of the ABFE (:mod:`cufep.engine.protocol`): the double decoupling of a ligand."""
+
+    name = ABFE
+    stages = STAGES_COMPLEX
+    stage_parameter = STAGE_PARAMETER
+
+    @staticmethod
+    def leg_stages(leg: str) -> tuple[str, ...]:
+        return STAGES_COMPLEX if leg == "complex" else STAGES_SOLVENT
+
+    @staticmethod
+    def stage_state(stage: str, lam: float, stages=None, rest2_scale: float = 1.0) -> AlchemicalState:
+        return stage_state(stage, lam, stages, rest2_scale)
+
+    @staticmethod
+    def state_from_dict(d: dict) -> AlchemicalState:
+        return AlchemicalState(**d)
+
+    @staticmethod
+    def evaluator(context, states, temperature_K: float, pressure_bar: float | None) -> "StateEnergyEvaluator":
+        return StateEnergyEvaluator(context, states, temperature_K, pressure_bar)
+
+    @staticmethod
+    def validate(states) -> None:
+        validate_states(states)
+
+
+PROTOCOL = _Abfe()

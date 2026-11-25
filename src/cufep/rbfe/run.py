@@ -103,6 +103,24 @@ def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, onl
                             f"solvent leg, which {', '.join(missing)} does not have yet: run the solvent leg first")
 
 
+def check_legs_have_their_windows(out_dir: Path, edges, repeats: int, only_legs) -> None:
+    """Before a run moves or writes anything: every leg it runs that has samples (or the checkpoint of their start)
+    has the schedule of their windows (:func:`cufep.engine.leg.check_samples_have_their_windows`), so that a leg is
+    not refused after its result was set aside (fifth review of PR #18, the class of the ABFE's)."""
+    from cufep.alchemy.schedule import Schedule
+    from cufep.engine.leg import check_samples_have_their_windows
+
+    for a, b in edges:
+        for r in range(repeats):
+            for leg in ("solvent", "complex"):
+                if only_legs and leg not in only_legs:
+                    continue
+                leg_dir = out_dir / "edges" / edge_name(a, b) / f"repeat_{r}" / leg
+                sched = leg_dir / "schedule.yaml"
+                check_samples_have_their_windows(
+                    leg_dir, [state.to_dict() for state in Schedule.load(sched).states] if sched.exists() else None)
+
+
 def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None) -> dict:
     """Run the whole relative calculation. Safe to call again to resume."""
     from cufep.run import lock_output_directory
@@ -117,21 +135,18 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
 
 
 def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None) -> dict:
-    from cufep.rbfe.leg import HybridLegJob
+    from cufep.rbfe.leg import EdgeLegJob
     from cufep.rbfe.prep import prepare_edge, prepared_edge
-    from cufep.run import execute_jobs, plan, write_timing
+    from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
 
     t_run = time.time()
     ligands = ligands_of(rcfg)
     if len(ligands) < 2:
         raise WorkflowError("a relative calculation needs at least two ligands")
-    resolved, report, protein, ligands = plan(rcfg.shared(), log, ligands)
-    # the settings auto resolved for the shared sections are those of the relative run
-    rcfg = RbfeConfig.model_validate({**rcfg.model_dump(mode="json"),
-                                      "backend": resolved.backend.model_dump(mode="json"),
-                                      "resources": resolved.resources.model_dump(mode="json"),
-                                      "solvation": resolved.solvation.model_dump(mode="json"),
-                                      "output": {"dir": str(out_dir)}})
+    resolved, report, protein = prepare_protein_and_settings(rcfg, rcfg.system.protein, log)
+    names = [lig.name for lig in ligands]
+    log(f"{len(ligands)} ligand(s): {', '.join(names[:8])}{' ...' if len(names) > 8 else ''}")
+    rcfg = RbfeConfig.model_validate({**resolved.model_dump(mode="json"), "output": {"dir": str(out_dir)}})
     for key, value, reason in report.decisions:
         log(f"auto: {key} = {value} ({reason})")
     for w in report.warnings:
@@ -150,6 +165,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     # of the run whose results the directory holds (review of PR #17)
     for a, b in edges:
         prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
+    if not reschedule:
+        check_legs_have_their_windows(out_dir, selected, rcfg.sampling.repeats, only_legs)
     experiment = experiment_of(rcfg, ligands)
     write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
     publish_text(out_dir / "auto_report.md", report.to_markdown())
@@ -160,7 +177,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
                                               out_dir / "edges" / edge_name(a, b), box_shape, log)
     cfg_dict = rcfg.model_dump(mode="json")
     repeats = rcfg.sampling.repeats
-    jobs = [HybridLegJob(ligand=edge_name(a, b), leg=leg, repeat=r, lig_dir=str(out_dir / "edges" / edge_name(a, b)),
+    jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
                          devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
                          reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]))
             for a, b in selected for r in range(repeats) for leg in ("solvent", "complex")
@@ -438,10 +455,10 @@ def failed_edges(summary: dict) -> list[str]:
 
 def analyse_directory(out_dir: Path) -> dict:
     """The results of a relative run from the results its legs have, as the run makes
-    them; writes nothing."""
+    them; writes nothing. Of the configuration of the run only what combining the results needs is read (the
+    number of repeats): the checks of a configuration are for a run that simulates, and a directory that an
+    earlier version wrote under other checks is analysed all the same (review of PR #18)."""
     out_dir = Path(out_dir)
-    # of the configuration only what combining the results needs: its checks are for a run that simulates, and a
-    # directory of an earlier version is analysed all the same (second review of PR #17)
     stored = yaml.safe_load((out_dir / "resolved_config.yaml").read_text()) or {}
     repeats = (stored.get("sampling") or {}).get("repeats", RbfeSampling.model_fields["repeats"].default)
     if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:

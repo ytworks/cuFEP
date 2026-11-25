@@ -64,7 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`, PR #17): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment. A2A example in the bilayer (image f6ac3b4): ddG +0.91 ± 0.30, +3.26 ± 0.12, +1.38 ± 0.26 (experiment +2.12, +0.72, -1.40), cycle closure -0.97 ± 0.41, dG RMSE 1.35 (FEP+ 0.83); both in the plan's record. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends.
+- Plan `docs/plans/2026-11-25-rbfe.md` (done: PR #17 with PR #18 merged into main on 2026-11-26): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment. A2A example in the bilayer (image f6ac3b4): ddG +0.91 ± 0.30, +3.26 ± 0.12, +1.38 ± 0.26 (experiment +2.12, +0.72, -1.40), cycle closure -0.97 ± 0.41, dG RMSE 1.35 (FEP+ 0.83); both in the plan's record. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends. Plan `docs/plans/2026-11-25-leg-engine.md` (done, PR #18): one engine of a leg for both (`src/cufep/engine/`), steps 1-6 done; ABFE fingerprint and analysis of a stored run unchanged; the TYK2 relative example on its image agrees with image f6ac3b4 within the errors (the plan's record).
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
@@ -112,6 +112,14 @@ Open items:
 
 ## Change Log
 
+### 2026-11-26 — [progress] RBFE and the engine of a leg merged (PR #17 with PR #18)
+- What: the reviews of PR #17 (four rounds, 18 findings) and PR #18 (eight rounds, 20 findings) were each
+  reproduced first, fixed with a test, pushed and answered; on the owner's order after no further findings,
+  PR #18 was merged into `feat/rbfe` and PR #17 into main.
+- Verified: unit suites of the heads before the last fixes (#17 a0b1b52: 795 passed; #18 2babdd8: 803
+  passed), the tests of every later fix before and after it, CI of each PR; the ABFE fingerprint unchanged.
+- Refs: `docs/plans/2026-11-25-rbfe.md`, `docs/plans/2026-11-25-leg-engine.md` (records of the reviews)
+
 ### 2026-11-26 — [amendment] RBFE: the nine findings of the review of PR #17
 - What: each end state in a force field with its own ligand (one template served A and B of one bonded graph:
   System A had the charges of B in the test); the legs of an edge are checked as the ABFE checks them
@@ -121,6 +129,24 @@ Open items:
   edges.csv from the repeats of the ddG; initial windows within max_windows. Each reproduced first, as a test.
 - Why: the review of PR #17 (2026-11-25); the examples were not affected (no such inputs, no reruns).
 - Refs: `docs/plans/2026-11-25-rbfe.md` (record); `docs/rbfe.md`
+
+### 2026-11-25 — [progress] One engine of a leg: the ABFE and the RBFE as two protocols
+- What: `src/cufep/engine/` (protocols, steps of a leg, analysis of a path, jobs); `CommonConfig`; the relative
+  leg runs on the engine without `shared()`, renamed results or the ABFE job. Found on the way: the timing of a
+  relative run read a ligand per leg (KeyError after all legs had finished), and the test of an edge was not
+  repeatable (CPU platform without deterministic forces, hydrogens placed at random); both fixed with tests.
+- Verified: ABFE fingerprint (`spikes/m38`, Reference platform) identical before and after; analysis of a stored
+  TYK2 ligand identical; unit suite and GPU tests; TYK2 relative example (image 5cc23eb, resumed on c3665a3).
+- Refs: `docs/plans/2026-11-25-leg-engine.md`; branch `refactor/leg-engine`
+
+### 2026-11-25 — [design] Plan: one engine of a leg for the ABFE and the RBFE
+- What: `src/cufep/engine/` (protocols of a leg, the steps of a leg, jobs); the ABFE and the RBFE become two
+  protocols on it; `RbfeConfig.shared()`, the renaming of leg results, the job subclass and the dispatch on the
+  keys of a state go. ABFE numbers, files and defaults unchanged, checked with `spikes/m38` before and after.
+- Why: the owner's question (is the sharing forced, is it the right architecture?): the RBFE was fitted into the
+  entrances of the ABFE (an ABFE configuration made from its settings, its pre-equilibration steered by the
+  setting of the ABFE restraint, result keys renamed, command hints replaced as text).
+- Refs: `docs/plans/2026-11-25-leg-engine.md`; branch `refactor/leg-engine`
 
 ### 2026-11-25 — [progress] RBFE: TYK2 example; the findings of the review of the diff
 - What: TYK2 example on image f6ac3b4 (plan record; Current Status). Review of PR #17: a torsion that a System
@@ -138,50 +164,3 @@ Open items:
   each leg its own precalculation (complex 500 ps after 500 ps, as the ABFE); `cufep rbfe run --leg`.
 - Why: the owner's choice of 2026-11-25 after that result.
 - Refs: `docs/rbfe.md` ("Lambda windows"), `runs/rbfe_tyk2_58bef64` (untracked)
-
-### 2026-11-25 — [amendment] RBFE: no ABFE; every window that a leg does not choose starts from its pre-equilibration
-- What: the reference of the dG by an ABFE in the same run (`dg.references: abfe`, the entry below) is removed:
-  the dG come from the edges alone (MLE), referenced to the mean of the experimental values, else to the mean
-  of the network. The windows the complex leg takes from the solvent leg, and fixed windows, start all from the
-  end of the pre-equilibration (OpenFE's start) instead of a walk on one GPU; `lambda_schedule.fixed_walk_ps`
-  of RBFE is gone. The ABFE run driver is back as on main but for `execute_jobs`, shared with RBFE.
-- Why: the owner's order of 2026-11-25 ("ABFE は不要", "RBFE だけで DG を出す方法をちゃんと実現せよ"; no
-  serial step in the GPU parallelism).
-- Refs: `docs/rbfe.md`, `docs/plans/2026-11-25-rbfe.md` ("記録")
-
-### 2026-11-25 — [progress] `cufep rbfe`: relative binding free energies, implemented, not run yet
-- What: hybrid topology by the rules of OpenFE's relative protocol with only charges on the plugin (`spikes/m36`:
-  within 0.037 kT of the charges written in), Kartograf mapping, LOMAP networks, adaptive lambda scheduling of the
-  paper (solvent leg decides), REST2, the bilayer; ddG, cycle closures, dG by cinnabar's MLE with the experimental
-  mean or an ABFE in the same run. Shared code: one state dispatch, `sample_leg`, `prepare_run`/`finish_run`; the
-  ABFE tests unchanged. RBFE has no long-range correction of the ligand LJ (OpenFE's default; the plan had both ends).
-- Why: the owner's order (the plan).
-- Refs: `docs/rbfe.md`, `docs/plans/2026-11-25-rbfe.md` ("記録"), PR #17
-
-### 2026-11-25 — [design] Plan: relative binding free energies, `cufep rbfe`
-- What: the owner's order. A second product in the same package and image: hybrid topology with the
-  lambda functions and soft-core of OpenFE's protocol, Kartograf mapping, adaptive lambda scheduling
-  as the paper sets it for relative transformations (9 windows, 0.04), 5 ns per window, REST2, the
-  bilayer as the ABFE has it; ddG per edge, DG by the MLE of the network with the experimental mean
-  (default) or a cuFEP ABFE of a reference ligand. Its own YAML. Shared code generalised so that the
-  ABFE gives the same numbers. Examples: TYK2 and A2A in the bilayer, three compounds each.
-- Why: the owner's order of 2026-11-25; the two choices (DG reference, place) are the owner's answers.
-- Refs: `docs/plans/2026-11-25-rbfe.md`
-
-### 2026-11-25 — [design] The owner's decision: the runs stop, no default changes for now
-- What: after the four runs with grand canonical moves of water (the entry below) the owner stops the
-  evaluation on A2A; the remaining 15 ligands are not run. No default changes for now: the water
-  stays TIP3P, `sampling.gcmc` and `sampling.relocation_mc` stay off. The two plans are closed.
-- Why: the owner's decision. In the four runs the binding stayed 5 to 8 kcal/mol too strong.
-- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` (`Status:`)
-
-### 2026-11-25 — [progress] A2A with grand canonical moves of water: 4k and 4e, TIP3P and OPC
-- What: image of 8252ccd, one calculation each on eight GPUs, the set's settings with
-  `sampling.gcmc.enabled: true` (kcal/mol; experiment -11.54 and -12.07). 4k: TIP3P -17.32 ± 0.42
-  (without the moves -20.32 ± 0.52 in the run of e77a6c5; three other runs -14.49, -13.07, -16.50),
-  OPC -19.96 ± 0.29 (-19.15 ± 0.35). 4e: TIP3P -17.21 ± 0.36 with the restraint on ASN 253 (without,
-  on ASN 253, -16.85 ± 0.64; on PHE 168, e77a6c5, -13.50 ± 0.34), OPC -18.26 ± 0.54 (-20.61 ± 0.47,
-  both on PHE 168). The moves were made in every run (5 to 20 thousand insertions and as many
-  deletions); the sphere holds 7 to 9 waters where the ligand is coupled and 16 to 21 where it is
-  decoupled. No GPU error, no worker restarted. The rest of the set waits for the owner.
-- Refs: `docs/plans/2026-11-24-gcmc-water.md` ("記録"), `runs/benchmark_a2a_full_gcmc_{tip3p,opc}_8252ccd`
