@@ -90,3 +90,8 @@ Refs: `docs/plans/2026-11-25-rbfe.md`; PR #17
      (softcore_alpha 0.85 → 0.7 で進んだ) → その窓を名指す記録の設定を、何も書く前に照合する。
   3. サンプルはチェックポイントから続くのに、記録の開始方法を作り直しの方法に書き換えた(walk が「前平衡化から」と報告
      された) → 元の記録を保ち、作り直しは `start_configurations_made_again` に分けて記録する。
+- 3 回目のレビュー(5aae9a5、前回の 3 件は確認済み): 2 件、再現してから修正。P: サンプルのあるレグで `sampling.exchange`
+  を hrex から none に変えると、λ と設定は一致するので開始配置と schedule を書き直してから HREX が拒否した → 本番の
+  `LegSpec.conditions()` を `conditions_differences` でサンプルの条件と照合し、書く前に止める。Q: HREX は最初のサンプルの
+  前に反復 0 のチェックポイントを書くので、サンプル 0 件でもチェックポイントから続く → サンプルの件数ではなく
+  チェックポイントの有無で元の開始方法を保つ(`goes_on_from_its_samples`)。
