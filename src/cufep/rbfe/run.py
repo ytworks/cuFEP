@@ -4,7 +4,6 @@ Output directory
     ``resolved_config.yaml``  the configuration of the run, auto settings resolved
     ``network.json``          the ligands and the edges (given or planned by LOMAP)
     ``edges/<A>~<B>/``        an edge: ``prep/`` (end states, mapping), ``repeat_<r>/{complex,solvent}/`` (legs)
-    ``abfe/``                 the ABFE run of the reference ligands (``dg.references: [abfe]``)
     ``edges.csv``, ``ligands.csv``, ``summary.json``  the results; ``cufep.log``, ``timing.json``
 """
 from __future__ import annotations
@@ -20,9 +19,9 @@ import yaml
 from cufep import jsonio
 from cufep.files import publish_text, publish_with
 from cufep.rbfe.config import RbfeConfig
-from cufep.rbfe.network import Edge, cycle_closures, dg_from_abfe, dg_from_experiment, edge_ddg
+from cufep.rbfe.network import Edge, cycle_closures, edge_ddg, ligand_dg
 from cufep.rbfe.prep import edge_name
-from cufep.workflow import KCAL, WorkflowError, _Log, check_interaction_inputs, select_ligands
+from cufep.workflow import KCAL, WorkflowError, _Log, select_ligands
 
 
 def ligands_of(rcfg: RbfeConfig) -> list:
@@ -105,16 +104,12 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
 def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None) -> dict:
     from cufep.rbfe.leg import HybridLegJob
     from cufep.rbfe.prep import prepare_edge
-    from cufep.run import execute_jobs, finish_run, lock_output_directory, plan, prepare_run, write_timing
+    from cufep.run import execute_jobs, plan, write_timing
 
     t_run = time.time()
     ligands = ligands_of(rcfg)
     if len(ligands) < 2:
         raise WorkflowError("a relative calculation needs at least two ligands")
-    refs = list(rcfg.dg.abfe_ligands)
-    missing = sorted(set(refs) - {lig.name for lig in ligands})
-    if missing:
-        raise WorkflowError(f"dg.abfe_ligands names ligands that are not ligands of the run: {', '.join(missing)}")
     resolved, report, protein, ligands = plan(rcfg.shared(), log, ligands)
     # the settings auto resolved for the shared sections are those of the relative run
     rcfg = RbfeConfig.model_validate({**rcfg.model_dump(mode="json"),
@@ -148,35 +143,17 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
                          devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
                          reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]))
             for a, b in selected for r in range(repeats) for leg in ("solvent", "complex")]
-    abfe_run = None
-    abfe_lock = None
-    if "abfe" in rcfg.dg.references:
-        abfe_dir = out_dir / "abfe"
-        abfe_dir.mkdir(parents=True, exist_ok=True)
-        abfe_lock = lock_output_directory(abfe_dir)
-        abfe_cfg = rcfg.abfe_config(refs)
-        # what the restraint of the ABFE needs, before any MD (as `cufep run` checks it)
-        check_interaction_inputs(abfe_cfg, [by_name[name] for name in refs])
-        abfe_run = prepare_run(abfe_cfg, abfe_dir, reschedule, _Log(abfe_dir / "cufep.log"),
-                               ligands=[by_name[name] for name in refs])
     t_prepared = time.time()
-    log(f"{len(jobs)} job(s) of {len(selected)} edge(s) x 2 legs x {repeats} repeat(s)"
-        + (f" and {len(abfe_run.jobs)} of the ABFE of {', '.join(refs)}" if abfe_run else "")
-        + f"; per lambda window {rcfg.sampling.equilibration('complex'):g} ns equilibration and "
+    log(f"{len(jobs)} job(s) of {len(selected)} edge(s) x 2 legs x {repeats} repeat(s); per lambda window "
+        f"{rcfg.sampling.equilibration('complex'):g} ns equilibration and "
         f"{rcfg.sampling.production_ns:g} ns production")
     gpus = list(rcfg.resources.gpus) if rcfg.resources.gpus else [None]
-    try:
-        results, monitor, mps_used = execute_jobs(jobs + (abfe_run.jobs if abfe_run else []), gpus,
-                                                  rcfg.resources.oversubscription_factor, log)
-        abfe_summary = finish_run(abfe_run, results[len(jobs):], monitor, mps_used) if abfe_run else []
-    finally:
-        if abfe_lock is not None:
-            abfe_lock.close()
-    for r in results[:len(jobs)]:
+    results, monitor, mps_used = execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor, log)
+    for r in results:
         if "error" in r:
             log(f"FAILED {r.get('ligand')}/r{r.get('repeat')}/{r.get('leg')}: {r['error']}")
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log)
-    summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, rcfg, experiment, abfe_summary)
+    summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, experiment)
     write_results(out_dir, summary)
     for line in result_lines(summary):
         log(line)
@@ -232,16 +209,17 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     return out
 
 
-def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, str]], repeats: int, rcfg,
-                    experiment: dict[str, float], abfe_summary: list[dict]) -> dict:
-    """The results of the edges, the cycle closures and the dG of every ligand by each reference."""
+def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, str]], repeats: int,
+                    experiment: dict[str, float]) -> dict:
+    """The results of the edges, the cycle closures and the dG of every ligand from the edges alone
+    (:func:`cufep.rbfe.network.ligand_dg`)."""
     results = [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats) for a, b in edges]
     measured = [Edge(r["ligand_a"], r["ligand_b"], r["ddg"], r["se"]) for r in results if "ddg" in r]
-    summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment,
-               "cycle_closures": cycle_closures(measured), "dg": {}, "notes": []}
     for r in results:
         if experiment.get(r["ligand_a"]) is not None and experiment.get(r["ligand_b"]) is not None:
             r["exp_ddg"] = experiment[r["ligand_b"]] - experiment[r["ligand_a"]]
+    summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment,
+               "cycle_closures": cycle_closures(measured), "dg": None, "notes": []}
     import networkx as nx
 
     graph = nx.Graph([(e.ligand_a, e.ligand_b) for e in measured])
@@ -249,25 +227,11 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     if not measured or not nx.is_connected(graph):
         summary["notes"].append("the edges with a ddG do not connect all ligands: no dG")
         return summary
-    if "experiment" in rcfg.dg.references:
-        if experiment:
-            values = dg_from_experiment(ligands, measured, experiment)
-            summary["dg"]["experiment"] = {name: {"dg": v, "se": e} for name, (v, e) in values.items()}
-        else:
-            summary["notes"].append("dg.references has experiment, but no ligand has an experimental value")
-    if "abfe" in rcfg.dg.references:
-        abfe = {}
-        for s in abfe_summary:
-            if s.get("dg_bind") is not None:
-                se = s.get("dg_bind_error") if s.get("dg_bind_std") is None else s["dg_bind_std"]
-                if se:
-                    abfe[s["ligand"]] = (float(s["dg_bind"]), float(se))
-        summary["abfe_kcal_mol"] = {name: {"dg": v, "se": e} for name, (v, e) in abfe.items()}
-        if abfe:
-            summary["dg"]["abfe"] = {name: {"dg": v, "se": e}
-                                     for name, (v, e) in dg_from_abfe(ligands, measured, abfe).items()}
-        else:
-            summary["notes"].append("dg.references has abfe, but no reference ligand has an ABFE result")
+    dg = ligand_dg(ligands, measured, experiment)
+    summary["dg"] = {"reference": dg["reference"], "reference_ligands": dg["reference_ligands"],
+                     "values": {name: {"dg": v, "se": e} for name, (v, e) in dg["values"].items()}}
+    if dg["reference"] == "mean of the network":
+        summary["notes"].append("no ligand has an experimental value: the dG are relative to the mean of the network")
     return summary
 
 
@@ -291,15 +255,12 @@ def write_results(out_dir: Path, summary: dict) -> None:
 
     def ligands_table(fh) -> None:
         w = csv.writer(fh)
-        refs = list(summary["dg"])
-        w.writerow(["ligand", "exp_dg_kcal_mol"] + [f"dg_{ref}_kcal_mol" for ref in refs]
-                   + [f"se_{ref}" for ref in refs] + ["abfe_dg_kcal_mol"])
-        abfe = summary.get("abfe_kcal_mol", {})
+        w.writerow(["ligand", "dg_kcal_mol", "standard_error", "exp_dg_kcal_mol", "reference"])
+        dg = summary.get("dg") or {"values": {}, "reference": ""}
         for name in summary["ligands"]:
-            w.writerow([name, fmt(summary["experiment_kcal_mol"].get(name))]
-                       + [fmt(summary["dg"][ref].get(name, {}).get("dg")) for ref in refs]
-                       + [fmt(summary["dg"][ref].get(name, {}).get("se")) for ref in refs]
-                       + [fmt(abfe.get(name, {}).get("dg"))])
+            v = dg["values"].get(name, {})
+            w.writerow([name, fmt(v.get("dg")), fmt(v.get("se")), fmt(summary["experiment_kcal_mol"].get(name)),
+                        dg["reference"]])
 
     publish_with(out_dir / "edges.csv", edges_table, newline="")
     publish_with(out_dir / "ligands.csv", ligands_table, newline="")
@@ -317,11 +278,11 @@ def result_lines(summary: dict) -> list[str]:
             lines.append(f"RESULT {e['edge']}: no ddG")
     for c in summary["cycle_closures"]:
         lines.append(f"cycle {' -> '.join(c['ligands'])}: sum of ddG {c['sum_kcal_mol']:+.2f} ± {c['se_kcal_mol']:.2f}")
-    for ref, values in summary["dg"].items():
-        for name, v in values.items():
+    if summary.get("dg"):
+        for name, v in summary["dg"]["values"].items():
             exp = summary["experiment_kcal_mol"].get(name)
-            lines.append(f"dG ({ref} reference) {name}: {v['dg']:.2f} ± {v['se']:.2f} kcal/mol"
-                         + (f" (experiment {exp:.2f})" if exp is not None else ""))
+            lines.append(f"dG {name}: {v['dg']:.2f} ± {v['se']:.2f} kcal/mol (relative to the "
+                         f"{summary['dg']['reference']})" + (f"; experiment {exp:.2f}" if exp is not None else ""))
     lines += [f"note: {n}" for n in summary["notes"]]
     return lines
 
@@ -331,12 +292,10 @@ def failed_edges(summary: dict) -> list[str]:
 
 
 def analyse_directory(out_dir: Path) -> dict:
-    """The results of a relative run from the results its legs have (and those of its ABFE), as the run makes
+    """The results of a relative run from the results its legs have, as the run makes
     them; writes nothing."""
     out_dir = Path(out_dir)
     rcfg = RbfeConfig.model_validate(yaml.safe_load((out_dir / "resolved_config.yaml").read_text()))
     network = json.loads((out_dir / "network.json").read_text())
-    abfe_file = out_dir / "abfe" / "summary.json"
-    abfe_summary = json.loads(abfe_file.read_text()) if abfe_file.exists() else []
     return combine_network(out_dir, network["ligands"], [tuple(e) for e in network["edges"]], rcfg.sampling.repeats,
-                           rcfg, {k: float(v) for k, v in network.get("experiment_kcal_mol", {}).items()}, abfe_summary)
+                           {k: float(v) for k, v in network.get("experiment_kcal_mol", {}).items()})

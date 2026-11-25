@@ -28,7 +28,7 @@ def test_the_ddg_of_an_edge_is_complex_minus_solvent_with_the_errors_added_in_qu
 
 
 def test_exact_edges_give_the_true_differences_and_zero_cycle_closures():
-    from cufep.rbfe.network import cycle_closures, dg_from_experiment, mle
+    from cufep.rbfe.network import cycle_closures, ligand_dg, mle
 
     names = list(TRUTH)
     f, cov = mle(names, _edges())
@@ -38,9 +38,10 @@ def test_exact_edges_give_the_true_differences_and_zero_cycle_closures():
     assert all(abs(c["sum_kcal_mol"]) < 1e-9 for c in closures)
     # every cycle of three edges of standard error 0.3 has a sum with standard error 0.3 sqrt(3)
     assert all(c["se_kcal_mol"] == pytest.approx(0.3 * math.sqrt(len(c["ligands"]))) for c in closures)
-    # the reference of experiment: shifted to the mean of the experimental values the network has
-    dg = dg_from_experiment(names, _edges(), {"a": TRUTH["a"], "c": TRUTH["c"]})
-    assert all(dg[n][0] == pytest.approx(TRUTH[n], abs=1e-9) for n in names)
+    # shifted to the mean of the experimental values the network has: two values give every ligand exactly
+    dg = ligand_dg(names, _edges(), {"a": TRUTH["a"], "c": TRUTH["c"]})
+    assert dg["reference"] == "mean of the experimental values" and dg["reference_ligands"] == ["a", "c"]
+    assert all(dg["values"][n][0] == pytest.approx(TRUTH[n], abs=1e-9) for n in names)
     assert cov.shape == (4, 4)
 
 
@@ -69,27 +70,26 @@ def test_the_estimate_is_cinnabars_for_noisy_edges():
     assert all(ours[n] == pytest.approx(theirs[n] - mean, abs=1e-6) for n in names)
 
 
-def test_an_abfe_reference_enters_the_likelihood_and_gives_absolute_values():
-    """With the ABFE of one ligand the estimate is absolute; the reference ligand moves towards the network as
-    much as the errors weigh, and the others follow by their edges."""
-    from cufep.rbfe.network import dg_from_abfe
+def test_without_experimental_values_the_dg_are_relative_to_the_mean_of_the_network():
+    """The edges fix the differences only: without an experimental value the mean of all ligands is 0, as cinnabar
+    gives them, and the result says which reference it has; one experimental value moves all ligands by the same
+    amount, and a ligand far from it in the network has the larger error."""
+    from cufep.rbfe.network import ligand_dg
 
     names = list(TRUTH)
-    exact = dg_from_abfe(names, _edges(), {"b": (TRUTH["b"], 0.4)})
-    assert all(exact[n][0] == pytest.approx(TRUTH[n], abs=1e-9) for n in names)
-    # an ABFE 1 kcal/mol off shifts every ligand by 1 kcal/mol: the edges fix the differences exactly
-    off = dg_from_abfe(names, _edges(), {"b": (TRUTH["b"] + 1.0, 0.4)})
-    assert all(off[n][0] == pytest.approx(TRUTH[n] + 1.0, abs=1e-9) for n in names)
-    # its error is that of the reference and of the path to it
-    assert off["b"][1] < off["d"][1] and off["b"][1] == pytest.approx(0.4, rel=0.2)
+    mean = np.mean(list(TRUTH.values()))
+    relative = ligand_dg(names, _edges(), {})
+    assert relative["reference"] == "mean of the network"
+    assert all(relative["values"][n][0] == pytest.approx(TRUTH[n] - mean, abs=1e-9) for n in names)
+    one = ligand_dg(names, _edges(), {"b": TRUTH["b"] + 1.0})
+    assert all(one["values"][n][0] == pytest.approx(TRUTH[n] + 1.0, abs=1e-9) for n in names)
+    assert one["values"]["b"][1] == pytest.approx(0.0, abs=1e-9) and one["values"]["d"][1] > one["values"]["a"][1]
 
 
 def test_edges_that_do_not_connect_the_ligands_or_lack_an_error_are_refused():
-    from cufep.rbfe.network import Edge, dg_from_abfe, mle
+    from cufep.rbfe.network import Edge, mle
 
     with pytest.raises(ValueError, match="connect"):
         mle(["a", "b", "c"], [Edge("a", "b", 1.0, 0.2)])
     with pytest.raises(ValueError, match="standard error"):
         mle(["a", "b"], [Edge("a", "b", 1.0, 0.0)])
-    with pytest.raises(ValueError, match="not in the network"):
-        dg_from_abfe(["a", "b"], [Edge("a", "b", 1.0, 0.2)], {"z": (-9.0, 0.3)})

@@ -7,12 +7,14 @@ analysis of the leg (:func:`cufep.workflow.leg_result_from_samples`).
 
 The lambda windows (``lambda_schedule``)
     adaptive, ``legs: solvent`` (default): the solvent leg runs the precalculation of adaptive lambda
-        scheduling and the complex leg takes its windows, as Midgley et al. 2025 decide the windows of a
-        relative transformation from the ligand in solution and use them for both legs. The complex leg waits
-        for them after its pre-equilibration and gives every window its start configuration by a walk through
-        them (``fixed_walk_ps`` in each, as the ABFE starts given windows).
+        scheduling, its windows at the same time on the GPUs it is granted, and the complex leg takes its windows,
+        as Midgley et al. 2025 decide the windows of a relative transformation from the ligand in solution and
+        use them for both legs. The complex leg pre-equilibrates meanwhile.
     adaptive, ``legs: each``: each leg runs its own precalculation (as the ABFE).
-    fixed: the windows of ``windows``, started by that walk.
+    fixed: the windows of ``windows``.
+    Windows that a leg does not choose itself start, all of them, from the end of its pre-equilibration, as OpenFE
+    starts its replicas, and the equilibration of the replica exchange relaxes them at the same time: no window
+    waits for another.
 """
 from __future__ import annotations
 
@@ -29,6 +31,8 @@ from cufep.workflow import KCAL, LegJob, WorkflowError
 STAGES = ["morph"]
 #: how long the complex leg waits between two looks for the windows of the solvent leg
 WAIT_SECONDS = 20.0
+#: how the windows that a leg does not choose itself get the configurations of their replicas
+PRE_EQUILIBRATION_START = "the end of the pre-equilibration"
 
 
 @dataclass
@@ -171,7 +175,6 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
         _choose_backend,
         _Log,
         _precision,
-        _walk_schedule,
         archive_leg,
         backend_fallback_refusal,
         check_equil_file,
@@ -258,6 +261,12 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                        box_safety=1.3 if barostat == "membrane" else None, settings=settings,
                        mps_thread_percentage=thread_percentage(job.oversubscription), **more)
 
+    def from_pre_equilibration(n: int) -> list:
+        """Every window from the end of the pre-equilibration, as OpenFE starts its replicas; the equilibration
+        of the replica exchange relaxes each window in its own state, all at the same time."""
+        start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
+        return [start] * n
+
     def run_with(backend: str):
         from cufep.sampling.states import stage_state
 
@@ -276,29 +285,32 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
             t0 = time.perf_counter()
             pool_spec = spec_of([stage_state("morph", 0.0).to_dict(), stage_state("morph", 1.0).to_dict()], backend,
                                 seed=seed + 23)
-            back = backend_of(pool_spec)
-            prepared = back.prepare_system(hybrid.system)
-            if barostat == "membrane":
-                prepared.addForce(back.make_membrane_barostat(pressure * u.bar, T * u.kelvin,
-                                                              cfg.dynamics.barostat_frequency, seed=seed + 5))
-            else:
-                prepared.addForce(back.make_isotropic_barostat(pressure * u.bar, T * u.kelvin,
-                                                               cfg.dynamics.barostat_frequency, seed=seed + 5))
-            integ = back.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond,
-                                         timestep_fs * u.femtoseconds, seed=seed + 6)
-            ctx = back.make_context(prepared, integ, device0)
-            ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
-            ctx.setPositions(eq["positions"])
-            ctx.setVelocities(eq["velocities"])
             a = ls.adaptive
             own_precalculation = ls.mode == "adaptive" and (a.legs == "each" or job.leg == "solvent")
+            ctx = integ = None
+            if own_precalculation:
+                # the Context of this process, which walks through the windows of the first iteration
+                back = backend_of(pool_spec)
+                prepared = back.prepare_system(hybrid.system)
+                if barostat == "membrane":
+                    prepared.addForce(back.make_membrane_barostat(pressure * u.bar, T * u.kelvin,
+                                                                  cfg.dynamics.barostat_frequency, seed=seed + 5))
+                else:
+                    prepared.addForce(back.make_isotropic_barostat(pressure * u.bar, T * u.kelvin,
+                                                                   cfg.dynamics.barostat_frequency, seed=seed + 5))
+                integ = back.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond,
+                                             timestep_fs * u.femtoseconds, seed=seed + 6)
+                ctx = back.make_context(prepared, integ, device0)
+                ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
+                ctx.setPositions(eq["positions"])
+                ctx.setVelocities(eq["velocities"])
             if ls.mode == "fixed":
                 values = ls.windows
                 schedule = schedule_from_windows(STAGES, {"morph": values},
                                                  {"morph": values if isinstance(values, int) else len(values)},
                                                  rest2_scale)
-                cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
-                how = {"start_configurations": "walk", "walk_ps": float(ls.fixed_walk_ps), "windows": "given"}
+                cfgs = from_pre_equilibration(len(schedule.states))
+                how = {"start_configurations": PRE_EQUILIBRATION_START, "windows": "given"}
             elif own_precalculation:
                 als = AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
                                   candidates=a.candidates, initial_windows={"morph": a.initial_windows},
@@ -325,9 +337,8 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                        "windows": "chosen by this precalculation"}
             else:
                 schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
-                cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
-                how = {"start_configurations": "walk", "walk_ps": float(ls.fixed_walk_ps),
-                       "windows": "those of the solvent leg"}
+                cfgs = from_pre_equilibration(len(schedule.states))
+                how = {"start_configurations": PRE_EQUILIBRATION_START, "windows": "those of the solvent leg"}
             del ctx, integ
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}
             configs = publish_windows(leg_dir, schedule, cfgs, record, leg=job.leg, edge=job.ligand,

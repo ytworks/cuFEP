@@ -278,8 +278,8 @@ cufep benchmark run tyk2 --tier smoke
 (Kartograf)、OpenFE の相対計算のプロトコルの規則で各 edge の hybrid topology を作り、論文が相対変換に
 定めたとおりの adaptive lambda scheduling で lambda window を選び、2 つの leg を REST2 付きの Hamiltonian
 replica exchange で全 GPU に配って回します。`membrane.enabled` のときは complex leg を二重膜に入れます。
-各 edge の ddG、cycle closure、ネットワークから求めた各リガンドの dG (最尤推定) を報告し、dG の基準は
-実験値の平均か、同じ run で計算した参照リガンドの ABFE です。
+各 edge の ddG、cycle closure、edge だけから求めた各リガンドの dG (最尤推定) を報告し、dG の基準は
+与えた実験値の平均、実験値が無ければネットワークの平均です。
 
 | ディレクトリ | 系 | リガンド、実験値 (kcal/mol) |
 |---|---|---|

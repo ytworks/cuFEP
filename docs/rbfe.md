@@ -20,7 +20,8 @@ cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have
   the pocket, all in one frame (as the public benchmark gives them). The atom mapping is made from these
   poses.
 - Experimental values (optional): `system.experiment` (a CSV with the columns `ligand` and `dg`, kcal/mol)
-  or the SDF tags `r_exp_dg` or `exp_dg`. They are used for the reference of the dG and for comparison.
+  or the SDF tags `r_exp_dg` or `exp_dg`. They set the one constant of the dG that the edges leave, and are
+  given next to the results.
 - Neutral ligands; an edge that changes the net charge is refused before anything is written (this version
   has no treatment of a charge change).
 
@@ -66,9 +67,12 @@ Adaptive lambda scheduling as Midgley et al. (J. Chem. Inf. Model. 2025, 65, 512
 transformations: a precalculation of the ligand in solvent starts from 9 evenly spaced windows of 101
 candidates, runs 50 ps in each new window, and adds a window where neighbouring windows overlap by 0.04 or
 less (the rule of `docs/protocol.md`, "Adaptive lambda scheduling"); the windows it ends with are those of
-both legs. The complex leg waits for them after its pre-equilibration and starts every window from a walk
-through them (`fixed_walk_ps` in each). `lambda_schedule.adaptive.legs: each` gives each leg a precalculation
-of its own; `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's number).
+both legs; the solvent leg runs the windows of each iteration of its precalculation at the same time on the
+GPUs it is granted, while the complex leg pre-equilibrates. `lambda_schedule.adaptive.legs: each` gives each
+leg a precalculation of its own; `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
+number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, as OpenFE
+starts its replicas: the equilibration of the replica exchange relaxes them at the same time, and no window
+waits for another.
 
 ### Sampling
 
@@ -90,17 +94,16 @@ system gave ligand A.
   2026 planned its networks): edges of score 0.4 or more, every ligand in a cycle.
 - Cycle closure: the sum of the ddG around every cycle of a cycle basis, with its standard error, as
   numbers without a verdict.
-- dG of every ligand: the maximum likelihood estimate of Xu (J. Chem. Inf. Model. 2019, 59, 4720), by
-  cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse of their variance.
-  The estimate fixes differences only; its reference (`dg.references`):
-  - `experiment` (default): the estimates shifted so that their mean over the ligands with an experimental
-    value equals the mean of those values; the predictions of the public benchmark (Ross et al., Commun.
-    Chem. 2023) and of the OpenFE benchmark are referenced so. The standard error is that of a ligand
-    against that mean.
-  - `abfe`: the ABFE of the ligands `dg.abfe_ligands`, computed by `cufep run` in the same run (in
-    `<output>/abfe`, with the settings of `dg.abfe` over its defaults), enter the same likelihood as values of
-    their nodes (cinnabar's node data, Xu 2019): the dG are then absolute without any experimental value.
-  Both references can be asked for at once.
+- dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
+  2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
+  of their variance. The edges fix the differences between the ligands; the one constant they leave is set
+  as relative calculations set it:
+  - with experimental values: the mean of the estimates of the ligands that have one is the mean of those
+    values (the predictions of the public benchmark of Ross et al., Commun. Chem. 2023, and of the OpenFE
+    benchmark of Baumann et al. 2026 are referenced so). The standard error of a ligand is that of its
+    estimate against that mean;
+  - without any: the mean of all estimates is 0 (cinnabar's output), dG relative to the mean of the network;
+    the result says so.
 
 ## Not in this version
 
@@ -133,7 +136,6 @@ alchemy:
 lambda_schedule:
   mode: adaptive
   windows: 11
-  fixed_walk_ps: 50.0
   adaptive:
     overlap_threshold: 0.04
     overlap_matrix: stage
@@ -146,11 +148,6 @@ lambda_schedule:
     walk_ps: 5.0
     max_windows: 100
     legs: solvent
-dg:
-  references:
-  - experiment
-  abfe_ligands: []
-  abfe: {}
 sampling:
   production_ns: 5.0
   equilibration_ns: 1.0
@@ -169,8 +166,7 @@ output:
 | `network.*` | LOMAP, score 0.4, every ligand in a cycle, paths of at most 6 edges | lomap2's defaults of `generate_lomap_network`, with which the OpenFE benchmark (Baumann et al. 2026) planned its networks |
 | `lambda_schedule.adaptive.*` | 9 windows, 0.04, 101 candidates, 50 ps, the matrix of the stage, the solvent leg decides | Midgley et al. 2025: the values and the rule of the paper, which is about relative transformations; `legs: each` is cuFEP's own (as the ABFE) |
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
-| `lambda_schedule.fixed_walk_ps` | 50 ps | as `lambda_schedule.fixed_walk_ps` of the ABFE |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |
 | `analysis.lrc` | none | OpenFE's `use_dispersion_correction: False` for the hybrid |
-| `dg.references` | experiment | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; `abfe` is cuFEP's own |
+| the constant of the dG (no setting) | the mean of the experimental values, else the mean of the network | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; cinnabar gives estimates of mean 0 |

@@ -2,8 +2,7 @@
 # binding free energy benchmark: ejm_31 (the ligand of examples/kinase_tyk2), ejm_46 and ejm_49, its two
 # neighbours in the FEP+ network of the set with the widest range of experimental values
 # (-9.54, -11.31, -7.75 kcal/mol). The three edges form a cycle.
-# The dG of every ligand is given with two references: the mean of the experimental values (the default)
-# and the ABFE of ejm_31, computed in the same run with the settings of examples/kinase_tyk2.
+# The dG of every ligand is referenced to the mean of the experimental values (the default; docs/rbfe.md).
 # Every setting not listed here uses its recommended default (docs/rbfe.md).
 system:
   protein: protein.pdb
@@ -13,11 +12,5 @@ network:
   - [ejm_31, ejm_46]
   - [ejm_31, ejm_49]
   - [ejm_46, ejm_49]
-dg:
-  references: [experiment, abfe]
-  abfe_ligands: [ejm_31]
-  abfe:
-    sampling:
-      production_ns: 5.0
 output:
   dir: runs/rbfe_tyk2

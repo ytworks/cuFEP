@@ -286,8 +286,8 @@ its own YAML ([docs/rbfe.md](docs/rbfe.md)). It maps the atoms of each pair of l
 the lambda windows by adaptive lambda scheduling as the paper sets it for relative transformations, and
 runs both legs with Hamiltonian replica exchange and REST2 on all GPUs, the complex leg in a bilayer when
 `membrane.enabled` is set. It reports the ddG of every edge, the cycle closures, and the dG of every ligand
-from the network (maximum likelihood estimate), referenced to the mean of the experimental values or to an
-ABFE of a reference ligand computed in the same run.
+from the edges alone (maximum likelihood estimate), referenced to the mean of the experimental values that
+are given, else to the mean of the network.
 
 | directory | system | ligands, experiment (kcal/mol) |
 |---|---|---|

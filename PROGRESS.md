@@ -64,7 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`, PR #17): `cufep rbfe` implemented (`docs/rbfe.md`); CPU tests of the hybrid, the network, the configuration and an edge end to end, GPU tests of the hybrid on both backends; examples `examples/rbfe_tyk2`, `examples/rbfe_a2a_membrane`: not run yet. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends.
+- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`, PR #17): `cufep rbfe` implemented (`docs/rbfe.md`); the dG of every ligand from the edges alone (MLE, the experimental mean, else the mean of the network); examples `examples/rbfe_tyk2`, `examples/rbfe_a2a_membrane`: not run yet. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends.
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
@@ -111,6 +111,16 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [amendment] RBFE: no ABFE; every window that a leg does not choose starts from its pre-equilibration
+- What: the reference of the dG by an ABFE in the same run (`dg.references: abfe`, the entry below) is removed:
+  the dG come from the edges alone (MLE), referenced to the mean of the experimental values, else to the mean
+  of the network. The windows the complex leg takes from the solvent leg, and fixed windows, start all from the
+  end of the pre-equilibration (OpenFE's start) instead of a walk on one GPU; `lambda_schedule.fixed_walk_ps`
+  of RBFE is gone. The ABFE run driver is back as on main but for `execute_jobs`, shared with RBFE.
+- Why: the owner's order of 2026-11-25 ("ABFE は不要", "RBFE だけで DG を出す方法をちゃんと実現せよ"; no
+  serial step in the GPU parallelism).
+- Refs: `docs/rbfe.md`, `docs/plans/2026-11-25-rbfe.md` ("記録")
 
 ### 2026-11-25 — [progress] `cufep rbfe`: relative binding free energies, implemented, not run yet
 - What: hybrid topology by the rules of OpenFE's relative protocol with only charges on the plugin (`spikes/m36`:

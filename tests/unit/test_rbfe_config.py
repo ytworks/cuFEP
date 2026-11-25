@@ -21,13 +21,11 @@ def test_documented_defaults_are_the_defaults_of_the_code(repo):
     for section, values in block.items():
         for key, value in values.items():
             assert defaults[section][key] == value, f"{section}.{key}"
-    for section in ("network", "mapping", "alchemy", "lambda_schedule", "dg"):
+    for section in ("network", "mapping", "alchemy", "lambda_schedule"):
         assert block[section] == defaults[section], section
 
 
 @pytest.mark.parametrize("more, message", [
-    ({"dg": {"references": ["abfe"]}}, "abfe_ligands"),
-    ({"dg": {"abfe_ligands": ["x"]}}, "no abfe"),
     ({"sampling": {"gcmc": {"enabled": True}}}, "moves of the ABFE"),
     ({"membrane": {"enabled": True, "complex_leg": "water"}}, "complex_leg"),
     ({"network": {"edges": [["a", "a"]]}}, "to itself"),
@@ -37,17 +35,3 @@ def test_documented_defaults_are_the_defaults_of_the_code(repo):
 def test_settings_a_relative_run_cannot_take_are_refused_when_read(more, message):
     with pytest.raises(ValueError, match=message):
         RbfeConfig.model_validate(_minimal(**more))
-
-
-def test_the_abfe_of_the_references_takes_the_shared_sections_and_its_own_settings():
-    rcfg = RbfeConfig.model_validate(_minimal(dg={"references": ["experiment", "abfe"], "abfe_ligands": ["x"],
-                                                  "abfe": {"sampling": {"production_ns": 5.0}}},
-                                              membrane={"enabled": True}, output={"dir": "runs/r"}))
-    abfe = rcfg.abfe_config(["x"])
-    assert abfe.system.ligand_names == ["x"] and str(abfe.output.dir) == "runs/r/abfe"
-    assert abfe.membrane.enabled and abfe.sampling.production_ns == 5.0
-    # the analysis of the ABFE is its own (its tail correction), not that of the relative run
-    assert abfe.analysis.lrc == "reweight" and rcfg.analysis.lrc == "none"
-    with pytest.raises(ValueError, match="set by the relative run"):
-        RbfeConfig.model_validate(_minimal(dg={"references": ["abfe"], "abfe_ligands": ["x"],
-                                               "abfe": {"output": {"dir": "y"}}})).abfe_config(["x"])

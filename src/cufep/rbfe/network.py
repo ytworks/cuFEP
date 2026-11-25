@@ -11,13 +11,13 @@ Cycle closure
 dG of every ligand
     The maximum likelihood estimate of Xu (J. Chem. Inf. Model. 2019, 59, 4720), by cinnabar's solver
     (``MLEEstimator.mle``, the one OpenFE's ``openfe gather --report dg`` uses): edges weighted by the inverse
-    of their variance. The estimate fixes only differences; the reference is one of
-        ``experiment``: the estimates shifted so that their mean over the ligands with an experimental value is
-            the mean of those values (the FEP+ predictions of the public benchmark of Ross et al. 2023 and the
-            OpenFE benchmark of Baumann et al. 2026 are referenced so);
-        ``abfe``: absolute binding free energies of reference ligands, computed by cuFEP's ABFE, enter the same
-            likelihood as harmonic wells on their nodes (cinnabar's ``node_data_label``, Xu 2019), so that the
-            estimates are absolute without any experimental value.
+    of their variance. The edges fix only the differences between the ligands; the one constant that is left is
+    set as the relative calculations of the literature set it:
+        with experimental values, the mean of the estimates of the ligands that have one is the mean of those
+            values (the predictions of the public benchmark of Ross et al. 2023 and of the OpenFE benchmark
+            of Baumann et al. 2026 are referenced so);
+        without any, the mean of the estimates of all ligands is 0 (cinnabar's output): dG relative to the
+            mean of the network, and the result says so.
 """
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def cycle_closures(edges: list[Edge]) -> list[dict]:
     return out
 
 
-def _graph(ligands: list[str], edges: list[Edge], anchors: dict[str, tuple[float, float]] | None = None):
+def _graph(ligands: list[str], edges: list[Edge]):
     import networkx as nx
 
     graph = nx.DiGraph()
@@ -76,54 +76,40 @@ def _graph(ligands: list[str], edges: list[Edge], anchors: dict[str, tuple[float
         if e.se <= 0.0:
             raise ValueError(f"edge {e.name} has no standard error; the estimate weights edges by it")
         graph.add_edge(e.ligand_a, e.ligand_b, f_ij=float(e.ddg), f_dij=float(e.se))
-    for name, (value, se) in (anchors or {}).items():
-        if se <= 0.0:
-            raise ValueError(f"the reference value of {name} has no standard error")
-        graph.nodes[name]["f_i"] = float(value)
-        graph.nodes[name]["f_di"] = float(se)
     if not nx.is_weakly_connected(graph):
         raise ValueError("the edges do not connect all ligands")
     return graph
 
 
-def mle(ligands: list[str], edges: list[Edge], anchors: dict[str, tuple[float, float]] | None = None):
+def mle(ligands: list[str], edges: list[Edge]):
     """(estimates, covariance) in the order of ``ligands``: cinnabar's maximum likelihood estimate."""
     from cinnabar.estimators import MLEEstimator
 
-    graph = _graph(ligands, edges, anchors)
-    f, cov = MLEEstimator.mle(graph, edge_data_label="f_ij", node_data_label="f_i" if anchors else None)
+    graph = _graph(ligands, edges)
+    f, cov = MLEEstimator.mle(graph, edge_data_label="f_ij")
     order = list(graph.nodes())
     index = [order.index(name) for name in ligands]
     return np.asarray(f)[index], np.asarray(cov)[np.ix_(index, index)]
 
 
-def dg_from_experiment(ligands: list[str], edges: list[Edge],
-                       experiment: dict[str, float]) -> dict[str, tuple[float, float]]:
-    """dG of every ligand: the estimate shifted to the mean of the experimental values it has. The standard
-    error is that of the estimate of a ligand minus the mean of the estimates of the reference ligands."""
-    refs = [name for name in ligands if name in experiment]
-    if not refs:
-        raise ValueError("no ligand of the network has an experimental value")
+def ligand_dg(ligands: list[str], edges: list[Edge], experiment: dict[str, float]) -> dict:
+    """dG of every ligand from the edges: ``{"reference": ..., "values": {name: (dG, standard error)}}``.
+
+    With experimental values the estimates are shifted so that the mean of those of the ligands with a value is
+    the mean of the values (``reference``: ``"mean of the experimental values"``), and the standard error of a
+    ligand is that of its estimate minus that mean; without any, the mean of all estimates is 0 (``reference``:
+    ``"mean of the network"``), and the standard error is that of a ligand against that mean."""
     f, cov = mle(ligands, edges)
-    idx = [ligands.index(name) for name in refs]
+    refs = [name for name in ligands if name in experiment]
+    members = refs or list(ligands)
     w = np.zeros(len(ligands))
-    w[idx] = 1.0 / len(idx)
-    shift = float(np.mean([experiment[name] for name in refs]) - w @ f)
-    out = {}
+    w[[ligands.index(name) for name in members]] = 1.0 / len(members)
+    target = float(np.mean([experiment[name] for name in refs])) if refs else 0.0
+    shift = target - float(w @ f)
+    values = {}
     for i, name in enumerate(ligands):
         d = -w.copy()
         d[i] += 1.0
-        out[name] = (float(f[i] + shift), float(math.sqrt(max(d @ cov @ d, 0.0))))
-    return out
-
-
-def dg_from_abfe(ligands: list[str], edges: list[Edge],
-                 abfe: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
-    """dG of every ligand from the edges and the ABFE of the reference ligands, in one likelihood."""
-    if not abfe:
-        raise ValueError("no reference ligand has an absolute binding free energy")
-    unknown = sorted(set(abfe) - set(ligands))
-    if unknown:
-        raise ValueError(f"reference ligands that are not in the network: {', '.join(unknown)}")
-    f, cov = mle(ligands, edges, anchors=abfe)
-    return {name: (float(f[i]), float(math.sqrt(max(cov[i, i], 0.0)))) for i, name in enumerate(ligands)}
+        values[name] = (float(f[i] + shift), float(math.sqrt(max(d @ cov @ d, 0.0))))
+    return {"reference": "mean of the experimental values" if refs else "mean of the network",
+            "reference_ligands": members, "values": values}

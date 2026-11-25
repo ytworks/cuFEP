@@ -90,7 +90,7 @@ def _config(tmp_path, out_dir, mode: str):
                      "checkpoint_interval_ps": 1.0, "rest2": {"scale": 1.5},
                      "pre_equilibration": {"complex": short, "solvent": short}},
         "analysis": {"error_blocks": [2], "part_error_blocks": 2, "convergence_points": 2, "convergence_blocks": 2},
-        "lambda_schedule": {"mode": mode, "windows": 3, "fixed_walk_ps": 0.5,
+        "lambda_schedule": {"mode": mode, "windows": 3,
                             "adaptive": {"initial_windows": 3, "window_ps": 0.5, "sample_interval_ps": 0.1,
                                          "walk_ps": 0.2, "overlap_threshold": 0.001, "max_windows": 4}},
         "resources": {"gpus": [], "cpu_threads_per_worker": 1},
@@ -125,10 +125,12 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     assert h["core_atoms"] + h["unique_old_atoms"] == 15 and h["core_atoms"] + h["unique_new_atoms"] == 13
     edge = edge_result(edge_dir, "toluene", "phenol", 1)
     assert edge["ddg"] == pytest.approx((complex_["delta_g"] - solvent["delta_g"]) / 4.184)
-    summary = combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1, rcfg,
-                              {"toluene": -5.0, "phenol": -5.6}, [])
-    assert summary["dg"]["experiment"]["phenol"]["dg"] - summary["dg"]["experiment"]["toluene"]["dg"] == \
-        pytest.approx(edge["ddg"])
+    summary = combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
+                              {"toluene": -5.0, "phenol": -5.6})
+    dg = summary["dg"]["values"]
+    assert summary["dg"]["reference"] == "mean of the experimental values"
+    assert dg["phenol"]["dg"] - dg["toluene"]["dg"] == pytest.approx(edge["ddg"])
+    assert dg["phenol"]["dg"] + dg["toluene"]["dg"] == pytest.approx(-10.6)
     write_results(out_dir, summary)
     first = (out_dir / "edges.csv").read_text()
     # `cufep rbfe analyze` makes the same results from the files of the run
@@ -138,6 +140,6 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     # called again: the legs are complete, their results are made again from the same samples
     again = [run_hybrid_leg_safe(job) for job in jobs]
     assert [r["delta_g"] for r in again] == [r["delta_g"] for r in results]
-    write_results(out_dir, combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1, rcfg,
-                                           {"toluene": -5.0, "phenol": -5.6}, []))
+    write_results(out_dir, combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
+                                           {"toluene": -5.0, "phenol": -5.6}))
     assert (out_dir / "edges.csv").read_text() == first

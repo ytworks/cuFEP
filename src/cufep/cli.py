@@ -377,9 +377,10 @@ def rbfe_plan(config: str) -> None:
     click.echo(f"lambda windows: {ls.mode}" + (f" from {ls.adaptive.initial_windows}, overlap threshold "
                                                  f"{ls.adaptive.overlap_threshold:g} ({ls.adaptive.legs} leg decides)"
                                                  if ls.mode == "adaptive" else f", {ls.windows}"))
+    exp = experiment_of(rcfg, ligands)
     click.echo(f"per window {rcfg.sampling.equilibration('complex'):g} ns equilibration and "
-               f"{rcfg.sampling.production_ns:g} ns production; dG references: {', '.join(rcfg.dg.references)}"
-               + (f" (ABFE of {', '.join(rcfg.dg.abfe_ligands)})" if rcfg.dg.abfe_ligands else ""))
+               f"{rcfg.sampling.production_ns:g} ns production; dG of every ligand from the edges, relative to the "
+               + ("mean of the experimental values of " + ", ".join(exp) if exp else "mean of the network"))
 
 
 @rbfe.command("run")

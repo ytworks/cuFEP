@@ -109,8 +109,6 @@ class HybridLambdaSchedule(_Section):
     mode: Literal["adaptive", "fixed"] = "adaptive"
     #: fixed mode: a number of evenly spaced windows (OpenFE's 11) or the lambda values
     windows: int | list[float] = 11
-    #: fixed mode: MD in each window that gives the replicas their start configurations
-    fixed_walk_ps: float = Field(default=50.0, gt=0.0)
     adaptive: HybridAdaptiveConfig = Field(default_factory=HybridAdaptiveConfig)
 
     @field_validator("windows")
@@ -122,7 +120,7 @@ class HybridLambdaSchedule(_Section):
 
 
 class RbfeSampling(SamplingConfig):
-    #: per lambda window, used for the estimate: 5 ns, the default of FEP+ and of OpenFE's relative protocol
+    #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol
     production_ns: float = 5.0
 
     @model_validator(mode="after")
@@ -141,26 +139,6 @@ class RbfeAnalysis(AnalysisConfig):
     lrc: Literal["none"] = "none"
 
 
-class DgConfig(_Section):
-    #: the references of the dG of every ligand: experiment, the mean of the experimental values of the
-    #: ligands that have one; abfe, the ABFE of the ligands ``abfe_ligands`` computed in the same run
-    references: list[Literal["experiment", "abfe"]] = Field(default_factory=lambda: ["experiment"])
-    abfe_ligands: list[str] = Field(default_factory=list)
-    #: settings of those ABFE in the YAML of ``cufep run`` (for example ``{sampling: {production_ns: 5.0}}``); the
-    #: sections that the two configurations share are taken from this one
-    abfe: dict = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _abfe_needs_ligands(self):
-        if not self.references:
-            raise ValueError("dg.references names no reference")
-        if "abfe" in self.references and not self.abfe_ligands:
-            raise ValueError("dg.references has abfe but dg.abfe_ligands names no ligand")
-        if self.abfe_ligands and "abfe" not in self.references:
-            raise ValueError("dg.abfe_ligands is given but dg.references has no abfe")
-        return self
-
-
 class RbfeOutput(_Section):
     dir: Path = Path("runs/cufep_rbfe")
 
@@ -172,7 +150,6 @@ class RbfeConfig(_Section):
     mapping: MappingConfig = Field(default_factory=MappingConfig)
     alchemy: HybridAlchemyConfig = Field(default_factory=HybridAlchemyConfig)
     lambda_schedule: HybridLambdaSchedule = Field(default_factory=HybridLambdaSchedule)
-    dg: DgConfig = Field(default_factory=DgConfig)
     membrane: MembraneConfig = Field(default_factory=MembraneConfig)
     forcefield: ForceFieldConfig = Field(default_factory=ForceFieldConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
@@ -208,22 +185,6 @@ class RbfeConfig(_Section):
             "resources": self.resources.model_dump(mode="json"),
             "output": {"dir": str(self.output.dir)},
         })
-
-    def abfe_config(self, ligands: list[str]) -> Config:
-        """The ABFE configuration of the reference ligands: ``dg.abfe`` over the ABFE defaults, with the shared
-        sections of this configuration (those that ``dg.abfe`` does not set) and its own output directory."""
-        base = self.shared().model_dump(mode="json")
-        base.pop("sampling")
-        base.pop("analysis")                       # the ABFE's own (its tail correction)
-        given = dict(self.dg.abfe)
-        for key in ("system", "output"):
-            if key in given:
-                raise ValueError(f"dg.abfe.{key} is set by the relative run")
-        merged = {**base, **given}
-        merged["system"] = {"protein": str(self.system.protein), "ligand": str(self.system.ligands),
-                            "ligand_names": list(ligands)}
-        merged["output"] = {"dir": str(Path(self.output.dir) / "abfe")}
-        return Config.model_validate(merged)
 
 
 def load_rbfe_config(path: str | Path) -> RbfeConfig:
