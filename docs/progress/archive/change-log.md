@@ -5,6 +5,53 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-25 — [amendment] RBFE: no ABFE; every window that a leg does not choose starts from its pre-equilibration
+- What: the reference of the dG by an ABFE in the same run (`dg.references: abfe`, the entry below) is removed:
+  the dG come from the edges alone (MLE), referenced to the mean of the experimental values, else to the mean
+  of the network. The windows the complex leg takes from the solvent leg, and fixed windows, start all from the
+  end of the pre-equilibration (OpenFE's start) instead of a walk on one GPU; `lambda_schedule.fixed_walk_ps`
+  of RBFE is gone. The ABFE run driver is back as on main but for `execute_jobs`, shared with RBFE.
+- Why: the owner's order of 2026-11-25 ("ABFE は不要", "RBFE だけで DG を出す方法をちゃんと実現せよ"; no
+  serial step in the GPU parallelism).
+- Refs: `docs/rbfe.md`, `docs/plans/2026-11-25-rbfe.md` ("記録")
+
+### 2026-11-25 — [progress] `cufep rbfe`: relative binding free energies, implemented, not run yet
+- What: hybrid topology by the rules of OpenFE's relative protocol with only charges on the plugin (`spikes/m36`:
+  within 0.037 kT of the charges written in), Kartograf mapping, LOMAP networks, adaptive lambda scheduling of the
+  paper (solvent leg decides), REST2, the bilayer; ddG, cycle closures, dG by cinnabar's MLE with the experimental
+  mean or an ABFE in the same run. Shared code: one state dispatch, `sample_leg`, `prepare_run`/`finish_run`; the
+  ABFE tests unchanged. RBFE has no long-range correction of the ligand LJ (OpenFE's default; the plan had both ends).
+- Why: the owner's order (the plan).
+- Refs: `docs/rbfe.md`, `docs/plans/2026-11-25-rbfe.md` ("記録"), PR #17
+
+### 2026-11-25 — [design] Plan: relative binding free energies, `cufep rbfe`
+- What: the owner's order. A second product in the same package and image: hybrid topology with the
+  lambda functions and soft-core of OpenFE's protocol, Kartograf mapping, adaptive lambda scheduling
+  as the paper sets it for relative transformations (9 windows, 0.04), 5 ns per window, REST2, the
+  bilayer as the ABFE has it; ddG per edge, DG by the MLE of the network with the experimental mean
+  (default) or a cuFEP ABFE of a reference ligand. Its own YAML. Shared code generalised so that the
+  ABFE gives the same numbers. Examples: TYK2 and A2A in the bilayer, three compounds each.
+- Why: the owner's order of 2026-11-25; the two choices (DG reference, place) are the owner's answers.
+- Refs: `docs/plans/2026-11-25-rbfe.md`
+
+### 2026-11-25 — [design] The owner's decision: the runs stop, no default changes for now
+- What: after the four runs with grand canonical moves of water (the entry below) the owner stops the
+  evaluation on A2A; the remaining 15 ligands are not run. No default changes for now: the water
+  stays TIP3P, `sampling.gcmc` and `sampling.relocation_mc` stay off. The two plans are closed.
+- Why: the owner's decision. In the four runs the binding stayed 5 to 8 kcal/mol too strong.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` (`Status:`)
+
+### 2026-11-25 — [progress] A2A with grand canonical moves of water: 4k and 4e, TIP3P and OPC
+- What: image of 8252ccd, one calculation each on eight GPUs, the set's settings with
+  `sampling.gcmc.enabled: true` (kcal/mol; experiment -11.54 and -12.07). 4k: TIP3P -17.32 ± 0.42
+  (without the moves -20.32 ± 0.52 in the run of e77a6c5; three other runs -14.49, -13.07, -16.50),
+  OPC -19.96 ± 0.29 (-19.15 ± 0.35). 4e: TIP3P -17.21 ± 0.36 with the restraint on ASN 253 (without,
+  on ASN 253, -16.85 ± 0.64; on PHE 168, e77a6c5, -13.50 ± 0.34), OPC -18.26 ± 0.54 (-20.61 ± 0.47,
+  both on PHE 168). The moves were made in every run (5 to 20 thousand insertions and as many
+  deletions); the sphere holds 7 to 9 waters where the ligand is coupled and 16 to 21 where it is
+  decoupled. No GPU error, no worker restarted. The rest of the set waits for the owner.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md` ("記録"), `runs/benchmark_a2a_full_gcmc_{tip3p,opc}_8252ccd`
+
 ### 2026-11-25 — [progress] Grand canonical moves of water in the complex leg (`sampling.gcmc`, default off)
 - What: ghost waters switched in the live Context, the acceptance of Ross 2017 (eq 1, 2, 7), batches of
   trials with the stand-in energy and a second test with the energy of the simulation, every replica
