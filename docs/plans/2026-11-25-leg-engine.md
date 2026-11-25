@@ -52,3 +52,24 @@ Refs: `docs/plans/2026-11-25-rbfe.md`; PR #17
   RBFE は TYK2 の example を 1 回流し、エッジの数値が前回(image f6ac3b4)の誤差の範囲にあること。
 
 ## 記録
+
+### 2026-11-25 手順 1〜6
+- 手順 1: `spikes/m38`(ABFE の 2 レグ、Reference platform、固定 seed)。リファクタリング前のコードで 2 回流して同じファイル
+  (CPU platform は deterministic forces 無しでは 2 回目で前平衡化の後の System が違った)。
+- 手順 2〜5 は計画の通り。違えた点: `CommonConfig` は `config/common.py` ではなく `config/schema.py`(節の型と同じ
+  モジュール、循環 import を避ける)。ABFE の窓の検査(`stored_windows`、`check_windows_settings`)は設定の代わりに
+  窓の設定の辞書を受け、相対レグも同じ検査を通る。手順 3〜5 は互いに同じ行に触るので 1 つのコミット(250ceb1)。
+  レグの補助関数(前平衡化、HREX、fallback の判定など)は今は `workflow.py` に残り、エンジンがそれを呼ぶ。
+- ABFE が変わらないこと: m38 の指紋が手順 2 の後(89477d2)、手順 3〜5 の後(250ceb1)ともリファクタリング前と
+  バイト単位で同じ。保存済みの ABFE の run(TYK2 ejm_31 の 2 レグ、image e77a6c5)の解析の結果の辞書が前後で同じ。
+- 見つかったこと: `feat/rbfe` のエッジのテストは CPU platform(deterministic forces 無し)と乱数で置く水素のため、
+  全体の中では 1 本目のレグの窓が繋がらず失敗し、単独では通った。deterministic forces と seed で 2 回同じ数値に
+  (`feat/rbfe` の 5b56034)。
+- 単体テスト全体(5cc23eb): 778 passed。GPU テスト(GPU 0): 61 passed、4 failed(hybrid のレグの HREX のテストが
+  `LegSpec` にプロトコルを書いておらず、worker が状態を ABFE として読んだ: テストを直した)。
+- TYK2 の相対の example を image 5cc23eb で(GPU 1〜7、全レグ プラグイン)。全レグが終わった後、run 全体の timing の
+  記録が各レグの ligand を読み `KeyError: 'ligand'` で止まった(エッジのレグには無い): ジョブの名前で書くように直し、
+  回帰テスト(直す前のコードで KeyError)。数値(`cufep rbfe analyze`、kcal/mol、前回 f6ac3b4): ejm_31→ejm_46
+  -1.75 ± 0.27(-1.86 ± 0.29)、ejm_31→ejm_49 +1.09 ± 0.44(+0.56 ± 0.32)、ejm_46→ejm_49 +2.86 ± 0.90(+2.39 ± 0.32、
+  NOT RELIABLE: complex レグの推定のサンプルの overlap、窓 9、前回は 10)。3 本とも差は二つの誤差の合成の範囲内。
+  cycle closure +0.03 ± 1.04。dG -9.31 ± 0.17、-11.06 ± 0.20、-8.22 ± 0.27(実験 -9.54、-11.31、-7.75)。

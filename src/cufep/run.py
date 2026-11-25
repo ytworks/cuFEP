@@ -399,11 +399,12 @@ def write_summary(out_dir: Path, summary: list[dict], ligands) -> None:
 def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, mps_used: bool, log,
                  file_name: str = "timing.json") -> None:
     """Where the time went: per phase and per job, and how busy the GPUs were (``file_name``)."""
-    legs = []
+    legs, tags = [], []
     for job in jobs:
         f = job.leg_dir / "timing.json"
         if f.exists():
             legs.append(json.loads(f.read_text()))
+            tags.append(job.tag)                 # what the leg is of, whatever its kind of job
     now = time.time()
     phases: dict[str, float] = {}
     for leg in legs:
@@ -426,11 +427,11 @@ def write_timing(out_dir: Path, jobs, t_run: float, t_prepared: float, monitor, 
     util = data["gpu_utilization_percent"]["while_sampling"]
     if util and all(v is not None for v in util.values()):
         log("timing: GPU utilization while sampling: " + ", ".join(f"GPU {g} {v:.0f}%" for g, v in util.items()))
-    for leg in legs:
+    for tag, leg in zip(tags, legs):
         smp = leg.get("sampling")
         if smp and smp.get("iterations"):
             busy = smp.get("worker_busy_fraction")
-            log(f"timing: {leg['ligand']}/r{leg['repeat']}/{leg['leg']}: {smp['lambda_windows']} lambda windows, "
+            log(f"timing: {tag}: {smp['lambda_windows']} lambda windows, "
                 f"{smp['seconds_per_iteration']:.3f} s per iteration, workers busy "
                 f"{100 * busy:.0f}%" if busy is not None else "")
 

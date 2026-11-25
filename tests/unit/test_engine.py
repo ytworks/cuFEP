@@ -43,3 +43,38 @@ def test_files_of_the_abfe_name_no_protocol_and_those_of_a_hybrid_leg_name_their
         Schedule.load(tmp_path / "wrong.yaml")
     with pytest.raises(ValueError, match="not those of one protocol"):
         validate_states([abfe.states[0], hybrid.states[-1]])
+
+
+def test_the_timing_of_a_run_names_each_leg_by_its_job(tmp_path):
+    """Regression: the timing of a run read the ligand of every leg from its timing file, and a relative run, whose
+    legs are of edges, ended with KeyError 'ligand' after all its legs had finished (TYK2 example, image 5cc23eb)."""
+    import json
+
+    from cufep.rbfe.leg import EdgeLegJob
+    from cufep.run import write_timing
+    from cufep.workflow import LegJob
+
+    jobs = [EdgeLegJob(edge="a~b", leg="complex", repeat=0, edge_dir=str(tmp_path / "a~b"), devices=[], config={},
+                       production_ns=1.0),
+            LegJob(ligand="c", leg="solvent", repeat=0, lig_dir=str(tmp_path / "c"), devices=[], config={},
+                   production_ns=1.0)]
+    for job, unit in zip(jobs, ({"edge": "a~b"}, {"ligand": "c"})):
+        job.leg_dir.mkdir(parents=True)
+        (job.leg_dir / "timing.json").write_text(json.dumps({
+            "phases": {"sampling": 2.0}, "finished": 10.0, **unit, "leg": job.leg, "repeat": 0,
+            "sampling": {"iterations": 3, "lambda_windows": 9, "seconds_per_iteration": 0.2,
+                         "worker_busy_fraction": 0.5}}))
+
+    class Monitor:
+        gpus = []
+
+        def mean(self):
+            return {}
+
+        def mean_over(self, intervals):
+            return {}
+
+    lines = []
+    write_timing(tmp_path, jobs, 0.0, 1.0, Monitor(), False, lines.append)
+    assert any(line.startswith("timing: a~b/r0/complex: 9 lambda windows") for line in lines)
+    assert any(line.startswith("timing: c/r0/solvent: 9 lambda windows") for line in lines)

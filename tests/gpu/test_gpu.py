@@ -934,8 +934,8 @@ def test_replica_exchange_of_a_hybrid_leg(tmp_path, hybrid_leg, backend):
     hybrid, schedule, box = hybrid_leg
     spec = LegSpec(name="gpu-hybrid", system_xml=mm.XmlSerializer.serialize(hybrid.system),
                    states=[s.to_dict() for s in schedule.states], n_atoms=hybrid.system.getNumParticles(),
-                   backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=2.0,
-                   steps_per_iteration=50, seed=3, frame_atoms=list(hybrid.ligand_atoms))
+                   protocol="hybrid", backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic",
+                   timestep_fs=2.0, steps_per_iteration=50, seed=3, frame_atoms=list(hybrid.ligand_atoms))
     with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[0], log=lambda m: None) as s:
         s.initialize(hybrid.positions, box)
         s.run(10, record_stride=2, checkpoint_stride=5)
