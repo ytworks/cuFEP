@@ -1,5 +1,5 @@
 # λ スケジュール: 熱力学的長さによる配置と重なりの床
-Status: In progress (2026-11-25: 段階 0 から 3 を実施。新方式は既定で off。方式はオーナーの指示で改訂した (Approach の冒頭)。段階 4 の検証実行を実施 (各実行に同じイメージの対照)。既定を変えるかはオーナーの判断)
+Status: Dropped (2026-11-25: 段階 0 から 4 を実施。検証の結果を見てオーナーが不採用と判断し、PR #16 はマージせずにクローズ。ブランチは残す)
 Refs: this pull request; `docs/protocol.md` ("Adaptive lambda scheduling"); `docs/configuration.md` (`lambda_schedule.adaptive`); `docs/plans/2026-11-21-als-initial-window-design.md`
 
 ## Context
