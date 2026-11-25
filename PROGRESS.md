@@ -108,9 +108,18 @@ Open items:
   of cuFEP's own without a published basis, kept until the owner decides (`.claude/rules/fep-invariants.md`).
 - The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4, CUDA 13.4, ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 - Plan `docs/plans/2026-11-25-thermodynamic-length-schedule.md` (in progress, PR #16): `lambda_schedule.adaptive.method: thermodynamic_length`, off by default: the rule of adaptive lambda scheduling as it is, and windows added to its result until neighbours are also a step of the thermodynamic length apart or less (Change Log).
-  Not run yet with it, but for a smoke run (exit 0): the verification runs of the plan (ejm_31 three times, 4e once) are next. No default changed.
+  Verification runs done (image `cufep:eeb2351`, each against a run of the present method from the same image; Change Log). No default changed: the owner decides. A prepared system differs in every run of the same code (water and ions; a bilayer also in its waters and lipids: OpenMM's `Modeller.addMembrane` relaxes it with an unseeded Langevin integrator), and so can the restraint chosen from its MD (4e: PHE168 or GLU169).
 
 ## Change Log
+
+### 2026-11-25 — [progress] Thermodynamic-length method: verification runs, each with a control of the same image
+- What: image `cufep:eeb2351`, 5 ns per window, method minus the present method of the same image (kcal/mol):
+  ejm_31 TIP3P (3 runs) complex leg +1.37 to +1.41, solvent -0.21 to -0.38, dG -11.48 to -11.64 against
+  -9.88 ± 0.66; ejm_31 OPC complex +0.11, solvent -0.81, dG -8.97 ± 0.44 against -8.02 ± 0.77; A2A 4e complex
+  +0.68, solvent +0.07, dG -15.02 ± 0.37 against -14.39 ± 0.61 (another restraint was chosen). Experiment -9.54, -12.07.
+  The code of 22 November and of today build the same Systems, worker settings and analysis (checked from the code).
+- Why: the owner's order: a control of the same image first, so that two runs differ by the method alone.
+- Refs: the plan ("記録", stage 4), `spikes/m36_candidates/`, `runs/*_eeb2351_*` (untracked), PR #16
 
 ### 2026-11-25 — [design] `lambda_schedule.adaptive.method: thermodynamic_length` (off by default)
 - What: the rule of adaptive lambda scheduling runs as it is; then windows are added wherever neighbouring
