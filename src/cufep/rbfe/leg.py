@@ -177,6 +177,44 @@ def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None)
         time.sleep(WAIT_SECONDS)
 
 
+def kept_windows_record(leg_dir: Path, schedule, settings: dict, log=print) -> dict:
+    """Before the start configurations of the windows a leg has are made again (its ``schedule.yaml`` is kept,
+    :func:`run_hybrid_leg`): what of their record holds, checked against what the leg has. Raises WorkflowError,
+    before anything of the leg is written, if
+
+    - the leg has samples and the windows are not those of its samples (a schedule of another repeat put back),
+      or its samples were made with other settings;
+    - the record of the start configurations names these windows and other settings than this run's (the
+      windows were chosen with them: a run with others is refused, as when the start configurations are whole).
+
+    Returns how the record said the start configurations of these windows were made (empty if it names other
+    windows or there is none): the start of the samples that go on from their checkpoint (second review of
+    PR #18)."""
+    from cufep.sampling.storage import _same, stored_conditions
+    from cufep.workflow import check_windows_settings, settings_differences, start_record_of
+
+    states = [state.to_dict() for state in schedule.states]
+    n_samples, conditions = stored_conditions(leg_dir / "hrex")
+    if n_samples > 0:
+        if conditions is None or not _same(conditions.get("states"), states):
+            raise WorkflowError(f"the lambda windows of {leg_dir / 'schedule.yaml'} are not those of its samples in "
+                                f"{leg_dir / 'hrex'}; nothing was changed (cufep rbfe run --reschedule starts the leg "
+                                "anew and keeps what it had)")
+        differing = settings_differences(conditions.get("settings") or {}, settings)
+        if differing:
+            raise WorkflowError(f"the samples in {leg_dir / 'hrex'} were made with other settings than this run "
+                                f"gives ({'; '.join(differing[:8])}); nothing was changed")
+    start_file = leg_dir / "start_configs.npz"
+    try:
+        made = start_record_of(start_file) if start_file.exists() else {}
+    except (OSError, ValueError, KeyError):
+        made = {}
+    if made.get("states") is None or not _same(made["states"], states):
+        return {}
+    check_windows_settings(made, settings, start_file, log)
+    return {key: value for key, value in made.items() if key not in ("settings", "states")}
+
+
 def run_hybrid_leg(job: EdgeLegJob) -> dict:
     """Run (or resume, or extend) one leg of an edge and return its result."""
     from cufep.alchemy.schedule import AlsSettings, schedule_from_windows
@@ -288,12 +326,17 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                 # leg stops the run here, before anything of the leg is written
                 schedule = _schedule_of_this_leg(leg_dir / "schedule.yaml", job.leg, STAGES)
                 check_scale(schedule)
+                earlier = kept_windows_record(leg_dir, schedule, settings, log)
                 log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg has, without "
                     "the start configurations of them; they are made again for these windows (the settings of "
                     "lambda_schedule are not applied to them; cufep rbfe run --reschedule determines the windows "
                     "again)")
                 cfgs = from_pre_equilibration(schedule)
                 how = {**starting, "windows": "those this leg had"}
+                if stored_conditions(leg_dir / "hrex")[0] > 0:
+                    # the samples go on from their checkpoint: the start they were made from is the one the record
+                    # had (none if it did not name these windows), and how the file was made again is said apart
+                    how = {"windows": "those this leg had", **earlier, "start_configurations_made_again": how}
             elif stored_conditions(leg_dir / "hrex")[0] > 0:
                 raise WorkflowError(f"{leg_dir} has samples but no schedule.yaml of the windows they are of: the leg "
                                     "cannot be continued; nothing was changed (cufep rbfe run --reschedule starts it "

@@ -195,7 +195,8 @@ def test_a_leg_with_samples_keeps_its_windows_when_their_start_configurations_ar
     monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
     out_dir = tmp_path / "run"
     ligands = _ligands(tmp_path, out_dir)
-    rcfg = _config(tmp_path, out_dir, "fixed")
+    # windows that adaptive lambda scheduling chose, started by its walk (the start the review names)
+    rcfg = _config(tmp_path, out_dir, "adaptive")
     edge_dir = out_dir / "edges" / "toluene~phenol"
     prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
 
@@ -211,13 +212,33 @@ def test_a_leg_with_samples_keeps_its_windows_when_their_start_configurations_ar
         kept = {key: start[key] for key in start.files}
     np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
                                                for key, value in kept.items()})
-    other = rcfg.model_copy(update={"lambda_schedule": rcfg.lambda_schedule.model_copy(update={"windows": 4})})
+    other = rcfg.model_copy(update={"lambda_schedule": rcfg.lambda_schedule.model_copy(
+        update={"mode": "fixed", "windows": 4})})
     again = run_hybrid_leg_safe(job(other))
     assert "error" not in again, again
     assert Schedule.load(leg_dir / "schedule.yaml").states == windows
     with np.load(leg_dir / "start_configs.npz") as start:
         assert len(start["positions"]) == len(windows)
     assert again["delta_g"] == first["delta_g"] and again["lambda_windows"] == first["lambda_windows"]
+    # the samples go on from their checkpoint: their start is the one they were made from (second review of PR #18)
+    assert again["start_configurations"] == first["start_configurations"]
+
+    # the schedule of another repeat, of other windows than those of the samples: refused before anything is written
+    # (second review of PR #18)
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    own = (leg_dir / "schedule.yaml").read_text()
+    other_windows = Schedule.load(leg_dir / "schedule.yaml")
+    other_windows.states = [type(s)(0.4 if 0.0 < s.lambda_hybrid < 1.0 else s.lambda_hybrid, s.rest2_scale)
+                             for s in other_windows.states]
+    other_windows.save(leg_dir / "schedule.yaml", leg="solvent")
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    before = {name: (leg_dir / name).read_bytes() for name in ("schedule.yaml", "start_configs.npz")}
+    refused = run_hybrid_leg_safe(job(other))
+    assert "not those of its samples" in refused["error"], refused["error"]
+    assert all((leg_dir / name).read_bytes() == data for name, data in before.items())
+    (leg_dir / "schedule.yaml").write_text(own)
 
     # a schedule of another leg: refused before anything of the leg is written
     text = (leg_dir / "schedule.yaml").read_text().replace("leg: solvent", "leg: complex")
@@ -228,3 +249,42 @@ def test_a_leg_with_samples_keeps_its_windows_when_their_start_configurations_ar
     refused = run_hybrid_leg_safe(job(other))
     assert "cannot be used for the solvent leg" in refused["error"]
     assert (leg_dir / "schedule.yaml").read_text() == text and (leg_dir / "start_configs.npz").read_bytes() == starts
+
+
+def test_windows_without_samples_are_kept_only_for_the_settings_they_were_chosen_with(tmp_path, monkeypatch,
+                                                                                    deterministic_cpu):
+    """Second review of PR #18: windows and start configurations one window short, without samples, run again with
+    another soft-core alpha. The record of the start configurations names the windows and the settings they were
+    made with; the run is refused before anything is written, as for a leg whose start configurations are whole."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def job(cfg) -> EdgeLegJob:
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                          config=cfg.model_dump(mode="json"), production_ns=cfg.sampling.production_ns, inline=True)
+
+    assert "error" not in run_hybrid_leg_safe(job(rcfg))
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    import shutil
+
+    shutil.rmtree(leg_dir / "hrex")                     # the windows and their start configurations, no samples
+    (leg_dir / "result.json").unlink()
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    before = {name: (leg_dir / name).read_bytes() for name in ("schedule.yaml", "start_configs.npz")}
+    softer = rcfg.model_copy(update={"alchemy": rcfg.alchemy.model_copy(update={"softcore_alpha": 0.7})})
+    refused = run_hybrid_leg_safe(job(softer))
+    assert "were made with other settings" in refused["error"], refused["error"]
+    assert all((leg_dir / name).read_bytes() == data for name, data in before.items())
+
