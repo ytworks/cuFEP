@@ -1,0 +1,14 @@
+# The control of spikes/m36_candidates/tyk2_ejm_31_opc.yaml: the TYK2 example (ligand ejm_31, 5 ns of
+# production per lambda window) with the water model OPC and the present method of lambda scheduling, run
+# from the same image before the run with `lambda_schedule.adaptive.method: thermodynamic_length`, so that
+# the two differ by the method alone. Everything else is the example's.
+#   IMAGE=cufep:<commit> spikes/run_frozen.sh run spikes/m36_candidates/tyk2_ejm_31_opc_als.yaml -o runs/<name>
+system:
+  protein: ../../examples/kinase_tyk2/protein.pdb
+  ligand: ../../examples/kinase_tyk2/ligand.sdf
+forcefield:
+  water: amber14/opc.xml
+sampling:
+  production_ns: 5.0
+output:
+  dir: runs/tyk2_als_opc
