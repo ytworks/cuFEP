@@ -244,24 +244,34 @@ def test_samples_of_an_earlier_version_are_checked_against_the_windows_the_leg_i
 
     from cufep.alchemy.schedule import schedule_from_windows
     from cufep.config.schema import Config
-    from cufep.sampling.storage import LegStorage
-    from cufep.workflow import WorkflowError, check_leg_reuse
+    from cufep.sampling.storage import ConditionsError, LegStorage
+    from cufep.workflow import check_leg_reuse, planned_iterations
 
     stages = ["discharge", "vanish"]
     made = schedule_from_windows(stages, {"discharge": 3, "vanish": 3}, {"discharge": 3, "vanish": 3})
     other = schedule_from_windows(stages, {"discharge": [0.0, 0.4, 1.0], "vanish": 3}, {"discharge": 3, "vanish": 3})
-    lig = tmp_path / "lig"
-    hrex = lig / "repeat_0" / "solvent" / "hrex"
-    storage = LegStorage(hrex, len(made.states), len(made.states))
-    storage.set_meta(states=[s.to_dict() for s in made.states], temperature_K=298.15, iteration_ps=2.5,
-                     n_equilibration_iterations=0)
-    for _ in range(3):
-        storage.append(np.zeros((len(made.states),) * 2), np.arange(len(made.states)), np.ones(len(made.states)))
-    storage.close()
+    made.save(tmp_path / "same.yaml", leg="solvent")
     other.save(tmp_path / "given.yaml", leg="solvent")
-    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
-                                 "lambda_schedule": {"file": str(tmp_path / "given.yaml")},
-                                 "sampling": {"rest2": {"scale": 1.0}}})
-    with pytest.raises(WorkflowError, match="lambda states"):
-        check_leg_reuse(cfg, lig, "solvent", 0, {"made_from": {}}, 0.0075)
 
+    def config(given: str) -> Config:
+        return Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                      "lambda_schedule": {"file": str(tmp_path / given)},
+                                      "sampling": {"rest2": {"scale": 1.0}, "equilibration_ns": 0.0025}})
+
+    production_ns = 0.01
+    cfg = config("same.yaml")
+    plan = planned_iterations(cfg.sampling.time_per_iteration_ps, float(cfg.dynamics.timestep_fs),
+                              cfg.sampling.equilibration("solvent"), production_ns)
+    # samples of an earlier version that this run could take as they are, but for their windows: the iterations
+    # of its plan, recorded with it, at the temperature of the run, without their conditions
+    n, total = len(made.states), plan.n_equilibration + plan.n_production
+    storage = LegStorage(tmp_path / "lig" / "repeat_0" / "solvent" / "hrex", n, n)
+    storage.set_meta(states=[s.to_dict() for s in made.states], temperature_K=298.15,
+                     iteration_ps=cfg.sampling.time_per_iteration_ps, n_equilibration_iterations=plan.n_equilibration,
+                     n_planned_iterations=total)
+    for _ in range(total):
+        storage.append(np.zeros((n, n)), np.arange(n), np.ones(n))
+    storage.close()
+    check_leg_reuse(cfg, tmp_path / "lig", "solvent", 0, {"made_from": {}}, production_ns)    # their own windows
+    with pytest.raises(ConditionsError, match="the lambda states"):
+        check_leg_reuse(config("given.yaml"), tmp_path / "lig", "solvent", 0, {"made_from": {}}, production_ns)
