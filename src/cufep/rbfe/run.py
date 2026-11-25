@@ -237,6 +237,9 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             "solvent_se": s["delta_g_error"] / KCAL,
             "windows": {leg: legs[leg]["n_states"] for leg in legs},
             "lowest_overlap": {leg: legs[leg]["quality"]["overlap"]["lowest"] for leg in legs},
+            # the overlap among the samples MBAR estimates from, the other check behind NOT RELIABLE
+            "lowest_overlap_used": {leg: (legs[leg]["quality"]["overlap"].get("used") or {}).get("lowest")
+                                    for leg in legs},
             "not_reliable": [leg for leg in legs if not legs[leg]["quality"]["overlap"]["ok"]],
             "fewest_independent_samples": {leg: legs[leg]["quality"]["samples"].get("counted") for leg in legs},
             "backend": {leg: legs[leg].get("backend") for leg in legs},
@@ -263,6 +266,9 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         out["not_reliable"] = sorted({leg for r in done for leg in r["not_reliable"]})
         # what the table gives of the legs: over the repeats of the ddG (second review of PR #17: the first only)
         out["lowest_overlap"] = {leg: min(r["lowest_overlap"][leg] for r in done) for leg in ("complex", "solvent")}
+        out["lowest_overlap_used"] = {leg: min((r["lowest_overlap_used"][leg] for r in done
+                                                if r["lowest_overlap_used"][leg] is not None), default=None)
+                                      for leg in ("complex", "solvent")}
         out["windows"] = {leg: sorted({r["windows"][leg] for r in done}) for leg in ("complex", "solvent")}
         out["backend"] = {leg: sorted({str(r["backend"][leg]) for r in done}) for leg in ("complex", "solvent")}
         # the conditions of the legs, which the edges of one network must share (combine_network)
@@ -283,8 +289,9 @@ SHARED_PREPARATION = ("protein_sha256", "forcefield", "membrane", "solvation", "
 def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
     """What differs among the edges with a ddG that would be combined into one network: the conditions of their
     legs (:data:`NETWORK_CONDITIONS`), and what their prepared systems were made from besides the two ligands
-    (:data:`SHARED_PREPARATION`: protein, force field, pH ...). Second review of PR #17: an edge run at 298 K and
-    one at 310 K, or with another protein, gave one set of dG."""
+    (:data:`SHARED_PREPARATION`: protein, force field, pH ...), and that a ligand of one name is one molecule in all
+    of them (the digests of their records). Second review of PR #17: an edge run at 298 K and one at 310 K, or with
+    another protein, gave one set of dG; third: two molecules under one name were one node."""
     from cufep.sampling.storage import _same
 
     out = []
@@ -294,12 +301,19 @@ def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
         known = [(edge, value) for edge, value in values if value is not None]
         if any(not _same(value, known[0][1]) for _edge, value in known[1:]):
             out.append(f"{name}: " + ", ".join(f"{edge} {value}" for edge, value in known))
-    made = []
+    made, molecules = [], {}
     for r in done:
         f = Path(out_dir) / "edges" / r["edge"] / "prep" / "prep.json"
         record = json.loads(f.read_text()).get("made_from") if f.exists() else None
         if record is not None:
             made.append((r["edge"], {key: record.get(key) for key in SHARED_PREPARATION}))
+            # the molecule (digest of its record) that each end of the edge is (third review of PR #17)
+            for end in ("ligand_a", "ligand_b"):
+                molecules.setdefault(r[end], {}).setdefault(record.get(end), []).append(r["edge"])
+    for name, digests in molecules.items():
+        if len(digests) > 1:
+            out.append(f"ligand {name} is another molecule in " + " than in ".join(
+                ", ".join(edges) for edges in digests.values()))
     for key in SHARED_PREPARATION:
         if any(not _same(m[key], made[0][1][key]) for _edge, m in made[1:]):
             out.append(f"the prepared systems ({key}): " + ", ".join(
@@ -349,16 +363,19 @@ def write_results(out_dir: Path, summary: dict) -> None:
         w = csv.writer(fh)
         w.writerow(["edge", "ligand_a", "ligand_b", "ddg_kcal_mol", "standard_error", "exp_ddg_kcal_mol",
                     "complex_dg", "solvent_dg", "windows_complex", "windows_solvent", "lowest_overlap_complex",
-                    "lowest_overlap_solvent", "not_reliable", "backend_complex", "backend_solvent"])
+                    "lowest_overlap_solvent", "lowest_overlap_used_complex", "lowest_overlap_used_solvent",
+                    "not_reliable", "backend_complex", "backend_solvent"])
         def joined(values) -> str:
             return "/".join(str(v) for v in values or [])
 
         for e in summary["edges"]:
             windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
+            used = e.get("lowest_overlap_used") or {}
             w.writerow([e["edge"], e["ligand_a"], e["ligand_b"], fmt(e.get("ddg")), fmt(e.get("se")),
                         fmt(e.get("exp_ddg")), fmt(e.get("complex_dg")), fmt(e.get("solvent_dg")),
                         joined(windows.get("complex")), joined(windows.get("solvent")),
-                        fmt(overlap.get("complex")), fmt(overlap.get("solvent")), "; ".join(e.get("not_reliable", [])),
+                        fmt(overlap.get("complex")), fmt(overlap.get("solvent")), fmt(used.get("complex")),
+                        fmt(used.get("solvent")), "; ".join(e.get("not_reliable", [])),
                         joined(backend.get("complex")), joined(backend.get("solvent"))])
 
     def ligands_table(fh) -> None:
@@ -391,7 +408,6 @@ def result_lines(summary: dict) -> list[str]:
                          "be determined")
         else:
             lines.append(f"RESULT {e['edge']}: no ddG")
-    lines += list(summary.get("notes") or []) if summary.get("inconsistent_edges") else []
     for c in summary["cycle_closures"]:
         lines.append(f"cycle {' -> '.join(c['ligands'])}: sum of ddG {c['sum_kcal_mol']:+.2f} ± {c['se_kcal_mol']:.2f}")
     if summary.get("dg"):

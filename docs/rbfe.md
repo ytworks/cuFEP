@@ -120,8 +120,9 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   numbers without a verdict.
 - The edges combined into cycle closures and dG must have been made under the same conditions (temperature,
   pressure, tail correction) from the same preparation besides their ligands (protein, force field, solvation,
-  bilayer, pH ...); otherwise each edge gives its ddG and the run says what differs, without cycle closures and
-  without dG.
+  bilayer, pH ...), and a ligand of one name must be one molecule in all of them; otherwise each edge gives its
+  ddG and the run says what differs, without cycle closures and without dG. `edges.csv` gives the lowest overlap
+  of all iterations and that among the samples of the estimate, the two checks behind NOT RELIABLE.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
   of their variance. The edges fix the differences between the ligands; the one constant they leave is set
