@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from cufep.sampling.states import AlchemicalState
+from cufep.sampling.states import AlchemicalState, state_from_dict
 
 
 @dataclass
@@ -94,7 +94,7 @@ class LegSpec:
         return len(self.states)
 
     def alchemical_states(self) -> list[AlchemicalState]:
-        return [AlchemicalState(**s) for s in self.states]
+        return [state_from_dict(s) for s in self.states]
 
     def conditions(self) -> dict:
         """What the samples of this leg are samples of.
@@ -311,7 +311,7 @@ class ReplicaWorker:
         import openmm as mm
         import openmm.unit as u
 
-        from cufep.sampling.states import StateEnergyEvaluator
+        from cufep.sampling.states import make_state_evaluator
 
         self.spec = spec
         self.arrays = arrays
@@ -336,7 +336,7 @@ class ReplicaWorker:
         self.context = self.backend.make_context(system, self.integrator, device)
         self.states = spec.alchemical_states()
         pressure_for_u = spec.pressure_bar if spec.barostat != "none" else None
-        self.evaluator = StateEnergyEvaluator(self.context, self.states, spec.temperature_K, pressure_for_u)
+        self.evaluator = make_state_evaluator(self.context, self.states, spec.temperature_K, pressure_for_u)
         self.temperature = temperature
         self.lrc = None
         if spec.lrc is not None:

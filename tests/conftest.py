@@ -306,3 +306,80 @@ def edit_attributes(hrex_dir, set: dict | None = None, remove=()) -> None:
         attrs.pop(key, None)
     manifest["attrs"] = attrs
     _write_manifest(Path(hrex_dir), manifest)
+
+
+# ---- a relative transformation (cufep.rbfe), for the unit and the GPU tests ------------------------------
+TOLUENE, PHENOL = "Cc1ccccc1", "Oc1ccccc1"
+#: atoms of toluene -> phenol with explicit hydrogens (RDKit's AddHs order): the six ring carbons and the
+#: five ring hydrogens; the methyl carbon and its hydrogens (0, 7, 8, 9) and the oxygen and its hydrogen (0, 7)
+#: are unique
+RING_MAP = {**{i: i for i in range(1, 7)}, **{10 + k: 8 + k for k in range(5)}}
+
+
+class _Ligand:
+    def __init__(self, offmol):
+        self.offmol = offmol
+
+
+def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
+    """Two molecules with a 3D pose each, B placed onto A on the mapped atoms, and Gasteiger charges."""
+    from openff.toolkit import Molecule
+    from rdkit import Chem
+    from rdkit.Chem import AllChem, rdMolAlign
+    from rdkit.Geometry import Point3D
+
+    core_b = RING_MAP if core_b is None else core_b
+    a = Chem.AddHs(Chem.MolFromSmiles(TOLUENE))
+    AllChem.EmbedMolecule(a, randomSeed=11)
+    b = Chem.AddHs(Chem.MolFromSmiles(smiles_b))
+    xyz_a = a.GetConformer().GetPositions()
+    AllChem.EmbedMolecule(b, randomSeed=11, coordMap={j: Point3D(*xyz_a[i]) for i, j in core_b.items()
+                                                      if b.GetAtomWithIdx(j).GetAtomicNum() > 1})
+    rdMolAlign.AlignMol(b, a, atomMap=[(j, i) for i, j in core_b.items()])
+    out = []
+    for name, mol in (("A", a), ("B", b)):
+        mol.SetProp("_Name", name)
+        off = Molecule.from_rdkit(mol, allow_undefined_stereo=True)
+        off.assign_partial_charges("gasteiger")
+        out.append(_Ligand(off))
+    return out
+
+
+def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4):
+    """A relative transformation for the tests: toluene (A) into phenol (B, or ``smiles_b``) in a box of water,
+    Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
+    Returns (system A, positions A, ligand A, system B, positions B, ligand B, core map, box), indices of the
+    Systems, positions in nm."""
+    import openmm as mm
+    import openmm.app as app
+    import openmm.unit as u
+
+    from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
+
+    lig_a, lig_b = _molecules(smiles_b, core_b)
+    field = make_forcefield(ForceFieldSpec(), [lig_a, lig_b])
+    top_a = lig_a.offmol.to_topology().to_openmm()
+    pos_a = lig_a.offmol.conformers[0].m_as("nanometer") + 1.0
+    modeller = app.Modeller(top_a, pos_a * u.nanometer)
+    modeller.addSolvent(field, boxSize=mm.Vec3(box_nm, box_nm, box_nm) * u.nanometer)
+    spec = SystemSpec(cutoff_nm=0.9)
+    system_a = create_system(field, modeller.topology, spec)
+    n_a = lig_a.offmol.n_atoms
+    modeller_b = app.Modeller(modeller.topology, modeller.positions)
+    modeller_b.delete([next(modeller_b.topology.residues())])
+    top_b = lig_b.offmol.to_topology().to_openmm()
+    modeller_b.add(top_b, (lig_b.offmol.conformers[0].m_as("nanometer") + 1.0) * u.nanometer)
+    system_b = create_system(field, modeller_b.topology, spec)
+    for system in (system_a, system_b):
+        for f in system.getForces():
+            if isinstance(f, mm.NonbondedForce):
+                f.setUseDispersionCorrection(False)
+    pos_a = np.asarray(modeller.positions.value_in_unit(u.nanometer))
+    pos_b = np.asarray(modeller_b.positions.value_in_unit(u.nanometer))
+    n_b_total = system_b.getNumParticles()
+    n_b = lig_b.offmol.n_atoms
+    ligand_a = list(range(n_a))
+    ligand_b = list(range(n_b_total - n_b, n_b_total))
+    core = {i: n_b_total - n_b + j for i, j in (RING_MAP if core_b is None else core_b).items()}
+    box = np.asarray(modeller.topology.getPeriodicBoxVectors().value_in_unit(u.nanometer))
+    return system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box

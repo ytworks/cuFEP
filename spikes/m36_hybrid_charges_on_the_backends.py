@@ -134,7 +134,7 @@ def main() -> None:
         without charge and LJ (base parameters: charges of A, new particles uncharged)."""
         out = clone_system(base)
         (_, f), = find_forces(out, mm.NonbondedForce)
-        for i in unique_new:
+        for _ in unique_new:
             out.addParticle(12.0)
             f.addParticle(0.0, 0.3, 0.0)
         for i in ligand:
@@ -269,15 +269,16 @@ def main() -> None:
             e_written[(x, s)] = nb_energy(context("openmm", sysm, "double"))
             e_reference[(x, s)] = nb_energy(context("openmm", sysm, "double", ewald=1e-6))
         ref = (0.0, 1.0)
-    
+
         print("\n1. stock OpenMM, offsets against charges written in (double precision, same Ewald tolerance), kT")
         for s in ss:
             d1 = [(e_stock[(x, s)] - e_written[(x, s)]) / KT for x in xs]
             print(f"   s = {s}: from {min(d1):.3e} to {max(d1):.3e} kT")
         d1p = [(e_plugin[k] - e_reference[k]) / KT for k in states]
         print(f"   (the plugin against the reference, absolute: from {min(d1p):.3f} to {max(d1p):.3f} kT)")
-    
-        print("\n2. differences from the state x = 0, s = 1, against the reference (charges written in, Ewald 1e-6), kT")
+
+        print("\n2. differences from the state x = 0, s = 1, against the reference "
+              "(charges written in, Ewald 1e-6), kT")
         print("   x     s     reference dE   plugin - ref   stock(5e-4) - ref")
         worst_plugin = worst_stock = 0.0
         for k in states:
@@ -287,7 +288,7 @@ def main() -> None:
             worst_plugin, worst_stock = max(worst_plugin, abs(dp)), max(worst_stock, abs(ds))
             print(f"   {k[0]:.1f}  {k[1]:.1f}  {dref:12.3f}  {dp:12.4f}  {ds:12.4f}")
         print(f"   largest: plugin {worst_plugin:.4f} kT, stock with the plugin's tolerance {worst_stock:.4f} kT")
-    
+
         print("\n3. plugin: the energy within each half of x from three evaluations (quadratic), kT")
         worst_fit = 0.0
         for s in ss:
@@ -344,8 +345,8 @@ def main() -> None:
         print(f"   {name} Context: E(x) - E(0.75) for x = 0, 0.25, 0.5, 1: "
               + ", ".join(f"{(e - e75) / KT:.4f}" for e in diffs) + " kT")
     for name, c in (("running", ctx), ("new", fresh)):
-        print(f"   {name} Context: PME parameters {c.getSystem().getForce(0) if False else ''}"
-              f"box {[round(v, 4) for v in np.diag(np.array(c.getState().getPeriodicBoxVectors(asNumpy=True)._value))]}")
+        box_now = np.array(c.getState().getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer))
+        print(f"   {name} Context: box {[round(float(v), 4) for v in np.diag(box_now)]}")
 
 
 if __name__ == "__main__":

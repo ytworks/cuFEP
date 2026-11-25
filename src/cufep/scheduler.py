@@ -347,7 +347,7 @@ def _entry(job: LegJob, conn, scheduler_pid: int | None = None, function=None) -
         die_with_parent(scheduler_pid)
     lock = hold_job_lock(job.leg_dir)           # noqa: F841  held until this process ends
     job.control = JobControl(conn)
-    (function or run_leg_safe)(job)
+    (getattr(job, "runner", None) or function or run_leg_safe)(job)
 
 
 #: how long a job is given to stop its workers and close its files after SIGTERM before it is killed
@@ -427,7 +427,8 @@ def run_jobs(jobs: list[LegJob], gpus: list, log=print, oversubscription="auto",
         results = []                                   # no GPU: one job at a time, in this process
         for job in jobs:
             job.devices, job.inline = [None], True
-            results.append(run_leg_safe(job))
+            # a job of a relative calculation runs its own kind of leg (cufep.rbfe.leg)
+            results.append((getattr(job, "runner", None) or run_leg_safe)(job))
         return results
     gpus = list(gpus)
     max_running = max_running or max(2, len(gpus))

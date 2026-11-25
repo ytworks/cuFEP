@@ -89,15 +89,52 @@ class AlchemicalState:
 #: A3FE: restrain (restraint off -> on), discharge (charges on -> off), vanish (LJ on -> off).
 STAGES_COMPLEX = ("restrain", "discharge", "vanish")
 STAGES_SOLVENT = ("discharge", "vanish")
+#: the one stage of a relative transformation (cufep.rbfe.states): the name of the stage of Sire's
+#: standard_morph schedule
+STAGES_HYBRID = ("morph",)
 #: names used by earlier versions (still accepted when reading files)
 STAGE_ALIASES = {"restraints": "restrain", "electrostatics": "discharge", "sterics": "vanish"}
+#: a global parameter that a System has if it can pass through the stage (adaptive lambda scheduling
+#: leaves out a stage whose parameter the Context does not have)
+STAGE_PARAMETER = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS,
+                   "morph": "lambda_sterics_core"}
 
 
 def canonical_stage(name: str) -> str:
     name = STAGE_ALIASES.get(name, name)
-    if name not in STAGES_COMPLEX:
+    if name not in STAGES_COMPLEX + STAGES_HYBRID:
         raise ValueError(f"unknown stage '{name}'")
     return name
+
+
+def is_hybrid_stage(name: str) -> bool:
+    return canonical_stage(name) in STAGES_HYBRID
+
+
+def state_from_dict(d: dict):
+    """The state a dictionary of :meth:`to_dict` describes: an :class:`AlchemicalState` of the ABFE, or a
+    hybrid state of a relative transformation (:class:`cufep.rbfe.states.HybridState`)."""
+    if "lambda_hybrid" in d:
+        from cufep.rbfe.states import HybridState
+
+        return HybridState(**d)
+    return AlchemicalState(**d)
+
+
+def is_hybrid(states) -> bool:
+    from cufep.rbfe.states import HybridState
+
+    return bool(states) and isinstance(states[0], HybridState)
+
+
+def make_state_evaluator(context: mm.Context, states, temperature_K: float, pressure_bar: float | None):
+    """The evaluator of all state energies for these states: :class:`StateEnergyEvaluator` for the ABFE,
+    :class:`cufep.rbfe.states.HybridEnergyEvaluator` for hybrid states."""
+    if is_hybrid(states):
+        from cufep.rbfe.states import HybridEnergyEvaluator
+
+        return HybridEnergyEvaluator(context, states, temperature_K, pressure_bar)
+    return StateEnergyEvaluator(context, states, temperature_K, pressure_bar)
 
 
 def rest2_scale_along_leg(stages, stage: str, lam: float, peak: float) -> float:
@@ -122,6 +159,11 @@ def stage_state(stage: str, lam: float, stages=None, rest2_scale: float = 1.0) -
     """
     lam = float(min(1.0, max(0.0, lam)))
     stage = canonical_stage(stage)
+    if stage in STAGES_HYBRID:
+        from cufep.rbfe.states import HybridState
+
+        scale = 1.0 if rest2_scale == 1.0 else rest2_scale_along_leg(stages or [stage], stage, lam, rest2_scale)
+        return HybridState(lam, scale)
     if stage == "restrain":
         state = AlchemicalState(lam, 1.0, 1.0)
     elif stage == "discharge":
@@ -136,6 +178,13 @@ def stage_state(stage: str, lam: float, stages=None, rest2_scale: float = 1.0) -
 
 
 def validate_states(states: list[AlchemicalState]) -> None:
+    if is_hybrid(states):
+        from cufep.rbfe.states import HybridState, validate_hybrid_states
+
+        if not all(isinstance(s, HybridState) for s in states):
+            raise ValueError("the states mix hybrid states and states of the ABFE")
+        validate_hybrid_states(states)
+        return
     if len(states) < 2:
         raise ValueError("at least two thermodynamic states are needed")
     for s in states:

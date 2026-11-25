@@ -63,7 +63,9 @@ OUTPUT_ROOT_NAMES = frozenset({
     "cache", "cufep.log", "resolved_config.yaml", "resolved_config.refused.yaml", "auto_report.md",
     "protein_prepared.pdb", "summary.json", "summary.csv", "timing.json", "timing_rerun.json",
     "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "benchmark_report_ligands.png",
-    "frozen_schedules", ".cufep.lock"})
+    "frozen_schedules", ".cufep.lock",
+    # the output of a relative run (cufep.rbfe.run)
+    "edges", "abfe", "network.json", "edges.csv", "ligands.csv"})
 
 
 def ligand_dir_name(name: str) -> str:
@@ -2563,6 +2565,85 @@ def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: s
     log(f"{what} done in {time.perf_counter() - t0:.0f} s (time step {eq.timestep_fs:g} fs)")
 
 
+def sample_leg(spec, hrex_dir: Path, job, configs, n_equil: int, total: int, cfg, log, timing: dict, timed,
+               ckpt_stride: int, unrecorded=None) -> dict:
+    """The replica exchange of a leg (step 5 of :func:`run_leg`, and of the legs of a relative calculation,
+    :mod:`cufep.rbfe.leg`): continue the samples in ``hrex_dir`` or start them from ``configs``, until ``total``
+    iterations of which the first ``n_equil`` are the equilibration, on the GPUs the scheduler grants; return
+    the samples. ``unrecorded`` is called with the sampler for samples of an earlier version that does not record
+    their conditions (they are analysed as they are); without it such samples are refused."""
+    from cufep.sampling.hrex import ReplicaExchangeSampler
+    from cufep.sampling.storage import read_samples
+
+    n_windows = len(spec.states)
+    control = job.control
+    # seconds one replica needs per iteration: a guess until the first iterations were timed
+    replica_seconds = [md_work(cfg.sampling.time_per_iteration_ps, spec.n_atoms, cfg.sampling.time_per_iteration_ps)]
+
+    def remaining_work(done: int) -> float:
+        return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)
+
+    t_sampling = time.perf_counter()
+    # the method of exchange is the one of the spec (leg_spec: sampling.exchange)
+    with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline, log=log) as sampler:
+        if sampler.unrecorded:
+            if unrecorded is None:
+                raise WorkflowError(f"the samples in {hrex_dir} do not record their conditions")
+            unrecorded(sampler)
+            timed("sampling", t_sampling)
+            return read_samples(hrex_dir)
+        if not sampler.storage.n_iterations - sampler.storage.n_stored and leg_is_complete(hrex_dir, total):
+            # the leg has all its iterations: nothing to continue, its samples are analysed as they are
+            # (whatever version wrote its checkpoint)
+            take_complete_leg(sampler.storage, n_equil, total, cfg, log)
+            timed("sampling", t_sampling)
+            return read_samples(hrex_dir)
+        if not sampler.restore():
+            sampler.initialize(*configs)
+        else:
+            log(f"resumed at iteration {sampler.iteration}")
+        # before the first iteration: what an analysis of an interrupted run needs to know
+        sampler.storage.set_plan(n_equil, total, analysis_record(cfg))
+        if control is not None and total > sampler.iteration:
+            devices = control.request_devices(n_windows, remaining_work(sampler.iteration))
+            if devices:
+                sampler.set_devices(devices)
+
+        def on_iteration(smp, stats) -> None:
+            if control is None:
+                return
+            per_worker = stats.all_workers / max(1, len(smp.workers))
+            per_replica = per_worker / max(1.0, n_windows / max(1, len(smp.workers)))
+            replica_seconds[0] = 0.8 * replica_seconds[0] + 0.2 * per_replica if smp.iteration > 3 else per_replica
+            devices = control.poll_devices()
+            if devices:
+                smp.set_devices(devices)
+            if smp.iteration % 25 == 0:
+                control.progress(remaining_work(smp.iteration))
+
+        remaining = total - sampler.iteration
+        first = sampler.iteration
+        if remaining > 0:
+            sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20),
+                        on_iteration=on_iteration)
+        # the result is for the length that was asked for, and every iteration is stored once
+        if sampler.storage.n_iterations != sampler.iteration or sampler.iteration < total:
+            raise WorkflowError(
+                f"the leg holds {sampler.storage.n_iterations} iterations of samples after {sampler.iteration} "
+                f"iterations were run and {total} were asked for; its samples are left as they are")
+        timing["sampling"] = {
+            "lambda_windows": n_windows, "iterations": sampler.iteration - first,
+            "seconds_per_iteration": (time.perf_counter() - t_sampling) / max(1, sampler.iteration - first),
+            "worker_busy_fraction": sampler.busy_seconds / sampler.worker_seconds_available
+            if sampler.worker_seconds_available > 0 else None,
+            "workers": [[it, list(devs)] for it, devs in sampler.device_history],
+            "oversubscription_factor": job.oversubscription}
+    if control is not None:
+        control.serial()
+    timed("sampling", t_sampling)
+    return read_samples(hrex_dir)
+
+
 def run_leg(job: LegJob) -> dict:
     """Run (or resume, or extend) one leg and return its result dictionary."""
     import openmm as mm
@@ -2578,9 +2659,9 @@ def run_leg(job: LegJob) -> dict:
     )
     from cufep.alchemy.schedule import Schedule, adaptive_schedule, schedule_from_windows
     from cufep.mps import thread_percentage
-    from cufep.sampling.hrex import ReplicaExchangeSampler, WindowPool
+    from cufep.sampling.hrex import WindowPool
     from cufep.sampling.states import STAGES_COMPLEX, STAGES_SOLVENT, stage_state
-    from cufep.sampling.storage import read_samples, stored_backend, stored_conditions
+    from cufep.sampling.storage import stored_backend, stored_conditions
     from cufep.sampling.worker import LegSpec, backend_of
 
     cfg = Config.model_validate(job.config)
@@ -2940,82 +3021,22 @@ def run_leg(job: LegJob) -> dict:
         spec = leg_spec(cfg, built, [s.to_dict() for s in schedule.states], barostat, timestep_fs, backend_name,
                         seed + 17, name=job.tag, frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca,
                         mps_thread_percentage=thread_percentage(job.oversubscription))
-        n_windows, total = len(schedule.states), n_equil + n_prod
-        control = job.control
-        # seconds one replica needs per iteration: a guess until the first iterations were timed
-        replica_seconds = [md_work(cfg.sampling.time_per_iteration_ps, alch.system.getNumParticles(),
-                                   cfg.sampling.time_per_iteration_ps)]
 
-        def remaining_work(done: int) -> float:
-            return n_windows * max(0, total - done) * replica_seconds[0] / max(1, job.oversubscription)
+        def unrecorded(sampler) -> None:
+            # samples of an earlier version, whose conditions are not recorded: a leg that has
+            # all its iterations is analysed as it is; nothing is added to such samples
+            problems = unrecorded_samples_problems(
+                sampler.storage.attributes(), sampler.storage.n_iterations, leg_dir, cfg, job.leg,
+                job.production_ns, [s.to_dict() for s in schedule.states], timestep_fs)
+            if problems:
+                refuse_unrecorded_samples(leg_dir, sampler.storage.n_iterations, problems)
+            log(f"the {sampler.storage.n_iterations} iterations of samples of this leg were written by a "
+                "version that did not record their conditions; they are analysed as they are")
+            if "the samples" not in origin_not_recorded:
+                origin_not_recorded.append("the samples")
 
-        t_sampling = time.perf_counter()
-        # the method of exchange is the one of the spec (leg_spec: sampling.exchange)
-        with ReplicaExchangeSampler(spec, hrex_dir, devices=job.devices, inline=job.inline, log=log) as sampler:
-            if sampler.unrecorded:
-                # samples of an earlier version, whose conditions are not recorded: a leg that has
-                # all its iterations is analysed as it is; nothing is added to such samples
-                problems = unrecorded_samples_problems(
-                    sampler.storage.attributes(), sampler.storage.n_iterations, leg_dir, cfg, job.leg,
-                    job.production_ns, [s.to_dict() for s in schedule.states], timestep_fs)
-                if problems:
-                    refuse_unrecorded_samples(leg_dir, sampler.storage.n_iterations, problems)
-                log(f"the {sampler.storage.n_iterations} iterations of samples of this leg were written by a "
-                    "version that did not record their conditions; they are analysed as they are")
-                if "the samples" not in origin_not_recorded:
-                    origin_not_recorded.append("the samples")
-                timed("sampling", t_sampling)
-                return read_samples(hrex_dir), schedule
-            if not sampler.storage.n_iterations - sampler.storage.n_stored and leg_is_complete(hrex_dir, total):
-                # the leg has all its iterations: nothing to continue, its samples are analysed as they are
-                # (whatever version wrote its checkpoint)
-                take_complete_leg(sampler.storage, n_equil, total, cfg, log)
-                timed("sampling", t_sampling)
-                return read_samples(hrex_dir), schedule
-            if not sampler.restore():
-                sampler.initialize(*configs)
-            else:
-                log(f"resumed at iteration {sampler.iteration}")
-            # before the first iteration: what an analysis of an interrupted run needs to know
-            sampler.storage.set_plan(n_equil, total, analysis_record(cfg))
-            if control is not None and total > sampler.iteration:
-                devices = control.request_devices(n_windows, remaining_work(sampler.iteration))
-                if devices:
-                    sampler.set_devices(devices)
-
-            def on_iteration(smp, stats) -> None:
-                if control is None:
-                    return
-                per_worker = stats.all_workers / max(1, len(smp.workers))
-                per_replica = per_worker / max(1.0, n_windows / max(1, len(smp.workers)))
-                replica_seconds[0] = 0.8 * replica_seconds[0] + 0.2 * per_replica if smp.iteration > 3 else per_replica
-                devices = control.poll_devices()
-                if devices:
-                    smp.set_devices(devices)
-                if smp.iteration % 25 == 0:
-                    control.progress(remaining_work(smp.iteration))
-
-            remaining = total - sampler.iteration
-            first = sampler.iteration
-            if remaining > 0:
-                sampler.run(remaining, checkpoint_stride=ckpt_stride, progress_every=max(1, total // 20),
-                            on_iteration=on_iteration)
-            # the result is for the length that was asked for, and every iteration is stored once
-            if sampler.storage.n_iterations != sampler.iteration or sampler.iteration < total:
-                raise WorkflowError(
-                    f"the leg holds {sampler.storage.n_iterations} iterations of samples after {sampler.iteration} "
-                    f"iterations were run and {total} were asked for; its samples are left as they are")
-            timing["sampling"] = {
-                "lambda_windows": n_windows, "iterations": sampler.iteration - first,
-                "seconds_per_iteration": (time.perf_counter() - t_sampling) / max(1, sampler.iteration - first),
-                "worker_busy_fraction": sampler.busy_seconds / sampler.worker_seconds_available
-                if sampler.worker_seconds_available > 0 else None,
-                "workers": [[it, list(devs)] for it, devs in sampler.device_history],
-                "oversubscription_factor": job.oversubscription}
-        if control is not None:
-            control.serial()
-        timed("sampling", t_sampling)
-        return read_samples(hrex_dir), schedule
+        return sample_leg(spec, hrex_dir, job, configs, n_equil, n_equil + n_prod, cfg, log, timing, timed,
+                          ckpt_stride, unrecorded), schedule
 
     # a leg that has samples from an earlier run is continued, never repeated from its start
     had_samples = stored_conditions(leg_dir / "hrex")[0] > 0
@@ -3696,11 +3717,11 @@ def unrecorded_samples_problems(attrs: dict, n_stored: int, leg_dir: Path, cfg: 
     ``states`` are those of the leg's lambda schedule (None if there is none), ``timestep_fs``
     the time step the leg uses.
     """
-    from cufep.sampling.states import AlchemicalState
+    from cufep.sampling.states import state_from_dict
     from cufep.sampling.storage import _same, equilibration_boundary
 
     def normal(sequence):
-        return [AlchemicalState(**state).to_dict() for state in sequence]
+        return [state_from_dict(state).to_dict() for state in sequence]
 
     problems = []
     if "temperature_K" in attrs and not _same(float(attrs["temperature_K"]), float(cfg.thermodynamics.temperature_K)):

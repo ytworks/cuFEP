@@ -58,15 +58,16 @@ import numpy as np
 import yaml
 
 from cufep.alchemy.candidates import initial_indices, initial_window_indices
-from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS
 from cufep.sampling.states import (
     R_GAS,
     STAGE_ALIASES,
+    STAGE_PARAMETER,
     AlchemicalState,
-    StateEnergyEvaluator,
     canonical_stage,
+    make_state_evaluator,
     set_state,
     stage_state,
+    state_from_dict,
     validate_states,
 )
 
@@ -111,6 +112,11 @@ class Schedule:
             raise ValueError(f"its stages are {', '.join(self.stages)}; the {leg} leg has {', '.join(stages)}")
         for which, state, wanted in (("first", self.states[0], stage_state(stages[0], 0.0)),
                                      ("last", self.states[-1], stage_state(stages[-1], 1.0))):
+            if not isinstance(state, AlchemicalState) or not isinstance(wanted, AlchemicalState):
+                # a hybrid state (cufep.rbfe.states): the ends are lambda 0 and 1 without REST2 scaling
+                if type(state) is not type(wanted) or state.to_dict() != wanted.to_dict():
+                    raise ValueError(f"its {which} state {state.to_dict()} is not the {which} end of the {leg} leg")
+                continue
             have = (state.lambda_restraints, state.lambda_electrostatics, state.lambda_sterics, state.rest2_scale)
             want = (wanted.lambda_restraints, wanted.lambda_electrostatics, wanted.lambda_sterics, 1.0)
             if any(abs(a - b) > 1e-9 for a, b in zip(have, want)):
@@ -145,7 +151,7 @@ class Schedule:
     @classmethod
     def load(cls, path: str | Path) -> "Schedule":
         d = yaml.safe_load(Path(path).read_text())
-        states = [AlchemicalState(**s) for s in d["states"]]
+        states = [state_from_dict(s) for s in d["states"]]
         validate_states(states)
         n = len(states)
         return cls(stages=[canonical_stage(s) for s in d["stages"]], states=states,
@@ -328,7 +334,7 @@ def candidate_energies(context, stage: str, grid: np.ndarray, beta: float, leg_s
     again. With REST2 the stages of the leg are needed (``leg_stages``).
     """
     states = [stage_state(stage, lam, leg_stages, rest2_scale) for lam in grid]
-    return StateEnergyEvaluator(context, states, 1.0 / (R_GAS * beta), None).reduced_potentials()[0]
+    return make_state_evaluator(context, states, 1.0 / (R_GAS * beta), None).reduced_potentials()[0]
 
 
 def stage_overlap(energies: list[np.ndarray], windows: list[int]) -> np.ndarray:
@@ -394,10 +400,10 @@ def run_window(context, integrator, task: dict, mover=None, interval_steps: int 
     its equilibration and between its samples, in the state of the window.
     """
     grid = np.linspace(0.0, 1.0, int(task["candidates"]))
-    state = AlchemicalState(**task["state"])
+    state = state_from_dict(task["state"])
     leg_stages, peak = task.get("leg_stages"), float(task.get("rest2_scale", 1.0))
     # one evaluator per stage over its candidates; terms common to all candidates cancel in the overlap
-    evaluators = {name: StateEnergyEvaluator(context, [stage_state(name, lam, leg_stages, peak) for lam in grid],
+    evaluators = {name: make_state_evaluator(context, [stage_state(name, lam, leg_stages, peak) for lam in grid],
                                              task["temperature_K"], None) for name in task["stages"]}
     _load(context, task["config"], mover)
     set_state(context, state)
@@ -450,8 +456,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
                          f"not {s.start_configurations!r}")
     by_pair = s.overlap_matrix == "pair"
     params = context.getParameters()
-    present = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS}
-    stages = [st for st in (canonical_stage(x) for x in stages) if present[st] in params]
+    stages = [st for st in (canonical_stage(x) for x in stages) if STAGE_PARAMETER[st] in params]
     if not stages:
         raise ValueError("the Context has no alchemical parameters")
     top = s.candidates - 1
@@ -467,7 +472,7 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     def path(nd: tuple[int, int]) -> float:
         return nd[0] + nd[1] / top
 
-    def state_of(nd: tuple[int, int]) -> AlchemicalState:
+    def state_of(nd: tuple[int, int]):
         return stage_state(stages[nd[0]], nd[1] / top, stages, s.rest2_scale)
 
     windows = {k: initial_window_indices(s.initial_windows.get(name, 3), s.candidates)

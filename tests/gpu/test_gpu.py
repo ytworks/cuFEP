@@ -12,7 +12,7 @@ from cufep.backends import get_backend
 from cufep.backends.cupotential import CuPotentialBackend
 from cufep.envcheck import check_environment
 from cufep.sampling.hrex import ReplicaExchangeSampler
-from cufep.sampling.states import StateEnergyEvaluator
+from cufep.sampling.states import StateEnergyEvaluator, make_state_evaluator
 from cufep.sampling.storage import read_samples
 from cufep.sampling.worker import LegSpec
 
@@ -68,7 +68,7 @@ def assert_backends_give_the_energies_of_a_tight_ewald_sum(alch_system, states, 
         state = ctx.getState(getEnergy=True, getForces=True)
         energy[name] = state.getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)
         forces[name] = state.getForces(asNumpy=True).value_in_unit(u.kilojoule_per_mole / u.nanometer)[atoms]
-        rows[name] = StateEnergyEvaluator(ctx, states, 300.0, pressure).reduced_potentials()[0]
+        rows[name] = make_state_evaluator(ctx, states, 300.0, pressure).reduced_potentials()[0]
         del ctx
     reference = rows["reference"] - rows["reference"][0]
     measured = {}
@@ -866,3 +866,79 @@ def test_a_leg_whose_ghosts_run_out_stops_and_no_worker_is_restarted(tmp_path, g
         with pytest.raises(MovesError, match="no ghost water is left") as stopped:
             s.run(20, record_stride=2, checkpoint_stride=5)
         assert not isinstance(stopped.value, WorkerError) and s.restarts == 0
+
+
+# ---- relative transformations (cufep.rbfe) ------------------------------------------------------------------
+@pytest.fixture(scope="module", params=[False, True], ids=["plain", "rest2"])
+def hybrid_leg(request):
+    """Toluene into phenol in a 3.2 nm box of water (large enough for the plugin), the hybrid System of the two;
+    with REST2 a dozen water atoms are hot too."""
+    from conftest import build_hybrid_edge
+
+    from cufep.rbfe.hybrid import make_hybrid_system
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge(box_nm=3.2)
+    rest2 = request.param
+    hot = list(range(len(ligand_a), len(ligand_a) + 12)) if rest2 else []
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, rest2=rest2,
+                                rest2_atoms=hot)
+    schedule = fixed_schedule(["morph"], {"morph": 8}, rest2_scale=3.0 if rest2 else 1.0)
+    return hybrid, schedule, box
+
+
+@needs_plugin
+def test_hybrid_backends_agree_at_every_state(hybrid_leg):
+    """The states of a hybrid System: each backend gives the differences between the windows that a tight Ewald
+    sum gives (the plugin carries the charges of the ligand as offsets under five global parameters)."""
+    hybrid, schedule, box = hybrid_leg
+    assert_backends_give_the_energies_of_a_tight_ewald_sum(hybrid.system, schedule.states, hybrid.positions, box,
+                                                           pressure=1.0)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_hybrid_state_energies_match_setting_each_state(hybrid_leg, backend):
+    """The evaluation of all hybrid state energies (a quadratic in each half of lambda for the main group)
+    equals switching the Context to each state, after dynamics in a scaled state."""
+    import openmm.unit as u
+
+    from cufep.sampling.states import set_state
+
+    hybrid, schedule, box = hybrid_leg
+    be = get_backend(backend)
+    integ = be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=3)
+    ctx = be.make_context(be.prepare_system(hybrid.system), integ, 0)
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(hybrid.positions)
+    k = len(schedule.states) // 2
+    set_state(ctx, schedule.states[k])
+    mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 100)
+    ctx.setVelocitiesToTemperature(300 * u.kelvin, 5)
+    integ.step(250)
+    red = make_state_evaluator(ctx, schedule.states, 300.0, None).reduced_potentials(restore=schedule.states[k])[0]
+    kt = 8.31446261815324e-3 * 300.0
+    direct = []
+    for state in schedule.states:
+        set_state(ctx, state)
+        direct.append(ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole) / kt)
+    direct = np.array(direct)
+    error = (red - red[0]) - (direct - direct[0])
+    assert np.max(np.abs(error)) < 0.02, error         # kT, as the test of the REST2 states of the ABFE
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_replica_exchange_of_a_hybrid_leg(tmp_path, hybrid_leg, backend):
+    """Replica exchange of the hybrid states on the GPU, with the barostat: finite energies and accepted swaps."""
+    hybrid, schedule, box = hybrid_leg
+    spec = LegSpec(name="gpu-hybrid", system_xml=mm.XmlSerializer.serialize(hybrid.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=hybrid.system.getNumParticles(),
+                   backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=2.0,
+                   steps_per_iteration=50, seed=3, frame_atoms=list(hybrid.ligand_atoms))
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=[0], log=lambda m: None) as s:
+        s.initialize(hybrid.positions, box)
+        s.run(10, record_stride=2, checkpoint_stride=5)
+    data = read_samples(tmp_path / "hrex")
+    k = len(schedule.states)
+    assert data["u"].shape == (10, k, k) and np.all(np.isfinite(data["u"]))
+    assert data["swaps"][:, :, 1].sum() > 0

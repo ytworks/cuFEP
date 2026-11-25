@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from cufep import jsonio, mps
@@ -131,7 +132,36 @@ def run(cfg: Config, reschedule: bool = False, log=None, only_ligands=None, only
 def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, only_legs=None,
          ligands=None) -> list[dict]:
     log = log or _Log(out_dir / "cufep.log")
-    t_run = time.time()
+    prepared = prepare_run(cfg, out_dir, reschedule, log, only_ligands, only_legs, ligands, time.time())
+    results, monitor, mps_used = execute_jobs(prepared.jobs, prepared.gpus, prepared.factor, log)
+    return finish_run(prepared, results, monitor, mps_used)
+
+
+@dataclass
+class PreparedRun:
+    """A run of the ABFE up to its jobs (:func:`prepare_run`): what :func:`finish_run` needs after them. A
+    relative run (cufep.rbfe.run) runs the jobs of the ABFE of its reference ligands with its own."""
+    resolved: Config
+    out_dir: Path
+    ligands: list
+    lig_dirs: dict
+    selected: list
+    to_run: set
+    repeats: int
+    partial: bool
+    jobs: list
+    gpus: list
+    factor: object
+    t_run: float
+    t_prepared: float
+    log: object
+
+
+def prepare_run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, only_legs=None, ligands=None,
+                t_run: float | None = None) -> PreparedRun:
+    """Everything of a run before its jobs: the plan, the checks of the directory, the record of the run, the
+    prepared systems and the jobs."""
+    t_run = time.time() if t_run is None else t_run
     resolved, report, protein, ligands = plan(cfg, log, ligands)
     selected = select_jobs([lig.name for lig in ligands], resolved.sampling.repeats, only_ligands, only_legs)
     partial = bool(only_ligands or only_legs)
@@ -192,8 +222,15 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     log(f"{len(jobs)} job(s): {len(ligands)} ligand(s) x 2 legs x {repeats} repeat(s); per lambda window "
         f"{resolved.sampling.equilibration('complex'):g} ns equilibration and "
         f"{resolved.sampling.production('complex'):g} ns production (complex leg)")
+    return PreparedRun(resolved=resolved, out_dir=out_dir, ligands=ligands, lig_dirs=lig_dirs, selected=selected,
+                       to_run=to_run, repeats=repeats, partial=partial, jobs=jobs, gpus=gpus,
+                       factor=resolved.resources.oversubscription_factor, t_run=t_run, t_prepared=t_prepared, log=log)
+
+
+def execute_jobs(jobs: list, gpus: list, factor, log) -> tuple[list, object, bool]:
+    """Run the jobs on the GPUs, with cuFEP's MPS daemon where several workers share a GPU, and a monitor of the
+    GPUs: (results, monitor, whether MPS was used)."""
     real_gpus = [g for g in gpus if g is not None]
-    factor = resolved.resources.oversubscription_factor
     monitor = GpuMonitor(real_gpus)              # maps the run's devices to nvidia-smi's before MPS starts
     daemon = mps.start(log) if real_gpus and factor != 1 else None
     monitor.start()
@@ -203,6 +240,15 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         monitor.stop()
         if daemon is not None:
             daemon.stop()
+    return results, monitor, daemon is not None
+
+
+def finish_run(run: PreparedRun, results: list, monitor, mps_used: bool) -> list[dict]:
+    """Everything of a run after its jobs: the results of the ligands, the summary, the figures."""
+    resolved, out_dir, ligands, lig_dirs = run.resolved, run.out_dir, run.ligands, run.lig_dirs
+    selected, to_run, repeats, partial = run.selected, run.to_run, run.repeats, run.partial
+    jobs, log = run.jobs, run.log
+    t_run, t_prepared = run.t_run, run.t_prepared
     failed_now: dict[str, list[str]] = {}
     for r in results:
         if "error" in r:
@@ -210,7 +256,7 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
             failed_now.setdefault(r["ligand"], []).append(f"{r['leg']} leg" + (f" of repeat {r['repeat']}"
                                                                               if repeats > 1 else ""))
     # a run of some legs only leaves the timing of the whole run in place
-    write_timing(out_dir, jobs, t_run, t_prepared, monitor, daemon is not None, log,
+    write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log,
                  file_name="timing_rerun.json" if partial else "timing.json")
 
     # legs of the ligands of this run that this run did not sample keep the result of an earlier run:
@@ -249,6 +295,8 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
         for w in s.get("warnings", []):
             log(f"  warning: {w}")
     return summary
+
+
 
 
 def result_line(s: dict) -> str:
