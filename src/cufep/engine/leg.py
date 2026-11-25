@@ -223,15 +223,85 @@ def goes_on_from_its_samples(leg_dir: Path) -> bool:
 
 
 def restores_its_samples(leg_dir: Path, total: int) -> bool:
-    """Whether the replica exchange of a leg takes up the samples it has as they are made, from where they began: it
-    restores their checkpoint (also the one of their start, before the first sample), or analyses a leg that has all
-    its ``total`` iterations as it is (:func:`cufep.workflow.sample_leg`). Samples without a checkpoint that are not
-    complete are not continued: the replica exchange starts anew from the start configurations, and their record is
-    of those (fourth review of PR #18)."""
+    """Whether the replica exchange of a leg takes up the samples it has as they were made, from where they began
+    (:func:`cufep.workflow.sample_leg`): it restores their checkpoint (also the one of their start, before the first
+    sample), analyses a leg that has all its ``total`` iterations as it is, or analyses samples of an earlier
+    version that do not record their conditions as they are. Other samples are not continued: the replica exchange
+    starts anew from the start configurations, and the record of the leg is of those (fourth and fifth reviews of
+    PR #18)."""
+    from cufep.sampling.storage import stored_conditions
     from cufep.workflow import leg_is_complete
 
     hrex = Path(leg_dir) / "hrex"
-    return (hrex / "checkpoint.npz").exists() or leg_is_complete(hrex, total)
+    if (hrex / "checkpoint.npz").exists() or leg_is_complete(hrex, total):
+        return True
+    n, conditions = stored_conditions(hrex)
+    return n > 0 and conditions is None
+
+
+#: the keys of the record of start configurations that say how they were made
+START_KEYS = ("start_configurations", "walk_ps", "start_md_ps", "minimize_steps", "start_backend")
+
+
+def kept_start_record(leg_dir: Path, schedule, settings: dict, total: int, made_now: dict, log=print) -> dict:
+    """The record of start configurations made again for windows a leg keeps (``made_now``: how they are made now,
+    with ``windows``). If the replica exchange takes up the samples of the leg as they were made
+    (:func:`restores_its_samples`), their start is the one the earlier record gives for these windows
+    (:func:`record_of_kept_windows`; none if it names other windows or there is none: the start is not known), and
+    how the file was made now is said apart (``start_configurations_made_again``); otherwise the replica exchange
+    starts from these configurations, and the record is ``made_now``. One rule for every way the leg keeps its
+    windows: its own schedule, a schedule given to it (reviews of PR #18)."""
+    if not restores_its_samples(leg_dir, total):
+        return dict(made_now)
+    earlier = record_of_kept_windows(leg_dir, schedule, settings, log)
+    again = {key: made_now[key] for key in START_KEYS if key in made_now}
+    rest = {key: value for key, value in made_now.items() if key not in START_KEYS}
+    return {**rest, **earlier, "start_configurations_made_again": again}
+
+
+def record_the_start_used(leg_dir: Path, total: int) -> None:
+    """Before the replica exchange of a leg whose start configurations it has: if they were made again while its
+    samples were taken up from their checkpoint (their record keeps the start of the samples, and the start made
+    again apart), and the replica exchange does not take up those samples now (the checkpoint is gone), it starts
+    from these configurations: their record becomes theirs (fifth review of PR #18: the walk was reported for
+    samples that started from configurations made again)."""
+    import json as _json
+
+    from cufep.files import publish_npz
+    from cufep.workflow import start_record_of
+
+    start_file = Path(leg_dir) / "start_configs.npz"
+    if not start_file.exists():
+        return
+    made = start_record_of(start_file)
+    again = made.get("start_configurations_made_again")
+    if not isinstance(again, dict) or restores_its_samples(leg_dir, total):
+        return
+    record = {**{key: value for key, value in made.items()
+                 if key not in START_KEYS and key != "start_configurations_made_again"}, **again}
+    with np.load(start_file) as start:
+        arrays = {key: start[key] for key in start.files if key != "made_with"}
+    publish_npz(start_file, made_with=_json.dumps(record), **arrays)
+
+
+def check_samples_have_their_windows(leg_dir: Path, states) -> None:
+    """Before a run moves or writes anything of a leg (before ``begin_leg``): if its replica exchange goes on from
+    samples (or the checkpoint of their start), the leg must have the windows of those samples: ``states`` are the
+    states of the schedule it will use (its own, or the one it is given), None if it has none. Samples that do not
+    record their conditions are not compared. Raises WorkflowError (fifth review of PR #18: a missing schedule was
+    refused after the result of the leg had been set aside, and the leg counted as failed)."""
+    from cufep.sampling.storage import _same, stored_layout
+    from cufep.workflow import WorkflowError
+
+    if not goes_on_from_its_samples(leg_dir):
+        return
+    if states is None:
+        refuse_samples_without_windows(leg_dir)
+    stored = stored_layout(Path(leg_dir) / "hrex")[1].get("conditions")
+    if isinstance(stored, dict) and not _same(stored.get("states"), [dict(s) for s in states]):
+        raise WorkflowError(f"the lambda windows {Path(leg_dir)} is to use are not those of its samples in "
+                            f"{Path(leg_dir) / 'hrex'}; nothing was changed (--reschedule starts the leg anew and "
+                            "keeps what it had)")
 
 
 def check_kept_windows(leg_dir: Path, schedule, conditions: dict, refuse_unrecorded: bool = True) -> None:

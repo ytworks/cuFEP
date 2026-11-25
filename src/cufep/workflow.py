@@ -1151,6 +1151,14 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         return                           # the windows and samples the leg has are set aside; it starts anew
     rest2_scale = cfg.sampling.rest2.scale if cfg.sampling.rest2.scale > 1.0 else 1.0
     sched_file = leg_dir / "schedule.yaml"
+    # samples (or the checkpoint of their start) need the windows they are of: the leg's schedule, or the one it is
+    # given; checked here, before begin_leg sets the result of the leg aside (fifth review of PR #18)
+    from cufep.engine.leg import check_samples_have_their_windows
+
+    src = given_schedule_file(cfg, lig_dir.name, leg, repeat)
+    windows = sched_file if sched_file.exists() else (src if src is not None and src.exists() else None)
+    check_samples_have_their_windows(leg_dir, None if windows is None
+                                     else [state.to_dict() for state in Schedule.load(windows).states])
     if sched_file.exists():
         schedule = Schedule.load(sched_file)
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -2661,12 +2669,12 @@ def run_leg(job: LegJob) -> dict:
         check_kept_windows,
         chosen_backend,
         finish_leg,
+        kept_start_record,
         leg_context,
         open_leg,
         pre_equilibrated,
-        record_of_kept_windows,
+        record_the_start_used,
         refuse_samples_without_windows,
-        restores_its_samples,
         with_fallback,
     )
     from cufep.mps import thread_percentage
@@ -2884,6 +2892,9 @@ def run_leg(job: LegJob) -> dict:
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has "
                 "(schedule.yaml); the settings of lambda_schedule are not applied to them, "
                 "cufep run --reschedule determines the windows again")
+            # start configurations made again for samples that are not taken up now: the replica exchange starts
+            # from them, and their record says so (fifth review of PR #18)
+            record_the_start_used(leg_dir, n_equil + n_prod)
         else:
             # what a Context of this leg is made with, for the workers of the precalculation and for
             # the Context of this process, which walks through the windows and runs them itself
@@ -2928,35 +2939,31 @@ def run_leg(job: LegJob) -> dict:
 
             if given is None and not sched_file.exists():
                 refuse_samples_without_windows(leg_dir)
-            earlier = None
+            keeps = False                               # the leg keeps windows of samples it may have
             if given is not None or sched_file.exists() or ls.mode_of(job.leg) == "fixed":
                 # the windows are given: only make a start configuration for each of them
                 if given is not None:
                     schedule = given
                     check_kept_windows(leg_dir, schedule, production_conditions(schedule), refuse_unrecorded=False)
+                    keeps = True
                 elif sched_file.exists():
                     kept = _schedule_of_this_leg(sched_file, job.leg, stages)
                     check_scale(kept)
                     check_kept_windows(leg_dir, kept, production_conditions(kept), refuse_unrecorded=False)
-                    # the start of samples that are taken up as they are made (their checkpoint, or a complete leg)
-                    earlier = (record_of_kept_windows(leg_dir, kept, windows_settings(cfg), log)
-                               if restores_its_samples(leg_dir, n_equil + n_prod) else None)
                     schedule = own_schedule(leg_dir, job.leg, stages, ligand=job.ligand, repeat=job.repeat,
                                             seed=seed, backend=backend_name)
+                    keeps = True
                 else:
                     schedule = schedule_from_windows(stages, ls.windows.for_leg(job.leg),
                                                      WindowsConfig().for_leg(job.leg), rest2.scale)
                 check_scale(schedule)                      # before anything is written for these windows
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
                 made_with = given_windows_record(ls.fixed_walk_ps, schedule, found_in_leg)
-                if earlier is not None:
-                    # the samples go on from their checkpoint: their start is the one the record had (none if it did
-                    # not name these windows); how the file was made again is said apart (reviews of PR #18)
-                    again = {key: made_with[key] for key in ("start_configurations", "walk_ps") if key in made_with}
-                    origin = ({"origin_not_recorded": made_with["origin_not_recorded"]}
-                              if "origin_not_recorded" in made_with and not earlier else {})
-                    made_with = {"windows": made_with["windows"], **origin, **earlier,
-                                 "start_configurations_made_again": again}
+                if keeps:
+                    # samples taken up as they were made keep their start (unknown without a record of these
+                    # windows); how the file was made now is said apart (reviews of PR #18)
+                    made_with = kept_start_record(leg_dir, schedule, windows_settings(cfg), n_equil + n_prod,
+                                                  made_with, log)
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
 
@@ -2990,13 +2997,15 @@ def run_leg(job: LegJob) -> dict:
             configs = publish_windows(leg_dir, schedule, cfgs, start_record(cfg, schedule, made_with), leg=job.leg,
                                       ligand=job.ligand, repeat=job.repeat, seed=seed, backend=backend_name)
             windows_origin = made_with.get("origin_not_recorded")
+            # how the file was made now (fifth review of PR #18: KeyError for samples whose start is not known)
+            made_now = made_with.get("start_configurations_made_again") or made_with
             timed("lambda_schedule", t0)
             log(
                 f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows "
                 f"in {time.perf_counter() - t0:.0f} s: "
                 + "; ".join(f"{name} {len(v)}" for name, v in schedule.windows().items())
-                + f"; start configurations: {made_with['start_configurations']}"
-                + (f" ({made_with['walk_ps']:g} ps in each window)" if "walk_ps" in made_with else "")
+                + f"; start configurations: {made_now['start_configurations']}"
+                + (f" ({made_now['walk_ps']:g} ps in each window)" if "walk_ps" in made_now else "")
             )
         # what of the windows has no record of its origin, as their files say it now (not what an
         # attempt on another backend found before its windows were set aside)

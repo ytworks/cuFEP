@@ -186,12 +186,13 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         chosen_backend,
         finish_leg,
         goes_on_from_its_samples,
+        kept_start_record,
         leg_context,
         open_leg,
         pre_equilibrated,
         record_of_kept_windows,
+        record_the_start_used,
         refuse_samples_without_windows,
-        restores_its_samples,
         starts_from,
         with_fallback,
     )
@@ -280,6 +281,9 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         if stored is not None:
             schedule, configs, _made = stored
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has")
+            # start configurations made again for samples that are not taken up now: the replica exchange starts
+            # from them, and their record says so (fifth review of PR #18)
+            record_the_start_used(leg_dir, n_equil + n_prod)
         else:
             t0 = time.perf_counter()
             a = ls.adaptive
@@ -295,18 +299,17 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                 production = spec_of([st.to_dict() for st in schedule.states], backend, seed=seed + 17,
                                      frame_atoms=frame_atoms, frame_ligand=frame_ligand, frame_ca=frame_ca)
                 check_kept_windows(leg_dir, schedule, production.conditions())
-                earlier = record_of_kept_windows(leg_dir, schedule, settings, log)
+                record_of_kept_windows(leg_dir, schedule, settings, log)   # the settings the windows were chosen with
                 log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg has, without "
                     "the start configurations of them; they are made again for these windows (the settings of "
                     "lambda_schedule are not applied to them; cufep rbfe run --reschedule determines the windows "
                     "again)")
                 cfgs = from_pre_equilibration(schedule)
-                how = {**starting, "windows": "those this leg had"}
-                if restores_its_samples(leg_dir, n_equil + n_prod):
-                    # the samples are taken up from their checkpoint (or analysed as they are): the start they were
-                    # made from is the one the record had (none if it did not name these windows), and how the file
-                    # was made again is said apart. Samples that are started anew have the start made again
-                    how = {"windows": "those this leg had", **earlier, "start_configurations_made_again": how}
+                # samples taken up as they were made keep their start (unknown without a record of these windows),
+                # and how the file was made now is said apart; samples started anew start from these (reviews of
+                # PR #18)
+                how = kept_start_record(leg_dir, schedule, settings, n_equil + n_prod,
+                                        {**starting, "windows": "those this leg had"}, log)
             elif goes_on_from_its_samples(leg_dir):
                 refuse_samples_without_windows(leg_dir)
             elif ls.mode == "fixed":

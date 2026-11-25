@@ -103,6 +103,24 @@ def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, onl
                             f"solvent leg, which {', '.join(missing)} does not have yet: run the solvent leg first")
 
 
+def check_legs_have_their_windows(out_dir: Path, edges, repeats: int, only_legs) -> None:
+    """Before a run moves or writes anything: every leg it runs that has samples (or the checkpoint of their start)
+    has the schedule of their windows (:func:`cufep.engine.leg.check_samples_have_their_windows`), so that a leg is
+    not refused after its result was set aside (fifth review of PR #18, the class of the ABFE's)."""
+    from cufep.alchemy.schedule import Schedule
+    from cufep.engine.leg import check_samples_have_their_windows
+
+    for a, b in edges:
+        for r in range(repeats):
+            for leg in ("solvent", "complex"):
+                if only_legs and leg not in only_legs:
+                    continue
+                leg_dir = out_dir / "edges" / edge_name(a, b) / f"repeat_{r}" / leg
+                sched = leg_dir / "schedule.yaml"
+                check_samples_have_their_windows(
+                    leg_dir, [state.to_dict() for state in Schedule.load(sched).states] if sched.exists() else None)
+
+
 def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None) -> dict:
     """Run the whole relative calculation. Safe to call again to resume."""
     from cufep.run import lock_output_directory
@@ -147,6 +165,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     # of the run whose results the directory holds (review of PR #17)
     for a, b in edges:
         prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
+    if not reschedule:
+        check_legs_have_their_windows(out_dir, selected, rcfg.sampling.repeats, only_legs)
     experiment = experiment_of(rcfg, ligands)
     write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
     publish_text(out_dir / "auto_report.md", report.to_markdown())

@@ -197,10 +197,55 @@ def test_an_abfe_leg_keeps_its_windows_by_the_checks_of_the_engine(tmp_path, mon
         # the same samples, analysed again (a free energy, or none for windows that the samples do not connect)
         assert str(again["delta_g_decouple"]) == str(first["delta_g_decouple"])
 
+        # fifth review: a schedule given (lambda_schedule.file) that is the one of the samples, taken from their
+        # checkpoint: the start of the samples is kept as for the leg's own schedule
+        own = (leg_dir / "schedule.yaml").read_text()
+        (tmp_path / "given.yaml").write_text(own)
         (leg_dir / "schedule.yaml").unlink()
-        starts = (leg_dir / "start_configs.npz").read_bytes()
-        refused = run_leg_safe(job(cfg))
-        assert "no schedule.yaml" in refused["error"], refused["error"]
-        assert not (leg_dir / "schedule.yaml").exists() and (leg_dir / "start_configs.npz").read_bytes() == starts
+        _one_start_short(leg_dir)
+        given = cfg.model_copy(update={"lambda_schedule": cfg.lambda_schedule.model_copy(
+            update={"file": tmp_path / "given.yaml"})})
+        taken = run_leg_safe(job(given))
+        assert "error" not in taken, taken
+        assert taken["start_configurations"] == first["start_configurations"]
+
+        # fifth review: no record of the start configurations at all (the file is lost): the samples are taken up
+        # from their checkpoint, their start is not known, and the run goes on (it stopped with a KeyError)
+        (leg_dir / "start_configs.npz").unlink()
+        unknown = run_leg_safe(job(cfg))
+        assert "error" not in unknown, unknown
+        assert unknown["start_configurations"] is None
+
+        # fifth review: a finished leg whose schedule is lost is refused by the run before its result is set aside
+        from cufep import run as run_module
+        from cufep.config.auto import AutoReport
+        from cufep.prep.ligand import load_ligands
+
+        (leg_dir / "schedule.yaml").unlink()
+        result = (leg_dir / "result.json").read_bytes()
+        ligand = load_ligands(tmp_path / "ligand.sdf")[0]
+        monkeypatch.setattr(run_module, "plan", lambda config, log, ligs=None: (config, AutoReport(), None,
+                                                                                 [ligand]))
+        with pytest.raises(Exception, match="no schedule.yaml"):
+            run_module.run(cfg, only_legs=["solvent"], log=lambda line: None)
+        assert (leg_dir / "result.json").read_bytes() == result and not (leg_dir / "schedule.yaml").exists()
     finally:
         cpu.setPropertyDefaultValue("DeterministicForces", before_default)
+
+
+def test_samples_that_do_not_record_their_conditions_are_taken_up_as_they_are(tmp_path):
+    """Fifth review of PR #18: samples of an earlier version, which do not record their conditions, are analysed as
+    they are (cufep.workflow.sample_leg); without a checkpoint they were taken for samples started anew."""
+    import numpy as np
+
+    from cufep.engine.leg import restores_its_samples
+    from cufep.sampling.storage import LegStorage
+
+    hrex = tmp_path / "leg" / "hrex"
+    storage = LegStorage(hrex, 2, 2)
+    for _ in range(3):
+        storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+    storage.close()
+    assert not (hrex / "checkpoint.npz").exists()
+    assert restores_its_samples(tmp_path / "leg", total=10)
+
