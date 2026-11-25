@@ -64,6 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
+- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`): relative binding free energies, `cufep rbfe`. Not run yet.
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan).
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
@@ -82,8 +83,7 @@ Open items:
   row "Starts of the complex leg"). Start A is the default of the complex leg since 2026-11-22:
   its three runs differ by 0.30 kcal/mol at most; B and C, with as many and more windows, by
   2.07 and 5.02, and that is not explained (C is not investigated, the owner's order).
-- Plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (done, PR #8): by the
-  owner's order no unit tests, GPU tests or reviews were run for it (no file of `src/` changed).
+- Plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (done, PR #8): by the owner's order no unit tests, GPU tests or reviews were run for it (no file of `src/` changed).
 - Workers during the precalculation of adaptive lambda scheduling (both runs of PR #8; no fix yet):
   a leg asks once for one worker per window of its start and keeps them through all iterations
   (`request_devices(..., pinned=True)` in `src/cufep/workflow.py`). With a start of 30 windows two
@@ -111,6 +111,16 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [design] Plan: relative binding free energies, `cufep rbfe`
+- What: the owner's order. A second product in the same package and image: hybrid topology with the
+  lambda functions and soft-core of OpenFE's protocol, Kartograf mapping, adaptive lambda scheduling
+  as the paper sets it for relative transformations (9 windows, 0.04), 5 ns per window, REST2, the
+  bilayer as the ABFE has it; ddG per edge, DG by the MLE of the network with the experimental mean
+  (default) or a cuFEP ABFE of a reference ligand. Its own YAML. Shared code generalised so that the
+  ABFE gives the same numbers. Examples: TYK2 and A2A in the bilayer, three compounds each.
+- Why: the owner's order of 2026-11-25; the two choices (DG reference, place) are the owner's answers.
+- Refs: `docs/plans/2026-11-25-rbfe.md`
 
 ### 2026-11-25 — [design] The owner's decision: the runs stop, no default changes for now
 - What: after the four runs with grand canonical moves of water (the entry below) the owner stops the
