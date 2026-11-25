@@ -254,3 +254,46 @@ def test_a_leg_of_this_run_without_a_free_energy_is_a_failure_of_the_run():
     assert failed_jobs(results) == ["a~b/r0/solvent: boom", "a~b/r0/complex: no free energy",
                                     "b~c/r0/complex: no free energy"]
 
+
+
+def _prepared(out_dir, edge: str, ligand_a: str, ligand_b: str) -> None:
+    import json
+
+    d = out_dir / "edges" / edge / "prep"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "prep.json").write_text(json.dumps({"made_from": {"ligand_a": ligand_a, "ligand_b": ligand_b}}))
+
+
+def test_a_ligand_of_one_name_in_two_edges_must_be_one_molecule_for_a_network(tmp_path):
+    """Third review of PR #17: A~B was run, then B was given another protonation state under its name and B~C was
+    run in the same directory: the two B were one node, and the dG of A, B and C were made from both. The records of
+    the prepared edges name the molecule of each end; one name of two molecules gives the ddG of each edge and no
+    network."""
+    from cufep.rbfe.run import combine_network, result_lines
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "b~c", 0, _leg_result(-8.0), _leg_result(-9.0))
+    _prepared(tmp_path, "a~b", "digest-a", "digest-b1")
+    _prepared(tmp_path, "b~c", "digest-b2", "digest-c")
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {})
+    assert [e.get("ddg") for e in summary["edges"]] == [pytest.approx(-1.5), pytest.approx(1.0)]
+    assert summary["dg"] is None and any("ligand b" in item for item in summary["inconsistent_edges"])
+    # the reason is said once (third review of PR #17: it was printed twice)
+    lines = result_lines(summary)
+    assert sum("NO NETWORK" in line for line in lines) == 1
+
+
+def test_the_table_gives_the_overlap_among_the_samples_of_the_estimate(tmp_path):
+    """Third review of PR #17: the check behind NOT RELIABLE is made on the overlap of all iterations and on that of
+    the samples MBAR estimates from; with 0.12 and 0.001 the table gave 0.12 next to NOT RELIABLE. It gives both."""
+    import csv
+
+    from cufep.rbfe.run import combine_network, write_results
+
+    complex_ = _leg_result(1.0, overlap=0.12)
+    complex_["quality"]["overlap"].update(ok=False, used={"lowest": 0.001, "ok": False})
+    _write_legs(tmp_path, "a~b", 0, complex_, _leg_result(0.0))
+    write_results(tmp_path, combine_network(tmp_path, ["a", "b"], [("a", "b")], 1, {}))
+    row = next(csv.DictReader((tmp_path / "edges.csv").open()))
+    assert float(row["lowest_overlap_complex"]) == pytest.approx(0.12)
+    assert float(row["lowest_overlap_used_complex"]) == pytest.approx(0.001) and row["not_reliable"] == "complex"
