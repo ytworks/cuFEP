@@ -597,6 +597,22 @@ def test_start_configurations_made_again_are_the_start_of_samples_started_anew_l
                                              devices=[None], config=independent.model_dump(mode="json"),
                                              production_ns=2 * rcfg.sampling.production_ns, inline=True))
     assert "error" in refused and (leg_dir / "start_configs.npz").read_bytes() == starts
+    # eighth review: the samples it had could not be emptied (the manifest was not replaced): they stay, and so does
+    # the record of their start
+    from cufep.sampling import storage as storage_module
+
+    rows = storage_module.stored_conditions(leg_dir / "hrex")[0]
+    truncate = storage_module.LegStorage.truncate
+
+    def not_emptied(self, n):
+        raise OSError("the manifest could not be replaced")
+
+    monkeypatch.setattr(storage_module.LegStorage, "truncate", not_emptied)
+    assert "manifest" in run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))["error"]
+    monkeypatch.setattr(storage_module.LegStorage, "truncate", truncate)
+    assert storage_module.stored_conditions(leg_dir / "hrex")[0] == rows
+    assert (leg_dir / "start_configs.npz").read_bytes() == starts
+
     # seventh review: stopped right after the replica exchange wrote the checkpoint of its new start; the retry restores
     # that checkpoint, and the result says the start made again
     from cufep.sampling import hrex

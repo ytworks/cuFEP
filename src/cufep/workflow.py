@@ -2610,12 +2610,12 @@ def sample_leg(spec, hrex_dir: Path, job, configs, n_equil: int, total: int, cfg
         if not sampler.restore():
             # the samples start from these configurations: their record says how they were made. After the
             # replica exchange accepted the leg (a refusal keeps the start of earlier samples, sixth review of
-            # PR #18) and before initialize writes the checkpoint of the start, from which a retry restores
-            # without coming here again (seventh review)
+            # PR #18), after the samples it had were emptied (a failure there keeps them and their start, eighth
+            # review), and before the checkpoint of the start is written, from which a retry restores without
+            # coming here again (seventh review)
             from cufep.engine.leg import record_the_start_used
 
-            record_the_start_used(Path(hrex_dir).parent)
-            sampler.initialize(*configs)
+            sampler.initialize(*configs, on_start=lambda: record_the_start_used(Path(hrex_dir).parent))
         else:
             log(f"resumed at iteration {sampler.iteration}")
         # before the first iteration: what an analysis of an interrupted run needs to know

@@ -444,7 +444,7 @@ class ReplicaExchangeSampler:
 
     # -- state ------------------------------------------------------------------------
     def initialize(self, positions: np.ndarray, boxes: np.ndarray, velocities: np.ndarray | None = None,
-                   water_on: np.ndarray | None = None) -> None:
+                   water_on: np.ndarray | None = None, on_start=None) -> None:
         """Start the run: set replica coordinates, one configuration for all or one per replica.
 
         ``water_on`` (a leg with grand canonical moves of water): which waters interact, for all
@@ -452,7 +452,9 @@ class ReplicaExchangeSampler:
 
         The storage is emptied: samples of a run that was interrupted before its first
         checkpoint would otherwise stay in front of the samples of this one. A checkpoint of
-        the start is written, so that such an interruption resumes from here.
+        the start is written, so that such an interruption resumes from here. ``on_start`` is called
+        after the samples were emptied and before that checkpoint is written: what the files of the leg
+        say of the start of its samples follows then (eighth review of PR #18).
         """
         if self.unrecorded:
             self.storage.refuse_unrecorded()
@@ -479,6 +481,8 @@ class ReplicaExchangeSampler:
             if on.shape[-1] != self.arrays.won.shape[-1] or on.ndim > 2 or (on.ndim == 2 and len(on) != self.k):
                 raise SamplerError("the list of the waters that interact does not match this leg")
             self.arrays.won[self.cur] = np.broadcast_to(on, (self.k, on.shape[-1]))
+        if on_start is not None:
+            on_start()
         self.checkpoint(must=True)
 
     def restore(self) -> bool:
