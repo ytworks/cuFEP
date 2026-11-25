@@ -78,3 +78,129 @@ def test_the_timing_of_a_run_names_each_leg_by_its_job(tmp_path):
     write_timing(tmp_path, jobs, 0.0, 1.0, Monitor(), False, lines.append)
     assert any(line.startswith("timing: a~b/r0/complex: 9 lambda windows") for line in lines)
     assert any(line.startswith("timing: c/r0/solvent: 9 lambda windows") for line in lines)
+
+
+def _abfe_solvent_leg(tmp_path):
+    """A solvent leg of the ABFE end to end on the CPU platform (benzene next to an alanine dipeptide, Gasteiger
+    charges), adaptive lambda scheduling started by its walk."""
+    import json as _json
+    import random
+
+    import numpy as np
+    import openmm as mm
+    import openmm.app as app
+    import openmm.unit as u
+    from conftest import _DIPEPTIDE_BONDS, _DIPEPTIDE_HEAVY
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep.config.schema import Config
+    from cufep.prep.ligand import load_ligands
+    from cufep.prep.protein import PreparedProtein
+    from cufep.workflow import LegJob, prepare_ligand
+
+    random.seed(20261126)
+    top, pos = app.Topology(), []
+    chain, previous_c = top.addChain("A"), None
+    for number, res_name in enumerate(("ACE", "ALA", "NME"), start=1):
+        res, local = top.addResidue(res_name, chain, str(number)), {}
+        for rn, name, element, xyz in _DIPEPTIDE_HEAVY:
+            if rn == res_name:
+                local[name] = top.addAtom(name, app.Element.getBySymbol(element), res)
+                pos.append(mm.Vec3(*(0.1 * np.array(xyz) + 1.0)))
+        for a, b in _DIPEPTIDE_BONDS[res_name]:
+            top.addBond(local[a], local[b])
+        if previous_c is not None:
+            top.addBond(previous_c, local["N"])
+        previous_c = local["C"] if res_name != "NME" else None
+    mod = app.Modeller(top, pos * u.nanometer)
+    mod.addHydrogens(app.ForceField("amber14/protein.ff14SB.xml", "amber14/tip3p.xml"),
+                     platform=mm.Platform.getPlatformByName("Reference"))
+    protein = PreparedProtein(mod.topology, mod.positions, None, {"A": "A"})
+    mol = Chem.AddHs(Chem.MolFromSmiles("c1ccccc1"))
+    AllChem.EmbedMolecule(mol, randomSeed=7)
+    xyz = mol.GetConformer().GetPositions()
+    for i, row in enumerate(xyz - xyz.mean(axis=0) + np.array([14.0, 16.0, 14.0])):
+        mol.GetConformer().SetAtomPosition(i, row.tolist())
+    mol.SetProp("_Name", "benzene")
+    w = Chem.SDWriter(str(tmp_path / "ligand.sdf"))
+    w.write(mol)
+    w.close()
+    lig = load_ligands(tmp_path / "ligand.sdf")[0]
+    out = tmp_path / "run"
+    (out / "cache").mkdir(parents=True)
+    (out / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
+        _json.dumps({"charges": [-0.13] * 6 + [0.13] * 6}))
+    (tmp_path / "protein.pdb").write_text("REMARK built in the test\n")
+    short = {"nvt_ns": 0.002, "npt_ns": 0.002, "md_ns": 0.004}
+    data = {"system": {"protein": str(tmp_path / "protein.pdb"), "ligand": str(tmp_path / "ligand.sdf")},
+            "backend": {"name": "openmm", "platform": "CPU"}, "dynamics": {"cutoff_nm": 0.6},
+            "solvation": {"box_shape": "cube", "padding_complex_nm": 0.8, "padding_solvent_nm": 0.8},
+            "thermodynamics": {"ionic_strength_M": 0.0},
+            "sampling": {"production_ns": 0.005, "equilibration_ns": 0.0025, "time_per_iteration_ps": 0.25,
+                         "checkpoint_interval_ps": 1.0, "pre_equilibration": {"complex": short, "solvent": short}},
+            "analysis": {"error_blocks": [2], "part_error_blocks": 2, "convergence_points": 2, "convergence_blocks": 2},
+            "lambda_schedule": {"mode": {"complex": "fixed", "solvent": "adaptive"}, "adaptive": {
+                "initial_windows": {"solvent": {"discharge": 2, "vanish": 2}}, "candidates": 11, "window_ps": 0.5,
+                "equilibration_ps": 0.0, "sample_interval_ps": 0.1, "walk_ps": 0.2, "overlap_threshold": 0.001}},
+            "restraints": {"selection": "auto"},
+            "resources": {"gpus": [], "cpu_threads_per_worker": 1}, "output": {"dir": str(out)}}
+    cfg = Config.model_validate(data)
+    lig_dir = out / "benzene"
+    prepare_ligand(cfg, lig, protein, lig_dir, False, "cube", print)
+
+    def job(config) -> LegJob:
+        return LegJob(ligand="benzene", leg="solvent", repeat=0, lig_dir=str(lig_dir), devices=[None],
+                      config=config.model_dump(mode="json"), production_ns=config.sampling.production("solvent"),
+                      inline=True)
+
+    return cfg, job, lig_dir / "repeat_0" / "solvent"
+
+
+def _one_start_short(leg_dir) -> None:
+    import numpy as np
+
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+
+
+def test_an_abfe_leg_keeps_its_windows_by_the_checks_of_the_engine(tmp_path, monkeypatch):
+    """The class of the reviews of PR #18 in the ABFE: a leg whose start configurations are one window short and whose
+    replica exchange goes on from its samples (or the checkpoint of their start) is checked before anything is
+    written (another way of exchange: refused, files unchanged), keeps the start its samples were made from (the
+    walk), and samples without a schedule are refused before new windows are written."""
+    import openmm as mm
+
+    from cufep.workflow import run_leg_safe
+
+    cpu = mm.Platform.getPlatformByName("CPU")
+    before_default = cpu.getPropertyDefaultValue("DeterministicForces")
+    cpu.setPropertyDefaultValue("DeterministicForces", "true")
+    try:
+        cfg, job, leg_dir = _abfe_solvent_leg(tmp_path)
+        first = run_leg_safe(job(cfg))
+        assert "error" not in first, first
+        assert first["start_configurations"].startswith("walk,")
+
+        _one_start_short(leg_dir)
+        unchanged = {name: (leg_dir / name).read_bytes() for name in ("schedule.yaml", "start_configs.npz")}
+        independent = cfg.model_copy(update={"sampling": cfg.sampling.model_copy(update={"exchange": "none"})})
+        refused = run_leg_safe(job(independent))
+        assert "other conditions" in refused["error"], refused["error"]
+        assert all((leg_dir / name).read_bytes() == data for name, data in unchanged.items())
+
+        again = run_leg_safe(job(cfg))
+        assert "error" not in again, again
+        assert again["start_configurations"] == first["start_configurations"]
+        # the same samples, analysed again (a free energy, or none for windows that the samples do not connect)
+        assert str(again["delta_g_decouple"]) == str(first["delta_g_decouple"])
+
+        (leg_dir / "schedule.yaml").unlink()
+        starts = (leg_dir / "start_configs.npz").read_bytes()
+        refused = run_leg_safe(job(cfg))
+        assert "no schedule.yaml" in refused["error"], refused["error"]
+        assert not (leg_dir / "schedule.yaml").exists() and (leg_dir / "start_configs.npz").read_bytes() == starts
+    finally:
+        cpu.setPropertyDefaultValue("DeterministicForces", before_default)

@@ -213,6 +213,86 @@ def with_fallback(run: LegRun, backend_name: str, run_with):
         return run_with("openmm"), "openmm"
 
 
+def goes_on_from_its_samples(leg_dir: Path) -> bool:
+    """Whether the replica exchange of a leg goes on from what its directory holds (its samples, or the checkpoint
+    of its start, which is written before the first sample, :meth:`ReplicaExchangeSampler.initialize`) and not
+    from the start configurations of its windows (third review of PR #18)."""
+    from cufep.sampling.storage import stored_conditions
+
+    return stored_conditions(Path(leg_dir) / "hrex")[0] > 0 or (Path(leg_dir) / "hrex" / "checkpoint.npz").exists()
+
+
+def restores_its_samples(leg_dir: Path, total: int) -> bool:
+    """Whether the replica exchange of a leg takes up the samples it has as they are made, from where they began: it
+    restores their checkpoint (also the one of their start, before the first sample), or analyses a leg that has all
+    its ``total`` iterations as it is (:func:`cufep.workflow.sample_leg`). Samples without a checkpoint that are not
+    complete are not continued: the replica exchange starts anew from the start configurations, and their record is
+    of those (fourth review of PR #18)."""
+    from cufep.workflow import leg_is_complete
+
+    hrex = Path(leg_dir) / "hrex"
+    return (hrex / "checkpoint.npz").exists() or leg_is_complete(hrex, total)
+
+
+def check_kept_windows(leg_dir: Path, schedule, conditions: dict, refuse_unrecorded: bool = True) -> None:
+    """Before anything of a leg is written for windows it keeps (start configurations made again, a schedule
+    taken): if its replica exchange goes on from its samples (:func:`goes_on_from_its_samples`), the windows must
+    be those of its samples and every condition they were made under that of the replica exchange of this run
+    (``conditions``: ``LegSpec.conditions()``), as the replica exchange compares them when it opens the samples,
+    after the files would have been written (reviews of PR #18). Raises WorkflowError or ConditionsError; returns
+    for a leg that does not go on from samples. Samples that do not record their conditions (an earlier version of
+    the ABFE) are refused with ``refuse_unrecorded``, else left to the checks of their own."""
+    from cufep.sampling.storage import _same, conditions_differences, other_conditions, stored_layout
+    from cufep.workflow import WorkflowError
+
+    if not goes_on_from_its_samples(leg_dir):
+        return
+    hrex = Path(leg_dir) / "hrex"
+    parts, attrs = stored_layout(hrex)
+    stored = attrs.get("conditions")
+    if not isinstance(stored, dict):
+        if refuse_unrecorded:
+            raise WorkflowError(f"the samples in {hrex} do not record their conditions; nothing was changed")
+        return
+    if not _same(stored.get("states"), [state.to_dict() for state in schedule.states]):
+        raise WorkflowError(f"the lambda windows of {Path(leg_dir) / 'schedule.yaml'} are not those of its samples in "
+                            f"{hrex}; nothing was changed (--reschedule starts the leg anew and keeps what it had)")
+    differing = conditions_differences(stored, conditions)
+    if differing:
+        raise other_conditions(sum(rows for _path, rows, _tail, _frames in parts), hrex, differing)
+
+
+def record_of_kept_windows(leg_dir: Path, schedule, settings: dict, log=print) -> dict:
+    """What the record of the start configurations of a leg says of how the start configurations of the windows
+    it keeps were made, if it names these windows (else empty), after checking that they were made with the
+    settings of this run (:func:`cufep.workflow.check_windows_settings`; second review of PR #18). A leg whose
+    replica exchange goes on from its samples keeps this as the start of its samples, and records the start
+    configurations made again apart."""
+    from cufep.sampling.storage import _same
+    from cufep.workflow import check_windows_settings, start_record_of
+
+    start_file = Path(leg_dir) / "start_configs.npz"
+    try:
+        made = start_record_of(start_file) if start_file.exists() else {}
+    except (OSError, ValueError, KeyError):
+        made = {}
+    if made.get("states") is None or not _same(made["states"], [state.to_dict() for state in schedule.states]):
+        return {}
+    check_windows_settings(made, settings, start_file, log)
+    return {key: value for key, value in made.items() if key not in ("settings", "states")}
+
+
+def refuse_samples_without_windows(leg_dir: Path) -> None:
+    """A leg whose replica exchange goes on from samples (or the checkpoint of their start) that has no schedule
+    of their windows cannot be continued: refused before new windows are written (review of PR #18)."""
+    from cufep.workflow import WorkflowError
+
+    if goes_on_from_its_samples(leg_dir):
+        raise WorkflowError(f"{leg_dir} has samples (or the checkpoint of their start) but no schedule.yaml of the "
+                            "windows they are of: the leg cannot be continued; nothing was changed (--reschedule "
+                            "starts it anew and keeps what it had)")
+
+
 def finish_leg(run: LegRun, result: dict, backend_name: str, n_atoms: int, identity: dict) -> None:
     """Write the timing of the leg (a diagnostic, which decides nothing) and its result."""
     from cufep.files import publish_text

@@ -2658,11 +2658,15 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.schedule import Schedule, schedule_from_windows
     from cufep.engine.leg import (
         adaptive_windows,
+        check_kept_windows,
         chosen_backend,
         finish_leg,
         leg_context,
         open_leg,
         pre_equilibrated,
+        record_of_kept_windows,
+        refuse_samples_without_windows,
+        restores_its_samples,
         with_fallback,
     )
     from cufep.mps import thread_percentage
@@ -2914,11 +2918,29 @@ def run_leg(job: LegJob) -> dict:
                 (lambda c: positions_in_cell(eq["positions"], eq["box"], start_box, c.getMolecules())),
                 eq["velocities"], device0, seed)
             t0 = time.perf_counter()
+            # a replica exchange that goes on from samples (or the checkpoint of their start) keeps their windows:
+            # checked before anything is written, as the replica exchange would refuse them only afterwards
+            # (reviews of PR #18, the class of the relative leg's)
+            def production_conditions(windows) -> dict:
+                return leg_spec(cfg, built, [s.to_dict() for s in windows.states], barostat, timestep_fs,
+                                backend_name, seed + 17, name=job.tag, frame_atoms=frame_atoms,
+                                frame_ligand=frame_ligand, frame_ca=frame_ca).conditions()
+
+            if given is None and not sched_file.exists():
+                refuse_samples_without_windows(leg_dir)
+            earlier = None
             if given is not None or sched_file.exists() or ls.mode_of(job.leg) == "fixed":
                 # the windows are given: only make a start configuration for each of them
                 if given is not None:
                     schedule = given
+                    check_kept_windows(leg_dir, schedule, production_conditions(schedule), refuse_unrecorded=False)
                 elif sched_file.exists():
+                    kept = _schedule_of_this_leg(sched_file, job.leg, stages)
+                    check_scale(kept)
+                    check_kept_windows(leg_dir, kept, production_conditions(kept), refuse_unrecorded=False)
+                    # the start of samples that are taken up as they are made (their checkpoint, or a complete leg)
+                    earlier = (record_of_kept_windows(leg_dir, kept, windows_settings(cfg), log)
+                               if restores_its_samples(leg_dir, n_equil + n_prod) else None)
                     schedule = own_schedule(leg_dir, job.leg, stages, ligand=job.ligand, repeat=job.repeat,
                                             seed=seed, backend=backend_name)
                 else:
@@ -2927,6 +2949,14 @@ def run_leg(job: LegJob) -> dict:
                 check_scale(schedule)                      # before anything is written for these windows
                 cfgs = _walk_schedule(ctx, integ, schedule, ls.fixed_walk_ps, timestep_fs)
                 made_with = given_windows_record(ls.fixed_walk_ps, schedule, found_in_leg)
+                if earlier is not None:
+                    # the samples go on from their checkpoint: their start is the one the record had (none if it did
+                    # not name these windows); how the file was made again is said apart (reviews of PR #18)
+                    again = {key: made_with[key] for key in ("start_configurations", "walk_ps") if key in made_with}
+                    origin = ({"origin_not_recorded": made_with["origin_not_recorded"]}
+                              if "origin_not_recorded" in made_with and not earlier else {})
+                    made_with = {"windows": made_with["windows"], **origin, **earlier,
+                                 "start_configurations_made_again": again}
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
 

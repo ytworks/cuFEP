@@ -522,3 +522,37 @@ def test_a_leg_stopped_at_the_checkpoint_of_its_start_keeps_the_start_it_was_mad
     result = run_hybrid_leg_safe(job)
     assert "error" not in result, result
     assert result["start_configurations"].startswith("walk")
+
+
+def test_samples_started_anew_without_their_checkpoint_have_the_start_made_again(tmp_path, monkeypatch,
+                                                                              deterministic_cpu):
+    """Fourth review of PR #18: a leg with samples that are not complete and no checkpoint (it was lost), whose start
+    configurations are one window short, is started anew by the replica exchange from the start configurations made
+    again (the samples it had are not continued); its result says that start, not the walk of the samples it had."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import PRE_EQUILIBRATION_START, EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "adaptive")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def job(production_ns: float) -> EdgeLegJob:
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                          config=rcfg.model_dump(mode="json"), production_ns=production_ns, inline=True)
+
+    first = run_hybrid_leg_safe(job(rcfg.sampling.production_ns))
+    assert first["start_configurations"].startswith("walk")
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    (leg_dir / "hrex" / "checkpoint.npz").unlink()
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    longer = run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))        # not complete: started anew
+    assert "error" not in longer, longer
+    assert longer["start_configurations"] == PRE_EQUILIBRATION_START
