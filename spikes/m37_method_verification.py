@@ -39,8 +39,10 @@ from cufep.analysis.mbar import counted_samples  # noqa: E402
 KCAL = 4.184
 PRODUCTION_NS = 5.0
 
+# experiment and published prediction: the columns exp_dg_kcal_mol and the prediction of the benchmark files
+# (benchmarks/tyk2/ligands.csv, benchmarks/a2a/ligands.csv)
 GROUPS = [
-    {"system": "ejm_31, TIP3P", "ligand": "ejm_31", "experiment": -9.54, "fepplus": -9.91, "runs": [
+    {"system": "ejm_31, TIP3P", "ligand": "ejm_31", "experiment": -9.54, "published_prediction": -9.91, "runs": [
         ("control", "runs/tyk2_als_eeb2351_1", "eeb2351", "als"),
         ("method", "runs/tyk2_tl_eeb2351_1", "eeb2351", "thermodynamic_length"),
         ("method", "runs/tyk2_tl_eeb2351_2", "eeb2351", "thermodynamic_length"),
@@ -49,11 +51,11 @@ GROUPS = [
         ("stored", "runs/tyk2_windows_a_5e2cf33_2", "5e2cf33", "als"),
         ("stored", "runs/tyk2_windows_a_5e2cf33_3", "5e2cf33", "als"),
         ("stored", "runs/benchmark_tyk2_full_e77a6c5", "e77a6c5", "als")]},
-    {"system": "ejm_31, OPC", "ligand": "ejm_31", "experiment": -9.54, "fepplus": -9.91, "runs": [
+    {"system": "ejm_31, OPC", "ligand": "ejm_31", "experiment": -9.54, "published_prediction": -9.91, "runs": [
         ("control", "runs/tyk2_als_opc_eeb2351_1", "eeb2351", "als"),
         ("method", "runs/tyk2_tl_opc_eeb2351_1", "eeb2351", "thermodynamic_length"),
         ("stored", "runs/benchmark_tyk2_full_opc_29fb9df", "29fb9df", "als")]},
-    {"system": "A2A 4e, bilayer", "ligand": "4e", "experiment": -12.074, "fepplus": -11.010, "runs": [
+    {"system": "A2A 4e, bilayer", "ligand": "4e", "experiment": -12.074, "published_prediction": -11.010, "runs": [
         ("control", "runs/a2a_als_eeb2351_1", "eeb2351", "als"),
         ("method", "runs/a2a_tl_eeb2351_1", "eeb2351", "thermodynamic_length"),
         ("stored", "runs/benchmark_a2a_full_e77a6c5", "e77a6c5", "als")]},
@@ -243,14 +245,16 @@ def main() -> None:
                                                  args.reuse_equal_cost)
             runs.append(entry)
             print(f"{group['system']} {role} {run}: {lig['dg_bind']:.2f} ± {lig['dg_bind_error']:.2f}", flush=True)
-        report.append({k: group[k] for k in ("system", "ligand", "experiment", "fepplus")} | {"runs": runs})
+        keys = ("system", "ligand", "experiment", "published_prediction")
+        report.append({k: group[k] for k in keys} | {"runs": runs})
     (out / "report.json").write_text(json.dumps(report, indent=1))
     print_tables(report)
 
 
 def print_tables(report: list) -> None:
     for g in report:
-        print(f"\n## {g['system']} (experiment {g['experiment']:.2f}, FEP+ {g['fepplus']:.2f})\n")
+        print(f"\n## {g['system']} (experiment {g['experiment']:.2f}, "
+              f"published prediction {g['published_prediction']:.2f})\n")
         print("| run | role | dG | dG - exp | complex | solvent | release | windows | precalc windows run | "
               "simulated ns (precalc + production) |")
         print("|---|---|---|---|---|---|---|---|---|---|")
