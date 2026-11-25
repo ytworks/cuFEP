@@ -133,6 +133,27 @@ class HybridLambdaSchedule(_Section):
         return _check_stage(v)
 
 
+def initial_window_problems(schedule: HybridLambdaSchedule) -> list[str]:
+    """Why adaptive lambda scheduling could not start from ``initial_windows`` (review of PR #17: nine windows to
+    start with and ``max_windows: 2`` were accepted, and the precalculation ran nine): the windows must be
+    candidates, and no more than ``max_windows``. The rule of the ABFE
+    (:func:`cufep.config.schema.initial_window_problems`)."""
+    from cufep.alchemy.candidates import initial_window_indices
+
+    if schedule.mode != "adaptive":
+        return []
+    a = schedule.adaptive
+    try:
+        n = len(initial_window_indices(a.initial_windows, a.candidates))
+    except ValueError as exc:
+        return [f"lambda_schedule.adaptive.initial_windows: {exc} (lambda_schedule.adaptive.candidates = "
+                f"{a.candidates})"]
+    if n > a.max_windows:
+        return [f"lambda_schedule.adaptive.initial_windows gives {n} lambda windows to start with, more than "
+                f"lambda_schedule.adaptive.max_windows = {a.max_windows}"]
+    return []
+
+
 class RbfeSampling(SamplingConfig):
     #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol
     production_ns: float = 5.0
@@ -181,6 +202,9 @@ class RbfeConfig(_Section):
             raise ValueError("membrane.complex_leg: water is a setting of the ABFE; a relative calculation runs the "
                              "complex leg in the bilayer")
         self.shared()                                 # the shared sections agree as the ABFE checks them
+        problems = initial_window_problems(self.lambda_schedule)
+        if problems:
+            raise ValueError("; ".join(problems))
         return self
 
     def shared(self) -> Config:

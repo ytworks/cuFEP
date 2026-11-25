@@ -13,6 +13,11 @@ cufep rbfe run config.yaml       # run (or resume) every edge
 cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have; writes nothing
 ```
 
+`cufep rbfe run` ends with exit code 1 when a job of this run failed, 0 otherwise (also when some edges have no
+ddG yet because only some legs were run, `--leg`). A run in a directory that holds results is refused before it
+writes anything if a prepared edge it takes was made from other inputs or settings (protein, ligands, force
+field, solvation, bilayer, cutoff, ionic strength, pH ...).
+
 ## Inputs
 
 - `system.protein`: the protein PDB, prepared as for the ABFE (`docs/protocol.md`, "Inputs").
@@ -29,7 +34,11 @@ cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have
 
 An edge A -> B has two legs, the complex and the ligand in solvent, each a transformation of A into B along
 one coordinate lambda from 0 (A) to 1 (B): ddG = dG(complex) - dG(solvent), with the standard error
-sqrt(se_complex^2 + se_solvent^2).
+sqrt(se_complex^2 + se_solvent^2). The legs of all repeats of an edge must have been made under the same
+conditions (temperature, pressure, prepared systems, correction of the dispersion tail: the check of the ABFE),
+and each must have its standard error; otherwise the edge has no ddG, says why, and the network is made from the
+other edges. The end states A and B are each built in a force field that holds its own ligand alone (two ligands
+of one bonded graph in one force field would share the template of one, with its charges).
 
 ### Atom mapping
 
@@ -97,7 +106,8 @@ OpenFE's relative protocol. One calculation per edge (`sampling.repeats: 1`).
 
 `membrane.enabled` builds the complex leg in a POPC bilayer (Lipid21) as the ABFE does, with the membrane
 barostat; the solvent leg is in water. Ligand B is moved with the rigid motion that the building of the
-system gave ligand A.
+system gave ligand A. With a water of more than three sites the bilayer is built with the 3-site water of the
+lipid patch and given the water of the run afterwards, as in the ABFE.
 
 ## The network
 

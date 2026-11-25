@@ -417,8 +417,12 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
 
     # ---- 5. analysis ---------------------------------------------------------------------------------
     t_analysis = time.perf_counter()
+    from cufep.workflow import record_digest
+
     run_record = {"ligand": job.ligand, "leg": job.leg, "repeat": job.repeat, "backend": backend_name,
                   "timestep_fs": timestep_fs, "notes": list(notes), "origin_not_recorded": [],
+                  # the prepared systems of the edge, which the legs of one ddG must share (edge_result)
+                  "prepared_systems_sha256": record_digest(built.info.get("made_from")),
                   "rest2": {"scale": float(rest2_scale), "hot_protein_atoms": len(built.hot_atoms),
                             "hot_residues": built.hot_residues, "torsion_terms_scaled": hybrid.rest2_torsions,
                             "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}}

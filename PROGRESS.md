@@ -112,6 +112,16 @@ Open items:
 
 ## Change Log
 
+### 2026-11-26 — [amendment] RBFE: the nine findings of the review of PR #17
+- What: each end state in a force field with its own ligand (one template served A and B of one bonded graph:
+  System A had the charges of B in the test); the legs of an edge are checked as the ABFE checks them
+  (temperature, pressure, prepared systems) and a leg without a standard error does not count, the other
+  edges are combined; pH in the record of a prepared edge; the force field of the lipid patch for a 4-site
+  water; prepared edges checked before a run writes anything; exit code from the jobs of the run; the legs in
+  edges.csv from the repeats of the ddG; initial windows within max_windows. Each reproduced first, as a test.
+- Why: the review of PR #17 (2026-11-25); the examples were not affected (no such inputs, no reruns).
+- Refs: `docs/plans/2026-11-25-rbfe.md` (record); `docs/rbfe.md`
+
 ### 2026-11-25 — [progress] RBFE: TYK2 example; the findings of the review of the diff
 - What: TYK2 example on image f6ac3b4 (plan record; Current Status). Review of PR #17: a torsion that a System
   has twice counts twice (it became one, as in OpenFE; the end at lambda 0 was 16.6 kJ/mol off in the test);
