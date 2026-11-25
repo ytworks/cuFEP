@@ -88,6 +88,21 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
     return edges, how
 
 
+def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, only_legs) -> None:
+    """Refuses, before the edges are prepared, a run of complex legs alone that take the windows of the solvent leg
+    (`lambda_schedule.adaptive.legs: solvent`) when a solvent leg has none yet: with no solvent leg to run, the
+    complex leg would wait for ever."""
+    s = rcfg.lambda_schedule
+    if not only_legs or "solvent" in only_legs or s.mode != "adaptive" or s.adaptive.legs != "solvent":
+        return
+    missing = [f"{edge_name(a, b)}/repeat_{r}" for a, b in edges for r in range(rcfg.sampling.repeats)
+               if not all((out_dir / "edges" / edge_name(a, b) / f"repeat_{r}" / "solvent" / f).exists()
+                          for f in ("schedule.yaml", "start_configs.npz"))]
+    if missing:
+        raise WorkflowError("--leg complex with lambda_schedule.adaptive.legs: solvent takes the windows of the "
+                            f"solvent leg, which {', '.join(missing)} does not have yet: run the solvent leg first")
+
+
 def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None) -> dict:
     """Run the whole relative calculation. Safe to call again to resume."""
     from cufep.run import lock_output_directory
@@ -127,6 +142,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     unknown = sorted(set(only_edges or []) - set(names))
     if unknown:
         raise WorkflowError(f"--edge: {', '.join(unknown)} is not an edge of the run (edges: {', '.join(names)})")
+    check_windows_of_the_solvent_leg(rcfg, out_dir, selected, only_legs)
     experiment = experiment_of(rcfg, ligands)
     write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
     publish_text(out_dir / "auto_report.md", report.to_markdown())

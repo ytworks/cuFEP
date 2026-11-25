@@ -198,6 +198,11 @@ class RbfeConfig(_Section):
             "analysis": self.analysis.model_dump(mode="json"),
             "resources": self.resources.model_dump(mode="json"),
             "output": {"dir": str(self.output.dir)},
+            # the complex leg is pre-equilibrated as the ABFE pre-equilibrates the complex leg of a restraint chosen
+            # from interactions (cufep.workflow.pre_equilibration_parts): the solute held in its pose through NVT
+            # and NPT (and through the equilibration of a new bilayer), no free MD; OpenFE starts its relative legs
+            # from the minimised input pose too, and the equilibration of the replica exchange follows
+            "restraints": {"selection": "interactions"},
         })
 
 

@@ -231,3 +231,73 @@ def test_a_window_where_the_other_ligand_interacts_starts_only_after_a_minimisat
             "steps_per_sample": 1, "minimize_steps": 500}
     out = run_window(ctx, integ, task)
     assert np.all(np.isfinite(out["config"][0])) and potential(ctx) < 0.0
+
+
+def _copy_with(system, kind, add):
+    copy = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
+    add(next(f for f in copy.getForces() if isinstance(f, kind)))
+    return copy
+
+
+def test_a_torsion_that_a_system_has_twice_counts_twice_at_its_end(edge):
+    """Regression (review of PR #17): torsions were keyed by their atoms and parameters, as OpenFE keys them, so a
+    term that a System has twice became one term and the end of the hybrid was not that System. One term twice in
+    both Systems, another twice in A only: each end is its System."""
+    from cufep.rbfe.hybrid import make_hybrid_system
+    from cufep.rbfe.states import HybridState
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = edge
+    f = next(f for f in system_a.getForces() if isinstance(f, mm.PeriodicTorsionForce))
+    atoms = next(f.getTorsionParameters(k)[:4] for k in range(f.getNumTorsions())
+                 if set(f.getTorsionParameters(k)[:4]) <= set(core))
+    # phases that give energies far from zero at a planar ring
+    both, only_a = (1, 0.7, 5.0), (2, 0.3, 4.0)
+
+    def twice_in_a(t):
+        for per, phase, k in (both, both, only_a, only_a):
+            t.addTorsion(*atoms, per, phase, k)
+
+    def twice_in_b(t):
+        for _ in range(2):
+            t.addTorsion(*[core[i] for i in atoms], *both)
+
+    sys_a = _copy_with(system_a, mm.PeriodicTorsionForce, twice_in_a)
+    sys_b = _copy_with(system_b, mm.PeriodicTorsionForce, twice_in_b)
+    hybrid = make_hybrid_system(sys_a, pos_a, ligand_a, sys_b, pos_b, ligand_b, core)
+    positions = hybrid.positions
+    h_to_b = {h: j for j, h in hybrid.b_to_hybrid.items()}
+    positions_b = np.array([positions[hybrid.b_to_hybrid[j]] for j in range(sys_b.getNumParticles())])
+    ctx = reference_context(hybrid.system, positions, box)
+    _set(ctx, HybridState(0.0))
+    expected = potential(reference_context(sys_a, positions[: sys_a.getNumParticles()], box)) \
+        + _valence_of(sys_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
+    assert potential(ctx) == pytest.approx(expected, abs=2e-3)
+    _set(ctx, HybridState(1.0))
+    expected = potential(reference_context(sys_b, positions_b, box)) \
+        + _valence_of(sys_a, hybrid.unique_old, positions[: sys_a.getNumParticles()], box)
+    assert potential(ctx) == pytest.approx(expected, abs=2e-3)
+
+
+def test_bonds_and_angles_of_the_environment_that_differ_between_a_and_b_are_refused(edge):
+    """Regression (review of PR #17): the hybrid takes the bonded terms of the environment from A and did not look at
+    those of B. A bond or an angle of the environment in one System only, or with other parameters, is refused; the
+    same term in both is taken."""
+    from cufep.alchemy.factory import AlchemyError
+    from cufep.rbfe.hybrid import make_hybrid_system
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, _box = edge
+    n_a = len(ligand_a)
+    # two oxygens of the water: n_a + 0 and n_a + 3 in A, 0 and 3 in B (B has its ligand last)
+    bond_a = lambda k: lambda f: f.addBond(n_a, n_a + 3, 0.3, k)  # noqa: E731
+    bond_b = lambda k: lambda f: f.addBond(0, 3, 0.3, k)  # noqa: E731
+    same = make_hybrid_system(_copy_with(system_a, mm.HarmonicBondForce, bond_a(100.0)), pos_a, ligand_a,
+                              _copy_with(system_b, mm.HarmonicBondForce, bond_b(100.0)), pos_b, ligand_b, core)
+    assert same.system.getNumParticles() > 0
+    cases = [(system_a, _copy_with(system_b, mm.HarmonicBondForce, bond_b(100.0)), "bond .* in B but not in A"),
+             (_copy_with(system_a, mm.HarmonicBondForce, bond_a(100.0)),
+              _copy_with(system_b, mm.HarmonicBondForce, bond_b(200.0)), "bond .* other parameters"),
+             (_copy_with(system_a, mm.HarmonicAngleForce, lambda f: f.addAngle(n_a, n_a + 3, n_a + 6, 1.9, 50.0)),
+              system_b, "angle .* in A but not in B")]
+    for sys_a, sys_b, message in cases:
+        with pytest.raises(AlchemyError, match=message):
+            make_hybrid_system(sys_a, pos_a, ligand_a, sys_b, pos_b, ligand_b, core)

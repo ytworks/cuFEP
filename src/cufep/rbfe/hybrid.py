@@ -248,6 +248,14 @@ def _pair(i: int, j: int) -> tuple[int, int]:
     return (i, j) if i < j else (j, i)
 
 
+def _same_environment_term(what: str, key, in_a, in_b) -> None:
+    """The bonded terms of the environment are those of A in the hybrid; B must have the same ones."""
+    if in_a is None:
+        raise AlchemyError(f"the environment {what} {key} is in B but not in A")
+    if not np.allclose(in_a, in_b, rtol=1e-9, atol=0.0):
+        raise AlchemyError(f"the environment {what} {key} has other parameters in B than in A: {in_b} and {in_a}")
+
+
 def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.System, positions_b, ligand_b,
                        core_map: dict[int, int], softcore_alpha: float = SOFTCORE_ALPHA, rest2: bool = False,
                        rest2_atoms=()) -> HybridSystem:
@@ -360,7 +368,7 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
         for k in range(f.getNumBonds()):
             i, j, r0, kk = f.getBondParameters(k)
             bonds_b[_pair(b_to_h[i], b_to_h[j])] = (r0.value_in_unit(_NM), kk.value_in_unit(_KJ / _NM ** 2))
-    done = set()
+    done, env_bonds = set(), {}
     if "HarmonicBondForce" in forces_a:
         f = forces_a["HarmonicBondForce"]
         for k in range(f.getNumBonds()):
@@ -368,12 +376,15 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             r0, kk = r0.value_in_unit(_NM), kk.value_in_unit(_KJ / _NM ** 2)
             key = _pair(i, j)
             bonds_hybrid.add(key)
-            if kind(key) == "core":
+            which = kind(key)
+            if which == "core":
                 r0_b, k_b = bonds_b.get(key, (r0, 0.0))
                 core_bonds.addBond(key[0], key[1], [r0, kk, r0_b, k_b])
                 done.add(key)
             else:
                 standard_bonds.addBond(key[0], key[1], r0, kk)
+                if which == "env":
+                    env_bonds[key] = (r0, kk)
     for key, (r0, kk) in bonds_b.items():
         bonds_hybrid.add(key)
         which = kind(key)
@@ -381,6 +392,10 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             standard_bonds.addBond(key[0], key[1], r0, kk)
         elif which == "core" and key not in done:
             core_bonds.addBond(key[0], key[1], [r0, 0.0, r0, kk])
+        elif which == "env":
+            _same_environment_term("bond", key, env_bonds.pop(key, None), (r0, kk))
+    if env_bonds:
+        raise AlchemyError(f"the environment bond {next(iter(env_bonds))} is in A but not in B")
 
     # ---- angles --------------------------------------------------------------------------
     standard_angles = mm.HarmonicAngleForce()
@@ -400,25 +415,32 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             i, j, m, t0, kk = f.getAngleParameters(k)
             angles_b[angle_key(b_to_h[i], b_to_h[j], b_to_h[m])] = (t0.value_in_unit(_RAD),
                                                                    kk.value_in_unit(_KJ / _RAD ** 2))
-    done = set()
+    done, env_angles = set(), {}
     if "HarmonicAngleForce" in forces_a:
         f = forces_a["HarmonicAngleForce"]
         for k in range(f.getNumAngles()):
             i, j, m, t0, kk = f.getAngleParameters(k)
             t0, kk = t0.value_in_unit(_RAD), kk.value_in_unit(_KJ / _RAD ** 2)
             key = angle_key(i, j, m)
-            if kind(key) == "core":
+            which = kind(key)
+            if which == "core":
                 t0_b, k_b = angles_b.get(key, (t0, 0.0))
                 core_angles.addAngle(*key, [t0, kk, t0_b, k_b])
                 done.add(key)
             else:
                 standard_angles.addAngle(*key, t0, kk)
+                if which == "env":
+                    env_angles[key] = (t0, kk)
     for key, (t0, kk) in angles_b.items():
         which = kind(key)
         if which == "new":
             standard_angles.addAngle(*key, t0, kk)
         elif which == "core" and key not in done:
             core_angles.addAngle(*key, [t0, 0.0, t0, kk])
+        elif which == "env":
+            _same_environment_term("angle", key, env_angles.pop(key, None), (t0, kk))
+    if env_angles:
+        raise AlchemyError(f"the environment angle {next(iter(env_angles))} is in A but not in B")
 
     # ---- torsions ------------------------------------------------------------------------
     standard_torsions = mm.PeriodicTorsionForce()
@@ -434,8 +456,10 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             if which == unique:
                 unique_terms.append((atoms, int(per), phase, kk))
             elif which in ("core", "env"):
-                # OpenFE's key: the atoms and the parameters rounded to 12 digits
-                interpolated[(atoms, int(per), round(phase, 12), round(kk, 12))] = (atoms, int(per), phase, kk)
+                # OpenFE's key: the atoms and the parameters rounded to 12 digits; a term that a System has twice
+                # counts twice (OpenFE keeps one of them, and the end would not be that System)
+                interpolated.setdefault((atoms, int(per), round(phase, 12), round(kk, 12)), []).append(
+                    (atoms, int(per), phase, kk))
         return unique_terms, interpolated
 
     old_unique, old_terms = torsion_terms(forces_a["PeriodicTorsionForce"], a_to_h, "old") \
@@ -444,20 +468,20 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
         if "PeriodicTorsionForce" in forces_b else ([], {})
     for atoms, per, phase, kk in old_unique + new_unique:
         standard_torsions.addTorsion(*atoms, per, phase, kk)
-    shared = old_terms.keys() & new_terms.keys()
-    for key in sorted(shared, key=lambda t: (t[0], t[1], t[2], t[3])):
-        atoms, per, phase, kk = new_terms[key]
-        standard_torsions.addTorsion(*atoms, per, phase, kk)
-    for key in sorted(old_terms.keys() - shared, key=lambda t: (t[0], t[1], t[2], t[3])):
-        atoms, per, phase, kk = old_terms[key]
-        if kind(atoms) == "env":
-            raise AlchemyError(f"the environment torsion {atoms} differs between A and B")
-        core_torsions.append((atoms, [per, phase, kk, 0.0, 0.0, 0.0]))
-    for key in sorted(new_terms.keys() - shared, key=lambda t: (t[0], t[1], t[2], t[3])):
-        atoms, per, phase, kk = new_terms[key]
-        if kind(atoms) == "env":
-            raise AlchemyError(f"the environment torsion {atoms} differs between A and B")
-        core_torsions.append((atoms, [0.0, 0.0, 0.0, per, phase, kk]))
+    # a term both ends have (as many times as both have it) is standard; the others go from one end to the other
+    for key in sorted(old_terms.keys() & new_terms.keys()):
+        for atoms, per, phase, kk in new_terms[key][:len(old_terms[key])]:
+            standard_torsions.addTorsion(*atoms, per, phase, kk)
+    for key in sorted(old_terms):
+        for atoms, per, phase, kk in old_terms[key][len(new_terms.get(key, ())):]:
+            if kind(atoms) == "env":
+                raise AlchemyError(f"the environment torsion {atoms} differs between A and B")
+            core_torsions.append((atoms, [per, phase, kk, 0.0, 0.0, 0.0]))
+    for key in sorted(new_terms):
+        for atoms, per, phase, kk in new_terms[key][len(old_terms.get(key, ())):]:
+            if kind(atoms) == "env":
+                raise AlchemyError(f"the environment torsion {atoms} differs between A and B")
+            core_torsions.append((atoms, [0.0, 0.0, 0.0, per, phase, kk]))
 
     # ---- NonbondedForce: charges through offsets, no ligand Lennard-Jones ------------------------
     nb = mm.NonbondedForce()
@@ -647,7 +671,8 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     sc.setNonbondedMethod(mm.CustomNonbondedForce.CutoffPeriodic)
     sc.setCutoffDistance(nb.getCutoffDistance())
     sc.setUseSwitchingFunction(False)
-    # the tail of the ligand-environment Lennard-Jones is restored in the analysis (alchemy/lrc.py), at both ends
+    # no correction of the ligand-environment Lennard-Jones beyond the cutoff, as OpenFE's relative protocol
+    # (`use_dispersion_correction: False` for the hybrid; analysis.lrc: none)
     sc.setUseLongRangeCorrection(False)
     environment = set(env)
     for group in (core_set, old_set, new_set):

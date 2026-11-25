@@ -35,3 +35,37 @@ def test_documented_defaults_are_the_defaults_of_the_code(repo):
 def test_settings_a_relative_run_cannot_take_are_refused_when_read(more, message):
     with pytest.raises(ValueError, match=message):
         RbfeConfig.model_validate(_minimal(**more))
+
+
+def test_the_complex_leg_is_pre_equilibrated_with_the_solute_held_and_no_free_md():
+    """The pre-equilibration of a complex leg of a relative run: the pose that was given, held through NVT and NPT
+    and through the equilibration of a new bilayer, without free MD (docs/rbfe.md, "Sampling")."""
+    from cufep.workflow import pre_equilibration_parts
+
+    rcfg = RbfeConfig.model_validate(_minimal())
+    assert pre_equilibration_parts(rcfg.shared(), "complex", False) == (0.0, True)
+    in_bilayer = RbfeConfig.model_validate(_minimal(membrane={"enabled": True}))
+    assert pre_equilibration_parts(in_bilayer.shared(), "complex", True) == (in_bilayer.membrane.equilibration_ns, True)
+    assert pre_equilibration_parts(rcfg.shared(), "solvent", False) == (rcfg.sampling.pre_equilibration.solvent.md_ns,
+                                                                         False)
+
+
+def test_complex_legs_alone_that_take_the_windows_of_a_solvent_leg_without_them_are_refused(tmp_path):
+    """With `lambda_schedule.adaptive.legs: solvent` a complex leg takes the windows of the solvent leg of its edge;
+    `cufep rbfe run --leg complex` before that leg has them is refused before the edges are prepared (the complex
+    leg would otherwise wait for ever for a solvent leg that is not run)."""
+    from cufep.rbfe.run import check_windows_of_the_solvent_leg
+    from cufep.workflow import WorkflowError
+
+    paper = RbfeConfig.model_validate(_minimal(lambda_schedule={"adaptive": {"legs": "solvent"}}))
+    edges = [("a", "b")]
+    with pytest.raises(WorkflowError, match="a~b/repeat_0"):
+        check_windows_of_the_solvent_leg(paper, tmp_path, edges, ["complex"])
+    for allowed in (None, ["solvent"], ["complex", "solvent"]):
+        check_windows_of_the_solvent_leg(paper, tmp_path, edges, allowed)
+    check_windows_of_the_solvent_leg(RbfeConfig.model_validate(_minimal()), tmp_path, edges, ["complex"])
+    solvent = tmp_path / "edges" / "a~b" / "repeat_0" / "solvent"
+    solvent.mkdir(parents=True)
+    for name in ("schedule.yaml", "start_configs.npz"):
+        (solvent / name).write_text("")
+    check_windows_of_the_solvent_leg(paper, tmp_path, edges, ["complex"])

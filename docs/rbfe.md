@@ -52,7 +52,13 @@ The rules of the HybridTopologyFactory of OpenFE's relative protocol (openfe 1.1
   default lambda functions); the Lennard-Jones of a unique atom goes with the soft-core of Gapsys, Seeliger
   and de Groot (J. Chem. Theory Comput. 2012, 8, 2373), alpha 0.85; charges have no soft-core;
 - a unique atom keeps all its bonded terms at full strength at both ends (a dummy), in both legs alike; the
-  atoms unique to A and those unique to B never interact.
+  atoms unique to A and those unique to B never interact;
+- a pair of core atoms that is an exception of the force field (1-2, 1-3 or 1-4) at one end only, which happens
+  only where the atoms between them change (a linker of another length, a ring opened or closed), has its
+  charge product and Lennard-Jones interpolated linearly between the exception at that end and the normal pair
+  at the other, as OpenFE's hybrid;
+- a bonded term that a System has twice counts twice (OpenFE keeps one of them); the bonds, angles and torsions
+  of the environment are those of A, and an edge whose B has other ones is refused.
 
 How the energy is carried (cuFEP's own; the energies are those of the rules): the NonbondedForce, which the
 cuPotential plugin replaces, holds only the charges of the ligand, as particle parameter offsets under the
@@ -79,7 +85,10 @@ from that without a minimisation: cuFEP's first version did, and those windows w
 
 ### Sampling
 
-The pre-equilibration of the hybrid System at lambda 0 (ligand A, the unique atoms of B dummies), then
+The pre-equilibration of the hybrid System at lambda 0 (ligand A, the unique atoms of B dummies): in the
+solvent leg NVT, NPT and 0.5 ns of MD; in the complex leg the solute held in its pose through NVT and NPT (and
+through `membrane.equilibration_ns` of a new bilayer), without free MD, as OpenFE starts its relative legs from
+the minimised input pose (the settings of `sampling.pre_equilibration` of the ABFE). Then
 Hamiltonian replica exchange with REST2 on the whole hybrid ligand and the pocket (the settings of
 `sampling.rest2` of the ABFE): 1 ns of equilibration and 5 ns of production per window, the defaults of
 OpenFE's relative protocol. One calculation per edge (`sampling.repeats: 1`).

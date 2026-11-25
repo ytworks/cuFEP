@@ -64,7 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`, PR #17): `cufep rbfe` implemented (`docs/rbfe.md`); the dG of every ligand from the edges alone (MLE, the experimental mean, else the mean of the network); examples `examples/rbfe_tyk2`, `examples/rbfe_a2a_membrane`: not run yet. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends.
+- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`, PR #17): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment (the plan's record). A2A example: running. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends.
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
@@ -111,6 +111,14 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [progress] RBFE: TYK2 example; the findings of the review of the diff
+- What: TYK2 example on image f6ac3b4 (plan record; Current Status). Review of PR #17: a torsion that a System
+  has twice counts twice (it became one, as in OpenFE; the end at lambda 0 was 16.6 kJ/mol off in the test);
+  bonds and angles of the environment that differ between A and B are refused; `--leg complex` with
+  `adaptive.legs: solvent` before the solvent leg has windows is refused (it waited for ever); the complex
+  pre-equilibration is stated in `shared()`. One finding rejected: OpenFE also separates unique old and new atoms.
+- Refs: `docs/rbfe.md` ("Hybrid topology", "Sampling"); `test_rbfe_hybrid.py`, `test_rbfe_config.py`
 
 ### 2026-11-25 — [design] RBFE: each leg chooses its own lambda windows (`lambda_schedule.adaptive.legs: each`)
 - What: TYK2 example, image of 58bef64, 8 GPUs, kcal/mol (experiment; FEP+): ddG ejm_31->ejm_46 -1.43 ± 0.32
