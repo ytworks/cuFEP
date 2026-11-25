@@ -7,6 +7,14 @@ preparation of the protein, the bilayer and the water, the pre-equilibration, Ha
 with REST2, adaptive lambda scheduling, the GPU scheduler with NVIDIA MPS, and the analysis of a leg (MBAR
 and its checks, `docs/protocol.md`, "Checks of the analysis"). Its YAML is its own.
 
+The two are two protocols of one engine of a leg (`src/cufep/engine/`): a leg goes from one end state to the
+other through lambda windows, and the engine runs it whatever its states are (the pre-equilibration, the
+backend, the windows and the start configurations of their replicas, the replica exchange, the fallback to stock
+OpenMM, the analysis of the path). The protocol of the ABFE decouples a ligand (stages restrain, discharge,
+vanish); the protocol of a relative leg transforms ligand A into B through a hybrid topology (stage morph). The
+result of a leg gives the free energy along its path as `delta_g` (kJ/mol), with the checks of the analysis and
+the hybrid topology. The sections that mean the same in both YAMLs are one schema (`CommonConfig`).
+
 ```bash
 cufep rbfe plan config.yaml      # ligands, edges and atom mappings, without simulating
 cufep rbfe run config.yaml       # run (or resume) every edge

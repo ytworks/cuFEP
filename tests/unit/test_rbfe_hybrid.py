@@ -228,7 +228,7 @@ def test_a_window_where_the_other_ligand_interacts_starts_only_after_a_minimisat
     ctx, integ = context()
     task = {"state": HybridState(1.0).to_dict(), "config": (positions, box, np.zeros_like(positions)), "stages": [],
             "candidates": 2, "temperature_K": 298.15, "equilibration_steps": 200, "n_samples": 0,
-            "steps_per_sample": 1, "minimize_steps": 500}
+            "steps_per_sample": 1, "minimize_steps": 500, "protocol": "hybrid"}
     out = run_window(ctx, integ, task)
     assert np.all(np.isfinite(out["config"][0])) and potential(ctx) < 0.0
 

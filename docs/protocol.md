@@ -178,6 +178,11 @@ run the same way.
 
 ## Steps of one leg
 
+The steps that do not depend on what a leg transforms (pre-equilibration, backend, lambda windows and the start
+configurations of their replicas, replica exchange, fallback to stock OpenMM, analysis of the path) are those of
+the engine of a leg (`src/cufep/engine/`), which `cufep rbfe` shares (`docs/rbfe.md`); the restraint (step 2)
+and the correction for releasing it are the ABFE's.
+
 1. Pre-equilibration: minimise, 0.25 ns NVT and 0.5 ns NPT on stock OpenMM, then 5 ns NPT
    on the backend of the leg (solvent leg: 0.1, 0.2 and 0.5 ns), with a frame every 20 ps
    and one at the end. A complex leg whose restraint is chosen from interactions
