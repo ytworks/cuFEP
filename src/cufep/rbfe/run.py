@@ -18,7 +18,7 @@ import yaml
 
 from cufep import jsonio
 from cufep.files import publish_text, publish_with
-from cufep.rbfe.config import RbfeConfig
+from cufep.rbfe.config import RbfeConfig, RbfeSampling
 from cufep.rbfe.network import Edge, cycle_closures, edge_ddg, ligand_dg
 from cufep.rbfe.prep import edge_name
 from cufep.workflow import KCAL, WorkflowError, _Log, select_ligands
@@ -307,9 +307,15 @@ def failed_edges(summary: dict) -> list[str]:
 
 def analyse_directory(out_dir: Path) -> dict:
     """The results of a relative run from the results its legs have, as the run makes
-    them; writes nothing."""
+    them; writes nothing. Of the configuration of the run only what combining the results needs is read (the
+    number of repeats): the checks of a configuration are for a run that simulates, and a directory that an
+    earlier version wrote under other checks is analysed all the same (review of PR #18)."""
     out_dir = Path(out_dir)
-    rcfg = RbfeConfig.model_validate(yaml.safe_load((out_dir / "resolved_config.yaml").read_text()))
+    stored = yaml.safe_load((out_dir / "resolved_config.yaml").read_text()) or {}
+    repeats = (stored.get("sampling") or {}).get("repeats", RbfeSampling.model_fields["repeats"].default)
+    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
+        raise WorkflowError(f"{out_dir / 'resolved_config.yaml'}: sampling.repeats is {repeats!r}, not a number of "
+                            "repeats")
     network = json.loads((out_dir / "network.json").read_text())
-    return combine_network(out_dir, network["ligands"], [tuple(e) for e in network["edges"]], rcfg.sampling.repeats,
+    return combine_network(out_dir, network["ligands"], [tuple(e) for e in network["edges"]], repeats,
                            {k: float(v) for k, v in network.get("experiment_kcal_mol", {}).items()})

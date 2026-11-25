@@ -193,8 +193,16 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     from cufep.engine.protocol import HYBRID, stage_state
     from cufep.mps import thread_percentage
     from cufep.rbfe.config import RbfeConfig
+    from cufep.sampling.storage import stored_conditions
     from cufep.sampling.worker import LegSpec
-    from cufep.workflow import _precision, planned_iterations, publish_windows, sample_leg, stored_windows
+    from cufep.workflow import (
+        _precision,
+        _schedule_of_this_leg,
+        planned_iterations,
+        publish_windows,
+        sample_leg,
+        stored_windows,
+    )
 
     rcfg = RbfeConfig.model_validate(job.config)
     run = open_leg(job, rcfg)
@@ -256,6 +264,11 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         return starts_from(run, spec_of(ends, "openmm", seed=seed + 29), schedule, start, hybrid.system, n_atoms,
                            MINIMIZE_STEPS, START_MD_PS)
 
+    def check_scale(schedule) -> None:
+        if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
+            raise WorkflowError("the lambda schedule of this leg was made with a REST2 scale of "
+                                f"{schedule.rest2_scale:g} but sampling.rest2.scale is {rest2.scale:g}")
+
     def run_with(backend: str):
         ls = rcfg.lambda_schedule
         # ---- 3. lambda windows ---------------------------------------------------------------
@@ -268,7 +281,24 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
             a = ls.adaptive
             starting = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
                         "minimize_steps": MINIMIZE_STEPS, "start_backend": "openmm"}
-            if ls.mode == "fixed":
+            if (leg_dir / "schedule.yaml").exists():
+                # the windows this leg has, without start configurations of them (none, or of other windows): its
+                # samples are of these windows, so they are kept and only their start configurations are made
+                # again, whatever lambda_schedule asks now (review of PR #18). A schedule that is not one of this
+                # leg stops the run here, before anything of the leg is written
+                schedule = _schedule_of_this_leg(leg_dir / "schedule.yaml", job.leg, STAGES)
+                check_scale(schedule)
+                log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg has, without "
+                    "the start configurations of them; they are made again for these windows (the settings of "
+                    "lambda_schedule are not applied to them; cufep rbfe run --reschedule determines the windows "
+                    "again)")
+                cfgs = from_pre_equilibration(schedule)
+                how = {**starting, "windows": "those this leg had"}
+            elif stored_conditions(leg_dir / "hrex")[0] > 0:
+                raise WorkflowError(f"{leg_dir} has samples but no schedule.yaml of the windows they are of: the leg "
+                                    "cannot be continued; nothing was changed (cufep rbfe run --reschedule starts it "
+                                    "anew and keeps what it had)")
+            elif ls.mode == "fixed":
                 values = ls.windows
                 schedule = schedule_from_windows(STAGES, {"morph": values},
                                                  {"morph": values if isinstance(values, int) else len(values)},
@@ -299,9 +329,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
             run.timed("lambda_schedule", t0)
             log(f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows in {time.perf_counter() - t0:.0f} s"
                 f" ({how['windows']})")
-        if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
-            raise WorkflowError("the lambda schedule of this leg was made with a REST2 scale of "
-                                f"{schedule.rest2_scale:g} but sampling.rest2.scale is {rest2.scale:g}")
+        check_scale(schedule)
         # ---- 4. replica exchange ----------------------------------------------------------------
         spec = spec_of([s.to_dict() for s in schedule.states], backend, seed=seed + 17, frame_atoms=frame_atoms,
                        frame_ligand=frame_ligand, frame_ca=frame_ca)

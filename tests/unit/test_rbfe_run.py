@@ -178,3 +178,53 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     write_results(out_dir, combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
                                            {"toluene": -5.0, "phenol": -5.6}))
     assert (out_dir / "edges.csv").read_text() == first
+
+
+def test_a_leg_with_samples_keeps_its_windows_when_their_start_configurations_are_made_again(tmp_path, monkeypatch,
+                                                                                            deterministic_cpu):
+    """Review of PR #18 (P1): a leg with samples and its schedule, whose start configurations are one window short,
+    run again with a configuration that asks for other windows. The windows the leg has are kept and only their
+    start configurations are made again, so that its samples are continued (here: analysed as they are); a schedule
+    that is not of this leg stops the run before any file of the leg is written."""
+    from cufep.alchemy.schedule import Schedule
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def job(cfg) -> EdgeLegJob:
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                          config=cfg.model_dump(mode="json"), production_ns=cfg.sampling.production_ns, inline=True)
+
+    first = run_hybrid_leg_safe(job(rcfg))
+    assert "error" not in first, first
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    windows = Schedule.load(leg_dir / "schedule.yaml").states
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    other = rcfg.model_copy(update={"lambda_schedule": rcfg.lambda_schedule.model_copy(update={"windows": 4})})
+    again = run_hybrid_leg_safe(job(other))
+    assert "error" not in again, again
+    assert Schedule.load(leg_dir / "schedule.yaml").states == windows
+    with np.load(leg_dir / "start_configs.npz") as start:
+        assert len(start["positions"]) == len(windows)
+    assert again["delta_g"] == first["delta_g"] and again["lambda_windows"] == first["lambda_windows"]
+
+    # a schedule of another leg: refused before anything of the leg is written
+    text = (leg_dir / "schedule.yaml").read_text().replace("leg: solvent", "leg: complex")
+    (leg_dir / "schedule.yaml").write_text(text)
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    starts = (leg_dir / "start_configs.npz").read_bytes()
+    refused = run_hybrid_leg_safe(job(other))
+    assert "cannot be used for the solvent leg" in refused["error"]
+    assert (leg_dir / "schedule.yaml").read_text() == text and (leg_dir / "start_configs.npz").read_bytes() == starts
