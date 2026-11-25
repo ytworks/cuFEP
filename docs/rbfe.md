@@ -21,9 +21,11 @@ cufep rbfe run config.yaml       # run (or resume) every edge
 cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have; writes nothing
 ```
 
-`cufep rbfe run` ends with exit code 1 when a job of this run failed, 0 otherwise (also when some edges have no
+`cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
+samples do not connect), 0 otherwise (also when some edges have no
 ddG yet because only some legs were run, `--leg`). A run in a directory that holds results is refused before it
-writes anything if a prepared edge it takes was made from other inputs or settings (protein, ligands, force
+writes anything if a prepared edge of the network (one it runs, or one whose results it combines) was made
+from other inputs or settings (protein, ligands, force
 field, solvation, bilayer, cutoff, ionic strength, pH ...).
 
 ## Inputs
@@ -124,6 +126,10 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   2026 planned its networks): edges of score 0.4 or more, every ligand in a cycle.
 - Cycle closure: the sum of the ddG around every cycle of a cycle basis, with its standard error, as
   numbers without a verdict.
+- The edges combined into cycle closures and dG must have been made under the same conditions (temperature,
+  pressure, tail correction) from the same preparation besides their ligands (protein, force field, solvation,
+  bilayer, pH ...); otherwise each edge gives its ddG and the run says what differs, without cycle closures and
+  without dG.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
   of their variance. The edges fix the differences between the ligands; the one constant they leave is set

@@ -142,9 +142,10 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     check_windows_of_the_solvent_leg(rcfg, out_dir, selected, only_legs)
     by_name = {lig.name: lig for lig in ligands}
     box_shape = rcfg.solvation.box_shape
-    # every prepared edge this run takes, before it writes anything: a refused run keeps the record of the run
-    # whose results the directory holds (review of PR #17)
-    for a, b in selected:
+    # every prepared edge of the network, before the run writes anything: those it runs, and those whose results it
+    # combines (second review of PR #17: an edge of another protein was combined); a refused run keeps the record
+    # of the run whose results the directory holds (review of PR #17)
+    for a, b in edges:
         prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
     experiment = experiment_of(rcfg, ligands)
     write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
@@ -167,11 +168,9 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         f"{rcfg.sampling.production_ns:g} ns production")
     gpus = list(rcfg.resources.gpus) if rcfg.resources.gpus else [None]
     results, monitor, mps_used = execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor, log)
-    failed_now = []
-    for r in results:
-        if "error" in r:
-            failed_now.append(f"{r.get('edge')}/r{r.get('repeat')}/{r.get('leg')}")
-            log(f"FAILED {failed_now[-1]}: {r['error']}")
+    failed_now = failed_jobs(results)
+    for line in failed_now:
+        log(f"FAILED {line}")
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log)
     summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, experiment)
     # what the exit code of `cufep rbfe run` says: whether a job of this run failed (review of PR #17)
@@ -219,8 +218,15 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         if no_error:
             out["repeats"].append({"repeat": r, "no_standard_error": no_error})
             continue
-        complete += [(f"{leg} leg of repeat {r}", legs[leg]) for leg in legs]
         c, s = legs["complex"], legs["solvent"]
+        # the two legs of the repeat are compared before they are subtracted (second review of PR #17)
+        pair = [(f"{leg} leg of repeat {r}", legs[leg]) for leg in legs]
+        differ, _ = cycle_differences(pair)
+        if differ:
+            out["repeats"].append({"repeat": r, "inconsistent_legs": differ, "complex_dg": c["delta_g"] / KCAL,
+                                   "solvent_dg": s["delta_g"] / KCAL})
+            continue
+        complete += pair
         ddg, se = edge_ddg(c["delta_g"], c["delta_g_error"], s["delta_g"], s["delta_g_error"])
         out["repeats"].append({
             "repeat": r, "ddg": ddg / KCAL, "se": se / KCAL, "complex_dg": c["delta_g"] / KCAL,
@@ -233,6 +239,8 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             "backend": {leg: legs[leg].get("backend") for leg in legs},
             "warnings": [f"{leg}: {n}" for leg in legs for n in legs[leg].get("notes", [])]})
     inconsistent, not_compared = cycle_differences(complete)
+    inconsistent += [item for r in out["repeats"] for item in r.get("inconsistent_legs", [])
+                     if item not in inconsistent]
     if inconsistent:
         out["inconsistent_legs"] = inconsistent
     if not_compared:
@@ -250,6 +258,49 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         else:
             out["se"] = done[0]["se"]
         out["not_reliable"] = sorted({leg for r in done for leg in r["not_reliable"]})
+        # what the table gives of the legs: over the repeats of the ddG (second review of PR #17: the first only)
+        out["lowest_overlap"] = {leg: min(r["lowest_overlap"][leg] for r in done) for leg in ("complex", "solvent")}
+        out["windows"] = {leg: sorted({r["windows"][leg] for r in done}) for leg in ("complex", "solvent")}
+        out["backend"] = {leg: sorted({str(r["backend"][leg]) for r in done}) for leg in ("complex", "solvent")}
+        # the conditions of the legs, which the edges of one network must share (combine_network)
+        out["conditions"] = {key: complete[0][1].get(key) for key, _ in NETWORK_CONDITIONS}
+    return out
+
+
+#: what the edges combined into one network must share, as their legs record it: the thermodynamic state and the
+#: treatment of the dispersion tail. (The prepared systems differ from edge to edge; what they are made from besides
+#: the ligands is compared by network_differences.)
+NETWORK_CONDITIONS = (("temperature_K", "temperature (K)"), ("pressure_bar", "pressure (bar)"),
+                      ("lrc_method", "correction for the dispersion tail"))
+#: what the prepared systems of all edges of one network must have been made from alike (rbfe.prep.edge_made_from)
+SHARED_PREPARATION = ("protein_sha256", "forcefield", "membrane", "solvation", "box_shape", "backend",
+                      "thermodynamics", "dynamics")
+
+
+def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
+    """What differs among the edges with a ddG that would be combined into one network: the conditions of their
+    legs (:data:`NETWORK_CONDITIONS`), and what their prepared systems were made from besides the two ligands
+    (:data:`SHARED_PREPARATION`: protein, force field, pH ...). Second review of PR #17: an edge run at 298 K and
+    one at 310 K, or with another protein, gave one set of dG."""
+    from cufep.sampling.storage import _same
+
+    out = []
+    done = [r for r in results if "ddg" in r]
+    for key, name in NETWORK_CONDITIONS:
+        values = [(r["edge"], (r.get("conditions") or {}).get(key)) for r in done]
+        known = [(edge, value) for edge, value in values if value is not None]
+        if any(not _same(value, known[0][1]) for _edge, value in known[1:]):
+            out.append(f"{name}: " + ", ".join(f"{edge} {value}" for edge, value in known))
+    made = []
+    for r in done:
+        f = Path(out_dir) / "edges" / r["edge"] / "prep" / "prep.json"
+        record = json.loads(f.read_text()).get("made_from") if f.exists() else None
+        if record is not None:
+            made.append((r["edge"], {key: record.get(key) for key in SHARED_PREPARATION}))
+    for key in SHARED_PREPARATION:
+        if any(not _same(m[key], made[0][1][key]) for _edge, m in made[1:]):
+            out.append(f"the prepared systems ({key}): " + ", ".join(
+                edge for edge, m in made if not _same(m[key], made[0][1][key])) + f" differ from {made[0][0]}")
     return out
 
 
@@ -258,10 +309,18 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     """The results of the edges, the cycle closures and the dG of every ligand from the edges alone
     (:func:`cufep.rbfe.network.ligand_dg`)."""
     results = [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats) for a, b in edges]
-    measured = [Edge(r["ligand_a"], r["ligand_b"], r["ddg"], r["se"]) for r in results if "ddg" in r]
     for r in results:
         if experiment.get(r["ligand_a"]) is not None and experiment.get(r["ligand_b"]) is not None:
             r["exp_ddg"] = experiment[r["ligand_b"]] - experiment[r["ligand_a"]]
+    differing = network_differences(out_dir, results)
+    if differing:
+        # each edge gives its ddG; no dG and no cycle closure is made from edges of other conditions
+        return {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, "cycle_closures": [],
+                "dg": None, "inconsistent_edges": differing,
+                "notes": ["NO NETWORK: the edges with a ddG were not made under the same conditions ("
+                          + "; ".join(differing) + "); their ddG are given one by one, without cycle closures "
+                          "and without dG"]}
+    measured = [Edge(r["ligand_a"], r["ligand_b"], r["ddg"], r["se"]) for r in results if "ddg" in r]
     summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment,
                "cycle_closures": cycle_closures(measured), "dg": None, "notes": []}
     import networkx as nx
@@ -288,14 +347,16 @@ def write_results(out_dir: Path, summary: dict) -> None:
         w.writerow(["edge", "ligand_a", "ligand_b", "ddg_kcal_mol", "standard_error", "exp_ddg_kcal_mol",
                     "complex_dg", "solvent_dg", "windows_complex", "windows_solvent", "lowest_overlap_complex",
                     "lowest_overlap_solvent", "not_reliable", "backend_complex", "backend_solvent"])
+        def joined(values) -> str:
+            return "/".join(str(v) for v in values or [])
+
         for e in summary["edges"]:
-            r = next((x for x in e["repeats"] if "ddg" in x), {})
+            windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
             w.writerow([e["edge"], e["ligand_a"], e["ligand_b"], fmt(e.get("ddg")), fmt(e.get("se")),
                         fmt(e.get("exp_ddg")), fmt(e.get("complex_dg")), fmt(e.get("solvent_dg")),
-                        (r.get("windows") or {}).get("complex", ""), (r.get("windows") or {}).get("solvent", ""),
-                        fmt((r.get("lowest_overlap") or {}).get("complex")),
-                        fmt((r.get("lowest_overlap") or {}).get("solvent")), "; ".join(e.get("not_reliable", [])),
-                        (r.get("backend") or {}).get("complex", ""), (r.get("backend") or {}).get("solvent", "")])
+                        joined(windows.get("complex")), joined(windows.get("solvent")),
+                        fmt(overlap.get("complex")), fmt(overlap.get("solvent")), "; ".join(e.get("not_reliable", [])),
+                        joined(backend.get("complex")), joined(backend.get("solvent"))])
 
     def ligands_table(fh) -> None:
         w = csv.writer(fh)
@@ -327,6 +388,7 @@ def result_lines(summary: dict) -> list[str]:
                          "be determined")
         else:
             lines.append(f"RESULT {e['edge']}: no ddG")
+    lines += list(summary.get("notes") or []) if summary.get("inconsistent_edges") else []
     for c in summary["cycle_closures"]:
         lines.append(f"cycle {' -> '.join(c['ligands'])}: sum of ddG {c['sum_kcal_mol']:+.2f} ± {c['se_kcal_mol']:.2f}")
     if summary.get("dg"):
@@ -336,6 +398,19 @@ def result_lines(summary: dict) -> list[str]:
                          f"{summary['dg']['reference']})" + (f"; experiment {exp:.2f}" if exp is not None else ""))
     lines += [f"note: {n}" for n in summary["notes"]]
     return lines
+
+
+def failed_jobs(results: list[dict]) -> list[str]:
+    """The legs of this run that failed: an error, or no finite free energy (windows that the samples do not connect;
+    second review of PR #17: such a leg ended the run with 0). What the exit code of `cufep rbfe run` says."""
+    failed = []
+    for r in results:
+        tag = f"{r.get('edge', r.get('ligand'))}/r{r.get('repeat')}/{r.get('leg')}"
+        if "error" in r:
+            failed.append(f"{tag}: {r['error']}")
+        elif r.get("delta_g") is None or not math.isfinite(float(r["delta_g"])):
+            failed.append(f"{tag}: no free energy")
+    return failed
 
 
 def failed_edges(summary: dict) -> list[str]:
