@@ -318,3 +318,51 @@ def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before
     with pytest.raises(WorkflowError, match="other inputs or settings"):
         run_rbfe(other, log=lambda line: None)
     assert all((out_dir / name).read_bytes() == data for name, data in before.items())
+
+
+def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_path, monkeypatch):
+    """Second review of PR #17: A~B finished, then the protein changed and only B~C was run (--edge): B~C had no
+    prepared systems yet and passed, and the network combined the A~B of the other protein. Every prepared edge of
+    the network is checked before the run writes anything."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.prep.ligand import load_ligands
+    from cufep.rbfe import prep as prep_module
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.prep import edge_made_from
+    from cufep.rbfe.run import run_rbfe, write_run_files
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, smiles in (("toluene", "Cc1ccccc1"), ("phenol", "Oc1ccccc1"), ("aniline", "Nc1ccccc1")):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        AllChem.EmbedMolecule(mol, randomSeed=11)
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    ligands = {lig.name: lig for lig in load_ligands(tmp_path / "ligands.sdf")}
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    rcfg = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"], ["phenol", "aniline"]]}})
+    write_run_files(out_dir, rcfg, list(ligands), [("toluene", "phenol"), ("phenol", "aniline")], "given", {})
+    done = out_dir / "edges" / "toluene~phenol" / "prep"
+    done.mkdir(parents=True)
+    (done / "prep.json").write_text(json.dumps(
+        {"made_from": edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"), "legs": {}}))
+    (tmp_path / "protein.pdb").write_text("REMARK another protein\n")          # the receptor changes
+    before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
+    protein = _protein()
+    monkeypatch.setattr(run_module, "plan", lambda cfg, log, ligs: (cfg, AutoReport(), protein, ligs))
+
+    def not_to_be_reached(*args, **kwargs):
+        raise AssertionError("an edge was prepared")
+
+    monkeypatch.setattr(prep_module, "prepare_edge", not_to_be_reached)
+    with pytest.raises(WorkflowError, match="toluene~phenol"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    assert all((out_dir / name).read_bytes() == data for name, data in before.items())
+
