@@ -33,6 +33,9 @@ def _protein():
         if previous_c is not None:
             top.addBond(previous_c, local["N"])
         previous_c = local["C"] if res_name != "NME" else None
+    import random
+
+    random.seed(20261125)                     # Modeller places the new hydrogens at random
     mod = app.Modeller(top, pos * u.nanometer)
     mod.addHydrogens(app.ForceField("amber14/protein.ff14SB.xml", "amber14/tip3p.xml"),
                      platform=mm.Platform.getPlatformByName("Reference"))
@@ -102,8 +105,23 @@ def _config(tmp_path, out_dir, mode: str, legs: str = "each"):
         "output": {"dir": str(out_dir)}})
 
 
+@pytest.fixture
+def deterministic_cpu():
+    """Contexts of the CPU platform with deterministic forces in this process (the legs of the test run in it): the
+    same numbers in every run. Without them a first leg of three windows was connected in one run and not in
+    another, and gave no free energy; the Reference platform repeats too but takes half an hour here."""
+    import openmm as mm
+
+    cpu = mm.Platform.getPlatformByName("CPU")
+    before = cpu.getPropertyDefaultValue("DeterministicForces")
+    cpu.setPropertyDefaultValue("DeterministicForces", "true")
+    yield
+    cpu.setPropertyDefaultValue("DeterministicForces", before)
+
+
 @pytest.mark.parametrize("mode, legs", [("adaptive", "each"), ("adaptive", "solvent"), ("fixed", "each")])
-def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_path, monkeypatch, mode, legs):
+def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_path, monkeypatch, mode, legs,
+                                                                             deterministic_cpu):
     from cufep.rbfe import leg as leg_module
     from cufep.rbfe.leg import HybridLegJob, run_hybrid_leg_safe
 
