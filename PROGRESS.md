@@ -112,6 +112,15 @@ Open items:
 
 ## Change Log
 
+### 2026-11-25 — [design] RBFE: each leg chooses its own lambda windows (`lambda_schedule.adaptive.legs: each`)
+- What: TYK2 example, image of 58bef64, 8 GPUs, kcal/mol (experiment; FEP+): ddG ejm_31->ejm_46 -1.43 ± 0.32
+  (-1.77; -0.91), ejm_31->ejm_49 +0.74 ± 1.28 NOT RELIABLE (+1.79; +1.86), ejm_46->ejm_49 +2.10 ± 0.45 (+3.56);
+  cycle closure -0.08 ± 1.40; dG (mean of the experimental values) -9.28, -10.71, -8.61 (-9.54, -11.31, -7.75).
+  The windows of the solvent leg left a pair of the ejm_31->ejm_49 complex leg at 0.013 (λ 0.12, 0.25). The owner:
+  each leg its own precalculation (complex 500 ps after 500 ps, as the ABFE); `cufep rbfe run --leg`.
+- Why: the owner's choice of 2026-11-25 after that result.
+- Refs: `docs/rbfe.md` ("Lambda windows"), `runs/rbfe_tyk2_58bef64` (untracked)
+
 ### 2026-11-25 — [amendment] RBFE: no ABFE; every window that a leg does not choose starts from its pre-equilibration
 - What: the reference of the dG by an ABFE in the same run (`dg.references: abfe`, the entry below) is removed:
   the dG come from the edges alone (MLE), referenced to the mean of the experimental values, else to the mean
