@@ -63,13 +63,14 @@ explicitly, without cutoff, as the ABFE computes them (`docs/protocol.md`, "Inte
 
 ### Lambda windows
 
-Adaptive lambda scheduling as Midgley et al. (J. Chem. Inf. Model. 2025, 65, 512) set it for relative
-transformations: a precalculation of the ligand in solvent starts from 9 evenly spaced windows of 101
-candidates, runs 50 ps in each new window, and adds a window where neighbouring windows overlap by 0.04 or
-less (the rule of `docs/protocol.md`, "Adaptive lambda scheduling"); the windows it ends with are those of
-both legs; the solvent leg runs the windows of each iteration of its precalculation at the same time on the
-GPUs it is granted, while the complex leg pre-equilibrates. `lambda_schedule.adaptive.legs: each` gives each
-leg a precalculation of its own; `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
+Adaptive lambda scheduling by the rule of Midgley et al. (J. Chem. Inf. Model. 2025, 65, 512), which is about
+relative transformations: a precalculation starts from 9 evenly spaced windows of 101 candidates and adds a
+window where neighbouring windows overlap by 0.04 or less (the rule of `docs/protocol.md`, "Adaptive lambda
+scheduling"). Each leg has its own (`lambda_schedule.adaptive.legs: each`): 50 ps in each new window in the
+solvent leg (the paper's), 500 ps after 500 ps in the complex leg (the values of the ABFE), the windows of an
+iteration at the same time on the GPUs of the leg. The paper decides the windows of both legs from the ligand
+in solution (`legs: solvent`); in the TYK2 example that left a pair of windows of a complex leg at an overlap of
+0.013. `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
 number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, minimised
 in their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all at the same time on
 the GPUs of the leg; the equilibration of the replica exchange then relaxes them further. (At lambda 0 the atoms
@@ -143,13 +144,17 @@ lambda_schedule:
     overlap_matrix: stage
     candidates: 101
     initial_windows: 9
-    window_ps: 50.0
-    equilibration_ps: 0.0
+    window_ps:
+      complex: 500.0
+      solvent: 50.0
+    equilibration_ps:
+      complex: 500.0
+      solvent: 0.0
     sample_interval_ps: 0.5
     start_configurations: walk
     walk_ps: 5.0
     max_windows: 100
-    legs: solvent
+    legs: each
 sampling:
   production_ns: 5.0
   equilibration_ns: 1.0
@@ -166,7 +171,9 @@ output:
 | `mapping.*` | Kartograf's defaults | Kartograf (Ries et al. 2024); the defaults of OpenFE's relative protocol (since openfe 1.7) |
 | `alchemy.softcore_alpha` | 0.85 | Gapsys et al. 2012; OpenFE's `softcore_alpha` |
 | `network.*` | LOMAP, score 0.4, every ligand in a cycle, paths of at most 6 edges | lomap2's defaults of `generate_lomap_network`, with which the OpenFE benchmark (Baumann et al. 2026) planned its networks |
-| `lambda_schedule.adaptive.*` | 9 windows, 0.04, 101 candidates, 50 ps, the matrix of the stage, the solvent leg decides | Midgley et al. 2025: the values and the rule of the paper, which is about relative transformations; `legs: each` is cuFEP's own (as the ABFE) |
+| `lambda_schedule.adaptive.*` | 9 windows, 0.04, 101 candidates, the matrix of the stage | Midgley et al. 2025: the values and the rule of the paper, which is about relative transformations |
+| `lambda_schedule.adaptive.legs` | each | the owner's choice of 2026-11-25: the paper's (`solvent`, the windows of the ligand in solution for both legs) left a pair of windows of the ejm_31 -> ejm_49 complex leg of TYK2 at an overlap of 0.013 (where a precalculation of the solvent leg of another run had added a window); each leg its own precalculation, as the ABFE |
+| `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent 50 ps and 0; complex 500 ps after 500 ps | the solvent leg: the paper's; the complex leg: the values of the ABFE, measured on TYK2 (`docs/protocol.md`, "What was measured on TYK2") |
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |

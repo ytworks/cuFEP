@@ -23,10 +23,12 @@ from cufep.config.schema import (
     DynamicsConfig,
     ForceFieldConfig,
     MembraneConfig,
+    PrecalculationLengths,
     ResourcesConfig,
     SamplingConfig,
     SolvationConfig,
     ThermodynamicsConfig,
+    _of_leg,
     _Section,
 )
 
@@ -93,15 +95,27 @@ class HybridAdaptiveConfig(_Section):
     candidates: int = Field(default=101, ge=3)
     #: the windows of the first iteration: a number of evenly spaced windows or the lambda values
     initial_windows: int | list[float] = 9
-    window_ps: float = Field(default=50.0, gt=0.0)
-    equilibration_ps: float = Field(default=0.0, ge=0.0)
+    #: MD per new window of the precalculation, recorded (one value, or one per leg): the paper's 50 ps in the
+    #: solvent leg; in the complex leg those of the ABFE (500 ps after 500 ps of equilibration), because the pocket
+    #: takes hundreds of picoseconds to adapt to a changed ligand (docs/protocol.md, "What was measured on TYK2")
+    window_ps: float | PrecalculationLengths = Field(
+        default_factory=lambda: PrecalculationLengths(complex=500.0, solvent=50.0))
+    equilibration_ps: float | PrecalculationLengths = Field(
+        default_factory=lambda: PrecalculationLengths(complex=500.0, solvent=0.0))
     sample_interval_ps: float = Field(default=0.5, gt=0.0)
     start_configurations: Literal["walk", "sequential"] = "walk"
     walk_ps: float = Field(default=5.0, gt=0.0)
     max_windows: int = Field(default=100, ge=2)
-    #: solvent: the precalculation of the solvent leg decides the windows of both legs (the paper's); each:
-    #: each leg has a precalculation of its own (as the ABFE)
-    legs: Literal["solvent", "each"] = "solvent"
+    #: each: each leg has a precalculation of its own (as the ABFE; the owner's choice of 2026-11-25, after the
+    #: windows of the solvent leg left a pair of windows of a complex leg of TYK2 at an overlap of 0.013); solvent:
+    #: the precalculation of the solvent leg decides the windows of both legs (the paper's)
+    legs: Literal["solvent", "each"] = "each"
+
+    def window(self, leg: str) -> float:
+        return float(_of_leg(self.window_ps, leg))
+
+    def equilibration(self, leg: str) -> float:
+        return float(_of_leg(self.equilibration_ps, leg))
 
 
 class HybridLambdaSchedule(_Section):

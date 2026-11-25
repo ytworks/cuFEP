@@ -76,7 +76,7 @@ def _ligands(tmp_path, out_dir):
     return ligands
 
 
-def _config(tmp_path, out_dir, mode: str):
+def _config(tmp_path, out_dir, mode: str, legs: str = "each"):
     from cufep.rbfe.config import RbfeConfig
 
     (tmp_path / "protein.pdb").write_text("REMARK built in the test\n")
@@ -84,7 +84,10 @@ def _config(tmp_path, out_dir, mode: str):
     return RbfeConfig.model_validate({
         "system": {"protein": str(tmp_path / "protein.pdb"), "ligands": str(tmp_path / "ligands.sdf")},
         "backend": {"name": "openmm", "platform": "CPU"},
-        "solvation": {"box_shape": "cube", "padding_complex_nm": 0.6, "padding_solvent_nm": 0.6},
+        # small boxes with room under NPT: a cutoff of 0.6 nm and a padding of 0.8 nm (with 0.9 and 0.6 nm, boxes of
+        # the precalculation fell below twice the cutoff now and then)
+        "dynamics": {"cutoff_nm": 0.6},
+        "solvation": {"box_shape": "cube", "padding_complex_nm": 0.8, "padding_solvent_nm": 0.8},
         "thermodynamics": {"ionic_strength_M": 0.0},
         "sampling": {"production_ns": 0.005, "equilibration_ns": 0.0025, "time_per_iteration_ps": 0.25,
                      "checkpoint_interval_ps": 1.0, "rest2": {"scale": 1.5},
@@ -92,20 +95,28 @@ def _config(tmp_path, out_dir, mode: str):
         "analysis": {"error_blocks": [2], "part_error_blocks": 2, "convergence_points": 2, "convergence_blocks": 2},
         "lambda_schedule": {"mode": mode, "windows": 3,
                             "adaptive": {"initial_windows": 3, "window_ps": 0.5, "sample_interval_ps": 0.1,
-                                         "walk_ps": 0.2, "overlap_threshold": 0.001, "max_windows": 4}},
+                                         "candidates": 11, "equilibration_ps": 0.0,
+                                         "walk_ps": 0.2, "overlap_threshold": 0.001, "max_windows": 4,
+                                         "legs": legs}},
         "resources": {"gpus": [], "cpu_threads_per_worker": 1},
         "output": {"dir": str(out_dir)}})
 
 
-@pytest.mark.parametrize("mode", ["adaptive", "fixed"])
-def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_path, mode):
+@pytest.mark.parametrize("mode, legs", [("adaptive", "each"), ("adaptive", "solvent"), ("fixed", "each")])
+def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_path, monkeypatch, mode, legs):
+    from cufep.rbfe import leg as leg_module
     from cufep.rbfe.leg import HybridLegJob, run_hybrid_leg_safe
+
+    # the start of the windows a leg does not choose, made short for the test (5000 steps of minimisation of every
+    # window take minutes on one processor)
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
     from cufep.rbfe.prep import prepare_edge
     from cufep.rbfe.run import analyse_directory, combine_network, edge_result, write_results, write_run_files
 
     out_dir = tmp_path / "run"
     ligands = _ligands(tmp_path, out_dir)
-    rcfg = _config(tmp_path, out_dir, mode)
+    rcfg = _config(tmp_path, out_dir, mode, legs)
     edge_dir = out_dir / "edges" / "toluene~phenol"
     info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     assert info["legs"]["complex"]["core_atoms"] == info["legs"]["solvent"]["core_atoms"] >= 11
@@ -115,9 +126,15 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     results = [run_hybrid_leg_safe(job) for job in jobs]
     assert all("error" not in r for r in results), results
     solvent, complex_ = results
-    # the windows of the complex leg are those that the precalculation of the solvent leg chose (adaptive), or
-    # the given ones (fixed)
-    assert complex_["lambda_windows"] == solvent["lambda_windows"]
+    # the windows of the complex leg: its own precalculation (each), those that the precalculation of the solvent
+    # leg chose (solvent), or the given ones (fixed)
+    if mode == "fixed" or legs == "solvent":
+        assert complex_["lambda_windows"] == solvent["lambda_windows"]
+    with np.load(edge_dir / "repeat_0" / "complex" / "start_configs.npz") as start:
+        made = json.loads(str(start["made_with"]))
+    expected = {("adaptive", "each"): "chosen by this precalculation",
+                ("adaptive", "solvent"): "those of the solvent leg", ("fixed", "each"): "given"}
+    assert made["windows"] == expected[(mode, legs)]
     if mode == "fixed":
         assert len(solvent["lambda_windows"]["morph"]) == 3
     assert all(np.isfinite(r["delta_g"]) and r["delta_g_error"] > 0 for r in results)

@@ -88,7 +88,7 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
     return edges, how
 
 
-def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None) -> dict:
+def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None) -> dict:
     """Run the whole relative calculation. Safe to call again to resume."""
     from cufep.run import lock_output_directory
 
@@ -96,12 +96,12 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)
     try:
-        return _run(rcfg, out_dir, reschedule, log or _Log(out_dir / "cufep.log"), only_edges)
+        return _run(rcfg, out_dir, reschedule, log or _Log(out_dir / "cufep.log"), only_edges, only_legs)
     finally:
         lock.close()
 
 
-def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None) -> dict:
+def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None) -> dict:
     from cufep.rbfe.leg import HybridLegJob
     from cufep.rbfe.prep import prepare_edge
     from cufep.run import execute_jobs, plan, write_timing
@@ -142,7 +142,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     jobs = [HybridLegJob(ligand=edge_name(a, b), leg=leg, repeat=r, lig_dir=str(out_dir / "edges" / edge_name(a, b)),
                          devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
                          reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]))
-            for a, b in selected for r in range(repeats) for leg in ("solvent", "complex")]
+            for a, b in selected for r in range(repeats) for leg in ("solvent", "complex")
+            if not only_legs or leg in only_legs]
     t_prepared = time.time()
     log(f"{len(jobs)} job(s) of {len(selected)} edge(s) x 2 legs x {repeats} repeat(s); per lambda window "
         f"{rcfg.sampling.equilibration('complex'):g} ns equilibration and "

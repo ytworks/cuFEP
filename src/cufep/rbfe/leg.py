@@ -6,11 +6,10 @@ windows, the replica exchange (:func:`cufep.workflow.sample_leg`), the fallback 
 analysis of the leg (:func:`cufep.workflow.leg_result_from_samples`).
 
 The lambda windows (``lambda_schedule``)
-    adaptive, ``legs: solvent`` (default): the solvent leg runs the precalculation of adaptive lambda
-        scheduling, its windows at the same time on the GPUs it is granted, and the complex leg takes its windows,
-        as Midgley et al. 2025 decide the windows of a relative transformation from the ligand in solution and
-        use them for both legs. The complex leg pre-equilibrates meanwhile.
-    adaptive, ``legs: each``: each leg runs its own precalculation (as the ABFE).
+    adaptive, ``legs: each`` (default): each leg runs its own precalculation of adaptive lambda scheduling, the
+        windows of an iteration at the same time on the GPUs it is granted (as the ABFE).
+    adaptive, ``legs: solvent``: the solvent leg runs the precalculation and the complex leg takes its windows, as
+        Midgley et al. 2025 decide the windows of a relative transformation from the ligand in solution.
     fixed: the windows of ``windows``.
     Windows that a leg does not choose itself start, all of them, from the end of its pre-equilibration, minimised in
     their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all windows at the same time
@@ -355,7 +354,7 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
             elif own_precalculation:
                 als = AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
                                   candidates=a.candidates, initial_windows={"morph": a.initial_windows},
-                                  window_ps=a.window_ps, equilibration_ps=a.equilibration_ps,
+                                  window_ps=a.window(job.leg), equilibration_ps=a.equilibration(job.leg),
                                   sample_interval_ps=a.sample_interval_ps, start_configurations=a.start_configurations,
                                   walk_ps=a.walk_ps, max_windows=a.max_windows, rest2_scale=float(rest2_scale))
                 from cufep.alchemy.candidates import initial_window_indices
@@ -363,7 +362,8 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                 n_first = len(initial_window_indices(a.initial_windows, a.candidates))
                 devices = list(job.devices)
                 if job.control is not None:
-                    work = md_work(a.window_ps + a.equilibration_ps, hybrid.system.getNumParticles(), iteration_ps)
+                    work = md_work(a.window(job.leg) + a.equilibration(job.leg), hybrid.system.getNumParticles(),
+                                   iteration_ps)
                     granted = job.control.request_devices(
                         n_first, n_first * work / max(1, job.oversubscription), pinned=True,
                         what=f"the precalculation of the lambda schedule ({n_first} lambda windows)")
