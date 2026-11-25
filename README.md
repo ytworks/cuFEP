@@ -13,7 +13,9 @@ the pocket; cuFEP prepares the system, chooses the restraint and the lambda wind
 Hamiltonian replica exchange with REST2 on all GPUs of the machine, and reports the binding free
 energy with its standard error and the checks of the alchemical best-practice literature.
 NVIDIA's [cuPotential](https://github.com/NVIDIA/cuPotential) plugin for OpenMM is the default
-compute backend; stock OpenMM is the second backend and is always available.
+compute backend; stock OpenMM is the second backend and is always available. `cufep rbfe` computes
+**relative binding free energies (RBFE)** of a network of ligands with the same backends, sampling and
+analysis ([Relative binding free energies](#relative-binding-free-energies)).
 
 > **Status: version 0.1, under development.** Neutral ligands only, no cofactors yet. The
 > interfaces and the defaults may still change. See [PROGRESS.md](PROGRESS.md) for the current
@@ -28,6 +30,7 @@ compute backend; stock OpenMM is the second backend and is always available.
 - [Reading the results](#reading-the-results)
 - [Configuration](#configuration)
 - [Examples](#examples)
+- [Relative binding free energies](#relative-binding-free-energies)
 - [Benchmarks](#benchmarks)
 - [Limitations](#limitations)
 - [Documentation](#documentation)
@@ -275,6 +278,29 @@ single calculations of the two examples with earlier defaults (the restraint cho
 ([docs/configuration.md](docs/configuration.md), `sampling.rest2.region`), and the other
 calculations of the examples are in [PROGRESS.md](PROGRESS.md).
 
+## Relative binding free energies
+
+`cufep rbfe` takes a protein PDB and one SDF with every ligand of a network in its pose in the pocket, and
+its own YAML ([docs/rbfe.md](docs/rbfe.md)). It maps the atoms of each pair of ligands from their poses
+(Kartograf), builds the hybrid topology of each edge with the rules of OpenFE's relative protocol, chooses
+the lambda windows by adaptive lambda scheduling as the paper sets it for relative transformations, and
+runs both legs with Hamiltonian replica exchange and REST2 on all GPUs, the complex leg in a bilayer when
+`membrane.enabled` is set. It reports the ddG of every edge, the cycle closures, and the dG of every ligand
+from the edges alone (maximum likelihood estimate), referenced to the mean of the experimental values that
+are given, else to the mean of the network.
+
+| directory | system | ligands, experiment (kcal/mol) |
+|---|---|---|
+| [examples/rbfe_tyk2](examples/rbfe_tyk2) | TYK2 kinase (PDB 4GIH), in water | ejm_31 -9.54, ejm_46 -11.31, ejm_49 -7.75 |
+| [examples/rbfe_a2a_membrane](examples/rbfe_a2a_membrane) | adenosine A2A receptor (PDB 5OLZ), in a POPC bilayer | 4e -12.07, 4b -9.96, 4o -11.36 |
+
+```bash
+cufep rbfe plan examples/rbfe_tyk2/config.yaml
+cufep rbfe run examples/rbfe_tyk2/config.yaml
+cufep rbfe run examples/rbfe_a2a_membrane/config.yaml
+cufep rbfe analyze runs/rbfe_tyk2
+```
+
 ## Benchmarks
 
 ```bash
@@ -331,6 +357,7 @@ See [protocol: Limits of version 0.1](docs/protocol.md#limits-of-version-01).
 |---|---|
 | [docs/protocol.md](docs/protocol.md) | the method: systems, thermodynamic cycle, lambda windows, REST2, analysis and its checks, GPUs, comparison with OpenFE's protocol |
 | [docs/configuration.md](docs/configuration.md) | every setting, its default and the basis of the default |
+| [docs/rbfe.md](docs/rbfe.md) | relative binding free energies: the method, every setting of `cufep rbfe` and the basis of its default |
 | [docs/LICENSING.md](docs/LICENSING.md) | licences of cuFEP, of the cuPotential runtime and of the benchmark inputs |
 | [docs/M0_REPORT.md](docs/M0_REPORT.md) | the first risk checks of the plugin and the platform |
 | [docs/plans/](docs/plans/README.md) | implementation plans (in Japanese) |

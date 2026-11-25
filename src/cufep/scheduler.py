@@ -37,7 +37,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from cufep.workflow import JobControl, LegJob, begin_leg, read_result, record_ended_job, run_leg_safe
+from cufep.engine.jobs import Job
+from cufep.workflow import JobControl, begin_leg, read_result, record_ended_job
 
 
 @dataclass(frozen=True)
@@ -322,11 +323,12 @@ class GpuMonitor:
         return {g: (sum(r.get(g, 0.0) for r in rows) / len(rows) if rows else None) for g in self.gpus}
 
 
-#: what a job process runs (tests put a stand-in here; it must be importable by the job process)
-JOB_FUNCTION = run_leg_safe
+#: what a job process runs instead of the runner of its job (tests put a stand-in here; it must be importable by
+#: the job process); None: the runner of the job (cufep.engine.jobs.Job.runner)
+JOB_FUNCTION = None
 
 
-def _entry(job: LegJob, conn, scheduler_pid: int | None = None, function=None) -> None:
+def _entry(job: Job, conn, scheduler_pid: int | None = None, function=None) -> None:
     import signal
 
     from cufep.processes import die_with_parent, hold_job_lock
@@ -347,14 +349,14 @@ def _entry(job: LegJob, conn, scheduler_pid: int | None = None, function=None) -
         die_with_parent(scheduler_pid)
     lock = hold_job_lock(job.leg_dir)           # noqa: F841  held until this process ends
     job.control = JobControl(conn)
-    (function or run_leg_safe)(job)
+    (function or job.runner())(job)
 
 
 #: how long a job is given to stop its workers and close its files after SIGTERM before it is killed
 STOP_GRACE_SECONDS = 120.0
 
 
-def stop_jobs(running: dict[int, dict], jobs: list[LegJob], log=print, grace: float | None = None) -> None:
+def stop_jobs(running: dict[int, dict], jobs: list[Job], log=print, grace: float | None = None) -> None:
     """Stop every started job process and everything it started, and wait until they have ended.
 
     Each job gets SIGTERM (it stops its workers and closes its files), then SIGKILL for its whole
@@ -386,7 +388,7 @@ def stop_jobs(running: dict[int, dict], jobs: list[LegJob], log=print, grace: fl
             signal.signal(sig, handler)
 
 
-def _stop_started(running: dict[int, dict], jobs: list[LegJob], log, grace: float) -> None:
+def _stop_started(running: dict[int, dict], jobs: list[Job], log, grace: float) -> None:
     import signal
 
     started = {i: r for i, r in running.items() if r.get("proc") is not None and r["proc"].pid is not None}
@@ -418,7 +420,7 @@ def _stop_started(running: dict[int, dict], jobs: list[LegJob], log, grace: floa
         log(f"{jobs[i].tag} stopped (exit code {proc.exitcode})")
 
 
-def run_jobs(jobs: list[LegJob], gpus: list, log=print, oversubscription="auto", mps: bool = False,
+def run_jobs(jobs: list[Job], gpus: list, log=print, oversubscription="auto", mps: bool = False,
              max_running: int | None = None, poll_seconds: float = 0.2) -> list[dict]:
     """Run all jobs on the given devices and return their results in order."""
     if not jobs:
@@ -427,14 +429,14 @@ def run_jobs(jobs: list[LegJob], gpus: list, log=print, oversubscription="auto",
         results = []                                   # no GPU: one job at a time, in this process
         for job in jobs:
             job.devices, job.inline = [None], True
-            results.append(run_leg_safe(job))
+            results.append(job.runner()(job))
         return results
     gpus = list(gpus)
     max_running = max_running or max(2, len(gpus))
     return _run_started_jobs(jobs, gpus, log, oversubscription, mps, max_running, poll_seconds)
 
 
-def _run_started_jobs(jobs: list[LegJob], gpus: list, log, oversubscription, mps: bool, max_running: int,
+def _run_started_jobs(jobs: list[Job], gpus: list, log, oversubscription, mps: bool, max_running: int,
                       poll_seconds: float) -> list[dict]:
     for job in jobs:
         job.oversubscription = oversubscription_for(job.n_atoms, oversubscription, mps)

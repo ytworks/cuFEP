@@ -63,7 +63,9 @@ Apply these rules whenever a change adds, removes, moves or reclassifies behavio
   scheduling, long-range dispersion), `sampling/` (pre-equilibration, Hamiltonian replica
   exchange, states, sample storage, GPU workers), `analysis/` (MBAR, uncertainty, checks,
   figures), `backends/` (cuPotential and stock OpenMM), `benchmarks/` (sets, runner, statistics),
-  `scheduler.py` and `mps.py` (GPUs and NVIDIA MPS), `workflow.py` and `run.py` (the stages),
+  `engine/` (what a leg is whatever its protocol: the protocols of a leg, its steps, the analysis of
+  its path, its job), `rbfe/` (`cufep rbfe`: configuration, mapping, hybrid topology, network, legs),
+  `scheduler.py` and `mps.py` (GPUs and NVIDIA MPS), `workflow.py` and `run.py` (the ABFE stages),
   `cli.py` (the `cufep` command), `validate.py` (energies of the two backends), `envcheck.py`
 - Specification: `docs/protocol.md` (methods, checks, comparison with other programs);
   every setting and its basis: `docs/configuration.md` (a unit test keeps its block identical to

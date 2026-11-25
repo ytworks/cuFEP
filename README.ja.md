@@ -13,7 +13,8 @@ cuFEP は、低分子のタンパク質への**絶対結合自由エネルギー
 exchange をマシンの全 GPU で行い、結合自由エネルギーを標準誤差と、alchemical 計算のベストプラクティス
 文献に基づく検査の結果とともに報告します。計算のバックエンドは既定で NVIDIA の
 [cuPotential](https://github.com/NVIDIA/cuPotential) (OpenMM のプラグイン) で、stock OpenMM を
-2 つ目のバックエンドとしていつでも使えます。
+2 つ目のバックエンドとしていつでも使えます。`cufep rbfe` は、同じバックエンド、サンプリング、解析で、
+リガンドのネットワークの**相対結合自由エネルギー (RBFE)** を計算します ([相対結合自由エネルギー](#相対結合自由エネルギー))。
 
 > **状態: バージョン 0.1、開発中。** 中性のリガンドのみ対応し、補因子にはまだ対応していません。
 > インターフェースと既定値は今後変わることがあります。現在の状態は [PROGRESS.md](PROGRESS.md)
@@ -28,6 +29,7 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
 - [結果の読み方](#結果の読み方)
 - [設定](#設定)
 - [例](#例)
+- [相対結合自由エネルギー](#相対結合自由エネルギー)
 - [ベンチマーク](#ベンチマーク)
 - [制限](#制限)
 - [ドキュメント](#ドキュメント)
@@ -269,6 +271,28 @@ cufep benchmark run tyk2 --tier smoke
 -18.91 ± 0.52 と -11.95 ± 0.73 でした ([docs/configuration.md](docs/configuration.md) の
 `sampling.rest2.region`)。example のそのほかの計算は [PROGRESS.md](PROGRESS.md) にあります。
 
+## 相対結合自由エネルギー
+
+`cufep rbfe` は、タンパク質の PDB と、ネットワークの全リガンドをポケットの pose で入れた 1 つの SDF と、
+専用の YAML ([docs/rbfe.md](docs/rbfe.md)) を受け取ります。リガンドの各対の原子を pose から対応させ
+(Kartograf)、OpenFE の相対計算のプロトコルの規則で各 edge の hybrid topology を作り、論文が相対変換に
+定めたとおりの adaptive lambda scheduling で lambda window を選び、2 つの leg を REST2 付きの Hamiltonian
+replica exchange で全 GPU に配って回します。`membrane.enabled` のときは complex leg を二重膜に入れます。
+各 edge の ddG、cycle closure、edge だけから求めた各リガンドの dG (最尤推定) を報告し、dG の基準は
+与えた実験値の平均、実験値が無ければネットワークの平均です。
+
+| ディレクトリ | 系 | リガンド、実験値 (kcal/mol) |
+|---|---|---|
+| [examples/rbfe_tyk2](examples/rbfe_tyk2) | TYK2 キナーゼ (PDB 4GIH)、水中 | ejm_31 -9.54、ejm_46 -11.31、ejm_49 -7.75 |
+| [examples/rbfe_a2a_membrane](examples/rbfe_a2a_membrane) | アデノシン A2A 受容体 (PDB 5OLZ)、POPC 二重膜中 | 4e -12.07、4b -9.96、4o -11.36 |
+
+```bash
+cufep rbfe plan examples/rbfe_tyk2/config.yaml
+cufep rbfe run examples/rbfe_tyk2/config.yaml
+cufep rbfe run examples/rbfe_a2a_membrane/config.yaml
+cufep rbfe analyze runs/rbfe_tyk2
+```
+
 ## ベンチマーク
 
 ```bash
@@ -322,6 +346,7 @@ TYK2 で 1.25 kcal/mol、A2A で 2.68 (FEP+ は 0.47 と 1.08)、Kendall τ は 
 |---|---|
 | [docs/protocol.md](docs/protocol.md) | 方法: 系、熱力学サイクル、lambda window、REST2、解析と検査、GPU、OpenFE のプロトコルとの比較 (英語) |
 | [docs/configuration.md](docs/configuration.md) | すべての設定、既定値とその根拠 (英語) |
+| [docs/rbfe.md](docs/rbfe.md) | 相対結合自由エネルギー: 方法、`cufep rbfe` のすべての設定と既定値の根拠 (英語) |
 | [docs/LICENSING.md](docs/LICENSING.md) | cuFEP、cuPotential ランタイム、ベンチマークの入力のライセンス (英語) |
 | [docs/M0_REPORT.md](docs/M0_REPORT.md) | プラグインとプラットフォームの最初のリスク確認 (英語) |
 | [docs/plans/](docs/plans/README.md) | 実装計画 (日本語) |

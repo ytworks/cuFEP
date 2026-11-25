@@ -5,6 +5,120 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-25 — [amendment] RBFE: no ABFE; every window that a leg does not choose starts from its pre-equilibration
+- What: the reference of the dG by an ABFE in the same run (`dg.references: abfe`, the entry below) is removed:
+  the dG come from the edges alone (MLE), referenced to the mean of the experimental values, else to the mean
+  of the network. The windows the complex leg takes from the solvent leg, and fixed windows, start all from the
+  end of the pre-equilibration (OpenFE's start) instead of a walk on one GPU; `lambda_schedule.fixed_walk_ps`
+  of RBFE is gone. The ABFE run driver is back as on main but for `execute_jobs`, shared with RBFE.
+- Why: the owner's order of 2026-11-25 ("ABFE は不要", "RBFE だけで DG を出す方法をちゃんと実現せよ"; no
+  serial step in the GPU parallelism).
+- Refs: `docs/rbfe.md`, `docs/plans/2026-11-25-rbfe.md` ("記録")
+
+### 2026-11-25 — [progress] `cufep rbfe`: relative binding free energies, implemented, not run yet
+- What: hybrid topology by the rules of OpenFE's relative protocol with only charges on the plugin (`spikes/m36`:
+  within 0.037 kT of the charges written in), Kartograf mapping, LOMAP networks, adaptive lambda scheduling of the
+  paper (solvent leg decides), REST2, the bilayer; ddG, cycle closures, dG by cinnabar's MLE with the experimental
+  mean or an ABFE in the same run. Shared code: one state dispatch, `sample_leg`, `prepare_run`/`finish_run`; the
+  ABFE tests unchanged. RBFE has no long-range correction of the ligand LJ (OpenFE's default; the plan had both ends).
+- Why: the owner's order (the plan).
+- Refs: `docs/rbfe.md`, `docs/plans/2026-11-25-rbfe.md` ("記録"), PR #17
+
+### 2026-11-25 — [design] Plan: relative binding free energies, `cufep rbfe`
+- What: the owner's order. A second product in the same package and image: hybrid topology with the
+  lambda functions and soft-core of OpenFE's protocol, Kartograf mapping, adaptive lambda scheduling
+  as the paper sets it for relative transformations (9 windows, 0.04), 5 ns per window, REST2, the
+  bilayer as the ABFE has it; ddG per edge, DG by the MLE of the network with the experimental mean
+  (default) or a cuFEP ABFE of a reference ligand. Its own YAML. Shared code generalised so that the
+  ABFE gives the same numbers. Examples: TYK2 and A2A in the bilayer, three compounds each.
+- Why: the owner's order of 2026-11-25; the two choices (DG reference, place) are the owner's answers.
+- Refs: `docs/plans/2026-11-25-rbfe.md`
+
+### 2026-11-25 — [design] The owner's decision: the runs stop, no default changes for now
+- What: after the four runs with grand canonical moves of water (the entry below) the owner stops the
+  evaluation on A2A; the remaining 15 ligands are not run. No default changes for now: the water
+  stays TIP3P, `sampling.gcmc` and `sampling.relocation_mc` stay off. The two plans are closed.
+- Why: the owner's decision. In the four runs the binding stayed 5 to 8 kcal/mol too strong.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` (`Status:`)
+
+### 2026-11-25 — [progress] A2A with grand canonical moves of water: 4k and 4e, TIP3P and OPC
+- What: image of 8252ccd, one calculation each on eight GPUs, the set's settings with
+  `sampling.gcmc.enabled: true` (kcal/mol; experiment -11.54 and -12.07). 4k: TIP3P -17.32 ± 0.42
+  (without the moves -20.32 ± 0.52 in the run of e77a6c5; three other runs -14.49, -13.07, -16.50),
+  OPC -19.96 ± 0.29 (-19.15 ± 0.35). 4e: TIP3P -17.21 ± 0.36 with the restraint on ASN 253 (without,
+  on ASN 253, -16.85 ± 0.64; on PHE 168, e77a6c5, -13.50 ± 0.34), OPC -18.26 ± 0.54 (-20.61 ± 0.47,
+  both on PHE 168). The moves were made in every run (5 to 20 thousand insertions and as many
+  deletions); the sphere holds 7 to 9 waters where the ligand is coupled and 16 to 21 where it is
+  decoupled. No GPU error, no worker restarted. The rest of the set waits for the owner.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md` ("記録"), `runs/benchmark_a2a_full_gcmc_{tip3p,opc}_8252ccd`
+
+### 2026-11-25 — [progress] Grand canonical moves of water in the complex leg (`sampling.gcmc`, default off)
+- What: ghost waters switched in the live Context, the acceptance of Ross 2017 (eq 1, 2, 7), batches of
+  trials with the stand-in energy and a second test with the energy of the simulation, every replica
+  with the list of its waters, the alchemical run of the leg without a barostat in the mean cell of
+  its pre-equilibration; TIP3P and OPC. The two numbers of the water: TIP3P -6.09 kcal/mol and 30.345
+  A^3 (grand's; measured here -6.125 ± 0.053, 30.319 ± 0.009), OPC -8.05 and 30.000 (measured). A short
+  run of 4k end to end: the sphere holds about 7 waters where the ligand is coupled and 14 where it is
+  decoupled. Unit tests 750, GPU tests 55 passed; a short review: no P1, two P2 fixed.
+- Why: the owner's order (plan `docs/plans/2026-11-24-gcmc-water.md`); no benchmark result with it yet.
+- Refs: the plan ("記録"), `docs/configuration.md` (`sampling.gcmc`), `docs/protocol.md` ("Grand canonical moves of water")
+
+### 2026-11-25 — [design] Plan: grand canonical Monte Carlo of water in the complex leg; the relocation run is stopped
+- What: A2A in the bilayer with OPC and the water relocation moves (image of 9989cdb): 4k -19.16 ± 0.59
+  kcal/mol, without the moves -19.15 ± 0.35 (experiment -11.54); moves accepted 117 of 19,247 into
+  the sphere and 67 of 19,503 out of it. Stopped on the owner's order during 4e. New plan: GCMC with
+  ghost waters (grand), batches of trials on the GPU and a second test with the energy of the
+  simulation, the complex leg at constant volume, TIP3P and OPC; default off. Risk check passed
+  (`spikes/m33`): waters switched off and on in a live Context give the energies of a System built
+  so, on both backends. Found by it: with REST2 the two backends treat the dispersion correction
+  differently, up to 0.55 kT between windows (TIP3P), 0 at both ends; the GPU tests have it off.
+- Why: the owner's order of 2026-11-24, after the moves that keep the number of waters changed nothing.
+- Refs: `docs/plans/2026-11-24-gcmc-water.md`, `docs/plans/2026-11-24-opc-water-model.md` ("記録")
+
+### 2026-11-24 — [progress] A2A in water with OPC stopped after two; the water relocation moves are merged and take a 4-site water
+- What: restraint from the bilayer in TIP3P, alchemical run in water with OPC (image of 02f3d7a): 4k
+  -17.50 ± 0.73 and 4e -20.16 ± 0.57 kcal/mol (experiment -11.54, -12.07; in water with TIP3P -12.11,
+  -16.17); stopped on the owner's order. `feat/relocation-mc` (PR #10) is merged into this branch
+  (`sampling.relocation_mc`, default off). With a 4-site water an accepted move gave the virtual site a
+  velocity: fixed, only the atoms with a mass are turned. The energy change of a moved water against a
+  tight Ewald sum: the plugin within 0.035 kT, stock OpenMM 0.225 kT with OPC (GPU test, m32). A short
+  review: no P1 or P2. Unit tests 738, GPU tests 43 passed. Next: A2A in the bilayer with OPC and the moves.
+- Why: the owner's order of 2026-11-24: all of A2A back to the bilayer with OPC, with the moves.
+- Refs: the plan ("記録"), `docs/protocol.md` ("Water relocation moves"), `tests/unit/test_relocation_mc.py`
+
+### 2026-11-24 — [design] `membrane.water`: the restraint from the bilayer in TIP3P, the alchemical run in water with OPC
+- What: the owner's order after A2A with OPC in the bilayer, stopped after two ligands: 4k
+  -19.15 ± 0.35 and 4e -20.61 ± 0.47 kcal/mol (experiment -11.54 and -12.07; the TIP3P run of
+  e77a6c5 -20.32 and -13.50), the box area 4 to 7 % larger than with TIP3P. `membrane.complex_leg`
+  of the closed PR #14 is merged into this branch, and `membrane.water` (cuFEP's own, default null:
+  `forcefield.water`) gives the system with the bilayer a water model of its own, accepted only
+  with `complex_leg: water`. 4k is prepared so: complex in water 18,989 OPC waters, bilayer 14,729
+  TIP3P waters. A short review: no P1. Unit tests 716 passed; GPU tests 35 passed before its fixes.
+- Why: the owner: OPC may not go with the bilayer. Lipid21 is validated with TIP3P.
+- Refs: the plan ("記録"), `docs/configuration.md` (`membrane.water`), `tests/unit/test_complex_leg_in_water.py`
+
+### 2026-11-24 — [progress] TYK2 with OPC: 16 ligands, one calculation each
+- What: image of 29fb9df, eight GPUs, one ligand at a time, the settings of the set with
+  `forcefield.water: amber14/opc.xml`. All 32 legs on the plugin, none NOT RELIABLE (lowest
+  overlap 0.099), a window below 50 independent samples in 15 of 16. Against experiment, OPC and
+  the run of e77a6c5 (TIP3P), 95 % bootstrap intervals: mean signed error +1.33 [0.67, 2.01] and
+  -1.20 [-1.83, -0.60]; RMSE 1.92 [1.27, 2.53] and 1.73 [1.10, 2.30]; after removing the mean
+  1.38 [0.85, 1.72] and 1.25 [0.75, 1.62]; Kendall tau 0.33 [-0.10, 0.69] and 0.47 [0.12, 0.75].
+  OPC binds 2.53 kcal/mol weaker on average: solvent leg +1.32 (all 16), complex leg -1.20.
+- Why: the plan. The owner decides about A2A and the default; nothing is changed.
+- Refs: the plan ("記録"), `runs/benchmark_tyk2_full_opc_29fb9df` (untracked)
+
+### 2026-11-24 — [design] A bilayer takes a 4-site water; the plugin's MD with virtual sites checked; ejm_31
+- What: `membrane.enabled` no longer refuses a 4-site water: the bilayer is built with 3-site waters
+  and every water gets its extra site afterwards (cuFEP's own way; A2A 4k prepared with OPC, no MD
+  of it yet). A review of 29fb9df asked what the plugin's own integrator and barostat do to a
+  virtual site: in 39 stored configurations of ejm_31 the sites are within 5e-10 nm of their place,
+  and the NPT volume is that of stock OpenMM (OPC -0.008 ± 0.053 of 25.8 nm3; test box +0.09 ± 0.08 %).
+  A GPU test holds sites and constraints after NPT MD; the four tests of the backends share one
+  function. ejm_31 with OPC: -9.30 ± 0.57 kcal/mol (TIP3P -10.08 ± 0.37; experiment -9.54).
+- Why: the plan (A2A needs the bilayer); the reviews before the push.
+- Refs: the plan ("記録"), `docs/configuration.md`, `docs/protocol.md` ("Systems"), `tests/unit/test_membrane.py`
+
 ### 2026-11-24 — [design] Plan: the water model OPC against TIP3P on the benchmark sets
 - What: the owner's order. Only the water changes (`forcefield.water: amber14/opc.xml`, ff14SB
   kept); TYK2, then A2A, one ligand at a time against the run of e77a6c5; the default stays TIP3P

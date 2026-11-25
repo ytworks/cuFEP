@@ -325,6 +325,118 @@ def validate(config: str, ligand, device: int, output) -> None:
 
 
 @main.group()
+def rbfe() -> None:
+    """Relative binding free energies of a network of ligands (its own YAML; docs/rbfe.md).
+
+    \b
+        cufep rbfe plan config.yaml     # ligands, edges and mappings, without simulating
+        cufep rbfe run config.yaml      # run (or resume) every edge
+        cufep rbfe analyze OUTPUT_DIR   # the ddG and dG from the results the legs have
+    """
+
+
+def _load_rbfe(config: str):
+    from cufep.rbfe.config import load_rbfe_config
+
+    try:
+        return load_rbfe_config(config)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"{config}: {exc}") from exc
+
+
+@rbfe.command("plan")
+@click.argument("config", type=click.Path(exists=True, dir_okay=False))
+def rbfe_plan(config: str) -> None:
+    """Show the ligands, the edges and their atom mappings of CONFIG, without simulating."""
+    from cufep.rbfe.mapping import MappingSettings, kartograf_mapping, lomap_score
+    from cufep.rbfe.run import edges_of, experiment_of, ligands_of
+
+    rcfg = _load_rbfe(config)
+    try:
+        ligands = ligands_of(rcfg)
+        edges, _how = edges_of(rcfg, ligands, click.echo)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    experiment = experiment_of(rcfg, ligands)
+    by_name = {lig.name: lig for lig in ligands}
+    m = rcfg.mapping
+    settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
+                               map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
+                               map_exact_ring_matches_only=m.map_exact_ring_matches_only,
+                               allow_partial_fused_rings=m.allow_partial_fused_rings,
+                               allow_bond_breaks=m.allow_bond_breaks)
+    for lig in ligands:
+        exp = experiment.get(lig.name)
+        click.echo(f"ligand {lig.name}: {lig.n_atoms} atoms" + (f", experiment {exp:.2f} kcal/mol" if exp else ""))
+    for a, b in edges:
+        mapping = kartograf_mapping(by_name[a], by_name[b], settings)
+        click.echo(f"edge {a} -> {b}: {len(mapping)} atoms mapped, {by_name[a].n_atoms - len(mapping)} unique to {a}, "
+                   f"{by_name[b].n_atoms - len(mapping)} unique to {b}; LOMAP score "
+                   f"{lomap_score(by_name[a], by_name[b], mapping):.2f}")
+    ls = rcfg.lambda_schedule
+    click.echo(f"lambda windows: {ls.mode}" + (f" from {ls.adaptive.initial_windows}, overlap threshold "
+                                                 f"{ls.adaptive.overlap_threshold:g} ({ls.adaptive.legs} leg decides)"
+                                                 if ls.mode == "adaptive" else f", {ls.windows}"))
+    exp = experiment_of(rcfg, ligands)
+    click.echo(f"per window {rcfg.sampling.equilibration('complex'):g} ns equilibration and "
+               f"{rcfg.sampling.production_ns:g} ns production; dG of every ligand from the edges, relative to the "
+               + ("mean of the experimental values of " + ", ".join(exp) if exp else "mean of the network"))
+
+
+@rbfe.command("run")
+@click.argument("config", type=click.Path(exists=True, dir_okay=False))
+@click.option("--production-ns", type=float, help="Override sampling.production_ns.")
+@click.option("--gpus", help="Override resources.gpus: 'auto' or a comma separated list of CUDA device numbers.")
+@click.option("--backend", type=click.Choice(["cupotential", "openmm"]), help="Override backend.name.")
+@click.option("-o", "--output", help="Override output.dir.")
+@click.option("--edge", "edges", multiple=True, help="Run only this edge (A~B); repeat for several.")
+@click.option("--leg", "legs", multiple=True, type=click.Choice(["complex", "solvent"]),
+              help="Run only this leg of the edges; the other keeps the result it has.")
+@click.option("--reschedule", is_flag=True, help="Determine the lambda windows of the legs that run again.")
+def rbfe_run(config: str, production_ns, gpus, backend, output, edges, legs, reschedule: bool) -> None:
+    """Run (or resume) the relative calculation described by CONFIG."""
+    from cufep.rbfe.run import failed_edges, run_rbfe
+
+    rcfg = _load_rbfe(config)
+    if production_ns is not None:
+        rcfg.sampling.production_ns = float(production_ns)
+    if gpus:
+        rcfg.resources.gpus = "auto" if gpus == "auto" else [int(x) for x in gpus.split(",")]
+    if output:
+        rcfg.output.dir = Path(output)
+    if backend:
+        rcfg.backend.name = backend
+    try:
+        summary = run_rbfe(rcfg, reschedule=reschedule, only_edges=list(edges) or None, only_legs=list(legs) or None)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    missing = failed_edges(summary)
+    if missing:
+        click.echo("no ddG: " + ", ".join(missing), err=True)
+    # the exit code is that of the jobs of this run: a run of some legs that all succeeded is not a failure, a
+    # failed repeat next to one that gave the ddG is (review of PR #17)
+    failed = summary.get("failed_in_this_run") or []
+    if failed:
+        click.echo("failed in this run: " + ", ".join(failed), err=True)
+        sys.exit(1)
+
+
+@rbfe.command("analyze")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False))
+def rbfe_analyze(directory: str) -> None:
+    """Print the ddG of the edges and the dG of the ligands of the output DIRECTORY of a relative run, from the
+    results its legs have. Writes nothing."""
+    from cufep.rbfe.run import analyse_directory, result_lines
+
+    try:
+        summary = analyse_directory(Path(directory))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    for line in result_lines(summary):
+        click.echo(line)
+
+
+@main.group()
 def benchmark() -> None:
     """Built-in benchmarks against experiment and FEP+ (TYK2 kinase, A2A receptor in a bilayer)."""
 

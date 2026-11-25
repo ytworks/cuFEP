@@ -675,22 +675,43 @@ class OutputConfig(_Section):
     dir: Path = Path("runs/cufep")
 
 
-class Config(_Section):
+class CommonConfig(_Section):
+    """The sections that mean the same in the configuration of an absolute (``cufep run``, :class:`Config`) and of
+    a relative calculation (``cufep rbfe``, :class:`cufep.rbfe.config.RbfeConfig`): all that the preparation of a
+    system and the engine of a leg (:mod:`cufep.engine`) read. Each configuration adds its own sections, among them
+    a ``lambda_schedule`` with ``precalculated_legs()`` and ``adaptive.window(leg)``, ``adaptive.equilibration(leg)``
+    and ``adaptive.sample_interval_ps``, and says what the pre-equilibration of its legs holds
+    (:meth:`holds_solute`)."""
+
     version: Literal[1] = 1
-    system: SystemConfig
     membrane: MembraneConfig = Field(default_factory=MembraneConfig)
     forcefield: ForceFieldConfig = Field(default_factory=ForceFieldConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
     thermodynamics: ThermodynamicsConfig = Field(default_factory=ThermodynamicsConfig)
     dynamics: DynamicsConfig = Field(default_factory=DynamicsConfig)
     solvation: SolvationConfig = Field(default_factory=SolvationConfig)
-    restraints: RestraintConfig = Field(default_factory=RestraintConfig)
-    alchemy: AlchemyConfig = Field(default_factory=AlchemyConfig)
-    lambda_schedule: LambdaScheduleConfig = Field(default_factory=LambdaScheduleConfig)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     resources: ResourcesConfig = Field(default_factory=ResourcesConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+
+    def holds_solute(self, leg: str) -> bool:
+        """Whether the pre-equilibration of ``leg`` holds the heavy atoms of the solute in the pose that was given
+        through NVT and NPT (and through the equilibration of a new bilayer) and has no free MD
+        (:func:`cufep.workflow.pre_equilibration_parts`)."""
+        raise NotImplementedError
+
+    @property
+    def bilayer_water(self) -> str:
+        """The water model of the system with the bilayer: ``membrane.water``, or ``forcefield.water``."""
+        return self.forcefield.water if self.membrane.water is None else self.membrane.water
+
+
+class Config(CommonConfig):
+    system: SystemConfig
+    restraints: RestraintConfig = Field(default_factory=RestraintConfig)
+    alchemy: AlchemyConfig = Field(default_factory=AlchemyConfig)
+    lambda_schedule: LambdaScheduleConfig = Field(default_factory=LambdaScheduleConfig)
 
     @model_validator(mode="after")
     def _settings_agree(self):
@@ -699,13 +720,14 @@ class Config(_Section):
             raise ValueError("; ".join(problems))
         return self
 
-    @property
-    def bilayer_water(self) -> str:
-        """The water model of the system with the bilayer: ``membrane.water``, or ``forcefield.water``."""
-        return self.forcefield.water if self.membrane.water is None else self.membrane.water
+    def holds_solute(self, leg: str) -> bool:
+        """A complex leg whose restraint is chosen from interactions (``restraints.selection: interactions``):
+        its trajectories start from the pose that was given, as in the method of Ding et al., which starts them
+        from the minimised input (:func:`cufep.workflow.pre_equilibration_parts`)."""
+        return leg == "complex" and self.restraints.selection == "interactions"
 
 
-def md_segments(cfg: "Config") -> list[tuple[str, int]]:
+def md_segments(cfg: "CommonConfig") -> list[tuple[str, int]]:
     """Every stretch of MD that one configuration gets in one go in an OpenMM Context it shares
     with other configurations, as (what it is in the words of the configuration, MD steps), at
     the configured time step. A run whose pre-equilibration falls back to a shorter time step
@@ -745,10 +767,9 @@ def check_configuration(cfg: "Config") -> None:
         raise ConfigurationError("; ".join(problems))
 
 
-def configuration_problems(cfg: "Config") -> list[str]:
-    """Settings that contradict each other, found without any input file: every problem in the
-    words of the configuration. :class:`Config` refuses to exist with one of them, so no command
-    gets as far as writing anything."""
+def common_problems(cfg: "CommonConfig") -> list[str]:
+    """The problems of :func:`configuration_problems` in the sections that the two configurations share
+    (:class:`CommonConfig`), and of the stretches of MD of their lambda schedules (:func:`md_segments`)."""
     from cufep.prep.water import water_problem
     from cufep.steps import barostat_segment_problem
 
@@ -779,6 +800,14 @@ def configuration_problems(cfg: "Config") -> list[str]:
                 f"{cfg.forcefield.water!r}: the complex leg would be sampled in another water than the solvent "
                 "leg. Another water model for the bilayer is only for membrane.complex_leg: "
                 "water, where the bilayer is the system of the MD from which the restraint is chosen")
+    return problems
+
+
+def configuration_problems(cfg: "Config") -> list[str]:
+    """Settings that contradict each other, found without any input file: every problem in the
+    words of the configuration. :class:`Config` refuses to exist with one of them, so no command
+    gets as far as writing anything."""
+    problems = common_problems(cfg)
     if cfg.membrane.for_restraint_only and cfg.restraints.selection != "interactions":
         # the bilayer of this setting is the system of the MD from which the restraint is chosen: with another
         # selection there is no such MD, and a bilayer would be built that nothing uses

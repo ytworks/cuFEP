@@ -9,10 +9,10 @@ from conftest import potential, reference_context
 
 from cufep.alchemy.factory import REST2_DQ, REST2_DS, REST2_GROUP, AlchemyError, bonded_pairs, make_alchemical_system
 from cufep.backends.base import clone_system
+from cufep.engine.protocol import rest2_scale_along_leg
 from cufep.sampling.states import (
     AlchemicalState,
     StateEnergyEvaluator,
-    rest2_scale_along_leg,
     set_state,
     stage_state,
     validate_states,

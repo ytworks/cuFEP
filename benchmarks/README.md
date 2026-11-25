@@ -16,4 +16,6 @@ protein file and its ligand is one of the set's records.
 (MIT licence, see `THIRD_PARTY/`): protein PDB, ligand SDF with experimental dG
 (`r_exp_dg`, kcal/mol), perturbation edges, and the FEP+ per-ligand predictions
 (`*_out.csv`, columns `Exp. dG` / `Pred. dG`). `THIRD_PARTY/SHA256SUMS` pins the
-downloaded files (retrieved 2026-11-18 from the `main` branch).
+downloaded files (retrieved 2026-11-18 from the `main` branch). The FEP+ per-edge predictions
+(`edge_predictions_*_out.csv`, from `21_4_results/edge_predictions/`, columns `Exp. ddG`, `Bennett ddG`,
+`CCC ddG` and their errors) were retrieved on 2026-11-25 for the relative examples (`examples/rbfe_*`).

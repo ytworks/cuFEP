@@ -46,6 +46,8 @@ jobs:
         with:
           environment-file: docker/environment.yml
           cache-environment: true
+      - name: Packages of relative binding free energies (as the image adds them)
+        run: micromamba install -y -n cufep -f docker/environment-rbfe.yml --freeze-installed
       - name: Install cuFEP
         run: pip install --no-deps -e .
       - name: Unit tests

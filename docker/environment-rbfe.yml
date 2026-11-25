@@ -1,0 +1,13 @@
+# The packages of relative binding free energies (cufep rbfe), installed on top of
+# docker/environment.yml with --freeze-installed, so that they change nothing of the environment the
+# absolute binding free energies run in. The versions are those of OpenFE 1.13.
+#   kartograf  atom mapping from the 3D poses (OpenFE's default mapper)
+#   lomap2     the LOMAP score and network of ligands
+#   cinnabar   maximum likelihood estimate of the free energies of a network (Xu 2019)
+name: cufep
+channels:
+  - conda-forge
+dependencies:
+  - kartograf=2.0.0
+  - lomap2=3.3.0
+  - cinnabar=0.6.1

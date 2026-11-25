@@ -58,6 +58,12 @@ RUN mkdir -p /licenses \
       micromamba clean -a -y; \
     fi
 
+# --- relative binding free energies: atom mapping, networks, MLE ------------------
+# Added on top, without changing a package that is installed already.
+COPY docker/environment-rbfe.yml /tmp/environment-rbfe.yml
+RUN micromamba install -y -n cufep -f /tmp/environment-rbfe.yml --freeze-installed \
+ && micromamba clean -a -y
+
 # --- cuFEP itself -------------------------------------------------------------
 COPY pyproject.toml README.md LICENSE /opt/cufep/
 COPY src /opt/cufep/src

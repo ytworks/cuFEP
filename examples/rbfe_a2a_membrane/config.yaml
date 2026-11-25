@@ -1,0 +1,18 @@
+# Relative binding free energies in a membrane: the adenosine A2A receptor (GPCR, PDB 5OLZ) in a POPC
+# bilayer with three compounds of the Schrödinger public binding free energy benchmark: 4e (the ligand of
+# examples/membrane_a2a), 4b and 4o, its two neighbours in the FEP+ network of the set
+# (-12.07, -9.96, -11.36 kcal/mol). The three edges form a cycle.
+# The dG of every ligand is referenced to the mean of the experimental values (the default; docs/rbfe.md).
+# Every setting not listed here uses its recommended default (docs/rbfe.md).
+system:
+  protein: protein.pdb
+  ligands: ligands.sdf
+membrane:
+  enabled: true
+network:
+  edges:
+  - [4e, 4b]
+  - [4e, 4o]
+  - [4b, 4o]
+output:
+  dir: runs/rbfe_a2a

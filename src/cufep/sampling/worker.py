@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from cufep.sampling.states import AlchemicalState
+from cufep.engine.protocol import ABFE, state_from_dict
 
 
 @dataclass
@@ -30,6 +30,8 @@ class LegSpec:
     system_xml: str                      # stock alchemical System, restraint included, no barostat
     states: list[dict]
     n_atoms: int
+    #: the protocol of the leg (cufep.engine.protocol): what its states are
+    protocol: str = ABFE
     backend: str = "cupotential"
     precision: str = "mixed"
     platform: str = "CUDA"
@@ -93,8 +95,9 @@ class LegSpec:
     def n_states(self) -> int:
         return len(self.states)
 
-    def alchemical_states(self) -> list[AlchemicalState]:
-        return [AlchemicalState(**s) for s in self.states]
+    def lambda_states(self) -> list:
+        """The states of the windows, of the protocol of the leg."""
+        return [state_from_dict(s, self.protocol) for s in self.states]
 
     def conditions(self) -> dict:
         """What the samples of this leg are samples of.
@@ -115,7 +118,9 @@ class LegSpec:
                 "precision": self.precision, "integrator": self.integrator, "n_atoms": int(self.n_atoms),
                 "system_sha256": hashlib.sha256(self.system_xml.encode()).hexdigest(),
                 "lrc": None if self.lrc is None else tail_summary(self.lrc),
-                **({"settings": dict(self.settings)} if self.settings else {})}
+                **({"settings": dict(self.settings)} if self.settings else {}),
+                # the protocol of a leg that is not of the ABFE (the conditions of the ABFE name none)
+                **({"protocol": self.protocol} if self.protocol != ABFE else {})}
 
 
 def _shared_directory(required_bytes: int, fallback: str | None = None) -> str:
@@ -311,7 +316,7 @@ class ReplicaWorker:
         import openmm as mm
         import openmm.unit as u
 
-        from cufep.sampling.states import StateEnergyEvaluator
+        from cufep.engine.protocol import make_state_evaluator
 
         self.spec = spec
         self.arrays = arrays
@@ -334,9 +339,9 @@ class ReplicaWorker:
         self.integrator = self.backend.make_integrator(temperature, spec.friction_per_ps / u.picosecond,
                                                        spec.timestep_fs * u.femtoseconds, seed=seed)
         self.context = self.backend.make_context(system, self.integrator, device)
-        self.states = spec.alchemical_states()
+        self.states = spec.lambda_states()
         pressure_for_u = spec.pressure_bar if spec.barostat != "none" else None
-        self.evaluator = StateEnergyEvaluator(self.context, self.states, spec.temperature_K, pressure_for_u)
+        self.evaluator = make_state_evaluator(self.context, self.states, spec.temperature_K, pressure_for_u)
         self.temperature = temperature
         self.lrc = None
         if spec.lrc is not None:

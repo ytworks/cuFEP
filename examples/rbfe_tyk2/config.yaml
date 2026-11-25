@@ -1,0 +1,16 @@
+# Relative binding free energies: TYK2 kinase (PDB 4GIH) with three ligands of the Schrödinger public
+# binding free energy benchmark: ejm_31 (the ligand of examples/kinase_tyk2), ejm_46 and ejm_49, its two
+# neighbours in the FEP+ network of the set with the widest range of experimental values
+# (-9.54, -11.31, -7.75 kcal/mol). The three edges form a cycle.
+# The dG of every ligand is referenced to the mean of the experimental values (the default; docs/rbfe.md).
+# Every setting not listed here uses its recommended default (docs/rbfe.md).
+system:
+  protein: protein.pdb
+  ligands: ligands.sdf
+network:
+  edges:
+  - [ejm_31, ejm_46]
+  - [ejm_31, ejm_49]
+  - [ejm_46, ejm_49]
+output:
+  dir: runs/rbfe_tyk2

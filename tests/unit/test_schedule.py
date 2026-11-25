@@ -608,10 +608,10 @@ def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):
     restrained_from_the_start = replace(
         of_complex, states=[replace(st, lambda_restraints=1.0) for st in of_complex.states]
     )
-    with pytest.raises(ValueError, match="its first state .restraint 1,.* is not the coupled end of the complex leg"):
+    with pytest.raises(ValueError, match="its first state .lambda_restraints 1,.* is not the first end of the complex"):
         restrained_from_the_start.check_leg("complex", complex_stages)
     cut_short = replace(of_complex, states=of_complex.states[:-1])
-    with pytest.raises(ValueError, match="its last state .* is not the decoupled end"):
+    with pytest.raises(ValueError, match="its last state .* is not the last end"):
         cut_short.check_leg("complex", complex_stages)
 
     # files: the leg a schedule was saved for is kept, and the workflow names the file it refuses
