@@ -598,3 +598,60 @@ def test_a_fraction_of_the_frames_is_rounded_down_as_it_is_written():
             assert frames_needed(n, hundredths / 100) == n * hundredths // 100
     assert frames_needed(800, 0.3999999999) == 319 and frames_needed(5, 0.15) == 0 and frames_needed(800, 1e-05) == 0
 
+
+
+def test_windows_placed_by_thermodynamic_length_read_a_pair_and_refuse_settings_that_contradict_that(tmp_path):
+    """``lambda_schedule.adaptive.method: thermodynamic_length`` (plan of 2026-11-25): a leg with it
+    keeps the rule it has (its overlap matrix and threshold), the step follows from the target
+    acceptance, and settings with which the rule would add to every pair a step apart, or which do
+    nothing, are refused or told when the configuration is read."""
+    from cufep.cli import lambda_window_table
+    from cufep.config.schema import load_config_with_notices
+    from cufep.workflow import als_settings
+
+    def read(adaptive, **schedule):
+        data = {**BASE, "lambda_schedule": {"adaptive": adaptive, **schedule}}
+        return load_config_with_notices(write(tmp_path, data))
+
+    def legs(cfg):
+        return [(s.method, s.overlap_matrix, s.overlap_threshold, s.exchange_acceptance)
+                for s in (als_settings(cfg, "complex"), als_settings(cfg, "solvent"))]
+
+    # not given: the rule from the start of each leg, as before the method existed
+    assert legs(read({})[0]) == [("als", "pair", 0.3, 0.35), ("als", "stage", 0.18, 0.35)]
+    cfg, notices = read({"method": "thermodynamic_length"})
+    assert legs(cfg) == [("thermodynamic_length", "pair", 0.3, 0.35),
+                         ("thermodynamic_length", "stage", 0.18, 0.35)] and notices == []
+    assert ("  and, after that, where neighbouring windows are more than a step of the thermodynamic length apart, "
+            "until both hold: complex leg 1.32 kT (an exchange acceptance of 0.35 between neighbours); solvent leg "
+            "1.32 kT") in lambda_window_table(cfg)
+    # the resolved configuration reads the same again
+    assert legs(Config.model_validate(cfg.model_dump(mode="json"))) == legs(cfg)
+    cfg, notices = read({"method": {"complex": "als", "solvent": "thermodynamic_length"},
+                         "thermodynamic_length": {"exchange_acceptance": {"complex": 0.4, "solvent": 0.45}}})
+    assert legs(cfg) == [("als", "pair", 0.3, 0.4), ("thermodynamic_length", "stage", 0.18, 0.45)] and notices == []
+    assert "until both hold: solvent leg 1.07 kT (an exchange" in lambda_window_table(cfg)
+
+    # the rule of a leg stays the one that is given for it
+    assert legs(read({"method": "thermodynamic_length", "overlap_matrix": "stage"})[0]) == [
+        ("thermodynamic_length", "stage", 0.18, 0.35)] * 2
+    # windows a step of an acceptance of 0.2 apart overlap by 0.255 as a pair: the rule would add there
+    with pytest.raises(ValidationError, match=r"exchange_acceptance = 0.2 allows .*0\.255.*overlap_threshold = 0.3"):
+        read({"method": "thermodynamic_length", "thermodynamic_length": {"exchange_acceptance": 0.2}})
+    read({"method": "thermodynamic_length", "overlap_threshold": 0.2,
+          "thermodynamic_length": {"exchange_acceptance": 0.2}})
+    with pytest.raises(ValidationError):
+        read({"thermodynamic_length": {"exchange_acceptance": 1.0}})
+    with pytest.raises(ValidationError):
+        read({"method": "length"})
+
+    # settings of the method that change nothing are told (its defaults, which every resolved
+    # configuration holds, are not such settings)
+    assert read({"thermodynamic_length": {"exchange_acceptance": 0.35}})[1] == []
+    assert read({"thermodynamic_length": {"exchange_acceptance": 0.4}})[1] == [
+        "lambda_schedule.adaptive.thermodynamic_length is given and changes nothing: no leg whose windows a "
+        "precalculation chooses has lambda_schedule.adaptive.method: thermodynamic_length"]
+    notices = read({"method": "thermodynamic_length"}, mode={"complex": "adaptive", "solvent": "fixed"})[1]
+    assert notices == ["lambda_schedule.adaptive.method is thermodynamic_length in the solvent leg and changes "
+                       "nothing there: its windows are not chosen by a precalculation (lambda_schedule.mode, "
+                       "lambda_schedule.file)"]

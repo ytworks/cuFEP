@@ -339,6 +339,20 @@ class LegModes(_Section):
     solvent: Literal["adaptive", "fixed"]
 
 
+class LegMethods(_Section):
+    """How adaptive lambda scheduling chooses the windows, for each leg."""
+
+    complex: Literal["als", "thermodynamic_length"]
+    solvent: Literal["als", "thermodynamic_length"]
+
+
+class LegAcceptances(_Section):
+    """A target acceptance of the exchange between neighbouring lambda windows, for each leg."""
+
+    complex: float = Field(gt=0.0, lt=1.0)
+    solvent: float = Field(gt=0.0, lt=1.0)
+
+
 def _of_leg(value, leg: str):
     """The value of a setting that is given once for both legs or once per leg."""
     return getattr(value, leg) if isinstance(value, _Section) else value
@@ -355,14 +369,52 @@ def _of_leg(value, leg: str):
 DEFAULT_OVERLAP_THRESHOLD = {"stage": 0.18, "pair": 0.30}
 
 
+#: The overlap matrix of a leg whose ``overlap_matrix`` is not given and whose windows the rule of
+#: adaptive lambda scheduling chooses from ``initial_windows`` (``method: als``)
+DEFAULT_OVERLAP_MATRIX = {"complex": "pair", "solvent": "stage"}
+
+
+class ThermodynamicLengthConfig(_Section):
+    """``lambda_schedule.adaptive.method: thermodynamic_length``: a second condition on the windows
+    that the rule of adaptive lambda scheduling ends with. Windows are added until neighbouring
+    windows are also at most a step of the thermodynamic length of their stage apart (Clark et al.,
+    J. Chem. Theory Comput. 2024, 20, 7806, eq 19)."""
+
+    #: the acceptance of an exchange between neighbouring windows that the longest step allows: the
+    #: step is 2 erfcinv of it in kT, the distance at which two windows whose energy difference is
+    #: normally distributed exchange with this probability (Walter and Bereau, arXiv:2610.11714,
+    #: section S1.8, target 0.35; the owner's choice of 2026-11-25). One value, or one per leg
+    exchange_acceptance: float | LegAcceptances = 0.35
+
+    @field_validator("exchange_acceptance")
+    @classmethod
+    def _an_acceptance_is_a_probability(cls, v):
+        if not isinstance(v, LegAcceptances) and not 0.0 < v < 1.0:
+            raise ValueError("exchange_acceptance must be above 0 and below 1")
+        return v
+
+    def acceptance(self, leg: str) -> float:
+        """The target acceptance of this leg."""
+        return float(_of_leg(self.exchange_acceptance, leg))
+
+
 class AdaptiveConfig(_Section):
     """Adaptive lambda scheduling (Midgley et al., J. Chem. Inf. Model. 2025, 65, 512).
 
-    ``overlap_threshold``, ``overlap_matrix`` and ``candidates`` are one value for both legs or
-    one per leg (``{complex: ..., solvent: ...}``), as the lengths of the precalculation are;
-    ``initial_windows`` and ``max_windows`` are always given per leg.
+    ``method``, ``overlap_threshold``, ``overlap_matrix`` and ``candidates`` are one value for both
+    legs or one per leg (``{complex: ..., solvent: ...}``), as the lengths of the precalculation
+    are; ``initial_windows`` and ``max_windows`` are always given per leg.
     """
 
+    #: how the precalculation chooses the windows. als: the rule of the paper, which adds windows to
+    #: ``initial_windows`` where neighbouring windows overlap too little. thermodynamic_length: that
+    #: rule as it is, and then windows are added wherever two neighbouring windows are more than a
+    #: step of the thermodynamic length apart (``thermodynamic_length``); the two take turns until
+    #: every pair is above the overlap threshold and at most a step long. No window of ``als`` is
+    #: taken away or moved, and the rule of each leg is the one it has (its matrix and threshold).
+    #: cuFEP's own combination, the owner's orders of 2026-11-25
+    method: Literal["als", "thermodynamic_length"] | LegMethods = "als"
+    thermodynamic_length: ThermodynamicLengthConfig = Field(default_factory=ThermodynamicLengthConfig)
     #: a pair of neighbouring windows is deficient if its overlap is at or below this value. Not
     #: given, it is for each leg the threshold of the matrix that the leg reads
     #: (DEFAULT_OVERLAP_THRESHOLD): with the default matrices 0.30 in the complex leg and 0.18 in
@@ -377,7 +429,7 @@ class AdaptiveConfig(_Section):
     #: windows get closer and windows that are close enough read as deficient; the overlap of a
     #: pair alone rises to 0.5 as its windows meet
     overlap_matrix: Literal["stage", "pair"] | LegOverlapMatrices = Field(
-        default_factory=lambda: LegOverlapMatrices(complex="pair", solvent="stage"))
+        default_factory=lambda: LegOverlapMatrices(**DEFAULT_OVERLAP_MATRIX))
     #: number of equally spaced candidate lambda values per stage
     candidates: int | LegCandidates = 101
     #: windows per leg and stage in the first iteration (the schedule never gets smaller than this):
@@ -422,11 +474,15 @@ class AdaptiveConfig(_Section):
 
     @model_validator(mode="after")
     def _a_threshold_that_is_not_given_is_that_of_the_matrix(self):
+        # written past __setattr__: the settings stay ones that were not given
         if "overlap_threshold" not in self.model_fields_set:
-            # written past __setattr__: the setting stays one that was not given
             self.__dict__["overlap_threshold"] = LegThresholds(**{
                 leg: DEFAULT_OVERLAP_THRESHOLD[self.matrix(leg)] for leg in ("complex", "solvent")})
         return self
+
+    def method_of(self, leg: str) -> str:
+        """How the precalculation chooses the windows of this leg: ``als`` or ``thermodynamic_length``."""
+        return str(_of_leg(self.method, leg))
 
     def threshold(self, leg: str) -> float:
         """The overlap at or below which a pair of neighbouring windows of this leg is deficient."""
@@ -811,6 +867,7 @@ def configuration_problems(cfg: "Config") -> list[str]:
                     f"sampling.gcmc.{name} is auto and cuFEP has no value for forcefield.water = "
                     f"{cfg.forcefield.water!r}: give the number (docs/configuration.md says how it is determined)")
     problems += initial_window_problems(cfg)
+    problems += placement_problems(cfg)
     if cfg.restraints.selection == "interactions":
         # the thresholds of the rule are numbers of frames, rounded down: none of them may be no frame
         n = analysed_frames(cfg)
@@ -855,6 +912,52 @@ def initial_window_problems(cfg: "Config") -> list[str]:
                             f"{total - (len(stages) - 1)} lambda windows to start with (windows at stage boundaries "
                             f"are shared), more than lambda_schedule.adaptive.max_windows.{leg} = {limit}{default}")
     return problems
+
+
+def placement_problems(cfg: "Config") -> list[str]:
+    """Why windows could not be added to a leg by thermodynamic length as the settings say
+    (``lambda_schedule.adaptive.method: thermodynamic_length``): once windows were added by length the
+    rule reads the overlap of each pair alone with the threshold of the leg, and windows a step apart
+    must be above it, or the rule would add a window to every pair that the step allows. Asked only
+    of the legs that run a precalculation."""
+    from cufep.alchemy.thermodynamic_length import gaussian_pair_overlap, length_of_acceptance
+
+    ls = cfg.lambda_schedule
+    a, problems = ls.adaptive, []
+    for leg in ls.precalculated_legs():
+        if a.method_of(leg) != "thermodynamic_length":
+            continue
+        target = a.thermodynamic_length.acceptance(leg)
+        planned = float(gaussian_pair_overlap(length_of_acceptance(target)))
+        if planned <= a.threshold(leg):
+            problems.append(f"lambda_schedule.adaptive.thermodynamic_length.exchange_acceptance = {target:g} allows "
+                            f"neighbouring windows of the {leg} leg a step apart at which the overlap of a pair is "
+                            f"{planned:.3f} (for a normally distributed energy difference), at or below "
+                            f"lambda_schedule.adaptive.overlap_threshold = {a.threshold(leg):g}: the rule would add "
+                            "a window to every such pair. Raise the acceptance or lower the threshold")
+    return problems
+
+
+def unused_placement_notices(data: dict, cfg: "Config") -> list[str]:
+    """A notice for a file that gives settings of ``method: thermodynamic_length`` which change
+    nothing, because no leg whose windows a precalculation chooses has that method. A file that
+    holds the defaults of those settings, as every resolved configuration does, has changed none."""
+    block = data.get("lambda_schedule")
+    adaptive = block.get("adaptive") if isinstance(block, dict) else None
+    if not isinstance(adaptive, dict):
+        return []
+    ls = cfg.lambda_schedule
+    asked = [leg for leg in ("complex", "solvent") if ls.adaptive.method_of(leg) == "thermodynamic_length"]
+    used = [leg for leg in asked if leg in ls.precalculated_legs()]
+    notices = []
+    changed = ls.adaptive.thermodynamic_length != ThermodynamicLengthConfig()
+    if "thermodynamic_length" in adaptive and changed and not used:
+        notices.append("lambda_schedule.adaptive.thermodynamic_length is given and changes nothing: no leg whose "
+                       "windows a precalculation chooses has lambda_schedule.adaptive.method: thermodynamic_length")
+    notices += [f"lambda_schedule.adaptive.method is thermodynamic_length in the {leg} leg and changes nothing there: "
+                "its windows are not chosen by a precalculation (lambda_schedule.mode, lambda_schedule.file)"
+                for leg in asked if leg not in used]
+    return notices
 
 
 def unpaired_threshold_notices(data: dict, cfg: "Config") -> list[str]:
@@ -1017,6 +1120,7 @@ def load_config_with_notices(path: str | Path) -> tuple[Config, list[str]]:
     data, notices = migrate_settings(data)
     cfg = Config.model_validate(data)
     notices += unpaired_threshold_notices(data, cfg)
+    notices += unused_placement_notices(data, cfg)
     base = path.resolve().parent
 
     def resolve(p: Path) -> Path:

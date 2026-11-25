@@ -20,6 +20,7 @@ from cufep.alchemy.thermodynamic_length import (
     length_of_acceptance,
     pair_differences,
     pair_distance,
+    windows_added_by_length,
 )
 from cufep.analysis.mbar import analyze_leg
 from cufep.sampling.hrex import mix_replicas
@@ -148,3 +149,34 @@ def test_the_analysis_of_a_leg_gives_the_lengths_between_its_windows():
     broken = analyze_leg({"u": u, "states": states, "attrs": {"states": state_dicts}}, 298.15)
     assert broken.neighbour_distance == [] and broken.stage_length == {}
     assert set(broken.stage_delta_g) == {"discharge", "vanish"}
+
+
+def test_windows_are_added_where_a_start_is_more_than_a_step_apart_and_no_window_is_taken_away():
+    """Intervals of a start that are 1.0, 1.5, 2.8, 0.6 and 0.3 kT long, at a step of 1.32: the second
+    gets one window and the third two, evenly in lambda within the interval, and the others none."""
+    start, lengths = [0, 20, 40, 60, 80, 100], [0.0, 1.0, 2.5, 5.3, 5.9, 6.2]
+    assert windows_added_by_length([(start, lengths)], 1.32, 99) == ([[30, 47, 53]], [False])
+    # room for two or four windows only, over two stages: they go where the step is the longest, and
+    # the answer says in which stages steps stay longer than asked for
+    two_stages = [([0, 50, 100], [0.0, 3.0, 3.1]), ([0, 100], [0.0, 4.0])]
+    assert windows_added_by_length(two_stages, 1.32, 2) == ([[25], [50]], [True, True])
+    assert windows_added_by_length(two_stages, 1.32, 4) == ([[17, 33], [33, 67]], [False, True])
+    assert windows_added_by_length(two_stages, 1.32, 99) == ([[17, 33], [25, 50, 75]], [False, False])
+    # an interval takes no more windows than it has candidates between its ends
+    assert windows_added_by_length([([0, 2, 100], [0.0, 9.0, 9.5])], 1.32, 99) == ([[1]], [False])
+    # a stage without a length, and one whose windows are close enough: nothing
+    assert windows_added_by_length([([0, 100], [0.0, 0.0]), ([0, 50, 100], [0.0, 1.3, 2.6])], 1.32, 9) == (
+        [[], []], [False, False])
+    # the path of the test above from 21 evenly spaced windows that are 0.3 to 8.3 apart: every
+    # interval is cut into the fewest steps that are 1.32 long or less, where it has the candidates
+    lambdas = np.linspace(0.0, 1.0, 21)
+    lengths = integrated_length(lambdas, 6.0 + 180.0 * lambdas ** 5)
+    added, limited = windows_added_by_length([([5 * i for i in range(21)], lengths)], 1.32, 99)
+    new = np.histogram(added[0], bins=[5 * i for i in range(21)])[0]
+    for d, n in zip(np.diff(lengths), new):
+        assert n == 4 or (d / (n + 1) <= 1.32 and (n == 0 or d / n > 1.32))
+    assert limited == [False] and new[0] == 0 and new[-1] == 4 and sorted(set(added[0])) == added[0]
+    with pytest.raises(ValueError, match="numbers that do not fall"):
+        windows_added_by_length([([0, 50, 100], [0.0, np.nan, 1.0])], 1.32, 9)
+    with pytest.raises(ValueError, match="increasing candidates"):
+        windows_added_by_length([([0, 50, 50], [0.0, 1.0, 2.0])], 1.32, 9)

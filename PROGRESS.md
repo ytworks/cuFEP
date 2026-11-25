@@ -52,8 +52,8 @@ start from the walk whatever number of workers it has; three settings that stay 
 
 | item | status |
 |---|---|
-| Unit tests (CPU) | 755 passed (2026-11-25, the branch `feat/thermodynamic-length-schedule` with the thermodynamic length as numbers of the precalculation and of a result, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
-| GPU tests | 55 passed (2026-11-25, one GPU, the same tree, image `cufep:dev`, `scripts/in_docker.sh --gpus 0 python -m pytest tests/gpu`); the tests of `rest2_leg`, of the water relocation moves and of the grand canonical moves run with TIP3P and with OPC; none builds a bilayer |
+| Unit tests (CPU) | 760 passed (2026-11-25, the branch `feat/thermodynamic-length-schedule` with `lambda_schedule.adaptive.method: thermodynamic_length`, in the image `cufep:dev`, `scripts/in_docker.sh python -m pytest`) |
+| GPU tests | 57 passed (2026-11-25, one GPU, the same tree, image `cufep:dev`, `scripts/in_docker.sh --gpus 5 python -m pytest tests/gpu`); the tests of `rest2_leg`, of the water relocation moves and of the grand canonical moves run with TIP3P and with OPC; the precalculation in a pool of workers runs with both methods; none builds a bilayer |
 | CI | `unit` (CPU tests in the conda environment of `docker/environment.yml`); `harness` (PROGRESS.md budget, README pair, names of commercial products, ruff) |
 | TYK2 example (ejm_31, experiment -9.54 kcal/mol) | `config.yaml` sets 5 ns of production per window (PR #4; the default stays 10 ns). With `selection: auto` in the full TYK2 run: -9.84 ± 0.33 kcal/mol; one earlier calculation: -8.94 ± 0.77. With the default `interactions` and the MD for the restraint from the pose that was given, four calculations of the same YAML and seed (4 GPUs each, PR #6): -12.16 ± 0.32 (image of 720cdb1), -12.23 ± 0.64, -8.84 ± 0.91 and -8.33 ± 0.74 (image of 1b770da, the same code of the sampling); mean -10.39, standard deviation 2.09 kcal/mol. Complex leg 42.95, 42.91, 40.19, 39.34 (standard deviation 1.86); solvent leg 20.23, 20.13, 20.77, 20.44 (0.29); release of the restraint -10.55 to -10.57. The four chose the same six anchors (backbone of VAL 981, its hydrogen bond in 764 to 771 of 800 frames) with the same reference angles. Overlap criterion met in every leg (lowest 0.131); a window with fewer than 50 independent samples in five of the eight legs (fewest 6, a solvent leg). The 1 ns blocks of one complex leg range from 38.1 to 43.2 kcal/mol. The first version of the selection (MD for the restraint after 5 ns of free MD), four runs: -10.85, -11.99, -5.83, -9.77, standard deviation 2.7. In the full TYK2 run with the present defaults (e77a6c5, PR #8): -10.08 ± 0.37 (complex leg 40.43, solvent leg 19.79; 33 and 18 windows; lowest overlap 0.154 and 0.189; a window with fewer than 50 independent samples in the complex leg) |
 | Starts of the complex leg (plan `docs/plans/2026-11-21-als-initial-window-design.md`, PR #7) | A is the default since 2026-11-22 (the owner's choice), so its three runs are runs of the TYK2 example as it is now. TYK2 example, three starts of the complex leg, three calculations each with the same YAML and seed (image of 5e2cf33, 4 GPUs each; the overlap of a pair alone, threshold 0.30; solvent leg as the default), kcal/mol. A (30 windows, those of mode fixed): -9.36 ± 0.56, -9.63 ± 0.37, -9.33 ± 0.51; mean -9.44, standard deviation 0.17. B (30 windows, denser at vanish 0.7 to 0.9): -10.01 ± 0.34, -9.64 ± 0.52, -11.71 ± 0.53; -10.45, 1.11. C (59 windows placed as B): -11.43 ± 0.46, -6.41 ± 0.59, -7.64 ± 0.43; -8.50, 2.62. The four runs of the row above: -10.39, 2.09. Complex leg, standard deviation: 0.20, 1.23, 2.20 (1.86). Lowest overlap 0.141 to 0.153 (A), 0.128 to 0.129 (B), 0.081 to 0.085 (C); a window with fewer than 50 independent samples in the complex leg of 2, 1 and 1 of the three runs; 0 or 1 round trip in the complex leg of every run. Three runs give a standard deviation only roughly. Tables: the plan (`spikes/m19_window_runs.py`) |
@@ -107,10 +107,21 @@ Open items:
 - `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and 5 A: a stop
   of cuFEP's own without a published basis, kept until the owner decides (`.claude/rules/fep-invariants.md`).
 - The conda environment is not locked (`docker/environment.yml` pins OpenMM 8.4, CUDA 13.4, ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
-- Plan `docs/plans/2026-11-25-thermodynamic-length-schedule.md` (in progress, PR #16): an opt-in placement of the lambda windows at equal thermodynamic length with the present rule as the repair; no default changes. Done: the measuring functions, the measurement on the stored runs and the lengths as numbers in the record of the precalculation
-  and in the result of a leg (Change Log). The method itself is not implemented; no run with it. Seven questions wait for the owner (the plan).
+- Plan `docs/plans/2026-11-25-thermodynamic-length-schedule.md` (in progress, PR #16): `lambda_schedule.adaptive.method: thermodynamic_length`, off by default: the rule of adaptive lambda scheduling as it is, and windows added to its result until neighbours are also a step of the thermodynamic length apart or less (Change Log).
+  Not run yet with it, but for a smoke run (exit 0): the verification runs of the plan (ejm_31 three times, 4e once) are next. No default changed.
 
 ## Change Log
+
+### 2026-11-25 — [design] `lambda_schedule.adaptive.method: thermodynamic_length` (off by default)
+- What: the rule of adaptive lambda scheduling runs as it is; then windows are added wherever neighbouring
+  windows are more than a step of the thermodynamic length apart (2 erfcinv(0.35) = 1.32 kT, the owner's
+  choice; ceil(d / step) - 1 windows per interval), the rule reads the overlaps again, and the two take turns
+  until neither adds. No window of the rule is taken away or moved: the windows of `als` are among those of the
+  method. The design of the entry "Plan: lambda windows placed by thermodynamic length" below (all windows
+  placed anew, fewer than the start possible) is not what was built: the owner rejected it.
+  From the stored legs: a complex leg would have 40 [38, 45] windows where it has 31 [30, 35].
+- Why: the owner's orders: both conditions, and what the present method gives is kept.
+- Refs: the plan ("記録", stage 3), `docs/configuration.md`, `docs/protocol.md` ("Windows added by thermodynamic length"), PR #16
 
 ### 2026-11-25 — [progress] Thermodynamic length: measured on the stored runs, and recorded as numbers from now on
 - What: `cufep.alchemy.thermodynamic_length` and `spikes/m36`; the lengths are numbers of the record of the

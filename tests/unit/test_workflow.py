@@ -1057,8 +1057,12 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
     longer = {"production_ns": 20.0}
     without(["alchemy"], "softcore_b", "annihilate_electrostatics")
     without(["analysis"], "detect_equilibration")             # (review of 3897311: the same for this one)
+    # (review of stage 3 of the plan of 2026-11-25: and for the method of adaptive lambda scheduling,
+    # two levels down in its section)
+    without(["lambda_schedule", "adaptive"], "method", "thermodynamic_length")
     driver._run(config(sampling=longer), out, False, log.append)
     assert previous() == ["resolved_config.previous_1.yaml"]
+    assert read_settings(out / "resolved_config.yaml")["lambda_schedule"]["adaptive"]["method"] == "als"
     assert read_settings(out / "resolved_config.yaml")["alchemy"]["softcore_b"] == 1
     assert read_settings(out / "resolved_config.yaml")["analysis"]["detect_equilibration"] is False
     without(["alchemy"], "softcore_b", "annihilate_electrostatics")

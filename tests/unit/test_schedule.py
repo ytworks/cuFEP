@@ -15,6 +15,7 @@ from cufep.alchemy.schedule import (
     AlsSettings,
     Schedule,
     adaptive_schedule,
+    add_to_pairs,
     als_step,
     bad_sections,
     choose_section,
@@ -169,6 +170,23 @@ def test_the_window_limit_stops_the_insertion():
     assert new is None and rec["status"] == "converged"                            # nothing to add anyway
 
 
+def test_windows_that_must_stay_get_a_window_into_every_deficient_pair():
+    """Where windows were added by thermodynamic length the rule may not move a window: every
+    deficient pair gets a window at its middle, where the rule would space a section of two pairs
+    evenly again and move the window between them."""
+    windows, overlaps = [0, 10, 20, 30], [0.1, 0.2, 0.5]
+    assert als_step(windows, overlaps, 0.3)[0] == [0, 7, 13, 20, 30]                  # the window at 10 is gone
+    new, rec = add_to_pairs(windows, overlaps, 0.3, room=9)
+    assert new == [0, 5, 10, 15, 20, 30] and rec["status"] == "inserted" and rec["new_windows"] == [5, 15]
+    assert rec["section"] == [0, 20] and rec["bad_sections"] == [[0, 20]]
+    assert add_to_pairs(windows, overlaps, 0.3, room=1)[0] == [0, 5, 10, 20, 30]         # the lowest overlap first
+    assert add_to_pairs(windows, overlaps, 0.3, room=0)[1]["status"] == "max_windows"
+    assert add_to_pairs(windows, [0.4, 0.5, 0.5], 0.3) == (None, {
+        "windows": windows, "superdiagonal": [0.4, 0.5, 0.5], "bad_sections": [], "status": "converged"})
+    new, rec = add_to_pairs([0, 1, 2, 9], [0.1, float("nan"), 0.2], 0.3, room=9)        # no candidate in two pairs
+    assert new == [0, 1, 2, 6, 9] and add_to_pairs([0, 1, 2], [0.1, 0.1], 0.3)[1]["status"] == "saturated"
+
+
 def test_the_rule_ends_with_every_pair_above_the_threshold():
     """A model in which the overlap of two windows is known in closed form.
 
@@ -250,24 +268,29 @@ def test_the_overlap_of_a_pair_alone_rises_as_windows_get_closer_and_the_matrix_
 
 
 def precalculation_of_harmonic_windows(context, integrator, overlap_matrix, max_windows, per_lambda=30.0,
-                                       threshold=0.33, candidates=101, start=21):
+                                       threshold=0.33, candidates=101, start=21, method="als", centre=None):
     """The precalculation of a vanish stage whose windows are unit-width harmonic windows,
-    ``per_lambda`` widths per unit of lambda: the pool returns the energies of such windows at
-    the candidates, the Context only gives the stage and the start configurations."""
+    ``per_lambda`` widths per unit of lambda, or with their centres at ``centre(lambda)``: the pool
+    returns the energies of such windows at the candidates, the Context only gives the stage and
+    the start configurations."""
     class Pool:
         def run(self, tasks):
             out = []
             for task in tasks:
                 lam = 1.0 - task["state"]["lambda_sterics"]
                 grid = np.linspace(0.0, 1.0, task["candidates"])
-                x = np.random.default_rng(int(round(lam * 100)) + 17).normal(per_lambda * lam, 1.0, task["n_samples"])
-                out.append({"energies": {"vanish": 0.5 * (x[:, None] - per_lambda * grid[None, :]) ** 2},
+                if centre is None:
+                    at, centres, seed = per_lambda * lam, per_lambda * grid, int(round(lam * 100)) + 17
+                else:
+                    at, centres, seed = centre(lam), centre(grid), int(round(lam * 1.0e6)) + 17
+                x = np.random.default_rng(seed).normal(at, 1.0, task["n_samples"])
+                out.append({"energies": {"vanish": 0.5 * (x[:, None] - centres[None, :]) ** 2},
                             "config": task["config"]})
             return out
 
     settings = AlsSettings(overlap_threshold=threshold, overlap_matrix=overlap_matrix, candidates=candidates,
                            initial_windows={"vanish": start}, window_ps=4.0, sample_interval_ps=0.002, walk_ps=0.004,
-                           max_windows=max_windows)
+                           max_windows=max_windows, method=method)
     return adaptive_schedule(context, integrator, ["vanish"], 300.0, 2.0, settings, lambda m: None, pool=Pool())[0]
 
 
@@ -323,6 +346,124 @@ def test_many_initial_windows_and_a_raised_threshold_converge_by_the_overlap_of_
     assert initial_window_indices(thirds.provenance["initial_lambda"]["vanish"], 100) == [0, 33, 66, 99]
     again = initial_window_indices(thirds.windows()["vanish"], 100)
     assert again[0] == 0 and again[-1] == 99 and len(again) == len(thirds.states)
+
+
+def harmonic_context(water_ligand_system):
+    """A Context that gives the precalculation of harmonic windows its stage and its start."""
+    system, pos, box, ligand = water_ligand_system
+    integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+    integ.setRandomNumberSeed(31)
+    ctx = mm.Context(make_alchemical_system(system, ligand).system, integ, mm.Platform.getPlatformByName("CPU"))
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(pos)
+    ctx.setVelocitiesToTemperature(300.0, 5)
+    return ctx, integ
+
+
+def both_conditions_hold(schedule, threshold):
+    """Whether the last records of a schedule say that every pair of neighbouring windows is above
+    the overlap threshold and at most a step of the thermodynamic length apart."""
+    record = schedule.provenance
+    step = record["length_additions"]["step_kT"]
+    last_pass = record["length_additions"]["passes"][-1]["stages"]["vanish"]
+    last_rule = [rec for rec in record["iterations"] if rec["stage"] == "vanish"][-1]
+    read = last_rule.get("pair_overlap", last_rule["superdiagonal"])        # what the rule read last
+    return (last_rule["status"] == "converged" and min(read) > threshold
+            and last_pass["added_lambda"] == [] and last_pass["longest_step"] <= step
+            and last_pass["lambda"] == last_rule["lambda"] == [round(v, 6) for v in schedule.windows()["vanish"]])
+
+
+def test_thermodynamic_length_adds_to_the_windows_of_the_rule_and_takes_none_away(water_ligand_system):
+    """``method: thermodynamic_length`` (plan of 2026-11-25; the owner: the present method is kept and
+    the second condition is added to it) on a stage that is 26 widths long, with a step of 1.32 kT
+    (an exchange acceptance of 0.35).
+
+    With a threshold of 0.20, 14 windows 2 widths apart overlap by 0.22 as pairs: the rule adds
+    nothing and ``als`` ends with them. They are more than a step apart, so the method adds one
+    window to every interval: 27 windows 1 apart, the 14 among them. From 41 windows, which are
+    within a step of each other, the method adds nothing and its windows are those of ``als``. From
+    11 with a threshold of 0.30 the rule ends with 25, some of them 1.56 apart on the 101 candidates,
+    and the method adds to those pairs."""
+    ctx, integ = harmonic_context(water_ligand_system)
+
+    def run(start, method, threshold, matrix="pair"):
+        return precalculation_of_harmonic_windows(ctx, integ, matrix, max_windows=100, per_lambda=26.0,
+                                                  threshold=threshold, start=start, method=method)
+
+    # the same with the rule on the matrix of the stage, as the solvent leg has it (2 widths apart: 0.207
+    # there): the leg keeps its rule, and once windows are added the overlap of each pair alone is read
+    by_rule, both = run(14, "als", 0.18, "stage"), run(14, "thermodynamic_length", 0.18, "stage")
+    assert len(by_rule.states) == 14 and len(both.states) == 27 and both_conditions_hold(both, 0.18)
+    assert set(by_rule.windows()["vanish"]) < set(both.windows()["vanish"])
+    rule_records = by_rule.provenance["iterations"]
+    assert both.provenance["iterations"][:len(rule_records)] == rule_records and "pair_overlap" not in rule_records[0]
+    assert both.provenance["overlap_matrix"] == "stage" and "pair_overlap" in both.provenance["iterations"][-1]
+
+    by_rule, both = run(14, "als", 0.20), run(14, "thermodynamic_length", 0.20)
+    assert len(by_rule.states) == 14 and by_rule.provenance["method"] == "adaptive lambda scheduling"
+    assert "length_additions" not in by_rule.provenance
+    values, record = both.windows()["vanish"], both.provenance
+    assert set(by_rule.windows()["vanish"]) < set(values) and len(values) == 27 and both.notes == []
+    assert max(np.diff(values)) <= 0.04 + 1e-9                                  # 1.04 widths or less
+    assert record["method"] == "adaptive lambda scheduling and thermodynamic length"
+    additions = record["length_additions"]
+    assert additions["exchange_acceptance"] == 0.35 and additions["step_kT"] == pytest.approx(1.3217, abs=1e-4)
+    first = additions["passes"][0]["stages"]["vanish"]
+    assert first["lambda"] == [round(v, 6) for v in by_rule.windows()["vanish"]] and len(first["added_lambda"]) == 13
+    assert first["longest_step"] == pytest.approx(1.04, rel=0.1) and len(additions["passes"]) == 2
+    assert both_conditions_hold(both, 0.20)
+    # the start is the start of the schedule, as with the rule alone: 13 windows were added to it
+    assert record["initial_windows"] == {"vanish": 14} and record["windows_simulated"] == 27
+    assert record["thermodynamic_length"]["vanish"]["exchange_acceptance"] == pytest.approx(
+        [math.erfc(0.5 * 26.0 * d) for d in np.diff(values)], abs=0.05)
+
+    by_rule, both = run(41, "als", 0.30), run(41, "thermodynamic_length", 0.30)
+    assert both.windows() == by_rule.windows() and both_conditions_hold(both, 0.30)
+    assert both.provenance["iterations"] == by_rule.provenance["iterations"]
+    assert [p["stages"]["vanish"]["added_lambda"] for p in both.provenance["length_additions"]["passes"]] == [[]]
+    by_rule, both = run(11, "als", 0.30), run(11, "thermodynamic_length", 0.30)
+    assert len(by_rule.states) == 25 and set(by_rule.windows()["vanish"]) < set(both.windows()["vanish"])
+    assert both_conditions_hold(both, 0.30)
+    with pytest.raises(ValueError, match="method is one of als, thermodynamic_length"):
+        precalculation_of_harmonic_windows(ctx, integ, "pair", max_windows=100, method="length")
+
+
+def test_thermodynamic_length_and_the_rule_take_turns_until_both_conditions_hold(water_ligand_system):
+    """Two stages on which the rule and the lengths each ask for windows, with a threshold of 0.30
+    (pairs up to 1.55 widths apart pass) and a step of 1.32.
+
+    A path that is steep near lambda = 1, x(lambda) = 6 lambda + 20 lambda^4, from 21 evenly spaced
+    windows that are 0.3 to 3.8 widths apart (1001 candidates): the rule brings every pair within 1.55,
+    and the method then adds windows to the pairs that are still more than 1.32 apart.
+
+    A step of 6 widths between lambda 0.5 and 0.6 that 11 evenly spaced windows do not resolve: the
+    rule adds windows there until every pair overlaps by more than 0.30, and only then are the
+    gradients of the windows in the step known, by which the method adds more.
+
+    In both, every window that ``als`` ends with is a window of the method, and the last records say
+    that both conditions hold."""
+    def steep(lam):
+        return 6.0 * lam + 20.0 * lam ** 4
+
+    def stepped(lam):
+        return 10.0 * lam + 6.0 / (1.0 + np.exp(-(lam - 0.55) / 0.02))
+
+    ctx, integ = harmonic_context(water_ligand_system)
+    for centre, candidates, start, where in ((steep, 1001, 21, (0.4, 1.0)), (stepped, 101, 11, (0.4, 0.7))):
+        by_rule, both = (precalculation_of_harmonic_windows(
+            ctx, integ, "pair", max_windows=100, threshold=0.30, candidates=candidates, start=start, method=method,
+            centre=centre) for method in ("als", "thermodynamic_length"))
+        rule_windows, values = by_rule.windows()["vanish"], both.windows()["vanish"]
+        assert len(rule_windows) > start                                        # the rule added windows
+        assert set(rule_windows) < set(values) and both.notes == []             # and the lengths more, on top
+        assert all(where[0] < v < where[1] for v in set(values) - set(rule_windows))
+        rule_records = by_rule.provenance["iterations"]
+        assert both.provenance["iterations"][:len(rule_records)] == rule_records
+        assert both_conditions_hold(both, 0.30)
+        # along the true path no pair of neighbours is more than a step apart, but for what the gradients
+        # at two windows miss of the path between them
+        assert np.diff(centre(np.array(values))).max() < 1.32 * 1.15
+        assert np.diff(centre(np.array(rule_windows))).max() > 1.32 * 1.05
 
 
 def test_a_leg_that_is_only_told_its_overlap_matrix_gets_the_threshold_of_that_matrix(water_ligand_system):

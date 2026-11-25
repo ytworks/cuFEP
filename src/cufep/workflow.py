@@ -672,6 +672,9 @@ MEMBRANE_SETTINGS_ADDED = {"complex_leg": "bilayer", "water": None}
 #: earlier version wrote is read with these values where it lacks them (``write_run_record``)
 SETTINGS_ADDED = {"alchemy": ALCHEMY_SETTINGS_ADDED, "analysis": ANALYSIS_SETTINGS_ADDED,
                   "membrane": MEMBRANE_SETTINGS_ADDED,
+                  # the rule of adaptive lambda scheduling from the start of a leg, the only method there was
+                  "lambda_schedule": {"adaptive": {"method": "als",
+                                                   "thermodynamic_length": {"exchange_acceptance": 0.35}}},
                   # no water relocation moves and no grand canonical moves of water: the sections as
                   # they are by default
                   "sampling": {"relocation_mc": {"enabled": False, "interval_ps": 4.0, "trial_poses": 16384,
@@ -3141,7 +3144,8 @@ def als_settings(cfg, leg: str, rest2_scale: float = 1.0):
                        window_ps=a.window(leg), equilibration_ps=a.equilibration(leg),
                        sample_interval_ps=a.sample_interval_ps,
                        start_configurations=a.start_configurations, walk_ps=a.walk_ps,
-                       max_windows=int(getattr(a.max_windows, leg)), rest2_scale=float(rest2_scale))
+                       max_windows=int(getattr(a.max_windows, leg)), rest2_scale=float(rest2_scale),
+                       method=a.method_of(leg), exchange_acceptance=a.thermodynamic_length.acceptance(leg))
 
 
 def _schedule_of_this_leg(path: Path, leg: str, stages: list[str]):

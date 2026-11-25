@@ -304,8 +304,20 @@ def write_run_record(out_dir: Path, resolved: Config, report, protein, log=print
     def calculation(data: dict) -> dict:
         return {key: value for key, value in data.items() if key not in ("resources", "output")}
 
+    def with_added(record: dict, added: dict) -> dict:
+        """The record with the settings it lacks, at every depth of a section it has (a setting of
+        ``lambda_schedule.adaptive`` is two levels down: review of stage 3 of the plan of 2026-11-25)."""
+        out = dict(record)
+        for key, value in added.items():
+            if key not in out:
+                out[key] = value
+            elif isinstance(value, dict) and isinstance(out[key], dict):
+                out[key] = with_added(out[key], value)
+        return out
+
     if earlier is not None:
-        earlier = dict(earlier, **{section: {**added, **earlier[section]} for section, added in SETTINGS_ADDED.items()
+        earlier = dict(earlier, **{section: with_added(earlier[section], added)
+                                   for section, added in SETTINGS_ADDED.items()
                                    if isinstance(earlier.get(section), dict)})
     if earlier is not None and settings_differences(calculation(earlier), calculation(new)):
         n = 1

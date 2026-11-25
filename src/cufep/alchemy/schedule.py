@@ -48,6 +48,18 @@ Adaptive mode: adaptive lambda scheduling (ALS)
     start with many windows, or a threshold above what that element can reach, makes the rule
     add windows where none are needed until ``max_windows``. The overlap of a pair alone rises
     to 0.5 as its windows meet. The rule itself (steps 3 and 4) is the same.
+
+    cuFEP's own, by a setting (``method: thermodynamic_length``; the owner, 2026-11-25): the rule
+    above runs as it is, and a second condition is added to its result. Once the rule has nothing
+    to add, windows are added wherever two neighbouring windows are more than a step of the
+    thermodynamic length apart, so many that no step is longer
+    (:mod:`cufep.alchemy.thermodynamic_length`: the metric of Clark et al., J. Chem. Theory Comput.
+    2024, 20, 7806, eq 19; the step from a target acceptance of the exchange between neighbouring
+    windows, as Walter and Bereau, arXiv:2610.11714, section S1.8). No window is taken away or
+    moved by this. The new windows are run, the rule reads the overlaps of the stages that got
+    windows again (the overlap of a pair alone), and the two take turns until neither adds: every
+    pair is then above the overlap threshold and at most a step long, both by the samples of the
+    precalculation. So the windows of ``method: als`` are among those of this method.
 """
 from __future__ import annotations
 
@@ -59,7 +71,7 @@ import yaml
 
 from cufep.alchemy.candidates import initial_indices, initial_window_indices
 from cufep.alchemy.factory import LAMBDA_ELECTROSTATICS, LAMBDA_RESTRAINTS, LAMBDA_STERICS
-from cufep.alchemy.thermodynamic_length import stage_record
+from cufep.alchemy.thermodynamic_length import length_of_acceptance, stage_record, windows_added_by_length
 from cufep.sampling.states import (
     R_GAS,
     STAGE_ALIASES,
@@ -72,8 +84,8 @@ from cufep.sampling.states import (
 )
 
 __all__ = ["Schedule", "AlsSettings", "stage_values", "schedule_from_windows", "fixed_schedule", "initial_indices",
-           "initial_window_indices", "bad_sections", "choose_section", "redistribute", "als_step", "stage_overlap",
-           "pair_overlap", "adaptive_schedule", "run_window", "STAGE_ALIASES"]
+           "initial_window_indices", "bad_sections", "choose_section", "redistribute", "als_step", "add_to_pairs",
+           "stage_overlap", "pair_overlap", "adaptive_schedule", "run_window", "STAGE_ALIASES"]
 
 
 # ============================================================================ the schedule
@@ -284,9 +296,37 @@ def als_step(windows: list[int], superdiagonal, threshold: float, room: int = 1)
     return None, {**record, "status": "saturated"}
 
 
+def add_to_pairs(windows: list[int], superdiagonal, threshold: float, room: int = 1) -> tuple[list[int] | None, dict]:
+    """One decision for a stage whose windows must all stay where they are: a window into the
+    middle of every deficient pair, the pairs with the lowest overlap first while there is room.
+
+    What :func:`als_step` is for a section of one pair, for every deficient pair at once. It is
+    used where windows were added by thermodynamic length: spacing the windows of a section of
+    several pairs evenly, as the rule does, would move windows the rule had ended with. Returns
+    the new window list or ``None``, and a record with the ``status`` values of :func:`als_step`.
+    """
+    sections = bad_sections(superdiagonal, threshold)
+    record = {"windows": list(windows), "superdiagonal": [float(v) for v in superdiagonal],
+              "bad_sections": [[windows[a], windows[b]] for a, b in sections]}
+    pairs = [k for a, b in sections for k in range(a, b)]
+    if not pairs:
+        return None, {**record, "status": "converged"}
+    if room < 1:
+        return None, {**record, "status": "max_windows"}
+    free = sorted((k for k in pairs if windows[k + 1] - windows[k] >= 2),
+                  key=lambda k: (float(superdiagonal[k]) if np.isfinite(superdiagonal[k]) else -np.inf, k))[:room]
+    if not free:
+        return None, {**record, "status": "saturated"}
+    added = sorted(int(round(0.5 * (windows[k] + windows[k + 1]))) for k in free)
+    return sorted(windows + added), {**record, "status": "inserted", "new_windows": added,
+                                     "section": [windows[min(free)], windows[max(free) + 1]]}
+
+
 # ============================================================================ ALS: the precalculation
 #: how the windows of the first iteration of the precalculation get their start configurations
 START_CONFIGURATIONS = ("walk", "sequential")
+#: how the precalculation chooses the windows
+METHODS = ("als", "thermodynamic_length")
 
 
 @dataclass
@@ -319,6 +359,13 @@ class AlsSettings:
     #: windows of the precalculation carry the scale of their place along the leg, and so do
     #: the candidates whose energies are recorded.
     rest2_scale: float = 1.0
+    #: how the windows are chosen (METHODS): "als", the rule above from ``initial_windows``; or
+    #: "thermodynamic_length", that rule and then windows added where neighbouring windows are more
+    #: than a step of the thermodynamic length apart, in turns until both conditions hold
+    method: str = "als"
+    #: thermodynamic_length: the acceptance of an exchange between neighbouring windows that the
+    #: spacing aims at (the step of the length is 2 erfcinv of it)
+    exchange_acceptance: float = 0.35
 
 
 def candidate_energies(context, stage: str, grid: np.ndarray, beta: float, leg_stages=None,
@@ -449,7 +496,10 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     if s.start_configurations not in START_CONFIGURATIONS:
         raise ValueError(f"start_configurations is one of {', '.join(START_CONFIGURATIONS)}, "
                          f"not {s.start_configurations!r}")
+    if s.method not in METHODS:
+        raise ValueError(f"method is one of {', '.join(METHODS)}, not {s.method!r}")
     by_pair = s.overlap_matrix == "pair"
+    by_length = s.method == "thermodynamic_length"
     params = context.getParameters()
     present = {"restrain": LAMBDA_RESTRAINTS, "discharge": LAMBDA_ELECTROSTATICS, "vanish": LAMBDA_STERICS}
     stages = [st for st in (canonical_stage(x) for x in stages) if present[st] in params]
@@ -502,6 +552,8 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             runs[nd] = result
 
     def run_all(todo: list[tuple[int, int]]) -> None:
+        if not todo:                                      # (every window has been run)
+            return
         if runs:                                          # a later iteration: from what had been run before it
             run_from(todo, [nearest(nd) for nd in todo])
         elif s.start_configurations == "walk":            # first iteration: a short walk gives the starts
@@ -524,6 +576,42 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
     def total_windows() -> int:
         return len({node(k, i) for k in windows for i in windows[k]})
 
+    notes, passes, rule_windows = [], [], {}
+    speed = float(length_of_acceptance(s.exchange_acceptance)) if by_length else None
+
+    def add_by_length() -> bool:
+        """thermodynamic_length: windows added where neighbouring windows are more than a step of
+        the length of their stage apart, by the samples of the windows the leg has now. Every
+        window stays; True if a window was added."""
+        measured = {k: stage_record([runs[node(k, i)]["energies"][name] for i in windows[k]], windows[k], 1.0 / top)
+                    for k, name in enumerate(stages)}
+        # a stage whose length is not a number gets no window by its length
+        usable = [k for k in measured if np.all(np.isfinite(measured[k]["length"]))]
+        added, limited = windows_added_by_length([(windows[k], measured[k]["length"]) for k in usable], speed,
+                                                 s.max_windows - total_windows()) if usable else ([], [])
+        if not passes:
+            rule_windows.update({k: list(v) for k, v in windows.items()})      # what the rule alone ends with
+        record = {}
+        for k, name in enumerate(stages):
+            record[name] = {"lambda": [round(i / top, 6) for i in windows[k]],
+                            "gradient_sd": [round(float(v), 4) for v in measured[k]["gradient_sd"]],
+                            "length": [round(float(v), 4) for v in measured[k]["length"]]}
+            if k not in usable:
+                continue
+            new = added[usable.index(k)]
+            # the steps that every interval is cut into, and the longest of them
+            cut = np.diff(np.searchsorted(new, windows[k])) + 1
+            longest = float(np.max(np.diff(measured[k]["length"]) / cut))
+            record[name].update({"added_lambda": [round(i / top, 6) for i in new], "longest_step": round(longest, 4),
+                                 "limited_by_max_windows": limited[usable.index(k)]})
+            if new:
+                log(f"lambda schedule, {name}: iteration {iteration}, neighbouring windows more than {speed:.2f} kT "
+                    f"apart; running {record[name]['added_lambda']}")
+                windows[k] = sorted(windows[k] + new)
+                status[k] = "running"                      # the rule reads the overlaps of its pairs again
+        passes.append({"iteration": iteration, "stages": record})
+        return any(rec.get("added_lambda") for rec in record.values())
+
     records, status = [], {k: "running" for k in windows}
     iteration = 0
     while True:
@@ -538,12 +626,18 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             # samples of the precalculation; the analysis of the production checks the matrix of all
             # windows of the leg from its own samples); the rule reads it, or each pair alone
             sup = stage_overlap(energies, windows[k])
-            read = pair_overlap(energies, windows[k]) if by_pair else sup
-            new, rec = als_step(windows[k], read, s.overlap_threshold, room=s.max_windows - total_windows())
+            # once windows were added by length the rule reads each pair alone, whatever matrix the leg
+            # reads (the element of the matrix of a stage falls as windows are added between two windows,
+            # the overlap of a pair alone does not, and it is never below that element), and adds to
+            # deficient pairs one by one: spacing a section evenly would move windows the rule had ended with
+            alone = by_pair or bool(passes)
+            read = pair_overlap(energies, windows[k]) if alone else sup
+            step = add_to_pairs if passes else als_step
+            new, rec = step(windows[k], read, s.overlap_threshold, room=s.max_windows - total_windows())
             rec = {"iteration": iteration, "stage": name,
                    "lambda": [round(i / top, 6) for i in rec.pop("windows")],
                    "superdiagonal": [round(float(v), 4) for v in sup],
-                   **({"pair_overlap": [round(float(v), 4) for v in read]} if by_pair else {}),
+                   **({"pair_overlap": [round(float(v), 4) for v in read]} if alone else {}),
                    "bad_sections": [[round(a / top, 6), round(b / top, 6)] for a, b in rec.pop("bad_sections")],
                    "status": rec["status"],
                    **({"section": [round(v / top, 6) for v in rec["section"]],
@@ -552,17 +646,21 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
             if new is None:
                 status[k] = rec["status"]
                 log(f"lambda schedule, {name}: {len(windows[k])} windows, {rec['status']} "
-                    f"(lowest overlap {min(rec['pair_overlap' if by_pair else 'superdiagonal']):.3f}"
+                    f"(lowest overlap {min(rec['pair_overlap' if alone else 'superdiagonal']):.3f}"
                     + (f" of a pair alone, {min(rec['superdiagonal']):.3f} in the matrix of the stage)"
-                       if by_pair else ")"))
+                       if alone else ")"))
             else:
                 log(f"lambda schedule, {name}: iteration {iteration}, overlap at or below {s.overlap_threshold:g} "
                     f"between {rec['section'][0]:g} and {rec['section'][1]:g}; running {rec['new_lambda']}")
                 windows[k] = new
                 changed = True
+        # thermodynamic_length: once the rule has nothing to add, windows are added where neighbours are
+        # more than a step of the length apart; the rule then reads the stages that got windows again,
+        # until neither adds: every pair is above the overlap threshold and at most a step long
+        if not changed and by_length and add_by_length():
+            changed = True
         if not changed:
             break
-    notes = []
     for k, name in enumerate(stages):
         if status[k] == "saturated":
             notes.append(f"adaptive lambda scheduling could not reach the overlap threshold in the {name} stage: "
@@ -570,6 +668,20 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         elif status[k] == "max_windows":
             notes.append(f"adaptive lambda scheduling stopped in the {name} stage at the limit of "
                          f"{s.max_windows} windows with neighbouring windows still below the overlap threshold")
+    if by_length:
+        # the lengths and the rule after them only add: every window the rule alone ended with is there
+        if any(not set(rule_windows[k]) <= set(windows[k]) for k in windows):
+            raise RuntimeError("a window of adaptive lambda scheduling was lost while windows were added by length")
+        # what the last pass by length left: a stage without a length, or a step that stayed too long
+        for name, stage in passes[-1]["stages"].items():
+            if "longest_step" not in stage:
+                notes.append(f"no window was added to the {name} stage by its thermodynamic length, which is not a "
+                             "number")
+            elif stage["longest_step"] > speed * (1.0 + 1.0e-9):
+                notes.append(f"neighbouring windows of the {name} stage are still more than {speed:.2f} kT apart, the "
+                             f"step of an exchange acceptance of {s.exchange_acceptance:g}: "
+                             + (f"the leg may not have more than the {s.max_windows} windows of max_windows"
+                                if stage["limited_by_max_windows"] else "they are already one candidate apart"))
     values = {name: [i / top for i in windows[k]] for k, name in enumerate(stages)}
     # the thermodynamic length of every stage, from the samples of its windows: numbers for the
     # record, which the rule does not read (cufep.alchemy.thermodynamic_length)
@@ -579,7 +691,16 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         lengths[name] = {"lambda": [round(i / top, 6) for i in windows[k]],
                          **{key: [round(float(v), 4) for v in series] for key, series in measured.items()}}
     schedule = _assemble(stages, values, "adaptive", s.rest2_scale, notes=notes,
-                         provenance={"method": "adaptive lambda scheduling", "overlap_threshold": s.overlap_threshold,
+                         provenance={"method": ("adaptive lambda scheduling and thermodynamic length" if by_length
+                                                else "adaptive lambda scheduling"),
+                                     # thermodynamic_length: the target, the step, and every pass that
+                                     # followed the rule: per stage the lengths at the windows it had and
+                                     # the windows added by them (the last pass added none)
+                                     **({"length_additions": {
+                                         "exchange_acceptance": s.exchange_acceptance, "step_kT": round(speed, 4),
+                                         "step_kcal_per_mol": round(speed * R_GAS * float(temperature_K) / 4.184, 4),
+                                         "passes": passes}} if by_length else {}),
+                                     "overlap_threshold": s.overlap_threshold,
                                      # the matrix the threshold was compared with (a schedule written
                                      # before this key existed: that of the stage)
                                      "overlap_matrix": s.overlap_matrix,

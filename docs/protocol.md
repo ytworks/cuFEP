@@ -24,6 +24,7 @@ that can be changed in the configuration.
 | equilibration, production | per lambda window: the part that is discarded, and the part used for the estimate | |
 | overlap matrix | probability of a sample of one lambda window being found in another; its superdiagonal (first off-diagonal) holds neighbouring windows | |
 | adaptive lambda scheduling | a precalculation that chooses the lambda windows | ALS |
+| thermodynamic length | along a stage, the integral over lambda of the standard deviation of the gradient of the energy with respect to lambda; a step of it between neighbouring windows is what A3FE calls a thermodynamic speed | |
 | oversubscription factor | number of workers that share one GPU at the same time under NVIDIA MPS | SOMD2 |
 | backend | the code that computes the forces: the cuPotential plugin or stock OpenMM. Not a force field | |
 
@@ -426,6 +427,84 @@ the two) and walked through them.
 | where the precalculation runs | the ligand in solution; the schedule is then used for the bound and the free state | each leg has its own precalculation, stage by stage (the restrain stage exists only in the complex leg) |
 | replica exchange | none in the paper's runs | Hamiltonian replica exchange |
 | after the production | not part of the method | the analysis checks the overlap and the number of independent samples, the levels of the literature, and shows the forward and reverse series and the halves without a verdict ("Checks of the analysis"); the user runs a leg again with more windows or a longer production ("When a leg carries a message") |
+
+### Windows added by thermodynamic length
+
+`lambda_schedule.adaptive.method: thermodynamic_length` (off by default) is the rule above as it
+is, and a second condition on the windows it ends with: neighbouring windows are at most a step
+of the thermodynamic length of their stage apart. The metric is that of Clark et al., J. Chem.
+Theory Comput. 2024, 20, 7806 (A3FE), and the target of the step that of Walter and Bereau,
+arXiv:2610.11714 v1 (section S1.8). The combination is cuFEP's own (the owner's orders of
+2026-11-25: what the present method gives is kept, and the second condition is added to it).
+
+1. The rule of adaptive lambda scheduling runs from `initial_windows` until it has nothing to
+   add, as with `method: als`: with the overlap matrix and the threshold that the leg has.
+2. For every stage: at each of its windows, the standard deviation over the samples of the window
+   of the gradient of the reduced energy with respect to lambda, taken as the central difference
+   of the energies at the two candidates next to the window (the one-sided difference at an end
+   of the stage). The integral of these over lambda by the trapezoidal rule, from one window to
+   the next, is the length d of that interval, in kT.
+3. The step is s = 2 erfcinv(a) with a the `thermodynamic_length.exchange_acceptance` of the leg
+   (1.32 kT for 0.35), the same in every stage. An interval that is longer than s gets
+   ceil(d / s) - 1 new windows, which cut it into equal steps of its length: a step is mapped to
+   lambda by linear interpolation between the two windows, so the new windows are evenly spaced
+   in lambda within the interval, each on the nearest candidate (halves to the even candidate).
+   An interval takes no more windows than it has candidates between its ends. If the leg would
+   get more than `max_windows` windows, the windows go one by one to the interval whose step is
+   the longest until the limit is reached.
+4. The new windows are run, each from the last configuration of the nearest window that had been
+   run. The rule reads the stages that got windows again, now the overlap of each pair alone with
+   the threshold of the leg, and adds a window at the middle of every pair that is deficient (it
+   does not space a section of several pairs evenly again here: that would move windows it had
+   ended with). Then steps 2 and 3 are done again
+   with the samples of all windows. This goes on until neither adds a window.
+
+No window is taken away or moved by steps 2 to 4, so the windows of `method: als` are among
+those of this method, and a leg never has fewer. When the precalculation ends, every pair of
+neighbouring windows is above `overlap_threshold`, as a pair alone, and at most a step long, both
+by its samples;
+where that could not be reached the schedule says so in a note (the windows are one candidate
+apart, the leg has `max_windows` windows, or the length of a stage is not a number, in which
+case no window is added to that stage by its length).
+
+If the energy difference between two windows is normally distributed, its standard deviation d
+in the samples of either is the length between the two, an exchange between them is accepted
+with probability erfc(d / 2), and the overlap of the two alone is 0.34 for d = 1.32 (an
+acceptance of 0.35) and 0.30 for d = 1.55 (0.27). So with the defaults the second condition asks
+for more than the rule of the complex leg does: pairs that it passes at 1.32 to 1.55 kT get a
+window. A3FE
+runs without replica exchange and takes the step as large as the overlap allows; of replica
+exchange its paper says: "If this method were used with replica exchange, benefits would still
+be expected at relatively high thermodynamic speeds, but the need for a sufficiently high
+exchange rate may favor lower speeds."
+
+The rule of a leg stays the one it has, also where it reads the matrix of the stage (the solvent
+leg by default). Only after windows were added by length is the overlap of each pair alone read
+instead: the element of the matrix of a stage falls as windows are added between two windows,
+while the overlap of a pair alone does not and is never below that element, so a pair that the
+rule of the leg had passed stays above the threshold.
+
+| point | the sources | cuFEP |
+|---|---|---|
+| which windows | A3FE: all windows are placed anew at equal steps of the integral, round(L / speed) + 1 values for a stage | the windows of the rule all stay; ceil(d / s) - 1 windows are added to an interval that is d long |
+| the gradient | A3FE: the gradient its engine writes during the run | the central difference of the candidate energies, 0.01 apart in lambda, which the precalculation computes for the overlap; with REST2 it holds the change of the scale of the hot region along the leg |
+| the step | A3FE: a thermodynamic speed in kcal/mol, 2 by default, for runs without replica exchange. Walter and Bereau: an acceptance of 0.35 with replica exchange, one schedule for all ligands | s = 2 erfcinv(a), a = 0.35 by default (the owner's choice); a precalculation for each leg of each ligand |
+| the acceptance of two windows a distance apart | Walter and Bereau: "we assumed Gaussian distributed exchange energies"; no formula is printed | erfc(d / 2), derived for a normally distributed energy difference and checked on harmonic windows |
+| where a lambda value may be | A3FE: rounded to three decimals | on the candidates of the stage |
+| the overlap | A3FE: the off-diagonal elements of the overlap matrix are looked at ("the rule-of-thumb that off-diagonal values should not be lower than 0.03") | the rule of adaptive lambda scheduling, before the lengths and again after every window they add |
+| time per window | A3FE: allocated adaptively afterwards (its eq 25) | not adopted: every window runs for `sampling.production_ns` |
+
+`schedule.yaml` holds under `length_additions` the target, the step in kT and in kcal/mol, and
+every pass of steps 2 and 3 with the iteration it followed: for every stage the windows it had,
+the standard deviations and the integral at them, the windows added and the longest step that
+is left; the last pass added none. The records of the rule (`iterations`) are those of
+`method: als` as far as that method goes, and `initial_windows` is the start, so
+`lambda_windows_added` of a result counts what the rule and the lengths added together.
+
+What was measured on the stored runs before the method was written (the lengths of 66 legs,
+what a normally distributed difference predicts against what the runs measured, the windows the
+second condition would add) is in the plan
+`docs/plans/2026-11-25-thermodynamic-length-schedule.md`.
 
 ### What was measured on TYK2
 

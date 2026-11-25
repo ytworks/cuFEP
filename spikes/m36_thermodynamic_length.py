@@ -23,9 +23,11 @@ lambda that the middle of the pair is in.
 
 For every stage the sum of the lengths of its pairs, and how many windows a spacing would give
 that corresponds to an acceptance (ceil(L / s) intervals, s = 2 erfcinv(acceptance)); for every
-leg the windows it had and those totals. The lengths between windows that are far apart leave the
-relation that makes them add up, so a sum is the nearer to the length of the stage the closer the
-windows of the run were.
+leg the windows it had and those totals. Also how many windows a leg would have if all its windows
+were kept and every pair of neighbours that is d apart got ceil(d / s) - 1 windows: what
+``method: thermodynamic_length`` adds to the windows of the rule. The lengths between windows that
+are far apart leave the relation that makes them add up, so a sum is the nearer to the length of the
+stage the closer the windows of the run were.
 
 Three tables are written to ``--out`` (pairs.csv, stages.csv, legs.csv) and a summary is printed.
 Numbers only: nothing is judged here.
@@ -117,7 +119,11 @@ def leg_rows(run: Path, leg_dir: Path) -> tuple[list[dict], list[dict], dict] | 
             pairs.append(row)
         stage_row = {**ident, "stage": stage, "windows": hi - lo + 1, "length": length}
         for a in TARGETS:
-            stage_row[f"intervals_at_{a}"] = max(1, math.ceil(length / float(length_of_acceptance(a))))
+            step = float(length_of_acceptance(a))
+            stage_row[f"intervals_at_{a}"] = max(1, math.ceil(length / step))
+            # with every window of the run kept: ceil(d / step) - 1 windows into a pair that is d apart
+            stage_row[f"added_by_length_at_{a}"] = int(
+                sum(max(0, math.ceil(p["distance"] / step - 1.0e-9) - 1) for p in pairs[-(hi - lo):]))
         stages.append(stage_row)
     accepted = [p["acceptance_recorded"] for p in pairs if p["acceptance_recorded"] is not None]
     ns = len(u) * float(attrs.get("iteration_ps", 0.0)) / 1000.0
@@ -133,6 +139,9 @@ def leg_rows(run: Path, leg_dir: Path) -> tuple[list[dict], list[dict], dict] | 
                "overlap_threshold": provenance.get("overlap_threshold")}
     for a in TARGETS:
         leg_row[f"windows_at_{a}"] = sum(s[f"intervals_at_{a}"] for s in stages) + 1
+    for a in TARGETS:
+        leg_row[f"windows_with_those_added_by_length_at_{a}"] = leg_row["windows"] + sum(
+            s[f"added_by_length_at_{a}"] for s in stages)
     return pairs, stages, leg_row
 
 
@@ -220,6 +229,13 @@ def main() -> None:
         print("  windows:                    ", quantiles(float(r["windows"]) for r in rows))
         for a in TARGETS:
             print(f"  windows at acceptance {a:.2f}:  ", quantiles(float(r[f"windows_at_{a}"]) for r in rows))
+        for a in TARGETS:
+            print(f"  its windows and those added by length for {a:.2f}:",
+                  quantiles(float(r[f"windows_with_those_added_by_length_at_{a}"]) for r in rows))
+            for stage in ("restrain", "discharge", "vanish"):
+                added = [s[f"added_by_length_at_{a}"] for s in stages if s["leg"] == leg and s["stage"] == stage]
+                if added:
+                    print(f"      added to {stage}:", quantiles(float(v) for v in added))
         print("  lowest acceptance recorded: ", quantiles(r["acceptance_lowest"] for r in rows))
         print("  highest acceptance recorded:", quantiles(r["acceptance_highest"] for r in rows))
         print("  sd / mean of the acceptances:", quantiles(r["acceptance_cv"] for r in rows))

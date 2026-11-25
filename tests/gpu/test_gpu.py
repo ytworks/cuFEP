@@ -249,9 +249,12 @@ def test_killed_worker_is_restarted_and_the_iteration_repeated(tmp_path, big_wat
 
 
 @needs_cuda
+@pytest.mark.parametrize("method", ["als", "thermodynamic_length"])
 @pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
-def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend):
-    """Adaptive lambda scheduling with the windows of an iteration running in worker processes."""
+def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend, method):
+    """Adaptive lambda scheduling with the windows of an iteration running in worker processes: by
+    the rule from its start, and with windows added by thermodynamic length after the rule (those run
+    from the nearest window that had been run)."""
     import openmm.unit as u
 
     from cufep.alchemy.schedule import AlsSettings, adaptive_schedule
@@ -259,6 +262,7 @@ def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend)
     from cufep.sampling.states import AlchemicalState
 
     alch, schedule, pos, box, _ = big_water_leg
+    by_length = method == "thermodynamic_length"
     be = get_backend(backend)
     system = be.prepare_system(alch.system)
     system.addForce(be.make_isotropic_barostat(1.0 * u.bar, 300 * u.kelvin, 25, seed=2))
@@ -272,7 +276,7 @@ def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend)
                    backend=backend, temperature_K=300.0, pressure_bar=1.0, barostat="isotropic", timestep_fs=2.0,
                    steps_per_iteration=50, seed=9)
     settings = AlsSettings(candidates=21, initial_windows={"discharge": 3, "vanish": 4}, window_ps=1.0,
-                           equilibration_ps=0.2, sample_interval_ps=0.05, walk_ps=0.2, max_windows=10)
+                           equilibration_ps=0.2, sample_interval_ps=0.05, walk_ps=0.2, max_windows=10, method=method)
     messages = []
     with WindowPool(spec, [0, 0, 0], log=messages.append) as pool:
         result, configs = adaptive_schedule(ctx, integ, ["discharge", "vanish"], 300.0, 2.0, settings,
@@ -284,6 +288,14 @@ def test_precalculation_windows_run_in_a_pool_of_workers(big_water_leg, backend)
     last = {rec["stage"]: rec for rec in result.provenance["iterations"]}
     assert set(last) == {"discharge", "vanish"}
     assert all(rec["status"] in ("converged", "saturated", "max_windows") for rec in last.values())
+    if by_length:
+        passes = result.provenance["length_additions"]["passes"]
+        assert result.provenance["initial_windows"] == {"discharge": 3, "vanish": 4}
+        assert result.provenance["windows_simulated"] >= len(result.states)
+        # the last pass by length is of the windows of the schedule, and found a length for every stage
+        for name, stage in passes[-1]["stages"].items():
+            assert stage["lambda"] == [round(v, 6) for v in result.windows()[name]]
+            assert np.isfinite(stage["length"][-1]) and stage["length"][-1] > 0.0 and stage["added_lambda"] == []
 
 
 # ------------------------------------------------------------------------------------- REST2

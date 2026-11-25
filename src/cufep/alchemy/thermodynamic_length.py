@@ -8,11 +8,17 @@ The metric and its integration are those of Clark, Robb, Cole and Michel, J. Che
    energy with respect to lambda over the samples of that value ("root variance of the gradients").
 2. Integrate it over lambda with the trapezoidal rule. The integral from the start of the stage is
    the length up to there; the paper calls a step of that integral a thermodynamic speed.
+3. For a speed, take ``round(length / speed) + 1`` values at equal steps of the integral, two at
+   least, and map each back to lambda by linear interpolation between the simulated values
+   (rounded to three decimals).
 
 cuFEP takes the gradient as a central difference of the reduced energies that the precalculation of
 adaptive lambda scheduling computes at all candidate lambda values of a stage, so a length here is
 in kT (the paper's speeds are in kcal/mol: times kT). With REST2 the scale of the hot region changes
 along the leg with lambda, and the difference of the candidate energies holds that change too.
+Where cuFEP adds windows by these lengths (:func:`windows_added_by_length`) it keeps every window
+that was simulated and cuts each interval between two of them into ``ceil(length / step)`` steps, so
+that no step is longer than the one asked for, and puts every new window on a candidate.
 
 What a length says about two windows that are ``d`` apart, if the energy difference between them
 is normally distributed (their own samples then give it the same variance, ``d ** 2``, and means
@@ -28,16 +34,18 @@ that differ by ``d ** 2``):
   samples of each) is ``exp(-d ** 2 / 8) * E[1 / (2 cosh(d z / 2))]`` over a standard normal ``z``:
   0.5 for ``d = 0``, 0.398 for 1, 0.225 for 2.
 
-Nothing here decides anything: these are numbers, and the functions that measure them from samples.
-A number that cannot be had from its input (an energy difference that is not a number, a single
-sample) is NaN, never a value that looks like a measurement.
+The functions that measure decide nothing: these are numbers. The one that adds windows is a rule of
+construction, used only where a configuration asks for it. A number that cannot be had from its
+input (an energy difference that is not a number, a single sample) is NaN, never a value that looks
+like a measurement.
 """
 from __future__ import annotations
 
 import numpy as np
 
 __all__ = ["gradient_sd", "integrated_length", "pair_differences", "pair_distance", "exchange_acceptance",
-           "stage_record", "gaussian_acceptance", "length_of_acceptance", "gaussian_pair_overlap"]
+           "stage_record", "gaussian_acceptance", "length_of_acceptance", "gaussian_pair_overlap",
+           "windows_added_by_length"]
 
 
 def gradient_sd(energies: np.ndarray, index: int, spacing: float) -> float:
@@ -180,3 +188,49 @@ def gaussian_pair_overlap(distance):
     t = np.abs(0.5 * d * z)
     half_sech = np.exp(-t) / (1.0 + np.exp(-2.0 * t))           # 1 / (2 cosh t), without the overflow of cosh
     return np.exp(-0.125 * d[..., 0] ** 2) * np.sum(w * half_sech, axis=-1) / np.sqrt(2.0 * np.pi)
+
+
+
+# ============================================================================ adding windows by length
+def windows_added_by_length(stages: list, speed: float, room: int) -> tuple[list[list[int]], list[bool]]:
+    """The candidates of the windows to add to the stages of a leg so that no step between
+    neighbouring windows is longer than ``speed``. Every window the stages have stays.
+
+    ``stages`` holds for every stage the candidates of its windows, in increasing order, and the
+    length from its first window to each of them (:func:`integrated_length`). The interval between
+    two neighbouring windows that is ``d`` long gets ``ceil(d / speed) - 1`` new windows, which cut
+    it into equal steps of its length. A step is mapped to lambda by linear interpolation between
+    the two windows, as A3FE maps its steps, so the new windows are evenly spaced in lambda within
+    the interval, each on the nearest candidate (halves to the even one, as every window of
+    adaptive lambda scheduling). An interval takes no more windows than it has candidates between
+    its ends.
+
+    ``room`` is the number of windows the leg may still get. The windows are given one by one to
+    the interval whose step is the longest, until no step is longer than ``speed``. The second value
+    says for every stage whether ``room`` was used up while an interval of it could still take one.
+    """
+    if not speed > 0.0:
+        raise ValueError("a speed above 0")
+    intervals = []                                    # [stage, lower candidate, upper candidate, length, new windows]
+    for k, (windows, lengths) in enumerate(stages):
+        windows, lengths = [int(i) for i in windows], np.asarray(lengths, dtype=float)
+        if len(windows) < 2 or len(windows) != len(lengths) or any(b <= a for a, b in zip(windows, windows[1:])):
+            raise ValueError("one length per window, for at least two windows on increasing candidates")
+        if not np.all(np.isfinite(lengths)) or np.any(np.diff(lengths) < 0.0):
+            raise ValueError("the lengths must be numbers that do not fall")
+        intervals += [[k, lo, hi, float(d), 0] for lo, hi, d in zip(windows, windows[1:], np.diff(lengths))]
+
+    def too_long(interval) -> bool:
+        return interval[3] / (interval[4] + 1) > speed * (1.0 + 1.0e-9)
+
+    while True:
+        open_ = [iv for iv in intervals if too_long(iv) and iv[4] < iv[2] - iv[1] - 1]
+        if not open_ or room < 1:
+            break
+        longest = max(open_, key=lambda iv: (iv[3] / (iv[4] + 1), -iv[0], -iv[1]))
+        longest[4] += 1
+        room -= 1
+    added = [[] for _ in stages]
+    for k, lo, hi, _length, new in intervals:
+        added[k] += [int(round(lo + (hi - lo) * j / (new + 1))) for j in range(1, new + 1)]
+    return added, [any(iv[0] == k for iv in open_) for k in range(len(stages))]

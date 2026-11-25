@@ -84,6 +84,7 @@ def _apply_overrides(cfg, repeats, production_ns, gpus, output, backend):
 def lambda_window_table(cfg) -> str:
     """The lambda windows a run with this configuration uses, per leg and stage."""
     from cufep.alchemy.schedule import stage_values
+    from cufep.alchemy.thermodynamic_length import length_of_acceptance
     from cufep.config.schema import WindowsConfig
 
     ls = cfg.lambda_schedule
@@ -106,10 +107,21 @@ def lambda_window_table(cfg) -> str:
             alone = " (the overlap of the two windows alone)" if a.matrix(leg) == "pair" else ""
             return f"at or below {a.threshold(leg):g}{alone}"
 
+        def step(leg: str) -> str:
+            target = a.thermodynamic_length.acceptance(leg)
+            return (f"{leg} leg {float(length_of_acceptance(target)):.2f} kT (an exchange acceptance of {target:g} "
+                    "between neighbours)")
+
+        by_length = [leg for leg in adaptive if a.method_of(leg) == "thermodynamic_length"]
+        placement = []
+        if by_length:
+            placement = ["  and, after that, where neighbouring windows are more than a step of the thermodynamic "
+                         "length apart, until both hold: " + "; ".join(step(leg) for leg in by_length) + ";"]
         lines += [
             "mode adaptive" + (f" in the {adaptive[0]} leg" if fixed else "")
             + ": adaptive lambda scheduling decides the windows in a precalculation.",
             f"  a window is added where the overlap of neighbouring windows is {per_leg(threshold)};",
+            *placement,
             f"  {per_leg(lambda leg: str(a.candidates_of(leg)))} candidate lambda values per stage; "
             "MD per new window: "
             + "; ".join(
