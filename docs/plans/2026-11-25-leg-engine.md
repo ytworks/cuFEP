@@ -1,5 +1,5 @@
 # レグのエンジンを分ける(ABFE と RBFE を 1 つのエンジンの上の 2 つのプロトコルにする)
-Status: In progress (branch `refactor/leg-engine`, PR on `feat/rbfe`)
+Status: Implemented, in review (branch `refactor/leg-engine`, draft PR #18 on `feat/rbfe`)
 Refs: `docs/plans/2026-11-25-rbfe.md`; PR #17
 
 ## Context
