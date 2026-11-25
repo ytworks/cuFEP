@@ -293,7 +293,8 @@ def check_samples_have_their_windows(leg_dir: Path, states) -> None:
     if states is None:
         refuse_samples_without_windows(leg_dir)
     stored = stored_layout(Path(leg_dir) / "hrex")[1].get("conditions")
-    if isinstance(stored, dict) and not _same(stored.get("states"), [dict(s) for s in states]):
+    # samples that do not record their states are not compared (their conditions are checked where they are used)
+    if isinstance(stored, dict) and "states" in stored and not _same(stored["states"], [dict(s) for s in states]):
         raise WorkflowError(f"the lambda windows {Path(leg_dir)} is to use are not those of its samples in "
                             f"{Path(leg_dir) / 'hrex'}; nothing was changed (--reschedule starts the leg anew and "
                             "keeps what it had)")

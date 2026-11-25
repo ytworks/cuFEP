@@ -965,6 +965,15 @@ def test_files_of_an_earlier_run_are_reused_only_for_the_same_input_and_settings
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
+def _schedule_of_the_samples(leg_dir, rest2_scale: float) -> None:
+    """The schedule a leg with samples has (a run writes it before its samples; a leg with samples and without it
+    is refused before the run, cufep.engine.leg.check_samples_have_their_windows)."""
+    from cufep.alchemy.schedule import fixed_schedule
+
+    fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 2}, rest2_scale).save(
+        leg_dir / "schedule.yaml", leg="solvent")
+
+
 def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_path, monkeypatch, ligands):
     """Review of PR 1: a run stopped because its configuration did not fit the directory had already
     overwritten resolved_config.yaml, which then described a configuration that made none of the results."""
@@ -1011,6 +1020,7 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
     for _ in range(6):
         storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
     storage.close()
+    _schedule_of_the_samples(hrex.parent, first.sampling.rest2.scale)
     driver._run(first, out, False, log.append)
     record = (out / "resolved_config.yaml").read_bytes()
     assert (out / "protein_prepared.pdb").exists() and not list(out.glob("resolved_config.previous_*"))
@@ -1081,7 +1091,8 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
     check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
     with pytest.raises(ConditionsError, match="temperature_K: 298.15 -> 310.0"):
         check_leg_reuse(config(thermodynamics={"temperature_K": 310.0}), lig_dir, "solvent", 0, prep_info, 10.0)
-    with pytest.raises(ConditionsError, match="rest2.scale: 1.5 -> 2.0"):
+    # another REST2 scale: the schedule of the leg says it first (its windows were made with 1.5)
+    with pytest.raises(WorkflowError, match="was made with a REST2 scale of 1.5 but sampling.rest2.scale is 2"):
         check_leg_reuse(config(sampling={"rest2": {"scale": 2.0}}), lig_dir, "solvent", 0, prep_info, 10.0)
     check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0, reschedule=True)      # the leg starts anew
     check_leg_reuse(other, lig_dir, "solvent", 1, prep_info, 10.0)                       # a leg without files
@@ -1621,6 +1632,7 @@ def test_a_leg_is_not_continued_from_a_checkpoint_that_does_not_record_its_rows(
             storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
         storage.write_checkpoint(np.zeros((2, 3, 3)), np.zeros((2, 3, 3)), np.zeros((2, 3, 3)), [0, 1], rows, extra)
         storage.close()
+        _schedule_of_the_samples(hrex.parent, cfg.sampling.rest2.scale)
 
     leg(3, {"start": 0})                       # 2 + 4 iterations are planned: it would be continued
     assert "does not record how many of its iterations were stored" in old_checkpoint_refusal(hrex)

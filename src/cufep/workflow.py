@@ -1152,13 +1152,18 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     rest2_scale = cfg.sampling.rest2.scale if cfg.sampling.rest2.scale > 1.0 else 1.0
     sched_file = leg_dir / "schedule.yaml"
     # samples (or the checkpoint of their start) need the windows they are of: the leg's schedule, or the one it is
-    # given; checked here, before begin_leg sets the result of the leg aside (fifth review of PR #18)
+    # given; checked here, before begin_leg sets the result of the leg aside (fifth review of PR #18), after the
+    # checks of the samples below, whose refusals say more of them (the windows of samples that are refused for
+    # their conditions do not matter)
     from cufep.engine.leg import check_samples_have_their_windows
 
     src = given_schedule_file(cfg, lig_dir.name, leg, repeat)
     windows = sched_file if sched_file.exists() else (src if src is not None and src.exists() else None)
-    check_samples_have_their_windows(leg_dir, None if windows is None
-                                     else [state.to_dict() for state in Schedule.load(windows).states])
+
+    def samples_have_their_windows() -> None:
+        check_samples_have_their_windows(leg_dir, None if windows is None
+                                         else [state.to_dict() for state in Schedule.load(windows).states])
+
     if sched_file.exists():
         schedule = Schedule.load(sched_file)
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -1173,6 +1178,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
                 check_windows_settings(made, windows_settings(cfg), start_file, quiet)
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
+        samples_have_their_windows()                 # a checkpoint of the start without samples
         return
     # a leg that is to be continued from a checkpoint of an earlier version (run_leg analyses a leg
     # that has all its iterations as it is, without its checkpoint)
@@ -1197,6 +1203,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
                                                production_ns, states, used_timestep)
         if problems:
             refuse_unrecorded_samples(leg_dir, n_stored, problems)
+        samples_have_their_windows()
         return
     current = {"temperature_K": float(cfg.thermodynamics.temperature_K),
                "pressure_bar": None if gcmc_in(cfg, leg) else float(cfg.thermodynamics.pressure_bar),
@@ -1213,6 +1220,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         differing = conditions_differences(conditions, current)
     if differing:
         raise other_conditions(n_stored, leg_dir / "hrex", differing)
+    samples_have_their_windows()
 
 
 def check_prepared(cfg: Config, ligand, lig_dir: Path, membrane: bool, box_shape: str, log=print) -> dict | None:
