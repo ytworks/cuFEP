@@ -70,9 +70,11 @@ less (the rule of `docs/protocol.md`, "Adaptive lambda scheduling"); the windows
 both legs; the solvent leg runs the windows of each iteration of its precalculation at the same time on the
 GPUs it is granted, while the complex leg pre-equilibrates. `lambda_schedule.adaptive.legs: each` gives each
 leg a precalculation of its own; `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
-number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, as OpenFE
-starts its replicas: the equilibration of the replica exchange relaxes them at the same time, and no window
-waits for another.
+number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, minimised
+in their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all at the same time on
+the GPUs of the leg; the equilibration of the replica exchange then relaxes them further. (At lambda 0 the atoms
+unique to B do not interact, so water can move where they are; a window in which they interact must not start
+from that without a minimisation: cuFEP's first version did, and those windows went to NaN.)
 
 ### Sampling
 

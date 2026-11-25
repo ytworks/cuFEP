@@ -407,6 +407,12 @@ def run_window(context, integrator, task: dict, mover=None, interval_steps: int 
                                              task["temperature_K"], None) for name in task["stages"]}
     _load(context, task["config"], mover)
     set_state(context, state)
+    if task.get("minimize_steps"):
+        # a window that starts from a configuration of another state (cufep.rbfe.leg): minimised in its own
+        # state first, as OpenFE minimises every replica before its equilibration
+        import openmm as mm
+
+        mm.LocalEnergyMinimizer.minimize(context, 10.0, int(task["minimize_steps"]))
     done = 0
 
     def md(steps: int) -> None:

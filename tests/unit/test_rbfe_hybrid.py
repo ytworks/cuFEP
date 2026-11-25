@@ -193,3 +193,41 @@ def test_lambda_functions_switch_the_unique_atoms_in_halves():
     assert middle["lambda_sterics_delete"] == 0.0 and middle["lambda_electrostatics_insert"] == 0.0
     assert second["lambda_sterics_delete"] == 0.5 and second["lambda_electrostatics_insert"] == 0.5
     assert all(math.isclose(v, 0.75) for k, v in second.items() if k.endswith(("core", "bonds", "angles", "torsions")))
+
+
+def test_a_window_where_the_other_ligand_interacts_starts_only_after_a_minimisation(edge):
+    """The bug of the first run of the TYK2 example (2026-11-25): every window of the complex leg started from the
+    end of its pre-equilibration at lambda 0, where the atoms unique to B do not interact and water can sit on them;
+    the windows in which they interact went to NaN at once. A water put on an atom unique to B: at lambda 1 that
+    configuration has an energy no MD survives (the windows of that run failed at their first step), and after the
+    window is minimised in its own state (run_window, ``minimize_steps``, as the leg starts such windows) its MD
+    stays finite."""
+    from cufep.alchemy.schedule import run_window
+    from cufep.rbfe.states import HybridState
+
+    *_, box = edge
+    hybrid = _hybrid(edge)
+    positions = hybrid.positions.copy()
+    water_o = next(i for i in range(len(edge[2]), edge[0].getNumParticles())
+                   if edge[0].getParticleMass(i).value_in_unit(u.dalton) > 15.0)
+    shift = positions[hybrid.unique_new[0]] - positions[water_o]
+    positions[water_o:water_o + 3] += shift + 0.02             # the water's oxygen on the unique atom
+
+    def context():
+        integ = mm.LangevinMiddleIntegrator(298.15 * u.kelvin, 1 / u.picosecond, 0.002 * u.picoseconds)
+        integ.setRandomNumberSeed(2)
+        ctx = mm.Context(hybrid.system, integ, mm.Platform.getPlatformByName("CPU"),
+                         {"Threads": "1", "DeterministicForces": "true"})
+        return ctx, integ
+
+    ctx, _integ = context()
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])
+    ctx.setPositions(positions)
+    _set(ctx, HybridState(1.0))
+    assert potential(ctx) > 1e6                                # kJ/mol: an overlap of hard Lennard-Jones
+    ctx, integ = context()
+    task = {"state": HybridState(1.0).to_dict(), "config": (positions, box, np.zeros_like(positions)), "stages": [],
+            "candidates": 2, "temperature_K": 298.15, "equilibration_steps": 200, "n_samples": 0,
+            "steps_per_sample": 1, "minimize_steps": 500}
+    out = run_window(ctx, integ, task)
+    assert np.all(np.isfinite(out["config"][0])) and potential(ctx) < 0.0

@@ -12,9 +12,9 @@ The lambda windows (``lambda_schedule``)
         use them for both legs. The complex leg pre-equilibrates meanwhile.
     adaptive, ``legs: each``: each leg runs its own precalculation (as the ABFE).
     fixed: the windows of ``windows``.
-    Windows that a leg does not choose itself start, all of them, from the end of its pre-equilibration, as OpenFE
-    starts its replicas, and the equilibration of the replica exchange relaxes them at the same time: no window
-    waits for another.
+    Windows that a leg does not choose itself start, all of them, from the end of its pre-equilibration, minimised in
+    their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all windows at the same time
+    on the GPUs of the leg; the equilibration of the replica exchange then relaxes them further.
 """
 from __future__ import annotations
 
@@ -31,8 +31,11 @@ from cufep.workflow import KCAL, LegJob, WorkflowError
 STAGES = ["morph"]
 #: how long the complex leg waits between two looks for the windows of the solvent leg
 WAIT_SECONDS = 20.0
-#: how the windows that a leg does not choose itself get the configurations of their replicas
-PRE_EQUILIBRATION_START = "the end of the pre-equilibration"
+#: how the windows that a leg does not choose itself get the configurations of their replicas: from the end of the
+#: pre-equilibration, minimised in their own state (OpenFE's 5000 steps of minimisation) and a short MD in it
+PRE_EQUILIBRATION_START = "the end of the pre-equilibration, minimised in each window"
+MINIMIZE_STEPS = 5000
+START_MD_PS = 10.0
 
 
 @dataclass
@@ -261,11 +264,53 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                        box_safety=1.3 if barostat == "membrane" else None, settings=settings,
                        mps_thread_percentage=thread_percentage(job.oversubscription), **more)
 
-    def from_pre_equilibration(n: int) -> list:
-        """Every window from the end of the pre-equilibration, as OpenFE starts its replicas; the equilibration
-        of the replica exchange relaxes each window in its own state, all at the same time."""
+    def from_pre_equilibration(schedule, pool_spec) -> list:
+        """The start of every window: the end of the pre-equilibration, minimised in the state of the window
+        (OpenFE's minimisation, ``MINIMIZE_STEPS``) and ``START_MD_PS`` of MD in it, all windows at the same time on
+        the GPUs the leg is granted (in this process one after another where it has no workers). The atoms unique
+        to the other ligand do not interact at lambda 0, so water can sit where they are: a window in which they
+        interact starts from that only after its minimisation."""
+        from cufep.alchemy.schedule import run_window
+        from cufep.steps import md_steps
+
         start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
-        return [start] * n
+        tasks = [{"state": state.to_dict(), "config": start, "stages": [], "candidates": 2, "temperature_K": T,
+                  "equilibration_steps": md_steps(START_MD_PS, timestep_fs), "n_samples": 0, "steps_per_sample": 1,
+                  "minimize_steps": MINIMIZE_STEPS} for state in schedule.states]
+        devices = list(job.devices)
+        if job.control is not None:
+            work = md_work(START_MD_PS, hybrid.system.getNumParticles(), iteration_ps)
+            granted = job.control.request_devices(
+                len(tasks), len(tasks) * work / max(1, job.oversubscription), pinned=True,
+                what=f"the start of {len(tasks)} lambda windows")
+            devices = granted or devices
+        if not job.inline and len(devices) >= 2:
+            with WindowPool(pool_spec, devices[:len(tasks)], log) as pool:
+                done = pool.run(tasks)
+        else:
+            ctx, integ = precalculation_context(pool_spec)
+            done = [run_window(ctx, integ, task) for task in tasks]
+            del ctx, integ
+        return [d["config"] for d in done]
+
+    def precalculation_context(pool_spec):
+        """A Context of this process for the windows: the backend of the spec, its barostat, the end of the
+        pre-equilibration."""
+        back = backend_of(pool_spec)
+        prepared = back.prepare_system(hybrid.system)
+        if barostat == "membrane":
+            prepared.addForce(back.make_membrane_barostat(pressure * u.bar, T * u.kelvin,
+                                                          cfg.dynamics.barostat_frequency, seed=seed + 5))
+        else:
+            prepared.addForce(back.make_isotropic_barostat(pressure * u.bar, T * u.kelvin,
+                                                           cfg.dynamics.barostat_frequency, seed=seed + 5))
+        integ = back.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond,
+                                     timestep_fs * u.femtoseconds, seed=seed + 6)
+        ctx = back.make_context(prepared, integ, device0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
+        ctx.setPositions(eq["positions"])
+        ctx.setVelocities(eq["velocities"])
+        return ctx, integ
 
     def run_with(backend: str):
         from cufep.sampling.states import stage_state
@@ -290,27 +335,15 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
             ctx = integ = None
             if own_precalculation:
                 # the Context of this process, which walks through the windows of the first iteration
-                back = backend_of(pool_spec)
-                prepared = back.prepare_system(hybrid.system)
-                if barostat == "membrane":
-                    prepared.addForce(back.make_membrane_barostat(pressure * u.bar, T * u.kelvin,
-                                                                  cfg.dynamics.barostat_frequency, seed=seed + 5))
-                else:
-                    prepared.addForce(back.make_isotropic_barostat(pressure * u.bar, T * u.kelvin,
-                                                                   cfg.dynamics.barostat_frequency, seed=seed + 5))
-                integ = back.make_integrator(T * u.kelvin, cfg.dynamics.friction_per_ps / u.picosecond,
-                                             timestep_fs * u.femtoseconds, seed=seed + 6)
-                ctx = back.make_context(prepared, integ, device0)
-                ctx.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in eq["box"]])
-                ctx.setPositions(eq["positions"])
-                ctx.setVelocities(eq["velocities"])
+                ctx, integ = precalculation_context(pool_spec)
             if ls.mode == "fixed":
                 values = ls.windows
                 schedule = schedule_from_windows(STAGES, {"morph": values},
                                                  {"morph": values if isinstance(values, int) else len(values)},
                                                  rest2_scale)
-                cfgs = from_pre_equilibration(len(schedule.states))
-                how = {"start_configurations": PRE_EQUILIBRATION_START, "windows": "given"}
+                cfgs = from_pre_equilibration(schedule, pool_spec)
+                how = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
+                       "minimize_steps": MINIMIZE_STEPS, "windows": "given"}
             elif own_precalculation:
                 als = AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
                                   candidates=a.candidates, initial_windows={"morph": a.initial_windows},
@@ -337,8 +370,9 @@ def run_hybrid_leg(job: HybridLegJob) -> dict:
                        "windows": "chosen by this precalculation"}
             else:
                 schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
-                cfgs = from_pre_equilibration(len(schedule.states))
-                how = {"start_configurations": PRE_EQUILIBRATION_START, "windows": "those of the solvent leg"}
+                cfgs = from_pre_equilibration(schedule, pool_spec)
+                how = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
+                       "minimize_steps": MINIMIZE_STEPS, "windows": "those of the solvent leg"}
             del ctx, integ
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}
             configs = publish_windows(leg_dir, schedule, cfgs, record, leg=job.leg, edge=job.ligand,
