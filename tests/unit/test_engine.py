@@ -242,14 +242,14 @@ def test_samples_of_an_earlier_version_are_checked_against_the_windows_the_leg_i
     schedule and start configurations written. They are compared with the windows the leg is given."""
     import numpy as np
 
-    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.alchemy.schedule import schedule_from_windows
     from cufep.config.schema import Config
     from cufep.sampling.storage import LegStorage
     from cufep.workflow import WorkflowError, check_leg_reuse
 
     stages = ["discharge", "vanish"]
-    made = fixed_schedule(stages, {"discharge": 3, "vanish": 3}, 1.0)
-    other = fixed_schedule(stages, {"discharge": [0.0, 0.4, 1.0], "vanish": 3}, 1.0)
+    made = schedule_from_windows(stages, {"discharge": 3, "vanish": 3}, {"discharge": 3, "vanish": 3})
+    other = schedule_from_windows(stages, {"discharge": [0.0, 0.4, 1.0], "vanish": 3}, {"discharge": 3, "vanish": 3})
     lig = tmp_path / "lig"
     hrex = lig / "repeat_0" / "solvent" / "hrex"
     storage = LegStorage(hrex, len(made.states), len(made.states))
