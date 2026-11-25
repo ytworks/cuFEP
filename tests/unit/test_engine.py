@@ -194,6 +194,8 @@ def test_an_abfe_leg_keeps_its_windows_by_the_checks_of_the_engine(tmp_path, mon
         again = run_leg_safe(job(cfg))
         assert "error" not in again, again
         assert again["start_configurations"] == first["start_configurations"]
+        # sixth review: the earlier record of the windows was checked; no note that their origin is not recorded
+        assert again["origin_not_recorded"] == first["origin_not_recorded"] == []
         # the same samples, analysed again (a free energy, or none for windows that the samples do not connect)
         assert str(again["delta_g_decouple"]) == str(first["delta_g_decouple"])
 
@@ -233,19 +235,33 @@ def test_an_abfe_leg_keeps_its_windows_by_the_checks_of_the_engine(tmp_path, mon
         cpu.setPropertyDefaultValue("DeterministicForces", before_default)
 
 
-def test_samples_that_do_not_record_their_conditions_are_taken_up_as_they_are(tmp_path):
-    """Fifth review of PR #18: samples of an earlier version, which do not record their conditions, are analysed as
-    they are (cufep.workflow.sample_leg); without a checkpoint they were taken for samples started anew."""
+def test_samples_of_an_earlier_version_are_checked_against_the_windows_the_leg_is_given(tmp_path):
+    """Sixth review of PR #18: samples that do not record their conditions but their states, of a leg without its
+    schedule that is given one (lambda_schedule.file) with other lambda values in the middle: the check before the
+    run compared them with no windows, and the leg was refused only after its result had been set aside and its
+    schedule and start configurations written. They are compared with the windows the leg is given."""
     import numpy as np
 
-    from cufep.engine.leg import restores_its_samples
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.config.schema import Config
     from cufep.sampling.storage import LegStorage
+    from cufep.workflow import WorkflowError, check_leg_reuse
 
-    hrex = tmp_path / "leg" / "hrex"
-    storage = LegStorage(hrex, 2, 2)
+    stages = ["discharge", "vanish"]
+    made = fixed_schedule(stages, {"discharge": 3, "vanish": 3}, 1.0)
+    other = fixed_schedule(stages, {"discharge": [0.0, 0.4, 1.0], "vanish": 3}, 1.0)
+    lig = tmp_path / "lig"
+    hrex = lig / "repeat_0" / "solvent" / "hrex"
+    storage = LegStorage(hrex, len(made.states), len(made.states))
+    storage.set_meta(states=[s.to_dict() for s in made.states], temperature_K=298.15, iteration_ps=2.5,
+                     n_equilibration_iterations=0)
     for _ in range(3):
-        storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+        storage.append(np.zeros((len(made.states),) * 2), np.arange(len(made.states)), np.ones(len(made.states)))
     storage.close()
-    assert not (hrex / "checkpoint.npz").exists()
-    assert restores_its_samples(tmp_path / "leg", total=10)
+    other.save(tmp_path / "given.yaml", leg="solvent")
+    cfg = Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"},
+                                 "lambda_schedule": {"file": str(tmp_path / "given.yaml")},
+                                 "sampling": {"rest2": {"scale": 1.0}}})
+    with pytest.raises(WorkflowError, match="lambda states"):
+        check_leg_reuse(cfg, lig, "solvent", 0, {"made_from": {}}, 0.0075)
 

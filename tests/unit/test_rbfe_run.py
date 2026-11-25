@@ -589,6 +589,14 @@ def test_start_configurations_made_again_are_the_start_of_samples_started_anew_l
     repaired = run_hybrid_leg_safe(job(rcfg.sampling.production_ns))           # taken up from the checkpoint
     assert repaired["start_configurations"] == first["start_configurations"]
     (leg_dir / "hrex" / "checkpoint.npz").unlink()
+    # sixth review: refused by the replica exchange (another way of exchange), the leg is not started anew, and the
+    # record keeps the start of its samples
+    starts = (leg_dir / "start_configs.npz").read_bytes()
+    independent = rcfg.model_copy(update={"sampling": rcfg.sampling.model_copy(update={"exchange": "none"})})
+    refused = run_hybrid_leg_safe(EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir),
+                                             devices=[None], config=independent.model_dump(mode="json"),
+                                             production_ns=2 * rcfg.sampling.production_ns, inline=True))
+    assert "error" in refused and (leg_dir / "start_configs.npz").read_bytes() == starts
     anew = run_hybrid_leg_safe(job(2 * rcfg.sampling.production_ns))           # not complete: started anew
     assert "error" not in anew, anew
     assert anew["start_configurations"] == PRE_EQUILIBRATION_START

@@ -191,7 +191,6 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         open_leg,
         pre_equilibrated,
         record_of_kept_windows,
-        record_the_start_used,
         refuse_samples_without_windows,
         starts_from,
         with_fallback,
@@ -281,9 +280,6 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         if stored is not None:
             schedule, configs, _made = stored
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has")
-            # start configurations made again for samples that are not taken up now: the replica exchange starts
-            # from them, and their record says so (fifth review of PR #18)
-            record_the_start_used(leg_dir, n_equil + n_prod)
         else:
             t0 = time.perf_counter()
             a = ls.adaptive
@@ -308,8 +304,8 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                 # samples taken up as they were made keep their start (unknown without a record of these windows),
                 # and how the file was made now is said apart; samples started anew start from these (reviews of
                 # PR #18)
-                how = kept_start_record(leg_dir, schedule, settings, n_equil + n_prod,
-                                        {**starting, "windows": "those this leg had"}, log)
+                how = kept_start_record(leg_dir, schedule, settings, {**starting, "windows": "those this leg had"},
+                                        log)
             elif goes_on_from_its_samples(leg_dir):
                 refuse_samples_without_windows(leg_dir)
             elif ls.mode == "fixed":

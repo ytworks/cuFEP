@@ -222,49 +222,38 @@ def goes_on_from_its_samples(leg_dir: Path) -> bool:
     return stored_conditions(Path(leg_dir) / "hrex")[0] > 0 or (Path(leg_dir) / "hrex" / "checkpoint.npz").exists()
 
 
-def restores_its_samples(leg_dir: Path, total: int) -> bool:
-    """Whether the replica exchange of a leg takes up the samples it has as they were made, from where they began
-    (:func:`cufep.workflow.sample_leg`): it restores their checkpoint (also the one of their start, before the first
-    sample), analyses a leg that has all its ``total`` iterations as it is, or analyses samples of an earlier
-    version that do not record their conditions as they are. Other samples are not continued: the replica exchange
-    starts anew from the start configurations, and the record of the leg is of those (fourth and fifth reviews of
-    PR #18)."""
-    from cufep.sampling.storage import stored_conditions
-    from cufep.workflow import leg_is_complete
-
-    hrex = Path(leg_dir) / "hrex"
-    if (hrex / "checkpoint.npz").exists() or leg_is_complete(hrex, total):
-        return True
-    n, conditions = stored_conditions(hrex)
-    return n > 0 and conditions is None
-
-
 #: the keys of the record of start configurations that say how they were made
 START_KEYS = ("start_configurations", "walk_ps", "start_md_ps", "minimize_steps", "start_backend")
 
 
-def kept_start_record(leg_dir: Path, schedule, settings: dict, total: int, made_now: dict, log=print) -> dict:
+def kept_start_record(leg_dir: Path, schedule, settings: dict, made_now: dict, log=print) -> dict:
     """The record of start configurations made again for windows a leg keeps (``made_now``: how they are made now,
-    with ``windows``). If the replica exchange takes up the samples of the leg as they were made
-    (:func:`restores_its_samples`), their start is the one the earlier record gives for these windows
-    (:func:`record_of_kept_windows`; none if it names other windows or there is none: the start is not known), and
-    how the file was made now is said apart (``start_configurations_made_again``); otherwise the replica exchange
-    starts from these configurations, and the record is ``made_now``. One rule for every way the leg keeps its
-    windows: its own schedule, a schedule given to it (reviews of PR #18)."""
-    if not restores_its_samples(leg_dir, total):
+    with ``windows``). A leg that has samples (or the checkpoint of their start) keeps their start, the one the
+    earlier record gives for these windows (:func:`record_of_kept_windows`; none if it names other windows or there
+    is none: the start is not known), with what the earlier record says it does not record, and says how the file
+    was made now apart (``start_configurations_made_again``); the record becomes that only when the replica exchange
+    initializes from these configurations (:func:`record_the_start_used`, called by
+    :func:`cufep.workflow.sample_leg`; it does not when it restores the checkpoint, analyses a complete leg, or
+    refuses the leg). A leg without samples starts from them: the record is ``made_now``. One rule for every way a
+    leg keeps its windows (reviews of PR #18)."""
+    if not goes_on_from_its_samples(leg_dir):
         return dict(made_now)
     earlier = record_of_kept_windows(leg_dir, schedule, settings, log)
     again = {key: made_now[key] for key in START_KEYS if key in made_now}
     rest = {key: value for key, value in made_now.items() if key not in START_KEYS}
+    if earlier:
+        # the earlier record of these windows says what is not recorded of them; the mark of made_now that their
+        # origin is not recorded is of start configurations without a record (sixth review of PR #18)
+        rest.pop("origin_not_recorded", None)
     return {**rest, **earlier, "start_configurations_made_again": again}
 
 
-def record_the_start_used(leg_dir: Path, total: int) -> None:
-    """Before the replica exchange of a leg whose start configurations it has: if they were made again while its
-    samples were taken up from their checkpoint (their record keeps the start of the samples, and the start made
-    again apart), and the replica exchange does not take up those samples now (the checkpoint is gone), it starts
-    from these configurations: their record becomes theirs (fifth review of PR #18: the walk was reported for
-    samples that started from configurations made again)."""
+def record_the_start_used(leg_dir: Path) -> None:
+    """Called when the replica exchange of a leg initializes from its start configurations (not from the checkpoint
+    of its samples): if their record keeps the start of earlier samples with the start made again apart
+    (:func:`kept_start_record`), it becomes the start made again, the one these samples start from (fifth and sixth
+    reviews of PR #18: switched before the initialization, the start of the earlier samples was lost when the
+    replica exchange refused the leg)."""
     import json as _json
 
     from cufep.files import publish_npz
@@ -275,7 +264,7 @@ def record_the_start_used(leg_dir: Path, total: int) -> None:
         return
     made = start_record_of(start_file)
     again = made.get("start_configurations_made_again")
-    if not isinstance(again, dict) or restores_its_samples(leg_dir, total):
+    if not isinstance(again, dict):
         return
     record = {**{key: value for key, value in made.items()
                  if key not in START_KEYS and key != "start_configurations_made_again"}, **again}

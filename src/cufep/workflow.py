@@ -1191,7 +1191,8 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         used_timestep = (
             float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
         )
-        states = [state.to_dict() for state in Schedule.load(sched_file).states] if sched_file.exists() else None
+        # the windows the leg will use: its own, or those it is given (sixth review of PR #18)
+        states = None if windows is None else [state.to_dict() for state in Schedule.load(windows).states]
         problems = unrecorded_samples_problems(stored_attributes(leg_dir / "hrex")[1], n_stored, leg_dir, cfg, leg,
                                                production_ns, states, used_timestep)
         if problems:
@@ -2608,6 +2609,11 @@ def sample_leg(spec, hrex_dir: Path, job, configs, n_equil: int, total: int, cfg
             return read_samples(hrex_dir)
         if not sampler.restore():
             sampler.initialize(*configs)
+            # the samples start from these configurations now: their record says how they were made (sixth
+            # review of PR #18: switched before, it was lost when the replica exchange then refused the leg)
+            from cufep.engine.leg import record_the_start_used
+
+            record_the_start_used(Path(hrex_dir).parent)
         else:
             log(f"resumed at iteration {sampler.iteration}")
         # before the first iteration: what an analysis of an interrupted run needs to know
@@ -2673,7 +2679,6 @@ def run_leg(job: LegJob) -> dict:
         leg_context,
         open_leg,
         pre_equilibrated,
-        record_the_start_used,
         refuse_samples_without_windows,
         with_fallback,
     )
@@ -2892,9 +2897,6 @@ def run_leg(job: LegJob) -> dict:
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has "
                 "(schedule.yaml); the settings of lambda_schedule are not applied to them, "
                 "cufep run --reschedule determines the windows again")
-            # start configurations made again for samples that are not taken up now: the replica exchange starts
-            # from them, and their record says so (fifth review of PR #18)
-            record_the_start_used(leg_dir, n_equil + n_prod)
         else:
             # what a Context of this leg is made with, for the workers of the precalculation and for
             # the Context of this process, which walks through the windows and runs them itself
@@ -2962,8 +2964,7 @@ def run_leg(job: LegJob) -> dict:
                 if keeps:
                     # samples taken up as they were made keep their start (unknown without a record of these
                     # windows); how the file was made now is said apart (reviews of PR #18)
-                    made_with = kept_start_record(leg_dir, schedule, windows_settings(cfg), n_equil + n_prod,
-                                                  made_with, log)
+                    made_with = kept_start_record(leg_dir, schedule, windows_settings(cfg), made_with, log)
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
 
