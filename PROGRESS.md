@@ -64,7 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
-- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`, PR #17): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment (the plan's record). A2A example: running. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends.
+- Plan `docs/plans/2026-11-25-rbfe.md` (in progress, branch `feat/rbfe`, PR #17): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment (the plan's record). A2A example: running. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends. Plan `docs/plans/2026-11-25-leg-engine.md` (in progress, branch `refactor/leg-engine`): one engine of a leg for both, not done yet.
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
@@ -111,6 +111,15 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-25 — [design] Plan: one engine of a leg for the ABFE and the RBFE
+- What: `src/cufep/engine/` (protocols of a leg, the steps of a leg, jobs); the ABFE and the RBFE become two
+  protocols on it; `RbfeConfig.shared()`, the renaming of leg results, the job subclass and the dispatch on the
+  keys of a state go. ABFE numbers, files and defaults unchanged, checked with `spikes/m38` before and after.
+- Why: the owner's question (is the sharing forced, is it the right architecture?): the RBFE was fitted into the
+  entrances of the ABFE (an ABFE configuration made from its settings, its pre-equilibration steered by the
+  setting of the ABFE restraint, result keys renamed, command hints replaced as text).
+- Refs: `docs/plans/2026-11-25-leg-engine.md`; branch `refactor/leg-engine`
 
 ### 2026-11-25 — [progress] RBFE: TYK2 example; the findings of the review of the diff
 - What: TYK2 example on image f6ac3b4 (plan record; Current Status). Review of PR #17: a torsion that a System
