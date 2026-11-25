@@ -63,7 +63,9 @@ def _sd(values: np.ndarray) -> float:
     values = np.asarray(values, dtype=float).ravel()
     if len(values) < 2 or not np.all(np.isfinite(values)):
         return float("nan")
-    return float(np.std(values, ddof=1))
+    with np.errstate(over="ignore", invalid="ignore"):
+        sd = float(np.std(values, ddof=1))
+    return sd if np.isfinite(sd) else float("nan")       # values whose squares overflow have none
 
 
 def integrated_length(lambdas, sds) -> np.ndarray:
@@ -113,13 +115,15 @@ def exchange_acceptance(x, y) -> float:
 
     ``x`` is the reduced energy of the second window minus that of the first in the samples of the
     first, ``y`` the same difference in the samples of the second. A pair is accepted with
-    probability ``min(1, exp(y - x))``, the rule of the replica exchange. NaN if a difference is
-    not a number.
+    probability ``min(1, exp(y - x))``, the rule of the replica exchange. NaN if ``y - x`` is not a
+    number for some pair: a difference that is not a number, or infinite ones of the same sign in
+    both windows.
     """
     x, y = np.asarray(x, dtype=float).ravel(), np.sort(np.asarray(y, dtype=float).ravel())
     if len(x) == 0 or len(y) == 0:
         raise ValueError("an acceptance needs samples of both windows")
-    if np.any(np.isnan(x)) or np.any(np.isnan(y)):
+    same_infinity = any(np.any(x == v) and np.any(y == v) for v in (np.inf, -np.inf))
+    if np.any(np.isnan(x)) or np.any(np.isnan(y)) or same_infinity:
         return float("nan")
     below = np.searchsorted(y, x, side="left")                  # the y smaller than each x: accepted with exp(y - x)
     log_sums = np.concatenate([[-np.inf], np.logaddexp.accumulate(y)])      # log of the sum of exp(y) over the smallest

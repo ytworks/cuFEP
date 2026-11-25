@@ -66,6 +66,10 @@ def test_the_acceptance_is_the_mean_over_all_pairs_of_samples():
     assert math.isnan(exchange_acceptance([0.0], [np.nan])) and math.isnan(exchange_acceptance([np.nan], [0.0]))
     assert math.isnan(exchange_acceptance([0.0, 1.0], [np.nan, -50.0]))
     assert math.isnan(pair_distance([0.0, np.inf], [0.0, 1.0])) and math.isnan(pair_distance([1.0], [2.0, 3.0]))
+    # infinite differences of the same sign in both windows have no difference (they gave 1.0), and
+    # values whose squares overflow have no standard deviation (they gave inf): review of stage 2
+    assert math.isnan(exchange_acceptance([np.inf], [np.inf])) and math.isnan(exchange_acceptance([-np.inf], [-np.inf]))
+    assert math.isnan(pair_distance([1.0e200, -1.0e200, 3.0e200], [1.0, 2.0, 3.0]))
     with pytest.raises(ValueError, match="samples of both"):
         exchange_acceptance([], [0.0])
     with pytest.raises(ValueError, match="above 0 and at most 1"):
@@ -138,3 +142,9 @@ def test_the_analysis_of_a_leg_gives_the_lengths_between_its_windows():
     # samples that do not say which states their windows are: the pairs, no stages
     bare = analyze_leg({"u": u, "states": states}, 298.15)
     assert bare.neighbour_distance == res.neighbour_distance and bare.stage_length == {}
+    # an iteration that does not hold one replica in each state: no lengths, and the analysis is made
+    # all the same (it ended with a ValueError: review of stage 2 of the plan of 2026-11-25)
+    states[7] = [0, 0, 2, 3, 4, 5]
+    broken = analyze_leg({"u": u, "states": states, "attrs": {"states": state_dicts}}, 298.15)
+    assert broken.neighbour_distance == [] and broken.stage_length == {}
+    assert set(broken.stage_delta_g) == {"discharge", "vanish"}

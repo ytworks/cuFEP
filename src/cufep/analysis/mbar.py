@@ -170,7 +170,8 @@ class LegAnalysis:
     #: the thermodynamic length between neighbouring windows over the production, in kT, from the
     #: energy difference between the two in the samples of each
     #: (cufep.alchemy.thermodynamic_length.pair_distance), and for every stage the sum over its
-    #: pairs. Numbers without a level; empty in results written before they were reported
+    #: pairs. Numbers without a level; empty in results written before they were reported, and for
+    #: samples that do not hold one replica in each state in every iteration
     neighbour_distance: list[float] = field(default_factory=list)
     stage_length: dict[str, float] = field(default_factory=dict)
     #: the whole overlap matrix of the windows (overlap_neighbour is its first off-diagonal),
@@ -1329,12 +1330,18 @@ def analyze_leg(samples: dict, temperature_K: float, n_equilibration: int | None
 
     from cufep.alchemy.thermodynamic_length import pair_differences, pair_distance
 
-    distances = [pair_distance(x, y) for x, y in pair_differences(u, states)]
+    # numbers for the record must not end an analysis: samples that do not hold one replica in
+    # each state in every iteration have no lengths (review of stage 2 of the plan of 2026-11-25)
+    try:
+        distances = [pair_distance(x, y) for x, y in pair_differences(u, states)]
+    except ValueError:
+        distances = []
     stages, lengths = {}, {}
     state_dicts = attrs.get("states", [])
     if isinstance(state_dicts, list) and len(state_dicts) == n_states:
         for name, (a, b) in stage_boundaries(state_dicts).items():
-            lengths[name] = float(sum(distances[a:b]))
+            if distances:
+                lengths[name] = float(sum(distances[a:b]))
             if not not_determined:
                 stages[name] = float((f_k[b] - f_k[a]) * kt)
 
