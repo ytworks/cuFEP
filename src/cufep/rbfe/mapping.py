@@ -126,16 +126,42 @@ class CoreMapper:
                 yield LigandAtomMapping(a, b, componentA_to_componentB=kept)
 
 
+def without_mixed_hydrogens(molecule_a, molecule_b, mapping: dict[int, int]) -> dict[int, int]:
+    """The mapping without the pairs that the rule of the constrained bonds (:func:`constrained_bond_rule`) takes out
+    of it where the bonds of hydrogens are constrained, as far as they can join mapped atoms: a hydrogen mapped onto
+    a heavy atom (or the other way round) whose bonded atom is mapped. Its bond is constrained in one end and not in
+    the other. (Pairs of two hydrogens that it takes out leave a hydrogen, which joins nothing.)"""
+    inverse = {j: i for i, j in mapping.items()}
+    out = {}
+    for i, j in mapping.items():
+        h_a = molecule_a.GetAtomWithIdx(i).GetAtomicNum() == 1
+        h_b = molecule_b.GetAtomWithIdx(j).GetAtomicNum() == 1
+        if h_a != h_b:
+            hydrogen = molecule_a.GetAtomWithIdx(i) if h_a else molecule_b.GetAtomWithIdx(j)
+            mapped = mapping if h_a else inverse
+            if any(nb.GetIdx() in mapped for nb in hydrogen.GetNeighbors()):
+                continue
+        out[i] = j
+    return out
+
+
 class WithoutBridges:
     """A mapper whose mappings in which atoms unique to one ligand join two mapped atoms (:func:`bridging_dummies`)
-    are left out, for the network of LOMAP: an edge is planned only with a mapping the preparation takes."""
+    are left out, for the network of LOMAP: an edge is planned only with a mapping the preparation takes. With
+    ``hydrogen_constraints`` the mapping is checked as the rule of the constrained bonds leaves it
+    (:func:`without_mixed_hydrogens`; twelfth review of PR #19: the oxygen of oxirane mapped onto a hydrogen of ethane
+    left the mapping there and joined the two carbons)."""
 
-    def __init__(self, mapper) -> None:
-        self.mapper = mapper
+    def __init__(self, mapper, hydrogen_constraints: bool = True) -> None:
+        self.mapper, self.hydrogen_constraints = mapper, hydrogen_constraints
 
     def suggest_mappings(self, a, b):
         for m in self.mapper.suggest_mappings(a, b):
-            if not bridging_dummies(a.to_rdkit(), b.to_rdkit(), dict(m.componentA_to_componentB)):
+            mol_a, mol_b = a.to_rdkit(), b.to_rdkit()
+            mapping = dict(m.componentA_to_componentB)
+            if self.hydrogen_constraints:
+                mapping = without_mixed_hydrogens(mol_a, mol_b, mapping)
+            if not bridging_dummies(mol_a, mol_b, mapping):
                 yield m
 
 
@@ -235,15 +261,17 @@ def constrained_bond_rule(mapping: dict[int, int], system_a, system_b, to_system
 
 
 def plan_network(ligands, settings: MappingSettings | None = None, distance_cutoff: float = 0.4,
-                 max_path_length: int = 6, require_cycle_covering: bool = True) -> list[tuple[str, str]]:
-    """Edges (name A, name B) of the LOMAP network of the ligands."""
+                 max_path_length: int = 6, require_cycle_covering: bool = True,
+                 hydrogen_constraints: bool = True) -> list[tuple[str, str]]:
+    """Edges (name A, name B) of the LOMAP network of the ligands (``hydrogen_constraints``: the bonds of hydrogens
+    are constrained, as ``dynamics.constraints`` sets them)."""
     from lomap.gufe_bindings.network_generation import generate_lomap_network
     from lomap.gufe_bindings.scorers import default_lomap_score
 
     settings = settings or MappingSettings()
     components = [_component(lig) for lig in ligands]
     mapper = WithoutBridges(_mapper(settings) if not settings.core_smarts
-                            else CoreMapper(_mapper(settings), settings.core_smarts))
+                            else CoreMapper(_mapper(settings), settings.core_smarts), hydrogen_constraints)
     network = generate_lomap_network(components, mappers=[mapper], scorer=default_lomap_score,
                                      distance_cutoff=distance_cutoff, max_path_length=max_path_length,
                                      require_cycle_covering=require_cycle_covering)

@@ -1051,6 +1051,26 @@ def test_the_report_compares_edges_with_the_experiment_of_its_table_and_dg_of_an
     assert float(row["exp_ddg"]) == pytest.approx(exact, abs=1e-6)
     assert "| cuFEP, own | 1 | 0.00 |" in text
     raw = next(line for line in text.splitlines() if line.startswith("| RMSE, raw"))
-    assert raw.split("|")[2].strip().startswith("0.00") and "shifted by" in text
+    assert raw.split("|")[2].strip().startswith("0.00") and "computed again from the ddG of its edges" in text
     assert axis_range([{"exp": -1.77, "calc": -1.77, "err": 3.0}], "exp", (("calc", "err", "calc"),))[1] \
         == pytest.approx(-1.77 + 3.0 + 1.0)
+    # twelfth review of PR #19: ejm_31 -> X computed as +2 +- 1 kcal/mol without experimental values, the benchmark
+    # with ejm_31 alone: the run gives (-1, +1) +- (0.5, 0.5) about the mean of the network; on the scale of ejm_31
+    # (-9.54) the same estimate gives the standard errors (0, 1), which the dG shifted to it had not
+    summary = {"ligands": ["ejm_31", "xlig"], "cycle_closures": [], "notes": [], "experiment_kcal_mol": {},
+               "dg": {"reference": "mean of the network", "reference_ligands": [],
+                      "values": {"ejm_31": {"dg": -1.0, "se": 0.5}, "xlig": {"dg": 1.0, "se": 0.5}}},
+               "edges": [{"edge": "ejm_31~xlig", "ligand_a": "ejm_31", "ligand_b": "xlig", "ddg": 2.0, "se": 1.0,
+                          "network_ddg": 2.0, "network_se": 1.0, "not_reliable": []}]}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    report("tyk2", tmp_path)
+    rows = {r["ligand"]: r for r in csv.DictReader((tmp_path / "rbfe_report_ligands.csv").open())}
+    assert float(rows["ejm_31"]["cufep_rbfe"]) == pytest.approx(ref["ejm_31"]["exp"], abs=1e-9)
+    assert float(rows["xlig"]["cufep_rbfe"]) == pytest.approx(ref["ejm_31"]["exp"] + 2.0, abs=1e-9)
+    assert float(rows["ejm_31"]["cufep_rbfe_error"]) == pytest.approx(0.0, abs=1e-9)
+    assert float(rows["xlig"]["cufep_rbfe_error"]) == pytest.approx(1.0, abs=1e-9)
+    # without an experimental value the dG stay about the mean of the network, and the report says so
+    summary["ligands"], summary["edges"][0]["ligand_a"] = ["ylig", "xlig"], "ylig"
+    summary["dg"]["values"] = {"ylig": {"dg": -1.0, "se": 0.5}, "xlig": {"dg": 1.0, "se": 0.5}}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    assert "their mean over the network set to 0 (no experimental value" in report("tyk2", tmp_path)

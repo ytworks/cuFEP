@@ -134,7 +134,8 @@ class HybridLeg:
     gcmc: object = None           # cufep.sampling.gcmc.GcmcSpec of a leg with grand canonical moves of water
 
 
-def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=None, centre_positions=None):
+def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=None, centre_positions=None,
+                check_start: bool = True):
     """The grand canonical moves of water of a hybrid System (all its waters interacting): their specification
     (:func:`cufep.sampling.gcmc.gcmc_spec`), with the ligand of the stand-in energy at fixed lambdas, its atoms with
     the parameters of A and those unique to B with the parameters of B (the module's docstring; the alchemical water
@@ -143,7 +144,8 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
     their poses (``end_heavy_nm``), so that A -> B and B -> A have one sphere (review of PR #19: from the hybrid, which
     holds the mapped atoms where A has them), each molecule whole along its bonds (``end_heavy_bonds``). The ghosts
     of the start are the waters farthest from the centre of the ligand of ``centre_positions``
-    (:func:`centre_positions_of`), one for both directions too (eleventh review of PR #19)."""
+    (:func:`centre_positions_of`), one for both directions too (eleventh review of PR #19). ``check_start`` False:
+    they are not checked against the sphere here (:func:`build_leg` checks the ghosts it chooses for the leg)."""
     import dataclasses
 
     from cufep.sampling.gcmc import GcmcError, gcmc_spec
@@ -157,7 +159,7 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
                          rcfg.thermodynamics.temperature_K, g.interval_ps, g.attempts, g.batch_size,
                          g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters),
                          radius_from_nm=end_heavy_nm, radius_from_bonds=end_heavy_bonds, bonds=hybrid.bonds,
-                         centre_positions=centre_positions)
+                         centre_positions=centre_positions, check_start=check_start)
     except GcmcError as exc:
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {exc}") from exc
     charge, sigma, epsilon = (np.array(v, dtype=float) for v in (spec.charge, spec.sigma, spec.epsilon))
@@ -168,15 +170,69 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
                                start_centre="ligand" if centre_positions is None else "midway")
 
 
-def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool):
-    """The moves of a leg (``gcmc``, its ghosts of the start counted from the centre midway between the end states)
-    with the ghosts its pre-equilibration and samples were made with where an earlier version made them: their
-    ghosts were the waters farthest from the centre of the hybrid (``positions``, the mapped atoms where A has them),
-    as many. They are kept where the record of the pre-equilibration names no ``start_centre`` and has those ghosts,
-    or, without a record, where the leg goes on from its samples (:func:`cufep.engine.leg.starts_anew`); elsewhere
-    the ghosts of ``gcmc`` (eleventh review of PR #19: the centre changed with the direction of the edge; 5 of the
-    22 complex legs of the full TYK2 run of 08d58d5 had one other ghost by the new centre, and their samples and
-    pre-equilibrations could not have been used again)."""
+def _samples_system_digest(leg_dir: Path) -> str | None:
+    """The checksum of the System that the samples of a leg, or the checkpoint of their start, recorded; None
+    without one."""
+    from cufep.sampling.storage import StorageError, stored_layout
+
+    try:
+        _parts, attrs = stored_layout(Path(leg_dir) / "hrex")
+    except (StorageError, OSError, ValueError):
+        return None
+    conditions = attrs.get("conditions")
+    return conditions.get("system_sha256") if isinstance(conditions, dict) else None
+
+
+def _fixed_cell_of(leg_dir: Path):
+    """The cell a leg with grand canonical moves of water is fixed in: the mean cell of its pre-equilibration, else
+    the cell of the replicas of its checkpoint; None without either."""
+    equil, ckpt = Path(leg_dir) / "equil.npz", Path(leg_dir) / "hrex" / "checkpoint.npz"
+    try:
+        if equil.exists():
+            with np.load(equil) as eq:
+                if "mean_box" in eq.files:
+                    return np.asarray(eq["mean_box"], dtype=float)
+        if ckpt.exists():
+            with np.load(ckpt, allow_pickle=False) as data:
+                return np.asarray(data["boxes"], dtype=float)[0]
+    except (OSError, ValueError, KeyError, EOFError):
+        return None
+    return None
+
+
+def _digests_with_ghosts(system, waters, ghosts, cell) -> set[str]:
+    """The checksums of ``system`` (before its ghosts are switched off) with the waters ``ghosts`` switched off, in
+    the two forms the samples of a leg record (:func:`recorded_form_of_the_system`: as prepared, and with the fixed
+    cell ``cell`` as its default cell)."""
+    import hashlib
+
+    import openmm as mm
+
+    from cufep.sampling.gcmc import ghosts_off
+
+    copy = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(system))
+    ghosts_off(copy, np.asarray(waters)[np.asarray(ghosts, dtype=np.int64)].reshape(-1))
+    out = {hashlib.sha256(mm.XmlSerializer.serialize(copy).encode()).hexdigest()}
+    if cell is not None:
+        copy.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(cell, dtype=float)])
+        out.add(hashlib.sha256(mm.XmlSerializer.serialize(copy).encode()).hexdigest())
+    return out
+
+
+def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, system=None):
+    """The moves of a leg (``gcmc``, its ghosts of the start counted from the centre midway between the end states,
+    ``start_centre`` "midway") with the ghosts its samples or its pre-equilibration were made with. Earlier versions
+    counted them from the centre of the hybrid (``positions``, which holds the mapped atoms where A has them;
+    ``start_centre`` "ligand"), as many (eleventh review of PR #19: 5 of the 22 complex legs of the full TYK2 run of
+    08d58d5 have one other ghost by the new centre).
+
+    A leg that goes on from its samples has the ghosts of the System its samples recorded: those of its record, of
+    the new and of the earlier centre are each put into ``system`` (the hybrid System before its ghosts are switched
+    off) and compared with the checksum of the samples (twelfth review of PR #19: a record that was lost or could not
+    be read chose the other System, and the leg was refused). Elsewhere, and where none matches: the earlier ghosts
+    where the record of the pre-equilibration names no centre and has them, or, without a record, where the leg goes
+    on from its samples; else those of ``gcmc``. The ghosts of a record that are those of neither centre have
+    ``start_centre`` "recorded"."""
     import dataclasses
 
     from cufep.engine.leg import EQUIL_GHOSTS, ghost_record, starts_anew
@@ -184,20 +240,54 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool):
 
     leg_dir = Path(leg_dir)
     record = leg_dir / EQUIL_GHOSTS
-    if record.exists():
-        data = ghost_record(record)
-        if data is None or "start_centre" in data or not (leg_dir / "equil.npz").exists():
-            return gcmc
-        stored = data["ghosts"]
-    elif starts_anew(leg_dir, reschedule):
-        return gcmc
-    else:
-        stored = None                                   # samples of a version that recorded no ghosts
+    data = ghost_record(record) if record.exists() else None
     earlier = farthest_waters(gcmc.waters, positions, box, gcmc.ligand_heavy, len(gcmc.ghosts),
                               gcmc.ligand_heavy_bonds)
-    if stored is not None and [int(i) for i in earlier] != stored:
+    rules = {"midway": [int(i) for i in gcmc.ghosts], "ligand": [int(i) for i in earlier]}
+
+    def chosen(ghosts, centre: str):
+        return dataclasses.replace(gcmc, ghosts=np.asarray(ghosts, dtype=np.int64), start_centre=centre)
+
+    goes_on = not starts_anew(leg_dir, reschedule)
+    digest = _samples_system_digest(leg_dir) if goes_on and system is not None else None
+    if digest is not None:
+        candidates = [(ghosts, name) for name, ghosts in rules.items()]
+        if data is not None:
+            named = [name for name, ghosts in rules.items() if ghosts == data["ghosts"]]
+            candidates.insert(0, (data["ghosts"], named[0] if named else "recorded"))
+        cell, tried = _fixed_cell_of(leg_dir), []
+        for ghosts, name in candidates:
+            if ghosts in tried:
+                continue
+            tried.append(ghosts)
+            if digest in _digests_with_ghosts(system, gcmc.waters, ghosts, cell):
+                return chosen(ghosts, name)
+    if data is not None:
+        if "start_centre" not in data and (leg_dir / "equil.npz").exists() and data["ghosts"] == rules["ligand"]:
+            return chosen(rules["ligand"], "ligand")
         return gcmc
-    return dataclasses.replace(gcmc, ghosts=earlier, start_centre="ligand")
+    if not record.exists() and goes_on:
+        return chosen(rules["ligand"], "ligand")              # samples of a version that recorded no ghosts
+    return gcmc
+
+
+def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | None = None,
+                reschedule: bool = False):
+    """The grand canonical moves of water of a leg (:func:`hybrid_gcmc`, the sphere from both end states
+    ``end_heavy``) with the ghosts of the start it has (:func:`ghosts_of_the_leg`; with ``leg_dir``), checked against
+    the sphere around the centre they were counted from: ``midway`` (:func:`centre_positions_of`) or, for those of an
+    earlier version, the hybrid (twelfth review of PR #19: they were checked around the new centre before they were
+    taken up, and a leg with valid ghosts and samples was refused). WorkflowError where a ghost is in the sphere."""
+    from cufep.sampling.gcmc import start_ghosts_in_sphere
+
+    gcmc = hybrid_gcmc(rcfg, hybrid, topology, box, *end_heavy, centre_positions=midway, check_start=False)
+    if leg_dir is not None:
+        gcmc = ghosts_of_the_leg(gcmc, hybrid.positions, box, leg_dir, reschedule, hybrid.system)
+    centre = {"midway": midway, "ligand": hybrid.positions}.get(gcmc.start_centre)
+    if centre is not None and start_ghosts_in_sphere(gcmc, hybrid.positions, box, gcmc.ghosts, centre):
+        raise WorkflowError(f"sampling.gcmc cannot be used with this system: {len(gcmc.ghosts)} ghost waters would "
+                            "take waters of the sphere itself")
+    return gcmc
 
 
 def molecules_of(system, topology, bonds) -> list[list[int]]:
@@ -232,9 +322,11 @@ def molecules_of(system, topology, bonds) -> list[list[int]]:
     return list(groups.values())
 
 
-def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int], unique_b: list[int]) -> list[int]:
+def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int], unique_b: list[int],
+                     rule: int | None = None) -> list[int]:
     """The hot atoms of the hybrid ligand by the rule of :mod:`cufep.rbfe.hot_region`, from the two prepared ligands
-    (their bonds and bond orders; atom i of a ligand is atom ``ligand[i]`` of its System)."""
+    (their bonds and bond orders; atom i of a ligand is atom ``ligand[i]`` of its System); ``rule``: a version of the
+    rule (:data:`cufep.rbfe.hot_region.HOT_REGION_RULE`, the present one where None)."""
     from openff.toolkit import Molecule
 
     from cufep.rbfe.hot_region import perturbed_hot_atoms
@@ -246,7 +338,32 @@ def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int],
     b_to_hybrid.update({j: n_a + k for k, j in enumerate(unique_b)})
     to_a = {i: int(atom) for i, atom in enumerate(a["ligand"])}
     to_b = {i: b_to_hybrid[int(atom)] for i, atom in enumerate(b["ligand"])}
-    return sorted(perturbed_hot_atoms(molecules[0], molecules[1], to_a, to_b, set(core_map)))
+    return sorted(perturbed_hot_atoms(molecules[0], molecules[1], to_a, to_b, set(core_map),
+                                      **({} if rule is None else {"rule": rule})))
+
+
+def hot_region_rule_of(rcfg, edge_dir: Path, leg: str) -> dict:
+    """``{"hot_region_rule": n}`` for the settings of a leg whose hot atoms (``sampling.rest2.region: perturbed``) the
+    present rule chooses otherwise than version 1 did (a bond that closes a ring in B); empty elsewhere, so that the
+    records of the other legs are those of earlier versions. The samples of such a leg made by version 1 record no
+    rule: a run refuses to continue them before it writes anything, and their result stays (twelfth review of PR #19:
+    the leg was refused after its result had been set aside). Their free energy is not changed by the hot atoms (the
+    end states are not scaled), and the analysis takes it."""
+    from cufep.rbfe.hot_region import HOT_REGION_RULE
+    from cufep.rbfe.prep import load_end_states
+
+    rest2 = rcfg.sampling.rest2
+    if not (rest2.scale > 1.0 and rest2.region == "perturbed"):
+        return {}
+    try:
+        end = load_end_states(edge_dir, leg)
+    except (OSError, KeyError, ValueError, EOFError):
+        return {}
+    a, b = end["a"], end["b"]
+    unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
+    now = perturbed_region(edge_dir, a, b, end["core_map"], unique_b)
+    before = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, rule=1)
+    return {} if now == before else {"hot_region_rule": HOT_REGION_RULE}
 
 
 def centre_positions_of(hybrid, a: dict, b: dict) -> np.ndarray:
@@ -378,10 +495,8 @@ def build_leg(rcfg, edge_dir: Path, leg: str, leg_dir: Path | None = None, resch
     if gcmc_in(rcfg, leg):
         from cufep.sampling.gcmc import ghosts_off
 
-        gcmc = hybrid_gcmc(rcfg, hybrid, topology, a["box"], *end_states_heavy(a, b),
-                           centre_positions=centre_positions_of(hybrid, a, b))
-        if leg_dir is not None:
-            gcmc = ghosts_of_the_leg(gcmc, hybrid.positions, np.asarray(a["box"], dtype=float), leg_dir, reschedule)
+        gcmc = start_moves(rcfg, hybrid, topology, np.asarray(a["box"], dtype=float), end_states_heavy(a, b),
+                           centre_positions_of(hybrid, a, b), leg_dir, reschedule)
         # every MD of the leg is of the System with the ghosts of the start switched off
         ghosts_off(hybrid.system, gcmc.waters[gcmc.ghosts].reshape(-1))
     xml = mm.XmlSerializer.serialize(hybrid.system)
@@ -421,13 +536,15 @@ def water_moves_record(gcmc: dict | None) -> dict:
             "standard_volume_nm3": float(gcmc["standard_volume_nm3"])}
 
 
-def hybrid_settings(rcfg, leg: str | None = None) -> dict:
+def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None) -> dict:
     """The settings of a relative run that the samples of a leg depend on beyond its System; the grand canonical
     moves of water for the leg that makes them (written only there, so that the solvent leg and the legs of
-    earlier versions keep the record they had)."""
+    earlier versions keep the record they had); with the directory of the edge, the version of the rule of the hot
+    atoms where it acts on the leg (:func:`hot_region_rule_of`)."""
     settings = {"rbfe": {"alchemy": settings_as_recorded(rcfg.alchemy),
                          "mapping": settings_as_recorded(rcfg.mapping)},
-                "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
+                "sampling.rest2": {**rcfg.sampling.rest2.model_dump(mode="json"),
+                                   **(hot_region_rule_of(rcfg, edge_dir, leg) if edge_dir is not None and leg else {})}}
     if gcmc_in(rcfg, leg):
         from cufep.workflow import gcmc_record
 
@@ -570,7 +687,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
-    settings = hybrid_settings(rcfg, job.leg)
+    settings = hybrid_settings(rcfg, job.leg, edge_dir)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more) -> LegSpec:

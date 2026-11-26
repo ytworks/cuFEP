@@ -77,11 +77,17 @@ def _end_graph(molecule, to_hybrid: dict[int, int]) -> dict:
             "ring_system": system_of, "rings": rings}
 
 
+#: the version of the rule: 2 reads a bond of two mapped atoms in the end state that has it (eleventh review of PR
+#: #19); 1 read it in A wherever both atoms were atoms of A, and a bond that closes a ring in B was not a bond to a
+#: ring. Recorded with the settings of a leg where the two give other hot atoms (cufep.rbfe.leg.hot_region_rule_of)
+HOT_REGION_RULE = 2
+
+
 def perturbed_hot_atoms(molecule_a, molecule_b, to_hybrid_a: dict[int, int], to_hybrid_b: dict[int, int],
-                        core: set[int]) -> set[int]:
+                        core: set[int], rule: int = HOT_REGION_RULE) -> set[int]:
     """The hot atoms (hybrid indices) of the rule of the module for the hybrid of ``molecule_a`` and ``molecule_b``
     (RDKit molecules with their hydrogens; ``to_hybrid_*`` their atom indices -> hybrid indices; ``core`` the mapped
-    hybrid atoms)."""
+    hybrid atoms). ``rule`` 1: as version 1 of the rule chose them (:data:`HOT_REGION_RULE`)."""
     a, b = _end_graph(molecule_a, to_hybrid_a), _end_graph(molecule_b, to_hybrid_b)
     in_a, in_b = set(a["neighbours"]), set(b["neighbours"])
     atoms = in_a | in_b
@@ -89,6 +95,8 @@ def perturbed_hot_atoms(molecule_a, molecule_b, to_hybrid_a: dict[int, int], to_
     def end_of(i: int, j: int) -> dict:
         """The end state that has the bond i-j (A where both ends have it). A bond of mapped atoms can be in one end
         only (a ring closed in B): it is read where it is (eleventh review of PR #19)."""
+        if rule == 1:
+            return a if i in in_a and j in in_a else b
         return a if j in a["neighbours"].get(i, ()) else b
 
     neighbours = {i: a["neighbours"].get(i, set()) | b["neighbours"].get(i, set()) for i in atoms}

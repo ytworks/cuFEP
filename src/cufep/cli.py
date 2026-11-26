@@ -387,7 +387,7 @@ def rbfe_plan(config: str) -> None:
 
     try:
         states = states_of(rcfg, ligands)
-        exp = experiment_of(rcfg, ligands)
+        exp = experiment_of(rcfg, ligands, states)
         of_compounds = compound_experiment(states, exp) if states is not None else None
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc

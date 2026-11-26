@@ -1447,6 +1447,14 @@ def test_a_checkpoint_of_08d58d5_without_samples_goes_on_with_start_configuratio
         **rcfg.model_dump(mode="json")["sampling"], "time_per_iteration_ps": 2 * rcfg.sampling.time_per_iteration_ps}})
     with pytest.raises(WorkflowError, match="steps_per_iteration"):
         check_samples_of_the_run(longer, edge_dir.parent.parent, [("toluene", "phenol")], [0], None, False)
+    # (twelfth review, P2) the pre-equilibration lost (a backup without equil.npz): the steps of an iteration are
+    # compared at the time step the samples record, before the run writes anything (it was not compared)
+    lost = tmp_path / "lost"
+    shutil.copytree(edge_dir.parent, lost / "edges")
+    (lost / "edges" / "toluene~phenol" / "repeat_0" / "complex" / "equil.npz").unlink()
+    with pytest.raises(WorkflowError, match="steps_per_iteration"):
+        check_samples_of_the_run(longer, lost, [("toluene", "phenol")], [0], None, False)
+    check_samples_of_the_run(rcfg, lost, [("toluene", "phenol")], [0], None, False)
     # (tenth review, P2) another temperature: the pre-equilibration cannot be used again, so --reschedule, which keeps
     # it, is not the way; refused before anything is set aside, with or without --reschedule, and no command of this
     # directory is offered
@@ -1630,3 +1638,160 @@ def test_the_plan_reads_the_states_as_the_run_does(tmp_path):
     (tmp_path / "states.csv").write_text("ligand,compound\ntoluene,T\n")
     result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
     assert result.exit_code != 0 and "does not name the ligands phenol" in result.output
+
+
+def test_a_prepared_edge_whose_mapping_joins_mapped_atoms_or_whose_record_is_lost_is_not_taken(tmp_path,
+                                                                                               edges_of_version_1):
+    """Twelfth review of PR #19:
+    (P1) an edge prepared before the check of the mapping, whose atoms unique to one ligand join two mapped atoms,
+    was taken again by `cufep rbfe run` and `cufep rbfe analyze`: the mappings of its legs, as the hybrid is made of
+    them, are checked when it is taken again and in the analysis;
+    (P2) a run of another repeat prepared again an edge whose record was lost, and the analysis took the legs of the
+    lost preparation with the new record: an edge whose legs hold results and whose record is missing is refused
+    before anything is written;
+    a custom core of version 2 of its rule is taken where both versions give the same core."""
+    import shutil
+
+    from test_rbfe_network import _leg_result, _write_legs
+
+    from cufep.rbfe.prep import PREPARATION_RULES, edge_made_from, prepared_edge
+    from cufep.rbfe.run import analyse_directory, result_lines
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = tmp_path / "bridged"
+    shutil.copytree(edges_of_version_1["prep"], edge_dir / "prep")
+    assert prepared_edge(rcfg, *ligands, edge_dir, "cube") is not None
+    info = json.loads((edge_dir / "prep" / "prep.json").read_text())
+    for leg in info["legs"].values():                    # ring carbon 3 of toluene out of the mapping, 2 and 4 in it
+        assert {"2", "3", "4"} <= set(leg["mapping"])
+        leg["mapping"].pop("3")
+    (edge_dir / "prep" / "prep.json").write_text(json.dumps(info))
+    with pytest.raises(WorkflowError, match="joins mapped atoms by atoms unique to one ligand"):
+        prepared_edge(rcfg, *ligands, edge_dir, "cube")
+    root = _run_dir(tmp_path / "run_bridged", {"toluene~phenol": (edge_dir / "prep", _leg_result(-12.0),
+                                                                   _leg_result(-10.5))})
+    summary = analyse_directory(root)
+    assert "ddg" not in summary["edges"][0]
+    assert any("joins mapped atoms" in why for why in summary["edges"][0]["earlier_preparation"])
+    assert any(x.startswith("RESULT toluene~phenol") and "remove" in x for x in result_lines(summary))
+    # the record lost, legs with results: refused, nothing written
+    lost = tmp_path / "lost"
+    _write_legs(tmp_path / "lost_run", "toluene~phenol", 0, _leg_result(-12.0), _leg_result(-10.5))
+    shutil.copytree(tmp_path / "lost_run" / "edges" / "toluene~phenol" / "repeat_0", lost / "repeat_0")
+    with pytest.raises(WorkflowError, match="is missing and its legs hold what was computed from them"):
+        prepared_edge(rcfg, *ligands, lost, "cube")
+    assert not (lost / "prep").exists()
+    assert prepared_edge(rcfg, *ligands, tmp_path / "new", "cube") is None    # nothing computed: prepared anew
+    # a custom core of version 2 of the rule, the same core by both versions: taken
+    custom = rcfg.model_copy(update={"mapping": rcfg.mapping.model_copy(update={"core_smarts": "c1ccccc1"})})
+    record = edge_made_from(custom, *ligands, "cube")
+    assert record["custom_core_rule"] == PREPARATION_RULES["custom_core"] == 3
+    of_rule_2 = tmp_path / "rule_2"
+    (of_rule_2 / "prep").mkdir(parents=True)
+    (of_rule_2 / "prep" / "prep.json").write_text(json.dumps({"made_from": {**record, "custom_core_rule": 2},
+                                                              "legs": {}}))
+    assert prepared_edge(custom, *ligands, of_rule_2, "cube") is not None
+
+
+def test_a_leg_whose_hot_atoms_the_earlier_rule_chose_otherwise_is_refused_before_anything_is_written(
+        tmp_path, monkeypatch, edges_of_version_1):
+    """Twelfth review of PR #19 (P2): a leg computed with `sampling.rest2.region: perturbed` by version 1 of the rule of
+    the hot atoms (a bond that closes a ring in B was read in A: propane -> cyclopropane had none), extended by this
+    version, was refused in the leg after the run had written its record and set the result of the leg aside. The
+    version of the rule is recorded with the settings of a leg where the two versions choose other hot atoms, and a
+    run refuses the samples of the earlier one before it writes anything (their free energy, whose end states are not
+    scaled, stays in the analysis); the other legs keep the record of before."""
+    import shutil
+
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import hybrid_settings
+    from cufep.rbfe.run import check_samples_of_the_run
+    from cufep.sampling import storage
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    shutil.copytree(edges_of_version_1["prep"], edge_dir / "prep")
+    base = _config(tmp_path, out_dir, "fixed")
+    rcfg = base.model_validate({**base.model_dump(mode="json"), "sampling": {
+        **base.model_dump(mode="json")["sampling"], "rest2": {"scale": 1.5, "region": "perturbed"}}})
+    assert hybrid_settings(rcfg, "solvent", edge_dir) == hybrid_settings(rcfg, "solvent")   # the two rules agree
+    hrex = edge_dir / "repeat_0" / "solvent" / "hrex"
+    hrex.mkdir(parents=True)
+    of_version_1 = {"settings": hybrid_settings(rcfg, "solvent")}
+    monkeypatch.setattr(storage, "stored_layout", lambda d: (([(Path(d) / "segment_0.h5", 5, 0, 0)],
+                                                              {"conditions": of_version_1})
+                                                             if Path(d) == hrex else ([], {})))
+    check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    monkeypatch.setattr(leg_module, "perturbed_region",
+                        lambda *args, rule=None: [0] if rule == 1 else [0, 1])      # the rules choose otherwise
+    assert hybrid_settings(rcfg, "solvent", edge_dir)["sampling.rest2"]["hot_region_rule"] == 2
+    with pytest.raises(WorkflowError, match="hot_region_rule") as refused:
+        check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    assert "--reschedule" in str(refused.value)
+
+
+def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is_refused_before_writing(tmp_path):
+    """Twelfth review of PR #19 (P1): oxirane -> ethane with hydrogens mapped onto heavy atoms (Kartograf's settings
+    of the review, 1.3 A): the oxygen, mapped onto a hydrogen of ethane, leaves the mapping by the rule of constrained
+    bonds (the C-H of ethane is constrained, the C-O of oxirane not) and stays bonded to both carbons, which the hybrid
+    then holds at both end states. The final mapping of each leg is checked: refused before anything of the edge is
+    written; the network leaves such a mapping out."""
+    from rdkit import Chem
+    from rdkit.Geometry import Point3D
+
+    from cufep.prep.ligand import load_ligands
+    from cufep.rbfe.mapping import (
+        MappingSettings,
+        WithoutBridges,
+        _component,
+        _mapper,
+        bridging_dummies,
+        kartograf_mapping,
+        without_mixed_hydrogens,
+    )
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    centre = np.array([16.0, 14.0, 16.0])
+    coordinates = {"C1CO1": [(0.75, 0, 0), (-0.75, 0, 0), (0, 1.22, 0), (1.22, -0.47, 0.88), (1.22, -0.47, -0.88),
+                             (-1.22, -0.47, 0.88), (-1.22, -0.47, -0.88)],
+                   "CC": [(0.77, 0, 0), (-0.77, 0, 0), (1.13, -0.515, 0.892), (1.13, -0.515, -0.892), (1.13, 1.03, 0),
+                          (-1.13, -0.515, 0.892), (-1.13, -0.515, -0.892), (-1.13, 1.03, 0)]}
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, smiles in (("oxirane", "C1CO1"), ("ethane", "CC")):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))         # heavy atoms first, then the hydrogens of each in order
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        for i, xyz in enumerate(coordinates[smiles]):
+            conf.SetAtomPosition(i, Point3D(*(np.array(xyz) + centre)))
+        mol.AddConformer(conf, assignId=True)
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    oxirane, ethane = load_ligands(tmp_path / "ligands.sdf")
+    (out_dir / "cache").mkdir(parents=True)
+    for lig in (oxirane, ethane):
+        lig.offmol.assign_partial_charges("gasteiger")
+        charges = [float(q) for q in lig.offmol.partial_charges.m_as("elementary_charge")]
+        (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
+            json.dumps({"charges": [q - sum(charges) / len(charges) for q in charges]}))
+    loose = {"map_hydrogens_on_hydrogens_only": False, "map_exact_ring_matches_only": False, "allow_bond_breaks": True,
+             "atom_max_distance_A": 1.3}
+    base = _config(tmp_path, out_dir, "fixed")
+    rcfg = base.model_validate({**base.model_dump(mode="json"), "mapping": loose})
+    settings = MappingSettings(**{k.removesuffix("_A"): v for k, v in loose.items()})
+    mapping = kartograf_mapping(oxirane, ethane, settings)
+    assert ethane.offmol.atoms[mapping[2]].atomic_number == 1                 # the oxygen onto a hydrogen
+    final = without_mixed_hydrogens(oxirane.to_rdkit(), ethane.to_rdkit(), mapping)
+    assert 2 not in final and bridging_dummies(oxirane.to_rdkit(), ethane.to_rdkit(), final)
+    edge_dir = out_dir / "edges" / "oxirane~ethane"
+    with pytest.raises(WorkflowError, match=r"the atoms \[2\] unique to A are bonded to the mapped atoms \[0, 1\]"):
+        prepare_edge(rcfg, oxirane, ethane, _protein(), edge_dir, "cube", print)
+    assert not edge_dir.exists()
+    a, b = _component(oxirane), _component(ethane)
+    assert list(WithoutBridges(_mapper(settings), True).suggest_mappings(a, b)) == []
+    assert list(WithoutBridges(_mapper(settings), False).suggest_mappings(a, b))

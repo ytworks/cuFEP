@@ -214,7 +214,7 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
               batch_size: int, radius_margin_nm: float, excess_chemical_potential_kcal_per_mol: float,
               standard_volume_nm3: float, ghost_waters: int | None,
               radius_from_nm: np.ndarray | None = None, radius_from_bonds=None, bonds=None,
-              centre_positions: np.ndarray | None = None) -> GcmcSpec:
+              centre_positions: np.ndarray | None = None, check_start: bool = True) -> GcmcSpec:
     """What a mover needs, from the ``system`` of a leg with every water interacting, its
     ``topology`` and the pose that was prepared. The waters and the sphere are found as for the
     water relocation moves (:func:`cufep.sampling.relocation_mc.relocation_spec`, with its
@@ -227,7 +227,8 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
     ligand taken whole in the check of the cell and in the moves. ``centre_positions``: the positions of the ligand
     whose centre the ghosts of the start are counted from and kept out of the sphere around, where they are not those
     of ``positions`` (of a hybrid: its mapped atoms between their positions in the two end states). Raises GcmcError
-    where the moves cannot be made."""
+    where the moves cannot be made. ``check_start`` False: the ghosts of the start are not checked against the sphere
+    here, for a caller that chooses the ghosts of a leg first (:func:`start_ghosts_in_sphere`)."""
     try:
         base = relocation_spec(system, topology, positions, box, ligand, cutoff_nm, softcore_alpha, softcore_b,
                                temperature_K, 1, None, interval_ps, radius_margin_nm, bonds)
@@ -253,12 +254,7 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
         raise GcmcError("at least one ghost water is needed")
     ghosts = farthest_waters(base.waters, positions, box, base.ligand_heavy, int(ghost_waters), base.ligand_heavy_bonds,
                              centre_positions)
-    centre = _centre(np.asarray(positions if centre_positions is None else centre_positions, dtype=float),
-                     np.asarray(box, dtype=float), base.ligand_heavy, base.ligand_heavy_bonds)
-    inside = np.linalg.norm(
-        nearest_image(np.asarray(positions, dtype=float)[base.waters[ghosts, 0]] - centre,
-                      np.asarray(box, dtype=float)), axis=1) < base.radius_nm
-    if inside.any():
+    if check_start and start_ghosts_in_sphere(base, positions, box, ghosts, centre_positions):
         raise GcmcError(f"{int(ghost_waters)} ghost waters would take waters of the sphere itself")
     return GcmcSpec(waters=base.waters, ligand=base.ligand, ligand_heavy=base.ligand_heavy, radius_nm=base.radius_nm,
                     charge=base.charge, sigma=base.sigma, epsilon=base.epsilon, mass=base.mass,
@@ -268,6 +264,17 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
                     excess_chemical_potential_kj_per_mol=4.184 * float(excess_chemical_potential_kcal_per_mol),
                     standard_volume_nm3=float(standard_volume_nm3), ghosts=ghosts,
                     ligand_heavy_bonds=base.ligand_heavy_bonds)
+
+
+def start_ghosts_in_sphere(spec, positions: np.ndarray, box: np.ndarray, ghosts, centre_positions=None) -> bool:
+    """Whether a ghost of the start (``ghosts``, rows of ``spec.waters``) is in the sphere of radius ``spec.radius_nm``
+    around the centre of the heavy atoms of the ligand (of ``centre_positions`` where given, else of ``positions``)."""
+    x, box = np.asarray(positions, dtype=float), np.asarray(box, dtype=float)
+    centre = _centre(x if centre_positions is None else np.asarray(centre_positions, dtype=float), box,
+                     spec.ligand_heavy, spec.ligand_heavy_bonds)
+    rows = np.asarray(ghosts, dtype=np.int64)
+    return bool((np.linalg.norm(nearest_image(x[np.asarray(spec.waters)[rows, 0]] - centre, box), axis=1)
+                 < float(spec.radius_nm)).any())
 
 
 def _centre(x: np.ndarray, box: np.ndarray, ligand_heavy: np.ndarray, bonds=None) -> np.ndarray:

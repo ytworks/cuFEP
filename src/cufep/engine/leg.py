@@ -97,16 +97,22 @@ def equil_ghosts_problem(equil_file: Path, gcmc, earlier_ghosts=None) -> str | N
 
 
 def ghost_record(record: Path) -> dict | None:
-    """A record of the ghost waters of a pre-equilibration (:data:`EQUIL_GHOSTS`), its ghosts as numbers, and
-    ``start_centre`` where it gives one; None where it cannot be read (empty, not JSON, without its list of ghosts)."""
+    """A record of the ghost waters of a pre-equilibration (:data:`EQUIL_GHOSTS`) as it is written: its ghosts, a list
+    of numbers of waters (integers, not negative), and ``start_centre`` (a name) where it gives one. None where it
+    is not that (empty, not JSON, without its list of ghosts, a number that is not an integer: twelfth review of
+    PR #19, 1.9 was taken as 1 and 1e999 stopped the leg)."""
     try:
         data = json.loads(Path(record).read_text())
-        out = {"ghosts": [int(i) for i in data["ghosts"]]}
-        if "start_centre" in data:
-            out["start_centre"] = str(data["start_centre"])
-        return out
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError):
         return None
+    if not isinstance(data, dict) or not isinstance(data.get("ghosts"), list):
+        return None
+    ghosts = data["ghosts"]
+    if not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in ghosts):
+        return None
+    if "start_centre" in data and not isinstance(data["start_centre"], str):
+        return None
+    return {"ghosts": list(ghosts), **({"start_centre": data["start_centre"]} if "start_centre" in data else {})}
 
 
 def recorded_ghosts(record: Path) -> list[int] | None:

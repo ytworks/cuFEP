@@ -738,9 +738,12 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   directory), and so are start configurations of the windows in another cell than the
   pre-equilibration fixes (`--reschedule` starts the leg anew); a leg that goes on from its samples
   does not start from its pre-equilibration. One of an earlier version without the record is used
-  where the rule of those versions gives the ghosts of this run, from the prepared system and the
-  settings of the moves (the sphere from the images of the ligand nearest to its first heavy atom, the
-  waters farthest from their centre); a record that cannot be read is not used. Switching is done in the
+  where its ghosts are known to be those of this run, from the prepared system and the settings of the
+  moves: two rules made such pre-equilibrations, that of the first versions (the sphere from the images
+  of the ligand nearest to its first heavy atom, the waters farthest from their centre) and, from
+  fc2ba44 to 507e435, the rule of this version; where the first could not have made it, the ghosts are
+  those of this version, else those of the first rule must be the same. A record that is not a list of
+  numbers of waters is not used. Switching is done in the
   Context while it
   runs (charge and epsilon of every site of the water in the nonbonded force and in the soft-core force of the
   ligand); a Context switched so gives the energies and forces of a System built so, on both

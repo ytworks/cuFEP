@@ -79,6 +79,7 @@ def test_a_bond_that_closes_a_ring_is_read_in_the_end_state_that_has_it():
     assert {to_a[0], to_a[1], to_a[2]} <= core
     hot = perturbed_hot_atoms(a, b, to_a, to_b, core)
     assert hot == set(to_a.values()) | set(to_b.values())
+    assert perturbed_hot_atoms(a, b, to_a, to_b, core, rule=1) == set()     # version 1, which legs record otherwise
 
 
 def _scaled(system, hot: set[int], s: float, ligand: set[int]):

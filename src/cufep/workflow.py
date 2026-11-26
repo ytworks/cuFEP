@@ -764,16 +764,12 @@ def electrostatics_annihilated(conditions: dict | None) -> bool:
     return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
 
 
-def earlier_ghosts_of(prep: dict, gcmc, settings):
-    """The ghost waters that the versions which recorded none chose for an absolute leg with grand canonical moves of
-    water (``gcmc``, with the settings ``sampling.gcmc``), by their rule, from the prepared system: the heavy atoms of
-    the ligand at the images nearest to its first heavy atom, the radius of the sphere from them, the number of ghosts
-    (``auto``: from that radius) and the waters farthest from their centre. Where that pose is whole they are the
-    ghosts of this version; elsewhere they can be the same too (eleventh review of PR #19: such a pre-equilibration
-    was refused, though its ghosts were those of the run). None where those versions made no pre-equilibration (the
-    sphere did not fit the cell, there were fewer waters, a ghost was in the sphere)."""
-    if gcmc is None:
-        return None
+def _ghosts_of_the_first_rule(prep: dict, gcmc, settings):
+    """The ghost waters that the first versions with the moves (67e6336 until fc2ba44) chose for an absolute leg, from
+    the prepared system and the settings of the moves: the heavy atoms of the ligand at the images nearest to its first
+    heavy atom, the radius of the sphere from them, the number of ghosts (``auto``: from that radius) and the waters
+    farthest from their centre. None where those versions made no pre-equilibration (the sphere did not fit the cell,
+    there were fewer waters, a ghost was in the sphere)."""
     from cufep.alchemy.lrc import nearest_image
     from cufep.sampling.relocation_mc import RelocationError, check_cell, sphere_radius
 
@@ -794,6 +790,21 @@ def earlier_ghosts_of(prep: dict, gcmc, settings):
     if (distance[ghosts] < radius).any():
         return None
     return ghosts
+
+
+def earlier_ghosts_of(prep: dict, gcmc, settings):
+    """The ghost waters that the versions which recorded none chose for an absolute leg with grand canonical moves of
+    water (``gcmc``, with the settings ``sampling.gcmc``), from the prepared system. Two rules made such
+    pre-equilibrations: that of the first versions (:func:`_ghosts_of_the_first_rule`), and from fc2ba44 to 507e435
+    the rule of this version (the ligand taken whole along its bonds), which recorded nothing yet. Where the first rule
+    could not have made it, its ghosts are those of this version (twelfth review of PR #19: such a pre-equilibration
+    was refused); where it could, they are known only where the two rules give the same ghosts, and the ghosts of the
+    first rule are given (eleventh review: a pre-equilibration whose ghosts the first rule gives was refused). None
+    without the moves."""
+    if gcmc is None:
+        return None
+    first = _ghosts_of_the_first_rule(prep, gcmc, settings)
+    return np.asarray(gcmc.ghosts) if first is None else first
 
 
 def alchemical_box(eq, gcmc) -> np.ndarray:

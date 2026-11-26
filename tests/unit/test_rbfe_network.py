@@ -684,6 +684,14 @@ def test_rows_of_states_that_contradict_each_other_or_fractions_outside_the_run_
              "x1,X,one,0.6\nx2,X,two,1.2\nx3,X,three,-0.8\n")
     with pytest.raises(WorkflowError, match="x2: solution_fraction 1.2 is not in"):
         states_of(config(forms), [Lig("x1")])
+    # twelfth review (P3): rows that say the same in other words are one state (1 and 1.0, a blank and the default)
+    for text in ("ligand,compound,solution_fraction\na,A,1\na,A,1.0\nb,B,1\n",
+                 "ligand,compound,solution_fraction,symmetry_number\na,A,,\na,A,1,1\nb,B,1.0,1.0\n"):
+        assert states_of(config(text), [Lig("a"), Lig("b")])["compound"] == {"a": "A", "b": "B"}
+    with pytest.raises(WorkflowError, match="names states twice with other values"):
+        states_of(config("ligand,compound,solution_fraction\na,A,1\na,A,0.5\nb,B,1\n"), [Lig("a"), Lig("b")])
+    with pytest.raises(WorkflowError, match="is not a positive whole number"):
+        states_of(config("ligand,compound,symmetry_number\na,A,1.5\nb,B,1\n"), [Lig("a"), Lig("b")])
 
 
 def test_a_state_takes_the_experiment_of_its_compound_and_the_states_are_combined_at_the_temperature_of_their_legs(
@@ -710,7 +718,69 @@ def test_a_state_takes_the_experiment_of_its_compound_and_the_states_are_combine
     write_results(tmp_path, summary)
     rows = {r["ligand"]: r for r in csv.DictReader((tmp_path / "ligands.csv").open())}
     assert rows["A2"]["exp_dg_kcal_mol"] == "-10.000" and rows["A2"]["exp_dg_of"] == "the compound A"
+    # twelfth review (P2): legs at 298.15 and 298.15000001 K, one temperature by the rule that compares them, were two,
+    # and the record of the run (310 K) was taken
+    import json
+
+    leg = tmp_path / "edges" / "A1~A2" / "repeat_0" / "complex" / "result.json"
+    leg.write_text(json.dumps(_leg_result(-8.0, temperature=298.15000001)))
+    (tmp_path / "edges" / "A1~A2" / "repeat_0" / "solvent" / "result.json").write_text(
+        json.dumps(_leg_result(-8.0, temperature=298.15000001)))
+    nearly = combine_network(tmp_path, ["A1", "A2", "B1"], [("A2", "B1"), ("A1", "A2")], 1,
+                             {"A1": -10.0, "B1": -9.0}, states, 310.0)
+    assert nearly["compounds"]["temperature_K"] == pytest.approx(298.15, abs=1e-6)
+    assert nearly["compounds"]["values"]["A"]["dg"] == pytest.approx(summary["compounds"]["values"]["A"]["dg"],
+                                                                     abs=1e-6)
     (tmp_path / "edges" / "A1~A2" / "prep" / "prep.json").unlink()
     edges = {e["edge"]: e for e in combine_network(tmp_path, ["A1", "A2", "B1"], [("A2", "B1"), ("A1", "A2")], 1,
                                                    {"A1": -10.0, "B1": -9.0}, states, 298.15)["edges"]}
     assert "ddg" not in edges["A1~A2"] and "is missing" in edges["A1~A2"]["earlier_preparation"][0]
+
+
+def test_the_experiment_of_a_compound_is_taken_from_its_states_the_run_leaves_out(tmp_path):
+    """Twelfth review of PR #19 (P2): A1 and A2 states of compound A, B1 of B, the experiment A1 = -10 and B1 = -9; a
+    run of A2 and B1 (system.ligand_names) dropped the value of A1 before the compounds were given theirs, and A2 -> B1
+    had no experimental ddG and the dG one compound of reference. The values of the states the run leaves out are
+    read too."""
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import compound_experiment, experiment_of, states_of
+
+    class Lig:
+        def __init__(self, name):
+            self.name, self.properties = name, {}
+
+    (tmp_path / "states.csv").write_text("ligand,compound\nA1,A\nA2,A\nB1,B\n")
+    (tmp_path / "exp.csv").write_text("ligand,dg\nA1,-10\nB1,-9\n")
+    rcfg = RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf",
+                                                 "states": str(tmp_path / "states.csv"),
+                                                 "experiment": str(tmp_path / "exp.csv")}})
+    ligands = [Lig("A2"), Lig("B1")]
+    states = states_of(rcfg, ligands)
+    assert states["left_out"] == {"A": ["A1"]}
+    assert compound_experiment(states, experiment_of(rcfg, ligands, states)) == {"A": -10.0, "B": -9.0}
+
+
+def test_the_ions_of_the_legs_are_compared_by_their_parameters_and_a_custom_core_of_rule_2_is_checked():
+    """Twelfth review of PR #19: (P2) a Na+ of the system in the complex leg and the Na+ of the force field in the
+    solvent leg, of the same charge, sigma and epsilon, were taken as other ions and the edge was left out; where they
+    were taken from is not compared. (P1) an edge whose custom core version 2 of the rule found is taken where both
+    rules give the same core of its ligands, and left out where the search of version 2 stopped before a match."""
+    from rdkit import Chem
+
+    from cufep.rbfe.prep import custom_core_rule_holds, earlier_rules_of
+
+    na = {"name": "NA", "charge": 1.0, "sigma_nm": 0.2439, "epsilon_kj_mol": 0.3658}
+    info = {"made_from": {"alchemical_water_rule": 2}, "legs": {
+        "complex": {"mapping": {}, "alchemical_water": {"ion": {**na, "from": "the system"}}},
+        "solvent": {"mapping": {}, "alchemical_water": {"ion": {**na, "from": "the force field"}}}}}
+    mol = Chem.AddHs(Chem.MolFromSmiles("C"))
+    assert earlier_rules_of(info, (mol, mol)) == []
+    info["legs"]["solvent"]["alchemical_water"]["ion"] = {**na, "sigma_nm": 0.3, "from": "the force field"}
+    assert any("other ions" in why for why in earlier_rules_of(info, (mol, mol)))
+    toluene = Chem.AddHs(Chem.MolFromSmiles("Cc1ccccc1"))
+    butyls = Chem.AddHs(Chem.MolFromSmiles("CC(C)(C)CCC(C)(C)C"))
+    group = "C([CH3]([H])([H])[H])([CH3]([H])([H])[H])[CH3]([H])([H])[H]"
+    assert custom_core_rule_holds({"custom_core_rule": 2, "mapping": {"core_smarts": "c1ccccc1"}}, (toluene, toluene))
+    assert not custom_core_rule_holds({"custom_core_rule": 2, "mapping": {"core_smarts": group}}, (butyls, butyls))
+    of_rule_2 = {"made_from": {"custom_core_rule": 2, "mapping": {"core_smarts": group}}, "legs": {}}
+    assert any("earlier rule" in why for why in earlier_rules_of(of_rule_2, (butyls, butyls)))

@@ -66,7 +66,8 @@ one water of end state A, the one of the lowest residue index among those with n
 `alchemy.alchemical_water_cutoff_nm` (0.8 nm) of the solutes (the protein, the ligand, lipids), is in end state B an
 ion of the sign of dq: its oxygen takes the charge, sigma and epsilon of the most abundant monovalent ion of that
 sign in the system of the complex leg (Na+ or Cl- of the force field if there is none), the same ion in both legs
-so that its hydration cancels in the ddG (an edge whose legs have other ions is refused), its hydrogens charge 0.
+so that its hydration cancels in the ddG (an edge whose legs give the ion another charge, sigma or epsilon is refused
+and left out of the analysis; where each leg took it from is not compared), its hydrogens charge 0.
 Both ends then have
 one total charge. In the hybrid the water's parameters go from A to B as a core atom's do: its charges with
 `lambda_electrostatics_core` (offsets in the NonbondedForce, which the cuPotential plugin carries), the Lennard-Jones
@@ -83,14 +84,20 @@ Kartograf (Ries et al., J. Chem. Theory Comput. 2024) maps the atoms of the two 
 apart, hydrogens only onto hydrogens, whole rings only and no ring that changes, no bond broken; its defaults,
 which are those of OpenFE's relative protocol. Then OpenFE's rule from perses: where a constrained bond
 between two mapped atoms changes its length, or is constrained at one end only, its hydrogen leaves the
-mapping.
+mapping (with `map_hydrogens_on_hydrogens_only: false`, the atom mapped onto a hydrogen).
 
 A custom core (`mapping.core_smarts`, a SMARTS pattern; none by default) restricts the mapping to the atoms in a
 match of the pattern in both ligands: the other atoms are unique to each ligand and change with the soft-core, as a
 group that is "decoupled in the intermediate lambda windows" to sample it better (the custom cores of Ross et al.
-2023, Supplementary section "OX2"). The network of LOMAP is planned from the mappings so restricted. A mapping in
-which a group of atoms unique to one ligand is bonded to two or more mapped atoms is refused (its bonds and angles
-would hold the mapped atoms at both ends of the transformation), and LOMAP plans no edge with one.
+2023, Supplementary section "OX2"). The network of LOMAP is planned from the mappings so restricted. A match of
+the pattern is a set of atoms (the orders of the atoms of a symmetric pattern are one match), and a pattern with more
+than 1000 matches in a ligand, the most that are searched, is refused. A mapping in which a group of atoms unique to
+one ligand is bonded to two or more mapped atoms is refused (its bonds and angles would hold the mapped atoms at both
+ends of the transformation): the mapping of each leg as the hybrid is made of it, after the rule of the constrained
+bonds, before anything of the edge is written; LOMAP plans no edge with one (with the hydrogens of constrained bonds
+taken out as that rule takes them); an edge prepared before this check is checked when it is taken again and in the
+analysis, which leaves it out. An edge whose record of its preparation is lost while its legs hold results is
+refused: it is prepared anew only when its directory is moved away.
 
 ### Hybrid topology
 
@@ -157,7 +164,11 @@ outside a ring between two heavy atoms with another heavy neighbour each, as RDK
 heavy atom). The ligand is then hot only in part: a charge of a hot atom carries sqrt(s) and one of a cold atom does
 not (the NonbondedForce, which the plugin carries, has electrostatic lambdas of each kind), and every pair inside the
 ligand and with the environment carries the factor of its hot atoms (s for two, sqrt(s) for one), every proper
-torsion of four hot atoms s, as REST2 scales them (Wang, Friesner and Berne 2011). The charges of an alchemical water
+torsion of four hot atoms s, as REST2 scales them (Wang, Friesner and Berne 2011). A bond of two mapped atoms is
+read in the end state that has it (a bond that closes a ring in B is a bond to a ring); version 1 of the rule read it
+in A, and a leg whose hot atoms the two versions choose otherwise records the version with its settings: samples of
+version 1 are not continued (refused before a run writes anything), and their free energy, whose end states are not
+scaled, stays in the analysis. The charges of an alchemical water
 are cold whatever the region. The energies of every state equal those of a System with the scaling written into its
 parameters (`tests/unit/test_rbfe_rest2_region.py`), on both backends (`tests/gpu`).
 
@@ -168,16 +179,21 @@ simulations were run in NPT". The moves are those of the ABFE (`docs/protocol.md
 water"; `src/cufep/sampling/gcmc.py`), with their settings: insertions and deletions of water in a sphere around the
 ligand, the waters farthest from the ligand ghosts from the pre-equilibration on (which has its barostat), and the
 replica exchange without a barostat in the mean cell of the pre-equilibration (in a complex leg without free MD
-its last cell). For a hybrid (cuFEP's own): the sphere is around the heavy atoms of both end states, so that A -> B
-and B -> A have one sphere, each molecule taken whole along its bonds (those of the hybrid System, which its topology
+its last cell). For a hybrid (cuFEP's own): the radius of the sphere is from the heavy atoms of
+both end states, so that A -> B and B -> A have one radius, and the centre of the sphere of a move is the centre of
+the heavy atoms of the hybrid ligand (the mapped atoms and the unique atoms of both ends) in the configuration of that
+move, the same atoms both ways: one configuration has one sphere (the two hybrids start from other configurations,
+the mapped atoms where A or B has them), each molecule taken whole along its bonds (those of the hybrid System, which its topology
 does not all hold) and the two end states put together by their centres, so that a ligand longer than half the cell
 has the sphere of the molecule whatever atom comes first; the ghosts of the start are the waters farthest from the
 centre of the hybrid with each mapped atom midway between its positions in the two end states, the same waters both
 ways (the hybrid holds the mapped atoms where A has them; earlier versions counted from that centre, and a leg whose
 pre-equilibration or samples they made keeps those ghosts: where the record of the pre-equilibration names no
-centre and has them, or without a record where the leg goes on from its samples); the ghost waters a
-pre-equilibration was made with are recorded beside it (`equil_ghosts.json`, with the centre); a record that cannot
-be read is a pre-equilibration whose ghosts are not known, and it is read only by a leg that would start from it; a
+centre and has them, or without a record where the leg goes on from its samples; a leg that goes on from its
+samples has the ghosts whose System has the checksum its samples recorded, whatever its record), checked against the
+sphere around the centre they were counted from; the ghost waters a pre-equilibration was made with are recorded
+beside it (`equil_ghosts.json`, with the centre: a list of numbers of waters); a record that is not that is a
+pre-equilibration whose ghosts are not known, and it is read only by a leg that would start from it; a
 leg that would start its replica exchange from a pre-equilibration of other
 ghosts or without that record (a relative leg does not take one on trust), or from start configurations in another
 cell than the pre-equilibration fixes, is refused before the run writes anything, with the command for that leg:

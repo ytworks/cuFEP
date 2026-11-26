@@ -55,7 +55,9 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
     for line, r in listed:
         name = r["ligand"].strip()
         said = {k: (v or "").strip() for k, v in r.items() if k != "ligand"}
-        if name in rows and rows[name][1] != said:
+        # what the calculation takes of a row, in its type and with its default: rows that say the same in other
+        # words are one state (twelfth review of PR #19: 1 and 1.0 were two)
+        if name in rows and _meaning(rows[name][1]) != _meaning(said):
             contradictions.append(f"{name} on lines {rows[name][0]} and {line} ({rows[name][1]} and {said})")
         rows.setdefault(name, (line, said))
     if contradictions:
@@ -85,9 +87,10 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
         if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
             problems.append(f"{n}: solution_fraction {r.get('solution_fraction')} is not in (0, 1]")
     for n, r in rows.items():
-        sigma = int(r.get("symmetry_number") or 1)
-        if sigma < 1:
-            problems.append(f"{n}: symmetry_number {sigma} is not a positive number")
+        sigma = _symmetry(r)
+        if sigma is None or sigma < 1:
+            problems.append(f"{n}: symmetry_number {r.get('symmetry_number')} is not a positive whole number")
+            continue
         if out["symmetry"].setdefault(r["compound"].strip(), sigma) != sigma:
             problems.append(f"compound {r['compound'].strip()} has two symmetry numbers")
     out["symmetry"] = {c: s for c, s in out["symmetry"].items() if c in set(out["compound"].values())}
@@ -111,6 +114,28 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
     return out
 
 
+def _symmetry(row: dict) -> int | None:
+    """The symmetry number of the state of a row of system.states (1 where it is not given; None where it is not a
+    whole number)."""
+    text = (row.get("symmetry_number") or "").strip()
+    if not text:
+        return 1
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return int(value) if math.isfinite(value) and value.is_integer() else None
+
+
+def _meaning(said: dict) -> tuple:
+    """What the calculation takes of a row of system.states (its compound, form, population in solution and symmetry
+    number), each in its type and with its default; a population that is not a number by its text."""
+    fraction = _fraction(said)
+    return (said.get("compound", ""), said.get("form") or "",
+            fraction if math.isfinite(fraction) else (said.get("solution_fraction") or ""),
+            _symmetry(said) if _symmetry(said) is not None else (said.get("symmetry_number") or ""))
+
+
 def _fraction(row: dict) -> float:
     """The population in solution of the state of a row of system.states (1 where it is not given; NaN where it is not
     a number, which the check refuses)."""
@@ -122,9 +147,13 @@ def _fraction(row: dict) -> float:
 
 def compound_experiment(states: dict, experiment: dict[str, float]) -> dict[str, float]:
     """The experimental dG of every compound: that of its states (the value of a compound is given for each of its
-    states, the tags of their records); refused where two states of one compound have other values."""
+    states, the tags of their records), also of a state of the file that the run leaves out (``left_out``; twelfth
+    review of PR #19: a value given for A1 alone was lost when the run took A2); refused where two states of one
+    compound have other values."""
     out: dict[str, float] = {}
-    for ligand, compound in states["compound"].items():
+    compound_of = dict(states["compound"])
+    compound_of.update({n: c for c, names in (states.get("left_out") or {}).items() for n in names})
+    for ligand, compound in compound_of.items():
         if ligand in experiment:
             if compound in out and abs(out[compound] - experiment[ligand]) > 1e-6:
                 raise WorkflowError(f"the states of compound {compound} have other experimental values")
@@ -132,15 +161,22 @@ def compound_experiment(states: dict, experiment: dict[str, float]) -> dict[str,
     return out
 
 
-def experiment_of(rcfg: RbfeConfig, ligands) -> dict[str, float]:
+def experiment_of(rcfg: RbfeConfig, ligands, states: dict | None = None) -> dict[str, float]:
     """Experimental binding free energies (kcal/mol) of the ligands that have one: the CSV of
-    ``system.experiment`` or the tags of the SDF records."""
+    ``system.experiment`` or the tags of the SDF records. With ``states`` (:func:`states_of`) also those of the states
+    of system.states that the run leaves out, whose values are those of their compounds (twelfth review of PR #19)."""
     out: dict[str, float] = {}
+    left_out = sorted({n for names in ((states or {}).get("left_out") or {}).values() for n in names})
     if rcfg.system.experiment is not None:
         with open(rcfg.system.experiment, newline="") as fh:
             for row in csv.DictReader(fh):
                 out[row["ligand"].strip()] = float(row["dg"])
-        return {lig.name: out[lig.name] for lig in ligands if lig.name in out}
+        names = [lig.name for lig in ligands] + left_out
+        return {name: out[name] for name in names if name in out}
+    if left_out:
+        from cufep.prep.ligand import load_ligands
+
+        ligands = list(ligands) + [lig for lig in load_ligands(rcfg.system.ligands) if lig.name in set(left_out)]
     for lig in ligands:
         for key in ("r_exp_dg", "exp_dg", "dG_exp"):
             if key in lig.properties:
@@ -167,7 +203,8 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
         m = rcfg.mapping
         settings = mapping_settings(m)
         n = rcfg.network
-        edges = plan_network(ligands, settings, n.distance_cutoff, n.max_path_length, n.require_cycle_covering)
+        edges = plan_network(ligands, settings, n.distance_cutoff, n.max_path_length, n.require_cycle_covering,
+                             hydrogen_constraints=rcfg.dynamics.constraints in ("auto", "hbonds"))
         how = "planned by LOMAP"
     import networkx as nx
 
@@ -347,8 +384,9 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                            "pressure_bar": None if gcmc_in(rcfg, leg) else float(rcfg.thermodynamics.pressure_bar),
                            "friction_per_ps": float(rcfg.dynamics.friction_per_ps),
                            "barostat_frequency": int(rcfg.dynamics.barostat_frequency),
-                           "exchange": str(rcfg.sampling.exchange), "settings": hybrid_settings(rcfg, leg)}
-                current.update(iteration_of_the_leg(rcfg, out_dir / "edges" / edge, leg, r))
+                           "exchange": str(rcfg.sampling.exchange),
+                           "settings": hybrid_settings(rcfg, leg, out_dir / "edges" / edge)}
+                current.update(iteration_of_the_leg(rcfg, out_dir / "edges" / edge, leg, r, stored.get("timestep_fs")))
                 differing = conditions_differences({key: stored[key] for key in current if key in stored}, current)
                 if differing:
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: its samples ({rows} iterations"
@@ -361,26 +399,35 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
 
 
-def iteration_of_the_leg(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: int) -> dict:
+def iteration_of_the_leg(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: int,
+                         stored_timestep_fs: float | None = None) -> dict:
     """What the samples of a leg of this run record of its dynamics, as the leg makes them: the time step of its
     pre-equilibration, the MD steps of an iteration from it (:func:`cufep.workflow.planned_iterations`), and the
-    barostat (none with grand canonical moves of water). Empty without the pre-equilibration (tenth review of PR #19:
-    a run with another length of an iteration passed the check before it and wrote its record)."""
+    barostat (none with grand canonical moves of water) (tenth review of PR #19: a run with another length of an
+    iteration passed the check before it and wrote its record). Without the pre-equilibration, which the leg makes
+    again, the MD steps of an iteration at the time step the samples record (``stored_timestep_fs``), and the barostat
+    (twelfth review of PR #19: an iteration of 5 ps instead of 2.5 ps passed where equil.npz was missing)."""
     import numpy as np
 
     from cufep.workflow import gcmc_in, planned_iterations
 
     leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
-    if not (leg_dir / "equil.npz").exists():
-        return {}
-    with np.load(leg_dir / "equil.npz") as eq:
-        timestep_fs = float(eq["timestep_fs"])
-    plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
-                              rcfg.sampling.production_ns)
+    if (leg_dir / "equil.npz").exists():
+        with np.load(leg_dir / "equil.npz") as eq:
+            timestep_fs = float(eq["timestep_fs"])
+        known = {"timestep_fs": timestep_fs}
+    elif stored_timestep_fs is not None:
+        timestep_fs, known = float(stored_timestep_fs), {}
+    else:
+        timestep_fs, known = None, {}
     info = json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
     barostat = "none" if gcmc_in(rcfg, leg) else (info.get("legs") or {}).get(leg, {}).get("barostat")
-    return {"timestep_fs": timestep_fs, "steps_per_iteration": int(plan.steps_per_iteration),
-            **({"barostat": barostat} if barostat is not None else {})}
+    out = {**known, **({"barostat": barostat} if barostat is not None else {})}
+    if timestep_fs is None:
+        return out
+    plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
+                              rcfg.sampling.production_ns)
+    return {**out, "steps_per_iteration": int(plan.steps_per_iteration)}
 
 
 def check_legs_have_their_windows(out_dir: Path, edges, repeats, only_legs) -> None:
@@ -475,8 +522,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
     check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
-    experiment = experiment_of(rcfg, ligands)
     states = states_of(rcfg, ligands)
+    experiment = experiment_of(rcfg, ligands, states)
     if states is not None:
         compound_experiment(states, experiment)            # refused before anything is written
     infos = {}
@@ -594,7 +641,7 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
 
     out = {"edge": edge_name(a, b), "ligand_a": a, "ligand_b": b, "repeats": []}
     # an edge prepared by an earlier rule is left out, as the run refuses it (prepared_edge)
-    from cufep.rbfe.prep import earlier_rules_of
+    from cufep.rbfe.prep import earlier_rules_of, prepared_molecules
 
     prep_file = Path(edge_dir) / "prep" / "prep.json"
     info = {}
@@ -613,7 +660,7 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             # network_differences read it again and stopped the analysis of every edge)
             out["earlier_preparation"] = [f"its record {prep_file} cannot be read"]
             return out
-    earlier_rules = earlier_rules_of(info)
+    earlier_rules = earlier_rules_of(info, prepared_molecules(Path(edge_dir) / "prep")) if info else []
     if earlier_rules:
         out["earlier_preparation"] = earlier_rules
         return out
@@ -864,12 +911,16 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
         # the states are combined at the temperature their legs were made at, which the edges share (network
         # differences); the run record can be that of a later run that made none of them (eleventh review of PR #19:
         # a third edge begun at 310 K weighted states of 298.15 K)
-        of_legs = {float(r["conditions"]["temperature_K"]) for r in results
-                   if "ddg" in r and (r.get("conditions") or {}).get("temperature_K") is not None}
-        if len(of_legs) == 1 and abs(next(iter(of_legs)) - float(temperature_K)) > 1e-9:
+        # (the temperatures of the legs are one by the rule that compared them, network_differences; twelfth review
+        # of PR #19: 298.15 and 298.15000001 K were two, and the record of the run was taken)
+        from cufep.sampling.storage import _same
+
+        of_legs = [float(r["conditions"]["temperature_K"]) for r in results
+                   if "ddg" in r and (r.get("conditions") or {}).get("temperature_K") is not None]
+        if of_legs and all(_same(t, of_legs[0]) for t in of_legs) and not _same(of_legs[0], float(temperature_K)):
             summary["notes"].append(f"the record of the run gives {float(temperature_K):g} K; the states are combined "
-                                    f"at {next(iter(of_legs)):g} K, the temperature of their legs")
-            temperature_K = next(iter(of_legs))
+                                    f"at {of_legs[0]:g} K, the temperature of their legs")
+            temperature_K = of_legs[0]
         by_compound = compound_dg(ligands, measured, states["compound"], compound_experiment(states, experiment),
                                   states["fraction"], states["symmetry"], R_GAS * float(temperature_K) / KCAL)
         summary["dg"] = {"reference": by_compound["reference"],

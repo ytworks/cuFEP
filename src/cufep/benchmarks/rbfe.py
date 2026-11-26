@@ -222,6 +222,34 @@ def states_of_a_summary(summary: dict, name: str | None = None) -> dict | None:
     return {"compound": compound_of}
 
 
+def dg_with_experiment(summary: dict, states: dict | None, experiment: dict[str, float],
+                       temperature_K: float) -> tuple[dict, str] | None:
+    """The dG of the ligands (or, with ``states``, of the compounds) of a relative run and their standard errors,
+    computed again from the ddG of its edges by the estimate of the run (:func:`cufep.rbfe.network.ligand_dg`,
+    :func:`cufep.rbfe.network.compound_dg`) with ``experiment`` as the reference: ``({name: {"dg", "se"}},
+    reference)``. None where the summary has no dG, or does not record what the estimate needs (the compound,
+    population and symmetry number of every state)."""
+    from cufep.rbfe.network import Edge, compound_dg, ligand_dg
+    from cufep.sampling.states import R_GAS
+    from cufep.workflow import KCAL
+
+    if not (summary.get("dg") or {}).get("values"):
+        return None
+    measured = [Edge(e["ligand_a"], e["ligand_b"], float(e["ddg"]), float(e["se"])) for e in summary["edges"]
+                if e.get("ddg") is not None and e.get("se") is not None]
+    names = list(summary["ligands"])
+    if states is None:
+        out = ligand_dg(names, measured, {n: v for n, v in experiment.items() if n in set(names)})
+        return {n: {"dg": v, "se": e} for n, (v, e) in out["values"].items()}, out["reference"]
+    compound_of = states.get("compound") or {}
+    if any(n not in compound_of for n in names) or "fraction" not in states or "symmetry" not in states:
+        return None
+    compounds = set(compound_of[n] for n in names)
+    out = compound_dg(names, measured, compound_of, {c: v for c, v in experiment.items() if c in compounds},
+                      states["fraction"], states["symmetry"], R_GAS * float(temperature_K) / KCAL)
+    return {c: {"dg": v["dg"], "se": v["se"]} for c, v in out["compounds"].items()}, out["reference"]
+
+
 def analysed_summary(run_dir: Path) -> dict:
     """The summary of a relative run as its directory gives it now: from its legs where it is the directory of a run
     (``edges/``, ``resolved_config.yaml``, ``network.json``), whatever results its legs have at the moment (fourth
@@ -269,27 +297,46 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         values, names_of = (summary.get("dg") or {}).get("values") or {}, list(summary["ligands"])
         experiment_of = experiment
 
+    def experiment_of_name(name_of: str):
+        """The experimental dG of a ligand, or of a compound where the ligands are states: the value the run was
+        given, else that of the benchmark."""
+        return experiment_of.get(name_of, reference.get(name_of, {}).get("exp"))
+
     def experiment_of_end(x: str):
-        """The experimental dG an end of an edge is compared with: of its compound for a state, else of the ligand;
-        the value the run was given, else that of the benchmark (eleventh review of PR #19: the table of ligands took
-        the benchmark's and the edges did not)."""
+        """The experimental dG an end of an edge is compared with: of its compound for a state, else of the ligand
+        (:func:`experiment_of_name`; eleventh review of PR #19: the table of ligands took the benchmark's and the
+        edges did not)."""
         name_of = compound_of.get(x) if states else x
         if name_of is None:
             return None
-        return experiment_of.get(name_of, reference.get(name_of, {}).get("exp"))
+        return experiment_of_name(name_of)
 
+    # the origin of the dG of the run: the mean of the experimental values it was given, or (none given) the mean of
+    # the network, which is not that of experiment (eleventh review of PR #19: a ddG reproduced exactly gave a raw RMSE
+    # of 10.4 kcal/mol). Then the dG and their standard errors are computed again from the edges, by the estimate of
+    # the run, with the experimental values of this table (twelfth review: dG shifted to them kept the standard errors
+    # of the mean of the network); a summary that does not record what that needs is shifted, and says that its
+    # standard errors are those of the mean of the network
+    origin = ((summary.get("dg") or {}).get("reference") or "")
+    how = "run"
+    if origin and origin != "mean of the experimental values":
+        temperature = float((compounds or {}).get("temperature_K") or record.get("temperature_K") or 298.15)
+        resolved = {n: experiment_of_name(n) for n in names_of}
+        again = dg_with_experiment(summary, states or None, {n: v for n, v in resolved.items() if v is not None},
+                                   temperature)
+        if again is not None:
+            values, origin = again
+            how = "again"
+        else:
+            how = "shifted"
     ligands = []
     for lig in names_of:
         ref = reference.get(lig, {})
         v = values.get(lig) or {}
         ligands.append({"ligand": lig, "exp": experiment_of.get(lig, ref.get("exp")), "cufep_rbfe": v.get("dg"),
                         "cufep_rbfe_error": v.get("se"), "fepplus": ref.get("fepplus"), "cufep_abfe": abfe.get(lig)})
-    # the origin of the dG of the run: the mean of the experimental values it was given, or (none given) the mean of
-    # the network, which is not that of experiment; shifted then to the mean of the experiment of the ligands compared
-    # (eleventh review of PR #19: a ddG reproduced exactly gave a raw RMSE of 10.4 kcal/mol)
-    origin = ((summary.get("dg") or {}).get("reference") or "")
     shifted = None
-    if origin != "mean of the experimental values":
+    if how == "shifted":
         scored_rows = [r for r in ligands if r["cufep_rbfe"] is not None and r["exp"] is not None]
         if scored_rows:
             shifted = (sum(r["exp"] for r in scored_rows)
@@ -332,11 +379,22 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                  "(docs/rbfe.md, \"States of a compound\"). Experiment measures compounds: the ddG compared with it "
                  "are those of the pairs of compounds the edges join, from the dG of the compounds; an edge between "
                  "states is compared with the published prediction of the same edge only.", ""]),
-             ("The dG of cuFEP come from the edges alone, their mean over the ligands with an experimental value set "
-              "to the mean of those values (`docs/rbfe.md`, \"The network\")" if shifted is None else
+             (f"The dG of cuFEP come from the edges alone, their mean over the {what.lower()} with an experimental "
+              "value set to the mean of those values (`docs/rbfe.md`, \"The network\")"
+              if how == "run" and origin == "mean of the experimental values" else
+              "The dG of cuFEP come from the edges alone; the run was given no experimental values and set their mean "
+              "over the network to 0 (`docs/rbfe.md`, \"The network\"): here the dG and their standard errors are "
+              f"computed again from the ddG of its edges by the same estimate, their mean over the {what.lower()} "
+              "with an experimental value of this table set to the mean of those values"
+              if how == "again" and origin == "mean of the experimental values" else
+              "The dG of cuFEP come from the edges alone, their mean over the network set to 0 (no experimental "
+              "value: they are not on the scale of experiment, and the raw errors compare values of other origins)"
+              if shifted is None else
               "The dG of cuFEP come from the edges alone; the run was given no experimental values and set their mean "
               "over the network to 0 (`docs/rbfe.md`, \"The network\"): here they are shifted by "
-              f"{shifted:+.2f} kcal/mol to the mean of the experimental values of the ligands compared")
+              f"{shifted:+.2f} kcal/mol to the mean of the experimental values of the {what.lower()} compared, and "
+              "their standard errors are those of the run, against the mean of the network (the summary does not "
+              "record what computing them again needs)")
              + "; the published FEP+ values are relative "
              "calculations shifted to the experimental mean of the whole published set, with 20 ns per lambda window "
              "(Ross et al. 2023), and cuFEP's absolute values (`benchmarks/results/`) are not shifted. The pairwise "
