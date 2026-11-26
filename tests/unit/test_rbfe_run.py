@@ -42,8 +42,9 @@ def _protein():
     return PreparedProtein(mod.topology, mod.positions, None, {"A": "A"})
 
 
-def _ligands(tmp_path, out_dir):
-    """Toluene and phenol on one ring, 0.6 nm from the peptide, with Gasteiger charges in the cache."""
+def _ligands(tmp_path, out_dir, smiles_b: str = "Oc1ccccc1", name_b: str = "phenol", first_h_b: int = 8):
+    """Toluene and phenol (or ``smiles_b``, whose first ring hydrogen is ``first_h_b``) on one ring, 0.6 nm from the
+    peptide, with Gasteiger charges in the cache (shifted to the formal charge of each)."""
     from rdkit import Chem
     from rdkit.Chem import AllChem, rdMolAlign
     from rdkit.Geometry import Point3D
@@ -56,13 +57,13 @@ def _ligands(tmp_path, out_dir):
     shift = np.array([16.0, 14.0, 16.0]) - xyz.mean(axis=0)
     for i, row in enumerate(xyz + shift):
         a.GetConformer().SetAtomPosition(i, row.tolist())
-    ring = {**{i: i for i in range(1, 7)}, **{10 + k: 8 + k for k in range(5)}}
-    b = Chem.AddHs(Chem.MolFromSmiles("Oc1ccccc1"))
+    ring = {**{i: i for i in range(1, 7)}, **{10 + k: first_h_b + k for k in range(5)}}
+    b = Chem.AddHs(Chem.MolFromSmiles(smiles_b))
     xyz_a = a.GetConformer().GetPositions()
     AllChem.EmbedMolecule(b, randomSeed=11, coordMap={j: Point3D(*xyz_a[i]) for i, j in ring.items() if j < 7})
     rdMolAlign.AlignMol(b, a, atomMap=[(j, i) for i, j in ring.items()])
     writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
-    for name, mol, dg in (("toluene", a, -5.0), ("phenol", b, -5.6)):
+    for name, mol, dg in (("toluene", a, -5.0), (name_b, b, -5.6)):
         mol.SetProp("_Name", name)
         mol.SetProp("r_exp_dg", str(dg))
         writer.write(mol)
@@ -73,7 +74,7 @@ def _ligands(tmp_path, out_dir):
         mol = lig.offmol
         mol.assign_partial_charges("gasteiger")
         charges = [float(q) for q in mol.partial_charges.m_as("elementary_charge")]
-        shift = sum(charges) / len(charges)
+        shift = (sum(charges) - lig.formal_charge) / len(charges)
         (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
             json.dumps({"charges": [q - shift for q in charges]}))
     return ligands
@@ -403,8 +404,10 @@ def test_a_bilayer_with_a_water_of_four_sites_gets_its_force_field_for_the_lipid
     base = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
     from cufep.rbfe.config import RbfeConfig
 
+    # (cuFEP has no excess chemical potential of TIP4P-Ew for the grand canonical moves of the complex leg)
     rcfg = RbfeConfig.model_validate({**base, "membrane": {"enabled": True},
-                                      "forcefield": {**base["forcefield"], "water": "amber14/tip4pew.xml"}})
+                                      "forcefield": {**base["forcefield"], "water": "amber14/tip4pew.xml"},
+                                      "sampling": {**base["sampling"], "gcmc": {"enabled": False}}})
     prepare_edge(rcfg, ligands[0], ligands[1], _protein(), out_dir / "edges" / "toluene~phenol", "cube", print)
     assert asked == ["amber14/tip4pew.xml"]
 
@@ -646,4 +649,40 @@ def test_start_configurations_made_again_are_the_start_of_samples_started_anew_l
     with pytest.raises(WorkflowError, match="no schedule.yaml"):
         run_rbfe(full, log=lambda line: None, only_legs=["solvent"])
     assert (leg_dir / "result.json").read_bytes() == result
+
+
+def test_an_edge_that_changes_the_charge_has_an_alchemical_water_in_both_legs(tmp_path):
+    """Toluene into phenolate (charge -1): in each leg one water farther than the cutoff from the solutes is Na+ in
+    end state B (the box of the test has no ion: the ion of the force field), so that both ends have one total
+    charge; the hybrid of the leg has it as its alchemical water, in a residue that the grand canonical moves of the
+    complex leg leave out; the record of the prepared edge names the rule."""
+    import openmm as mm
+
+    from cufep.rbfe.leg import build_leg
+    from cufep.rbfe.prep import edge_made_from, load_end_states, prepare_edge
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir, "[O-]c1ccccc1", "phenolate", 7)
+    assert [lig.formal_charge for lig in ligands] == [0, -1]
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenolate"
+    info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    assert edge_made_from(rcfg, *ligands, "cube")["alchemical_water_cutoff_nm"] == 0.8
+    for leg in ("complex", "solvent"):
+        water = info["legs"][leg]["alchemical_water"]
+        assert water["charge_change"] == 1 and water["ion"]["name"] == "NA" and water["ion"]["charge"] == 1.0
+        end = load_end_states(edge_dir, leg)
+        totals = []
+        for which in ("a", "b"):
+            system = mm.XmlSerializer.deserialize(end[which]["system_xml"])
+            nb = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
+            totals.append(sum(nb.getParticleParameters(i)[0].value_in_unit(mm.unit.elementary_charge)
+                              for i in range(system.getNumParticles())))
+        assert totals[0] == pytest.approx(totals[1], abs=1e-6)
+        built = build_leg(rcfg, edge_dir, leg)
+        assert built.hybrid.alchemical_water == tuple(sorted(water["atoms_a"]))
+        names = {a.residue.name for a in built.prep["topology"].atoms() if a.index in set(water["atoms_a"])}
+        assert names == {"ALW"}
+        if built.gcmc is not None:
+            assert not set(water["atoms_a"]) & set(built.gcmc.waters.reshape(-1).tolist())
 

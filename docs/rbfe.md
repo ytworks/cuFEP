@@ -37,8 +37,9 @@ field, solvation, bilayer, cutoff, ionic strength, pH ...).
 - Experimental values (optional): `system.experiment` (a CSV with the columns `ligand` and `dg`, kcal/mol)
   or the SDF tags `r_exp_dg` or `exp_dg`. They set the one constant of the dG that the edges leave, and are
   given next to the results.
-- Neutral ligands; an edge that changes the net charge is refused before anything is written (this version
-  has no treatment of a charge change).
+- Ligands of any net charge (the box is neutralised with counterions, `thermodynamics.ionic_strength_M` of salt).
+  An edge that changes the net charge by one charge has an alchemical water ("Edges that change the net charge");
+  a larger change is refused before anything is written.
 
 ## The calculation of an edge
 
@@ -49,6 +50,24 @@ conditions (temperature, pressure, prepared systems, correction of the dispersio
 and each must have its standard error; otherwise the edge has no ddG, says why, and the network is made from the
 other edges. The end states A and B are each built in a force field that holds its own ligand alone (two ligands
 of one bonded graph in one force field would share the template of one, with its charges).
+
+### Edges that change the net charge
+
+The co-alchemical water of Chen et al. (J. Chem. Theory Comput. 2018, 14, 6346; its full text could not be
+obtained), with the rule of OpenFE's relative protocol (`explicit_charge_correction`, from perses'
+`transform_waters_into_ions`, read in its source; `src/cufep/rbfe/charge.py`): with dq = q(A) - q(B) = +1 or -1,
+one water of end state A, the one of the lowest residue index among those with no atom within
+`alchemy.alchemical_water_cutoff_nm` (0.8 nm) of the solutes (the protein, the ligand, lipids), is in end state B an
+ion of the sign of dq: its oxygen takes the charge, sigma and epsilon of the most abundant monovalent ion of that
+sign in the system (Na+ or Cl- of the force field if there is none), its hydrogens charge 0. Both ends then have
+one total charge. In the hybrid the water's parameters go from A to B as a core atom's do: its charges with
+`lambda_electrostatics_core` (offsets in the NonbondedForce, which the cuPotential plugin carries), the Lennard-Jones
+of each of its pairs interpolated linearly with `lambda_sterics_core` (in the force of the ligand with its
+environment; its Lennard-Jones beyond the cutoff is not corrected, as the ligand's). The water keeps its geometry and
+masses; it is not one of the waters of the grand canonical moves (its residue is named ALW in the topology of the
+hybrid). Both legs of the edge have one. The lambda windows are those of adaptive lambda scheduling, as for every
+edge. A change of more than one charge is refused (OpenFE: "Absolute charge changes greater than 1 are currently
+not supported").
 
 ### Atom mapping
 
@@ -124,7 +143,9 @@ and B -> A have one sphere; a water switched off has no charge and no Lennard-Jo
 Lennard-Jones with the ligand at either end state; in the stand-in energy with which the trials are screened the
 ligand interacts with the parameters of both ends at full strength in every window, and the test with the full
 potential of the window that every trial that passes is given corrects it (what the stand-in is changes how many
-trials pass, not what is sampled). The solvent leg runs at constant pressure.
+trials pass, not what is sampled). The solvent leg runs at constant pressure. With a water model for which cuFEP
+has no excess chemical potential and standard volume (`docs/configuration.md`, `sampling.gcmc`) a relative
+configuration is refused when it is read unless it gives those numbers or `sampling.gcmc.enabled: false`.
 
 ### Membrane proteins
 
@@ -166,7 +187,7 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
 
 ## Not in this version
 
-- An edge that changes the net charge (refused before anything is written).
+- An edge that changes the net charge by more than one charge (refused before anything is written).
 - A correction of the Lennard-Jones of the ligand with its surroundings beyond the cutoff: none, as OpenFE's
   relative protocol (`use_dispersion_correction: False` for the hybrid); the NonbondedForce of the
   environment keeps its own long-range correction.
@@ -191,6 +212,7 @@ mapping:
   allow_bond_breaks: false
 alchemy:
   softcore_alpha: 0.85
+  alchemical_water_cutoff_nm: 0.8
 lambda_schedule:
   mode: adaptive
   windows: 11
@@ -234,6 +256,7 @@ output:
 |---|---|---|
 | `mapping.*` | Kartograf's defaults | Kartograf (Ries et al. 2024); the defaults of OpenFE's relative protocol (since openfe 1.7) |
 | `alchemy.softcore_alpha` | 0.85 | Gapsys et al. 2012; OpenFE's `softcore_alpha` |
+| `alchemy.alchemical_water_cutoff_nm` | 0.8 | OpenFE's `explicit_charge_correction_cutoff` |
 | `network.*` | LOMAP: pairs of a score below 1 - 0.4 left out (but those that join the parts), every ligand in a cycle, paths of at most 6 edges | lomap2's defaults of `generate_lomap_network`, with which the OpenFE benchmark (Baumann et al. 2026) planned its networks |
 | `lambda_schedule.adaptive.*` | 9 windows, 0.04, 101 candidates, the matrix of the stage | Midgley et al. 2025: the values and the rule of the paper, which is about relative transformations |
 | `lambda_schedule.adaptive.legs` | each | the owner's choice of 2026-11-25: the paper's (`solvent`, the windows of the ligand in solution for both legs) left a pair of windows of the ejm_31 -> ejm_49 complex leg of TYK2 at an overlap of 0.013 (where a precalculation of the solvent leg of another run had added a window); each leg its own precalculation, as the ABFE |

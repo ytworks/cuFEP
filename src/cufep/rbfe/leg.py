@@ -85,18 +85,24 @@ def run_hybrid_leg_safe(job: EdgeLegJob) -> dict:
         return err
 
 
-def hybrid_topology(top_a, top_b, unique_b: list[int]):
+def hybrid_topology(top_a, top_b, unique_b: list[int], alchemical_water=()):
     """The topology of the hybrid System: that of A, and the unique atoms of B in a residue LIG of a chain of their
-    own (their bonds among themselves; those to the core are terms of the System)."""
+    own (their bonds among themselves; those to the core are terms of the System). The residue of the alchemical
+    water of an edge that changes the charge is named ``ALCHEMICAL_WATER_RESNAME`` (cufep.rbfe.charge), so that the
+    grand canonical moves, which take the waters named HOH, leave it out."""
     import openmm.app as app
 
+    from cufep.rbfe.charge import ALCHEMICAL_WATER_RESNAME
+
+    alchemical = {int(i) for i in alchemical_water}
     out = app.Topology()
     out.setPeriodicBoxVectors(top_a.getPeriodicBoxVectors())
     atoms = {}
     for chain in top_a.chains():
         c = out.addChain(chain.id)
         for res in chain.residues():
-            r = out.addResidue(res.name, c, res.id, res.insertionCode)
+            name = ALCHEMICAL_WATER_RESNAME if {a.index for a in res.atoms()} & alchemical else res.name
+            r = out.addResidue(name, c, res.id, res.insertionCode)
             for atom in res.atoms():
                 atoms[("a", atom.index)] = out.addAtom(atom.name, atom.element, r, atom.id)
     for bond in top_a.bonds():
@@ -200,12 +206,13 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
     if rest2_on and leg == "complex":
         hot_atoms, hot_residues = rest2_region(rest2, a["topology"], a["positions"], a["ligand"], a["protein"],
                                                info.get("input_chains"))
+    water = (info["legs"][leg].get("alchemical_water") or {}).get("atoms_a", [])
     hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                 mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
                                 end["core_map"], softcore_alpha=rcfg.alchemy.softcore_alpha, rest2=rest2_on,
-                                rest2_atoms=hot_atoms)
+                                rest2_atoms=hot_atoms, alchemical_water=water)
     unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
-    topology = hybrid_topology(a["topology"], b["topology"], unique_b)
+    topology = hybrid_topology(a["topology"], b["topology"], unique_b, water)
     gcmc = None
     if gcmc_in(rcfg, leg):
         from cufep.sampling.gcmc import ghosts_off
@@ -305,7 +312,10 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         f"{built.info['ligand_a']}, {len(hybrid.unique_new)} unique to {built.info['ligand_b']}; "
         + (f"REST2 on the ligand and {len(built.hot_atoms)} atoms of {len(built.hot_residues)} residues "
            f"({' '.join(built.hot_residues)}), {rest2_scale:g} times the temperature in the middle"
-           if rest2_scale > 1.0 else "REST2 off"))
+           if rest2_scale > 1.0 else "REST2 off")
+        + ("" if not hybrid.alchemical_water else
+           f"; the net charge changes: water {hybrid.alchemical_water[0]} becomes "
+           f"{built.info['legs'][job.leg]['alchemical_water']['ion']['name']} (an alchemical water)"))
     gcmc = built.gcmc
     if gcmc is not None:
         mu = gcmc.excess_chemical_potential_kj_per_mol / KCAL

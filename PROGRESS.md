@@ -25,7 +25,7 @@ OpenMM, on all GPUs of a machine, from two files.
   workers per GPU through NVIDIA MPS.
 - Benchmarks against experiment and the FEP+ predictions of the Schrödinger public binding free
   energy benchmark (MIT licence): TYK2 (kinase) and A2A (GPCR in a bilayer).
-- Version 0.1: neutral ligands only, no cofactors.
+- Version 0.1: neutral ligands in the ABFE; the RBFE takes charges and changes of one charge. No cofactors.
 - Distribution: a Docker image built from `docker/Dockerfile`; an image with the plugin is not
   published before the licence question is settled (`docs/LICENSING.md`).
 
@@ -111,6 +111,18 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-26 — [design] RBFE: grand canonical moves of water on by default, charge changes, relative benchmarks
+- What: plan `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (PR #19). `cufep benchmark run --protocol rbfe`
+  (LOMAP networks; pairwise and edgewise RMSE); every edge gets the ddG of the network; `sampling.gcmc` on by default
+  in the RBFE complex leg (off in the ABFE); edges that change the net charge by one get an alchemical water
+  (OpenFE's rule), larger changes are refused. docs/rbfe.md said LOMAP keeps edges of score 0.4 or more: lomap2 leaves
+  out pairs below 0.6 and joins the parts with the best pairs whatever their score (corrected).
+- Why: the owner's order of 2026-11-26 (the features of the published relative protocol, Ross et al. 2023) and the
+  owner's answers (GCMC on in RBFE; A2A with the 29 states of the published map).
+- Verified: CPU tests of each part (synthetic truth, end states against A and B Systems, refusals); GPU tests of the
+  hybrid with the moves and with the alchemical water on both backends. No run yet.
+- Refs: `docs/rbfe.md` ("Edges that change the net charge", "Sampling", "The network"); `spikes/m39`
 
 ### 2026-11-26 — [progress] RBFE and the engine of a leg merged (PR #17 with PR #18)
 - What: the reviews of PR #17 (four rounds, 18 findings) and PR #18 (eight rounds, 20 findings) were each

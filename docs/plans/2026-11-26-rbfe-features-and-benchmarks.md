@@ -105,3 +105,22 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   一致。作った後に切った hybrid も同じ。hybrid の状態で移動が動き、Context の水の状態とエネルギーが一致。complex leg
   だけに記録される)。GPU(両バックエンドで、切り替えた Context の全状態のエネルギーが全部の水の hybrid と 0.02 kT
   以内、HREX で移動の回数・挿入・セル固定): `tests/gpu` の hybrid と GCMC の 22 件が通過(2 GPU)。
+
+### 2026-11-26 手順 4: 電荷が変わるエッジ(alchemical water)と電荷を持つリガンド(RBFE)
+- Chen et al. 2018 は全文が手に入らなかった(Europe PMC に無し、オープンアクセスでない)。規則は全文を読める OpenFE の相対
+  プロトコル(`explicit_charge_correction`、perses の `transform_waters_into_ions`、main のソース)のものにし、
+  `src/cufep/rbfe/charge.py` と `docs/rbfe.md` に書いた: dq = q(A) − q(B) が ±1 のとき、A の座標で溶質(タンパク質、
+  リガンド、脂質)から 0.8 nm 以内に原子の無い水のうち残基番号の最小のものを、B では dq の符号の 1 価イオン(系に最も
+  多いもの、無ければ力場の Na+/Cl−)にし、H の電荷を 0 にする。|dq| > 1 は書く前に拒否(OpenFE と同じ)。
+- hybrid への載せ方(cuFEP の配置): その水は環境のまま、電荷は NonbondedForce の offset(λ_electrostatics_core、
+  プラグインは電荷だけを持つ方針どおり)、LJ は NonbondedForce から外し hybrid の LJ の力に A=水・B=イオンで入れ、
+  (水, ほかの環境)の相互作用グループを足した。LJ のカットオフ外の補正は無い(リガンドと同じ)。GCMC の水からは外す
+  (残基名 ALW)。両レグに 1 つずつ。ABFE の電荷の拒否はそのまま、RBFE は電荷を持つリガンドを受け付ける。
+- 既定 on の GCMC の影響: cuFEP が化学ポテンシャルを持たない水モデル(例 TIP4P-Ew)では、値を与えるか GCMC を切らないと
+  RBFE の設定が読み込み時に拒否される(既存の規則)。docs に書き、その水を使う既存のテストでは GCMC を切った。
+- 全体テスト(65bb947): 809 passed、1 failed — 相対レポートの出力名が出力ディレクトリの予約名に入っていなかった(手順 2
+  の漏れ)。加えた。
+- テスト: CPU(水の選び方が規則どおりで毎回同じ、両端の全電荷が等しい、λ 0 と 1 で A と B(イオン)の System に一致、
+  NonbondedForce は水の電荷の offset だけ、評価器が各状態の直接計算と一致、|dq| > 1 の拒否、準備した両レグの記録と
+  hybrid と GCMC からの除外)。GPU: 電荷変化の hybrid の各状態で両バックエンドが厳しい Ewald 和と一致(hybrid の
+  GPU テスト 15 件通過)。

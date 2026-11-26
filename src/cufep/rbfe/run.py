@@ -158,6 +158,11 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     if unknown:
         raise WorkflowError(f"--edge: {', '.join(unknown)} is not an edge of the run (edges: {', '.join(names)})")
     check_windows_of_the_solvent_leg(rcfg, out_dir, selected, only_legs)
+    from cufep.rbfe.charge import charge_change_problems
+
+    problems = charge_change_problems(ligands, edges)
+    if problems:
+        raise WorkflowError("; ".join(problems))
     by_name = {lig.name: lig for lig in ligands}
     box_shape = rcfg.solvation.box_shape
     # every prepared edge of the network, before the run writes anything: those it runs, and those whose results it

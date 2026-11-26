@@ -83,6 +83,9 @@ class MappingConfig(_Section):
 class HybridAlchemyConfig(_Section):
     #: alpha of the soft-core Lennard-Jones of Gapsys et al. 2012 (OpenFE's softcore_alpha)
     softcore_alpha: float = Field(default=0.85, gt=0.0, le=1.0)
+    #: an edge that changes the net charge: the alchemical water is one with no atom this close to the solutes
+    #: (OpenFE's explicit_charge_correction_cutoff; cufep.rbfe.charge)
+    alchemical_water_cutoff_nm: float = Field(default=0.8, gt=0.0)
 
 
 class HybridAdaptiveConfig(_Section):

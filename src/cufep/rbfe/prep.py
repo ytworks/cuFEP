@@ -70,8 +70,16 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
     from cufep.prep.ligand import assign_partial_charges
     from cufep.prep.solvate import SolvationSpec, combine, ligand_atom_indices, min_box_height_nm, solvate
+    from cufep.rbfe.charge import (
+        alchemical_water,
+        charge_change,
+        charge_change_problems,
+        ion_parameters,
+        oxygen_first,
+        water_into_ion,
+    )
     from cufep.rbfe.mapping import MappingSettings, constrained_bond_rule, kartograf_mapping, lomap_score
-    from cufep.workflow import WorkflowError, _check_box, _remove_clashing_waters, check_ligand
+    from cufep.workflow import WorkflowError, _check_box, _remove_clashing_waters
 
     prep_dir = Path(edge_dir) / "prep"
     done = prep_dir / "prep.json"
@@ -79,13 +87,15 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     info = prepared_edge(cfg, ligand_a, ligand_b, edge_dir, box_shape)
     if info is not None:
         return info
+    problems = charge_change_problems([ligand_a, ligand_b], [(ligand_a.name, ligand_b.name)])
+    if problems:
+        raise WorkflowError("; ".join(problems))
+    # charged ligands are taken (an edge between two ligands of one charge, or a change of one charge with an
+    # alchemical water); the ABFE stops on them (cufep.workflow.check_ligand)
+    dq = charge_change(ligand_a, ligand_b)
     prep_dir.mkdir(parents=True, exist_ok=True)
     for lig in (ligand_a, ligand_b):
-        check_ligand(lig)
         assign_partial_charges(lig, cfg.forcefield.ligand_charges, cache_dir=Path(cfg.output.dir) / "cache")
-    if ligand_a.formal_charge != ligand_b.formal_charge:
-        raise WorkflowError(f"{ligand_a.name} -> {ligand_b.name} changes the net charge; this version has no "
-                            "treatment of a charge change")
     m = cfg.mapping
     settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
                                map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
@@ -143,14 +153,31 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
         modeller_b = _modeller_with_ligand_replaced(modeller, ligand_a, ligand_b)
         system_a = create_system(forcefield, modeller.topology, sysspec)
         system_b = create_system(forcefield_b, modeller_b.topology, sysspec)
-        return modeller, system_a, modeller_b, system_b, membrane_info
+        water = None
+        if dq != 0:
+            # the water that is an ion in B (cufep.rbfe.charge), chosen in A, the same atoms in B
+            import openmm.unit as unit
+
+            positions = np.asarray(modeller.positions.value_in_unit(unit.nanometer))
+            cutoff = cfg.alchemy.alchemical_water_cutoff_nm
+            atoms_a = oxygen_first(modeller.topology, alchemical_water(modeller.topology, positions, cutoff))
+            in_a, in_b = set(ligand_atom_indices(modeller.topology)), set(ligand_atom_indices(modeller_b.topology))
+            env_a = [i for i in range(system_a.getNumParticles()) if i not in in_a]
+            env_b = [i for i in range(system_b.getNumParticles()) if i not in in_b]
+            to_b = dict(zip(env_a, env_b))
+            ion = ion_parameters(system_a, modeller.topology, int(np.sign(dq)), forcefield)
+            atoms_b = [to_b[i] for i in atoms_a]
+            water_into_ion(system_b, atoms_b, ion)
+            water = {"atoms_a": atoms_a, "atoms_b": atoms_b, "ion": ion, "charge_change": dq,
+                     "cutoff_nm": float(cfg.alchemy.alchemical_water_cutoff_nm)}
+        return modeller, system_a, modeller_b, system_b, membrane_info, water
 
     info = {"ligand_a": ligand_a.name, "ligand_b": ligand_b.name, "lomap_score": score, "made_from": made_from,
             "membrane": membrane, "box_shape": box_shape, "solvent_box_shape": solvent_shape,
             "box_built_for_backend": cfg.backend.name, "input_chains": dict(protein.input_chains)}
     legs = {}
     for leg, with_protein in (("complex", True), ("solvent", False)):
-        modeller_a, system_a, modeller_b, system_b, membrane_info = build(with_protein)
+        modeller_a, system_a, modeller_b, system_b, membrane_info, water = build(with_protein)
         atoms_a, atoms_b = ligand_atom_indices(modeller_a.topology), ligand_atom_indices(modeller_b.topology)
         hydrogens_a = {i for i, a in enumerate(ligand_a.offmol.atoms) if a.atomic_number == 1}
         hydrogens_b = {i for i, a in enumerate(ligand_b.offmol.atoms) if a.atomic_number == 1}
@@ -162,6 +189,10 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
                      "core_atoms": len(kept), "mapping": {str(i): j for i, j in sorted(kept.items())},
                      "barostat": "membrane" if (with_protein and membrane) else "isotropic",
                      "membrane_info": membrane_info}
+        if water is not None:
+            legs[leg]["alchemical_water"] = water
+            notes.append(f"{leg} leg: the net charge changes by {-dq:+d}; water {water['atoms_a'][0]} is "
+                         f"{water['ion']['name']} in {ligand_b.name}'s end state (an alchemical water)")
         removed = sorted(set(mapping) - set(kept))
         if removed:
             notes.append(f"{leg} leg: {len(removed)} hydrogen(s) left the mapping because a constrained bond changes "
@@ -206,7 +237,11 @@ def edge_made_from(cfg, ligand_a, ligand_b, box_shape: str) -> dict:
             "mapping": cfg.mapping.model_dump(mode="json"), "backend": cfg.backend.name,
             # the pH sets the protonation states of a protein given without hydrogens (review of PR #17)
             "thermodynamics": {"ionic_strength_M": cfg.thermodynamics.ionic_strength_M, "ph": cfg.thermodynamics.ph},
-            "dynamics": {k: getattr(cfg.dynamics, k) for k in ("cutoff_nm", "hmr_mass_amu", "constraints")}}
+            "dynamics": {k: getattr(cfg.dynamics, k) for k in ("cutoff_nm", "hmr_mass_amu", "constraints")},
+            # an edge that changes the net charge: the rule of its alchemical water (only there, so that the records
+            # of the other edges are those of earlier versions)
+            **({"alchemical_water_cutoff_nm": float(cfg.alchemy.alchemical_water_cutoff_nm)}
+               if ligand_a.formal_charge != ligand_b.formal_charge else {})}
 
 
 def load_end_states(edge_dir: Path, leg: str) -> dict:

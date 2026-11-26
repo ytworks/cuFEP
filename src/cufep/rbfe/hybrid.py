@@ -201,6 +201,9 @@ class HybridSystem:
     rest2: bool = False
     rest2_atoms: tuple[int, ...] = ()
     rest2_torsions: int = 0
+    #: environment atoms whose parameters go from those of A to those of B (the water that is an ion in B,
+    #: cufep.rbfe.charge)
+    alchemical_water: tuple[int, ...] = ()
     #: pairs of bonded atoms of the hybrid System (bonds and constraints of both end states)
     bonds: frozenset = field(default_factory=frozenset)
 
@@ -258,14 +261,18 @@ def _same_environment_term(what: str, key, in_a, in_b) -> None:
 
 def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.System, positions_b, ligand_b,
                        core_map: dict[int, int], softcore_alpha: float = SOFTCORE_ALPHA, rest2: bool = False,
-                       rest2_atoms=()) -> HybridSystem:
+                       rest2_atoms=(), alchemical_water=()) -> HybridSystem:
     """The hybrid System of two end states.
 
     ``system_a`` and ``system_b`` hold the same environment, atom for atom in the same order, and the
     ligands ``ligand_a`` and ``ligand_b`` (atom indices of each System); ``core_map`` maps atoms of ligand A
     to atoms of ligand B (indices of the Systems). ``positions_*`` are in nm; the hybrid has the positions
     of A and, for the unique new atoms, those of B. ``rest2_atoms`` are environment atoms (indices of A,
-    which are those of the hybrid) of the hot region; the ligand is always in it.
+    which are those of the hybrid) of the hot region; the ligand is always in it. ``alchemical_water`` are
+    environment atoms (indices of A) whose nonbonded parameters differ in B, the water that is an ion in B
+    (:mod:`cufep.rbfe.charge`): their charges go with ``lambda_electrostatics_core`` (offsets in the
+    NonbondedForce), their Lennard-Jones with everything with ``lambda_sterics_core`` (the force of the ligand
+    with its environment; none in the NonbondedForce), as those of a core atom.
     """
     lig_a, lig_b = sorted(int(i) for i in ligand_a), sorted(int(i) for i in ligand_b)
     set_a, set_b = set(lig_a), set(lig_b)
@@ -305,8 +312,12 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     core_set, old_set, new_set = set(core), set(unique_old), set(unique_new)
     ligand = sorted(core_set | old_set | new_set)
     ligand_set = set(ligand)
+    alchemical = {int(i) for i in alchemical_water}
+    if any(i in set_a or i < 0 or i >= n_a for i in alchemical):
+        raise AlchemyError("alchemical_water must be environment atoms")
+    env_b_of = dict(zip(env_a, env_b))
     for i, j in zip(env_a, env_b):
-        if particles_a[i] != particles_b[j]:
+        if particles_a[i] != particles_b[j] and i not in alchemical:
             raise AlchemyError(f"environment atom {i} of A and {j} of B have other parameters")
 
     out = mm.System()
@@ -515,6 +526,13 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             charge[h] = (0.0, 0.0, 0.0, qb)
             params_b[h] = (qb, sb, eb)
             nb.addParticle(0.0, sb, 0.0)
+        elif h in alchemical:
+            # the water that is an ion in B: its charge as an offset, its Lennard-Jones in the custom force
+            qa, sa, _ea = particles_a[h]
+            qb = particles_b[env_b_of[h]][0]
+            nb.addParticle(qa, sa, 0.0)
+            if qb != qa:
+                nb.addParticleParameterOffset(LAMBDA_ELECTROSTATICS_CORE, h, qb - qa, 0.0, 0.0)
         else:
             nb.addParticle(*particles_a[h])
     for h in ligand:
@@ -625,6 +643,8 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
         raise AlchemyError("rest2_atoms given without rest2")
     if any(i in ligand_set or i < 0 or i >= n_a for i in hot_env):
         raise AlchemyError("rest2_atoms must be environment atoms")
+    if alchemical & set(hot_env):
+        raise AlchemyError("the alchemical water is in the hot region of REST2")
     region = ligand_set | set(hot_env)
     if rest2:
         nb.addGlobalParameter(REST2_DQ, 0.0)
@@ -664,6 +684,10 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             row = [params_a[h][1], params_a[h][2], params_a[h][1], 0.0, 1.0, 0.0]
         elif h in new_set:
             row = [params_b[h][1], 0.0, params_b[h][1], params_b[h][2], 0.0, 1.0]
+        elif h in alchemical:
+            _qa, sa, ea = particles_a[h]
+            _qb, sb, eb = particles_b[env_b_of[h]]
+            row = [sa, ea, sb, eb, 0.0, 0.0]
         else:
             _q, s, e = particles_a[h]
             row = [s, e, s, e, 0.0, 0.0]
@@ -678,6 +702,9 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     for group in (core_set, old_set, new_set):
         if group:
             sc.addInteractionGroup(group, environment)
+    if alchemical:
+        # the Lennard-Jones of the alchemical water with the rest of the environment (with the ligand: above)
+        sc.addInteractionGroup(alchemical, environment - alchemical)
     for k in range(nb.getNumExceptions()):
         i, j, *_ = nb.getExceptionParameters(k)
         sc.addExclusion(i, j)
@@ -730,7 +757,7 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
                         unique_new=tuple(unique_new), a_to_hybrid=a_to_h, b_to_hybrid=b_to_h,
                         parameters_a=params_a, parameters_b=params_b, softcore_alpha=float(softcore_alpha),
                         rest2=bool(rest2), rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions,
-                        bonds=frozenset(bonds_hybrid))
+                        bonds=frozenset(bonds_hybrid), alchemical_water=tuple(sorted(alchemical)))
 
 
 def _copy_virtual_site(site):

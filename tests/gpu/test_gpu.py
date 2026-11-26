@@ -1028,3 +1028,27 @@ def test_replica_exchange_of_a_hybrid_leg_with_grand_canonical_moves_of_water(tm
     assert (counts[:, :, 0] + counts[:, :, 2]).sum(axis=1).tolist() == [0, k * moves.attempts] * 5
     assert counts[:, :, 1].sum() > 0
     assert np.allclose(data["volume"], abs(np.linalg.det(box)), rtol=1e-6)
+
+
+@needs_plugin
+def test_backends_agree_at_every_state_of_a_hybrid_that_changes_the_charge():
+    """Toluene into phenolate with an alchemical water that is Na+ in B: each backend gives the differences between
+    the windows that a tight Ewald sum gives (the water's charges as offsets under lambda_electrostatics_core in the
+    NonbondedForce the plugin replaces, its Lennard-Jones in the custom force on the stock kernels)."""
+    from conftest import build_hybrid_edge, hybrid_edge_topology
+
+    from cufep.rbfe.charge import alchemical_water, ion_parameters, water_into_ion
+    from cufep.rbfe.hybrid import make_hybrid_system
+
+    ring = {**{i: i for i in range(1, 7)}, **{10 + k: 7 + k for k in range(5)}}
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge("[O-]c1ccccc1", ring,
+                                                                                         box_nm=3.2)
+    top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a)
+    water = alchemical_water(top_a, pos_a, 0.8)
+    water_into_ion(system_b, [i - len(ligand_a) for i in water],
+                   ion_parameters(system_a, top_a, +1, mm.app.ForceField("amber14/tip3p.xml")))
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, alchemical_water=water)
+    schedule = fixed_schedule(["morph"], {"morph": 8})
+    assert_backends_give_the_energies_of_a_tight_ewald_sum(hybrid.system, schedule.states, hybrid.positions, box,
+                                                           pressure=1.0)
+

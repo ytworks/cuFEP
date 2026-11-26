@@ -370,9 +370,11 @@ def rbfe_plan(config: str) -> None:
         click.echo(f"ligand {lig.name}: {lig.n_atoms} atoms" + (f", experiment {exp:.2f} kcal/mol" if exp else ""))
     for a, b in edges:
         mapping = kartograf_mapping(by_name[a], by_name[b], settings)
+        dq = by_name[b].formal_charge - by_name[a].formal_charge
         click.echo(f"edge {a} -> {b}: {len(mapping)} atoms mapped, {by_name[a].n_atoms - len(mapping)} unique to {a}, "
                    f"{by_name[b].n_atoms - len(mapping)} unique to {b}; LOMAP score "
-                   f"{lomap_score(by_name[a], by_name[b], mapping):.2f}")
+                   f"{lomap_score(by_name[a], by_name[b], mapping):.2f}"
+                   + (f"; the net charge changes by {dq:+d} (an alchemical water)" if dq else ""))
     ls = rcfg.lambda_schedule
     click.echo(f"lambda windows: {ls.mode}" + (f" from {ls.adaptive.initial_windows}, overlap threshold "
                                                  f"{ls.adaptive.overlap_threshold:g} ({ls.adaptive.legs} leg decides)"

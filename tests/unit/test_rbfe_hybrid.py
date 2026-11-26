@@ -12,7 +12,7 @@ import numpy as np
 import openmm as mm
 import openmm.unit as u
 import pytest
-from conftest import TOLUENE, build_hybrid_edge, potential, reference_context
+from conftest import TOLUENE, build_hybrid_edge, potential, reference_context, valence_energy
 
 pytestmark = pytest.mark.needs("openff.toolkit", "rdkit", "openmmforcefields")
 
@@ -35,38 +35,6 @@ def _set(ctx, state):
             ctx.setParameter(name, value)
 
 
-def _valence_of(system, atoms, positions, box) -> float:
-    """Energy of the bonds, angles and torsions of ``system`` that have an atom of ``atoms``."""
-    keep = mm.System()
-    for i in range(system.getNumParticles()):
-        keep.addParticle(system.getParticleMass(i))
-    keep.setDefaultPeriodicBoxVectors(*system.getDefaultPeriodicBoxVectors())
-    atoms = set(atoms)
-    for f in system.getForces():
-        if isinstance(f, mm.HarmonicBondForce):
-            g = mm.HarmonicBondForce()
-            for k in range(f.getNumBonds()):
-                i, j, r, kk = f.getBondParameters(k)
-                if {i, j} & atoms:
-                    g.addBond(i, j, r, kk)
-        elif isinstance(f, mm.HarmonicAngleForce):
-            g = mm.HarmonicAngleForce()
-            for k in range(f.getNumAngles()):
-                i, j, m, t, kk = f.getAngleParameters(k)
-                if {i, j, m} & atoms:
-                    g.addAngle(i, j, m, t, kk)
-        elif isinstance(f, mm.PeriodicTorsionForce):
-            g = mm.PeriodicTorsionForce()
-            for k in range(f.getNumTorsions()):
-                i, j, m, n, p, ph, kk = f.getTorsionParameters(k)
-                if {i, j, m, n} & atoms:
-                    g.addTorsion(i, j, m, n, p, ph, kk)
-        else:
-            continue
-        keep.addForce(g)
-    return potential(reference_context(keep, positions, box))
-
-
 @pytest.mark.parametrize("rest2", [False, True])
 def test_the_ends_of_the_hybrid_are_the_two_ligands_and_the_dummies_keep_their_bonded_terms(edge, rest2):
     """At lambda 0 the hybrid System has the energy of System A plus the bonded terms of the unique atoms of B
@@ -85,12 +53,12 @@ def test_the_ends_of_the_hybrid_are_the_two_ligands_and_the_dummies_keep_their_b
 
     _set(ctx, HybridState(0.0))
     expected = potential(reference_context(system_a, positions[: system_a.getNumParticles()], box)) \
-        + _valence_of(system_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
+        + valence_energy(system_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
     assert potential(ctx) == pytest.approx(expected, abs=2e-3)
 
     _set(ctx, HybridState(1.0))
     expected = potential(reference_context(system_b, positions_b, box)) \
-        + _valence_of(system_a, hybrid.unique_old, positions[: system_a.getNumParticles()], box)
+        + valence_energy(system_a, hybrid.unique_old, positions[: system_a.getNumParticles()], box)
     assert potential(ctx) == pytest.approx(expected, abs=2e-3)
 
 
@@ -270,11 +238,11 @@ def test_a_torsion_that_a_system_has_twice_counts_twice_at_its_end(edge):
     ctx = reference_context(hybrid.system, positions, box)
     _set(ctx, HybridState(0.0))
     expected = potential(reference_context(sys_a, positions[: sys_a.getNumParticles()], box)) \
-        + _valence_of(sys_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
+        + valence_energy(sys_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
     assert potential(ctx) == pytest.approx(expected, abs=2e-3)
     _set(ctx, HybridState(1.0))
     expected = potential(reference_context(sys_b, positions_b, box)) \
-        + _valence_of(sys_a, hybrid.unique_old, positions[: sys_a.getNumParticles()], box)
+        + valence_energy(sys_a, hybrid.unique_old, positions[: sys_a.getNumParticles()], box)
     assert potential(ctx) == pytest.approx(expected, abs=2e-3)
 
 
