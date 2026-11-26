@@ -260,12 +260,13 @@ def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> i
 
 
 def recorded_form_of_the_system(leg_dir: Path, xml: str, system, cell) -> str:
-    """The XML of the System of a relative leg with grand canonical moves of water in the form its samples recorded:
-    that of the prepared hybrid (``xml``; every version but two), or the same System with the fixed cell ``cell`` as
-    its default cell (eb36e30 and 08d58d5, which ran the full TYK2 benchmark). The two differ in that default alone,
-    which no Context of the leg uses (each is given its cell); the cell of the samples is checked itself
-    (:func:`cufep.engine.leg.checkpoint_cell_problem`). Sixth review of PR #19: legs of 08d58d5 could not be continued
-    or analysed again."""
+    """The XML of the System of a relative leg with grand canonical moves of water in the form its samples, or the
+    checkpoint of their start, recorded: that of the prepared hybrid (``xml``; every version but two), or the same
+    System with the fixed cell ``cell`` as its default cell (eb36e30 and 08d58d5, which ran the full TYK2 benchmark).
+    The two differ in that default alone, which is not the cell a Context of the leg runs in (each is given its cell)
+    but sets its PME grid (stock OpenMM chooses the grid from the default cell): a leg goes on with the form it was
+    made with, so that its samples, its checkpoint and the checksum they record are of one System (sixth and seventh
+    reviews of PR #19). The cell of the samples is checked itself (:func:`cufep.engine.leg.checkpoint_cell_problem`)."""
     import hashlib
 
     import openmm as mm

@@ -1398,9 +1398,26 @@ def test_a_checkpoint_of_08d58d5_without_samples_goes_on_with_start_configuratio
         built.hybrid.system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in alchemical_box(eq, True)])
     digest = hashlib.sha256(mm.XmlSerializer.serialize(built.hybrid.system).encode()).hexdigest()
     edit_attributes(leg_dir / "hrex", set={"conditions": {**attrs["conditions"], "system_sha256": digest}})
+    # (seventh review, the reply) with its start configurations too: the samples would take the conditions of the
+    # run as new and the hybrid of the preparation, another PME grid where the default cell sets it. Both go on with
+    # the System of the checkpoint, and the samples record its checksum
+    import shutil
+
+    from cufep.sampling.storage import stored_conditions
+
+    kept = tmp_path / "kept"
+    shutil.copytree(edge_dir.parent, kept / "edges")
     (leg_dir / "start_configs.npz").unlink()
-    result = run_hybrid_leg_safe(job)
-    assert "error" not in result and np.isfinite(result["delta_g"])
+    for root in (edge_dir.parent.parent, kept):
+        dir_of_leg = root / "edges" / "toluene~phenol" / "repeat_0" / "complex"
+        resumed = EdgeLegJob(edge="toluene~phenol", leg="complex", repeat=0,
+                             edge_dir=str(root / "edges" / "toluene~phenol"), devices=[None],
+                             config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns,
+                             inline=True)
+        result = run_hybrid_leg_safe(resumed)
+        assert "error" not in result and np.isfinite(result["delta_g"]), root
+        n, conditions = stored_conditions(dir_of_leg / "hrex")
+        assert n > 0 and conditions["system_sha256"] == digest, root
 
 
 def test_an_archive_that_adds_the_pre_equilibration_records_it_before_it_moves_anything(tmp_path, monkeypatch):
