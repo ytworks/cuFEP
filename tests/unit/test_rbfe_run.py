@@ -1948,3 +1948,59 @@ def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is
     assert np.allclose(f_mover.centre(x_f, box), b_mover.centre(x_b, box), rtol=0.0, atol=1e-9)
     on = np.ones(len(f_moves.waters), dtype=bool)
     assert list(f_mover.in_sphere(x_f, box, on)) == list(b_mover.in_sphere(x_b, box, on))
+    # (fourteenth review, P2) the rule of e0f9743 (the mapped atoms midway, the heavy atoms of A) is one of the rules a
+    # pre-equilibration of an earlier version is taken up by, and checked by: a record of its ghosts ("midway") where
+    # they are not those of this version. Ethane -> oxirane: a hydrogen of A mapped onto the oxygen of B
+    from cufep.rbfe.leg import hybrid_settings, sphere_atoms_of
+    from cufep.rbfe.run import check_samples_of_the_run
+    from cufep.sampling import storage
+    from cufep.sampling.gcmc import farthest_waters
+    from cufep.sampling.relocation_mc import heavy_bonds
+
+    reverse = out_dir / "edges" / "ethane~oxirane"
+    prepare_edge(free, ethane, oxirane, _protein(), reverse, "cube", print)
+    end_r = load_end_states(reverse, "complex")
+    ra, rb, rcore = end_r["a"], end_r["b"], end_r["core_map"]
+    hybrid_r = make_hybrid_system(mm.XmlSerializer.deserialize(ra["system_xml"]), ra["positions"], ra["ligand"],
+                                  mm.XmlSerializer.deserialize(rb["system_xml"]), rb["positions"], rb["ligand"], rcore)
+    top_r = hybrid_topology(ra["topology"], rb["topology"],
+                            sorted(j for j in rb["ligand"] if j not in set(rcore.values())))
+    box_r = np.asarray(ra["box"], dtype=float)
+    midway_r = centre_positions_of(hybrid_r, ra, rb)
+    both_ends = hybrid_heavy_atoms(hybrid_r, ra, rb)
+    moves_r = start_moves(free, hybrid_r, top_r, box_r, end_states_heavy(ra, rb), midway_r, heavy_atoms=both_ends)
+    atoms = list(top_r.atoms())
+    of_a = np.array([i for i in sorted(hybrid_r.ligand_atoms) if atoms[i].element.symbol != "H"], dtype=np.int64)
+    assert len(of_a) < len(moves_r.ligand_heavy)                       # the oxygen, a hydrogen of A
+    bonds_a = heavy_bonds(top_r, of_a, hybrid_r.bonds)
+
+    def of_rule(heavy, bonds, k):
+        return list(farthest_waters(moves_r.waters, hybrid_r.positions, box_r, heavy, k, bonds, midway_r))
+
+    n = next(k for k in range(1, len(moves_r.waters))
+             if of_rule(of_a, bonds_a, k) != of_rule(moves_r.ligand_heavy, moves_r.ligand_heavy_bonds, k))
+    of_e0f9743 = of_rule(of_a, bonds_a, n)
+    leg_dir = tmp_path / "leg_of_e0f9743"
+    leg_dir.mkdir()
+    (leg_dir / "equil.npz").write_bytes(b"made by e0f9743")
+    (leg_dir / "equil_ghosts.json").write_text(json.dumps({"ghosts": [int(i) for i in of_e0f9743],
+                                                           "start_centre": "midway"}))
+    counted = free.model_validate({**free.model_dump(mode="json"), "sampling": {
+        **free.model_dump(mode="json")["sampling"], "gcmc": {"ghost_waters": n}}})
+    taken = start_moves(counted, hybrid_r, top_r, box_r, end_states_heavy(ra, rb), midway_r, leg_dir, False,
+                        both_ends)
+    assert list(taken.ghosts) == [int(i) for i in of_e0f9743] and taken.start_centre == "midway"
+    # (fourteenth review, P2) the atoms of the sphere of the moves are those of this version only where the edge maps a
+    # hydrogen of A onto a heavy atom of B: recorded with the settings of its complex leg there alone, and samples of
+    # such a leg that record nothing are not continued (refused before a run writes anything)
+    assert sphere_atoms_of(reverse, "complex") == {"sphere_atoms": "heavy in either end state"}
+    assert sphere_atoms_of(edge_dir, "complex") == {}                 # the heavy atoms of A are heavy in both
+    hrex = reverse / "repeat_0" / "complex" / "hrex"
+    hrex.mkdir(parents=True)
+    unrecorded = {"settings": hybrid_settings(free, "complex")}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(storage, "stored_layout",
+                      lambda d: (([(Path(d) / "segment_0.h5", 5, 0, 0)], {"conditions": unrecorded})
+                                 if Path(d) == hrex else ([], {})))
+        with pytest.raises(WorkflowError, match="sphere_atoms"):
+            check_samples_of_the_run(free, out_dir, [("ethane", "oxirane")], [0], ["complex"], False)

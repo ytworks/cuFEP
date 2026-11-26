@@ -170,7 +170,7 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
         q, s, e = hybrid.parameters_a[h] if h in hybrid.parameters_a else hybrid.parameters_b[h]
         charge[h], sigma[h], epsilon[h] = q, s, e
     return dataclasses.replace(spec, charge=charge, sigma=sigma, epsilon=epsilon, stand_in_lambdas=(1.0, 1.0),
-                               start_centre="ligand" if centre_positions is None else "midway")
+                               start_centre="ligand" if centre_positions is None else MIDWAY_OF_BOTH)
 
 
 def _samples_system_digest(leg_dir: Path) -> str | None:
@@ -222,24 +222,31 @@ def _digests_with_ghosts(system, waters, ghosts, cell) -> set[str]:
     return out
 
 
-def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, system=None, earlier_heavy=None):
-    """The moves of a leg (``gcmc``, its ghosts of the start counted from the centre midway between the end states,
-    ``start_centre`` "midway") with the ghosts its samples or its pre-equilibration were made with, and the centres
-    they may have been counted from: ``(moves, centres)``. Earlier versions counted them from the centre of the hybrid
-    (``positions``, which holds the mapped atoms where A has them; "ligand"), as many (eleventh review of PR #19: 5 of
-    the 22 complex legs of the full TYK2 run of 08d58d5 have one other ghost by the new centre).
+#: the rules of the ghosts of the start of a hybrid, by the name its record of a pre-equilibration gives
+#: (``start_centre``): the centre of the heavy atoms of the ligand of the hybrid (none: every version up to e7af433), of
+#: those of A with the mapped atoms midway between the end states ("midway": e0f9743 to 1124b1e, and f54e96e to 9dacb52,
+#: which counted from the atoms heavy in either end and recorded the same name), of those heavy in either end, midway
+#: (MIDWAY_OF_BOTH: this version; fourteenth review of PR #19)
+MIDWAY_OF_BOTH = "midway, heavy in either end"
 
-    A leg that goes on from its samples has the ghosts of the System its samples recorded: those of its record, of
-    the new and of the earlier centre are each put into ``system`` (the hybrid System before its ghosts are switched
-    off) and compared with the checksum of the samples (twelfth review of PR #19: a record that was lost or could not
-    be read chose the other System). Elsewhere, and where none matches: the earlier ghosts where the record of the
-    pre-equilibration names no centre and has them, or, without a record, where the leg goes on from its samples;
-    else those of ``gcmc``. The centres: the one the record names where it has these ghosts; else every centre whose
-    rule gives them (thirteenth review of PR #19: where both rules give the same ghosts, the leg of an earlier version
-    was checked around the new centre and refused); both for ghosts of neither rule. A record is a set of numbers of
-    waters of the leg (:func:`cufep.engine.leg.ghost_record`), compared as such. ``earlier_heavy``: (atoms, bonds)
-    of the heavy atoms earlier versions took the centre of (those of the elements of A), where they are not those of
-    ``gcmc``."""
+
+def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, system=None, earlier_heavy=None,
+                      midway=None):
+    """The moves of a leg (``gcmc``, its ghosts of the start by the rule of this version, :data:`MIDWAY_OF_BOTH`) with
+    the ghosts its samples or its pre-equilibration were made with, and the rules whose centres they are checked
+    around: ``(moves, rules)``.
+
+    The rules of the versions that made legs (``earlier_heavy``: the heavy atoms of A, (atoms, bonds); ``midway``: the
+    positions with the mapped atoms midway): "ligand", the centre of the hybrid (``positions``) and the heavy atoms of
+    A; "midway", the midway positions and the heavy atoms of A; :data:`MIDWAY_OF_BOTH`, the midway positions and the
+    atoms heavy in either end (``gcmc``). A leg that goes on from its samples has the ghosts of the System its samples
+    recorded: those of its record and of each rule are put into ``system`` (the hybrid System before its ghosts are
+    switched off) and compared with the checksum of the samples (twelfth review of PR #19). A leg that starts from its
+    pre-equilibration has the ghosts of its record where a rule its record allows gives them; without a record, a leg
+    that goes on from its samples those of "ligand". Ghosts so taken up are checked around the centre of each rule that
+    gives them (of the rules the record allows), one of which suffices; ghosts chosen anew, where the ghosts of the leg
+    are none of these, around that of this version alone (fourteenth review of PR #19: a new choice passed around the
+    earlier centre, and the rule of e0f9743 was not among those tried)."""
     import dataclasses
 
     from cufep.engine.leg import EQUIL_GHOSTS, ghost_record, starts_anew
@@ -249,16 +256,24 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
     record = leg_dir / EQUIL_GHOSTS
     data = ghost_record(record, len(gcmc.waters)) if record.exists() else None
     heavy, bonds = earlier_heavy if earlier_heavy is not None else (gcmc.ligand_heavy, gcmc.ligand_heavy_bonds)
-    earlier = farthest_waters(gcmc.waters, positions, box, heavy, len(gcmc.ghosts), bonds)
-    rules = {"midway": sorted(int(i) for i in gcmc.ghosts), "ligand": sorted(int(i) for i in earlier)}
+    n = len(gcmc.ghosts)
+    rules = {MIDWAY_OF_BOTH: sorted(int(i) for i in gcmc.ghosts),
+             "midway": sorted(int(i) for i in farthest_waters(gcmc.waters, positions, box, heavy, n, bonds,
+                                                              positions if midway is None else midway)),
+             "ligand": sorted(int(i) for i in farthest_waters(gcmc.waters, positions, box, heavy, n, bonds))}
+    named = (data or {}).get("start_centre")
+    # the rules a record allows: the one it names ("midway" was written by the rules of both sets of heavy atoms),
+    # every rule where it names none
+    allowed = (list(rules) if named is None else ["midway", MIDWAY_OF_BOTH] if named == "midway"
+               else [named] if named in rules else [])
 
-    def chosen(ghosts):
-        named = [name for name, of_rule in rules.items() if of_rule == ghosts]
-        if data is not None and data.get("start_centre") in named and data["ghosts"] == ghosts:
-            named = [data["start_centre"]]
-        centres = tuple(named) if named else tuple(rules)
+    def taken_up(ghosts):
+        of_rules = [name for name, of_rule in rules.items() if of_rule == ghosts]
+        if data is not None and data["ghosts"] == ghosts and set(of_rules) & set(allowed):
+            of_rules = [name for name in of_rules if name in allowed]
+        centres = tuple(of_rules) if of_rules else tuple(rules)
         return (dataclasses.replace(gcmc, ghosts=np.asarray(ghosts, dtype=np.int64),
-                                    start_centre=named[0] if named else "recorded"), centres)
+                                    start_centre=of_rules[0] if of_rules else "recorded"), centres)
 
     goes_on = not starts_anew(leg_dir, reschedule)
     digest = _samples_system_digest(leg_dir) if goes_on and system is not None else None
@@ -270,14 +285,13 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
                 continue
             tried.append(ghosts)
             if digest in _digests_with_ghosts(system, gcmc.waters, ghosts, cell):
-                return chosen(ghosts)
-    if data is not None:
-        if "start_centre" not in data and (leg_dir / "equil.npz").exists() and data["ghosts"] == rules["ligand"]:
-            return chosen(rules["ligand"])
-        return chosen(rules["midway"])
+                return taken_up(ghosts)
+    if (data is not None and (leg_dir / "equil.npz").exists()
+            and any(rules[name] == data["ghosts"] for name in allowed)):
+        return taken_up(data["ghosts"])
     if not record.exists() and goes_on:
-        return chosen(rules["ligand"])                        # samples of a version that recorded no ghosts
-    return gcmc, ("midway",)
+        return taken_up(rules["ligand"])                      # samples of a version that recorded no ghosts
+    return gcmc, (MIDWAY_OF_BOTH,)                            # chosen anew by this version
 
 
 def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | None = None,
@@ -297,11 +311,12 @@ def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | 
     of_a = np.array([i for i in sorted(hybrid.ligand_atoms)
                      if atoms[i].element is not None and atoms[i].element.symbol != "H"], dtype=np.int64)
     earlier_heavy = (of_a, heavy_bonds(topology, of_a, hybrid.bonds))
-    centres = ("midway",)
+    centres = (MIDWAY_OF_BOTH,)
     if leg_dir is not None:
         gcmc, centres = ghosts_of_the_leg(gcmc, hybrid.positions, box, leg_dir, reschedule, hybrid.system,
-                                          earlier_heavy)
-    of = {"midway": (midway, None), "ligand": (hybrid.positions, earlier_heavy)}
+                                          earlier_heavy, midway)
+    of = {MIDWAY_OF_BOTH: (midway, None), "midway": (midway, earlier_heavy),
+          "ligand": (hybrid.positions, earlier_heavy)}
     # the ghosts pass where the sphere around one of the centres they may have been counted from holds none of them
     if all(start_ghosts_in_sphere(gcmc, hybrid.positions, box, gcmc.ghosts, *of[name]) for name in centres):
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {len(gcmc.ghosts)} ghost waters would "
@@ -620,6 +635,30 @@ def water_moves_record(gcmc: dict | None) -> dict:
             "standard_volume_nm3": float(gcmc["standard_volume_nm3"])}
 
 
+def sphere_atoms_of(edge_dir: Path, leg: str) -> dict:
+    """``{"sphere_atoms": ...}`` for the settings of the grand canonical moves of a leg whose sphere this version takes
+    around other atoms than earlier versions did: a mapped atom that is a hydrogen in A and heavy in B, which this
+    version counts among the heavy atoms of the hybrid ligand (:func:`hybrid_heavy_atoms`) and earlier versions did not.
+    Empty elsewhere (every edge that maps hydrogens on hydrogens only), so that the records of those legs are those of
+    earlier versions. The samples of such a leg that record no such setting are not continued: their moves were made
+    around the heavy atoms of A, or (f54e96e to 9dacb52, which recorded nothing either) of both ends, which their
+    records do not tell apart (fourteenth review of PR #19: continued, they mixed waters in the sphere counted two
+    ways)."""
+    from cufep.rbfe.prep import load_end_states
+
+    try:
+        end = load_end_states(edge_dir, leg)
+    except (OSError, KeyError, ValueError, EOFError):
+        return {}
+    atoms_a, atoms_b = list(end["a"]["topology"].atoms()), list(end["b"]["topology"].atoms())
+
+    def heavy(atom) -> bool:
+        return atom.element is not None and atom.element.symbol != "H"
+
+    changes = any(not heavy(atoms_a[int(i)]) and heavy(atoms_b[int(j)]) for i, j in end["core_map"].items())
+    return {"sphere_atoms": "heavy in either end state"} if changes else {}
+
+
 def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None, inputs=None) -> dict:
     """The settings of a relative run that the samples of a leg depend on beyond its System; the grand canonical
     moves of water for the leg that makes them (written only there, so that the solvent leg and the legs of
@@ -633,7 +672,7 @@ def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None, 
     if gcmc_in(rcfg, leg):
         from cufep.workflow import gcmc_record
 
-        settings["gcmc"] = gcmc_record(rcfg)
+        settings["gcmc"] = {**gcmc_record(rcfg), **(sphere_atoms_of(edge_dir, leg) if edge_dir is not None else {})}
     return settings
 
 

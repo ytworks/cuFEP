@@ -189,14 +189,15 @@ def test_the_sphere_of_an_edge_is_the_same_both_ways(edge, tmp_path):
     # hybrid: where its record names no centre and has them, or without a record where it goes on from its samples
     import json
 
-    from cufep.rbfe.leg import ghosts_of_the_leg
+    from cufep.rbfe.leg import MIDWAY_OF_BOTH, ghosts_of_the_leg
 
     hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
     top = hybrid_edge_topology(hybrid.system.getNumParticles(), list(hybrid.ligand_atoms), hybrid.system, box)
     both = heavy(system_a, pos_a, ligand_a) + heavy(system_b, pos_b, ligand_b)
-    midway = hybrid_gcmc(rcfg, hybrid, top, box, both, centre_positions=centre_positions_of(hybrid, a_end, b_end))
+    midway_at = centre_positions_of(hybrid, a_end, b_end)
+    midway = hybrid_gcmc(rcfg, hybrid, top, box, both, centre_positions=midway_at)
     earlier = hybrid_gcmc(rcfg, hybrid, top, box, both)
-    assert midway.start_centre == "midway" and list(midway.ghosts) != list(earlier.ghosts)
+    assert midway.start_centre == MIDWAY_OF_BOTH and list(midway.ghosts) != list(earlier.ghosts)
     leg_dir = tmp_path / "leg"
     leg_dir.mkdir()
     (leg_dir / "equil.npz").write_bytes(b"made by an earlier version")
@@ -206,12 +207,14 @@ def test_the_sphere_of_an_edge_is_the_same_both_ways(edge, tmp_path):
         (leg_dir / "equil_ghosts.json").unlink(missing_ok=True)
         if record is not None:
             (leg_dir / "equil_ghosts.json").write_text(json.dumps(record))
-        moves, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False)
+        moves, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, midway=midway_at)
         assert list(moves.ghosts) == list(kept.ghosts)
     (leg_dir / "hrex").mkdir()
     (leg_dir / "hrex" / "checkpoint.npz").write_bytes(b"")              # goes on from its samples
-    assert list(ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False)[0].ghosts) == list(earlier.ghosts)
-    assert list(ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, True)[0].ghosts) == list(midway.ghosts)
+    going_on, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, midway=midway_at)
+    assert list(going_on.ghosts) == list(earlier.ghosts)
+    anew, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, True, midway=midway_at)
+    assert list(anew.ghosts) == list(midway.ghosts)
 
 
 def test_a_leg_keeps_the_ghosts_of_its_samples_and_one_configuration_has_one_sphere_both_ways(edge, tmp_path,
@@ -230,7 +233,7 @@ def test_a_leg_keeps_the_ghosts_of_its_samples_and_one_configuration_has_one_sph
 
     from cufep.rbfe import leg as leg_module
     from cufep.rbfe.hybrid import make_hybrid_system
-    from cufep.rbfe.leg import centre_positions_of, ghosts_of_the_leg, hybrid_gcmc, start_moves
+    from cufep.rbfe.leg import MIDWAY_OF_BOTH, centre_positions_of, ghosts_of_the_leg, hybrid_gcmc, start_moves
     from cufep.sampling.gcmc import GcmcMover, ghosts_off, start_ghosts_in_sphere
     from cufep.workflow import WorkflowError
 
@@ -274,7 +277,8 @@ def test_a_leg_keeps_the_ghosts_of_its_samples_and_one_configuration_has_one_sph
             record.write_text(text)
         stored = digest(made_with.ghosts) if made_with is not None else "0" * 64
         monkeypatch.setattr(leg_module, "_samples_system_digest", lambda leg_dir, stored=stored: stored)
-        moves, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, hybrid.system)
+        moves, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, hybrid.system,
+                                            midway=midway_positions)
         assert list(moves.ghosts) == list(kept.ghosts)
     # (thirteenth review, P2) a record of numbers of no water ([426] of 426 waters, 2**63) or of a number twice is not a
     # record: the checksum of the samples still finds the ghosts; [1, 1] is not taken for [1], and the same set in
@@ -285,10 +289,12 @@ def test_a_leg_keeps_the_ghosts_of_its_samples_and_one_configuration_has_one_sph
     for text in (json.dumps({"ghosts": [n]}), json.dumps({"ghosts": [2 ** 63]}),
                  json.dumps({"ghosts": [int(earlier.ghosts[0])] * 2})):
         record.write_text(text)
-        moves, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, hybrid.system)
+        moves, _centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, hybrid.system,
+                                            midway=midway_positions)
         assert list(moves.ghosts) == list(earlier.ghosts)
     record.write_text(json.dumps({"ghosts": [int(i) for i in earlier.ghosts[::-1]]}))
-    moves, centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, hybrid.system)
+    moves, centres = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False, hybrid.system,
+                                            midway=midway_positions)
     assert list(moves.ghosts) == list(earlier.ghosts) and centres == ("ligand",)
     monkeypatch.undo()
     # (thirteenth review, P2) the centres the ghosts are checked around: the one the record names, else every centre
@@ -300,9 +306,11 @@ def test_a_leg_keeps_the_ghosts_of_its_samples_and_one_configuration_has_one_sph
     leg_one.mkdir()
     (leg_one / "equil.npz").write_bytes(b"made by an earlier version")
     (leg_one / "equil_ghosts.json").write_text(json.dumps({"ghosts": single.ghosts.tolist()}))
-    assert ghosts_of_the_leg(single, hybrid.positions, box, leg_one, False)[1] == ("midway", "ligand")
+    centres = ghosts_of_the_leg(single, hybrid.positions, box, leg_one, False, midway=midway_positions)[1]
+    assert centres == (MIDWAY_OF_BOTH, "midway", "ligand")
     (leg_one / "equil_ghosts.json").write_text(json.dumps({"ghosts": single.ghosts.tolist(), "start_centre": "ligand"}))
-    assert ghosts_of_the_leg(single, hybrid.positions, box, leg_one, False)[1] == ("ligand",)
+    assert ghosts_of_the_leg(single, hybrid.positions, box, leg_one, False, midway=midway_positions)[1] == (
+        "ligand",)
     import cufep.sampling.gcmc as gcmc_module
 
     (leg_one / "equil_ghosts.json").write_text(json.dumps({"ghosts": single.ghosts.tolist()}))
@@ -315,6 +323,15 @@ def test_a_leg_keeps_the_ghosts_of_its_samples_and_one_configuration_has_one_sph
                                                               "start_centre": "midway"}))
         with pytest.raises(WorkflowError, match="would take waters of the sphere itself"):
             start_moves(one, hybrid, top, box, both, midway_positions, leg_one, False)
+        # (fourteenth review, P2) ghosts chosen anew (the number of ghosts changed: the record of one ghost is not taken
+        # up) are checked around the centre of this version alone, though both rules choose them
+        (leg_one / "equil_ghosts.json").write_text(json.dumps({"ghosts": single.ghosts.tolist()}))
+        two = _rbfe_config(gcmc={"ghost_waters": 2})
+        anew = hybrid_gcmc(two, hybrid, top, box, *both, centre_positions=midway_positions, check_start=False)
+        assert ghosts_of_the_leg(anew, hybrid.positions, box, leg_one, False, midway=midway_positions)[1] == (
+            MIDWAY_OF_BOTH,)
+        with pytest.raises(WorkflowError, match="would take waters of the sphere itself"):
+            start_moves(two, hybrid, top, box, both, midway_positions, leg_one, False)
     # the check of the start around the centre the ghosts were counted from, with B 0.3 nm along y from A: as many
     # ghosts as waters outside the sphere around the centre of the hybrid (403 of 426); around the new centre fewer are
     # outside (395), and a new leg has ghosts inside
