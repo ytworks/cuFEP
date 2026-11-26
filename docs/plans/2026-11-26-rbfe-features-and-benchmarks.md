@@ -194,3 +194,10 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   二重層、complex の GCMC(プラグイン)、両レグの alchemical water(Na+、dq = +1)、REST2、状態の合成(4o の重み 1.00、
   脱プロトン化 0.00)が exit 0 で通った。結果の行に同じ化合物の状態の間の「experiment +0.00」が出ていた: 指摘 2 を
   レポートだけで直していたので、`combine_network` で直した(edges.csv、summary.json、結果の行も同じになる)。
+
+### 2026-11-26 手順 8: フル実行の開始
+- オーナーの判断(2026-11-26): `spikes/m39` の結果(TYK2 の LOMAP の規則で pairwise RMSE 0.72 対 0.70、A2A は差なし)で
+  「問題なし」。LOMAP の網(TYK2 22 本、A2A 29 状態に 37 本)でフル実行する。
+- ABFE の fingerprint(`spikes/m38`、Reference platform)は main(e16c1f1)と 8403b80 で同一。
+- TYK2: image cufep:a1f54d9(コミットから)、8 GPU、`cufep benchmark run tyk2 --tier full --protocol rbfe -o
+  runs/rbfe_bench_tyk2_a1f54d9`。終わったら報告し、続いて A2A(29 状態)。
