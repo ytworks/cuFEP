@@ -856,3 +856,25 @@ def test_experiment_is_compared_with_the_compounds_not_with_an_edge_between_stat
     _states_run(tmp_path, "a2a", summary, states)
     text = report("a2a", tmp_path)
     assert "| cuFEP, the pairs of compounds the edges join | 1 | 0.00 |" in text
+
+
+def test_the_pairs_of_compounds_take_the_experiment_of_the_table_of_compounds(tmp_path):
+    """Second review of PR #19 (P3): a run that records no experimental values (none in its configuration) has those
+    of the benchmark in the table of compounds, and the pairs of compounds against experiment were left out (0 pairs).
+    The pairs take the experimental value of the table."""
+    from cufep.benchmarks.rbfe import read_states, report
+
+    ref = read_reference("a2a")
+    states = {s: r for s, r in read_states("a2a").items() if r["compound"] in ("4b", "4e")}
+    two = [s for s in states if states[s]["compound"] == "4b"]
+    one = [s for s in states if states[s]["compound"] == "4e"][0]
+    compounds = {"4b": {"dg": ref["4b"]["exp"], "se": 0.1, "symmetry_number": 1, "weights": {s: 0.5 for s in two}},
+                 "4e": {"dg": ref["4e"]["exp"], "se": 0.1, "symmetry_number": 1, "weights": {one: 1.0}}}
+    summary = {"ligands": two + [one], "edges": [
+        {"edge": f"{two[0]}~{one}", "ligand_a": two[0], "ligand_b": one, "ddg": 0.0, "se": 0.1, "not_reliable": []}],
+        "notes": [], "cycle_closures": [], "dg": {"reference": "the first ligand", "values": {}},
+        "experiment_kcal_mol": {}, "compounds": {"temperature_K": 298.15, "experiment_kcal_mol": {},
+                                                 "values": compounds}}
+    _states_run(tmp_path, "a2a", summary, states)
+    text = report("a2a", tmp_path)
+    assert "| cuFEP, the pairs of compounds the edges join | 1 | 0.00 |" in text

@@ -233,8 +233,10 @@ combines them (`cufep.rbfe.network.compound_dg`):
 The one constant the edges leave is set for the compounds (the mean over the compounds with an experimental value
 is the mean of those values; the value of a compound is that of its states, which must agree), and the states get
 the same constant. Standard errors from the covariance of the estimate, the states weighted by their share of the
-sum. `compounds.csv` gives every compound with its states and their weights. A run that takes only some states of a
-compound of the file combines those, and says so. Which states a compound has, their populations and its symmetry
+sum. `compounds.csv` gives every compound with its states and their weights. An edge between states of two compounds
+has the experimental ddG of those compounds, named so (`exp_ddg_of` in `summary.json` and `edges.csv`, "experiment of
+the compounds" in its RESULT line): it is not what the edge computes; an edge between states of one compound has
+none. A run that takes only some states of a compound of the file combines those, and says so. Which states a compound has, their populations and its symmetry
 number are inputs: cuFEP does not find them. The relative benchmark of A2A takes them from the published map
 (`benchmarks/a2a/rbfe_states.csv`, made by `cufep.benchmarks.curate` from the unmodified inputs: the 29 records, the
 solvent pKa of Supplementary Table 17 at the pH of the assay, 7.5, and the symmetry numbers of Supplementary Table 16).

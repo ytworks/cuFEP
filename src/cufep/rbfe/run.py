@@ -314,16 +314,8 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             out["repeats"].append({"repeat": r, "no_standard_error": no_error})
             continue
         c, s = legs["complex"], legs["solvent"]
-        # the complex legs of all repeats in the state of one grand canonical ensemble of water (review of PR #19)
-        moves = water_moves_of(c)
-        if complete and moves is not None and complete[0][1].get("grand_canonical_state") is not None \
-                and not _same_moves(moves, complete[0][1]["grand_canonical_state"]):
-            out["repeats"].append({"repeat": r, "inconsistent_legs": [
-                f"grand canonical moves of water: complex leg of repeat {r} {moves}, of the first repeat "
-                f"{complete[0][1]['grand_canonical_state']}"], "complex_dg": c["delta_g"] / KCAL,
-                "solvent_dg": s["delta_g"] / KCAL})
-            continue
-        c = {**c, "grand_canonical_state": moves}
+        # the state of the water moves of the complex leg, compared among all repeats below (review of PR #19)
+        c = {**c, "grand_canonical_state": water_moves_of(c, Path(edge_dir) / f"repeat_{r}" / "complex")}
         # the two legs of the repeat are compared before they are subtracted (second review of PR #17)
         pair = [(f"complex leg of repeat {r}", c), (f"solvent leg of repeat {r}", s)]
         differ, _ = cycle_differences(pair)
@@ -347,6 +339,10 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             "backend": {leg: legs[leg].get("backend") for leg in legs},
             "warnings": [f"{leg}: {n}" for leg in legs for n in legs[leg].get("notes", [])]})
     inconsistent, not_compared = cycle_differences(complete)
+    # the complex legs of all repeats in one grand canonical ensemble of water, whatever their order (second review
+    # of PR #19: a first repeat of an earlier version let two later ones of other chemical potentials pass)
+    moves = [(where, res["grand_canonical_state"]) for where, res in complete if "grand_canonical_state" in res]
+    inconsistent += moves_differ(moves)
     inconsistent += [item for r in out["repeats"] for item in r.get("inconsistent_legs", [])
                      if item not in inconsistent]
     if inconsistent:
@@ -376,7 +372,7 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         # the conditions of the legs, which the edges of one network must share (combine_network)
         out["conditions"] = {key: complete[0][1].get(key) for key, _ in NETWORK_CONDITIONS
                              if key != "grand_canonical"}
-        out["conditions"]["grand_canonical"] = complete[0][1].get("grand_canonical_state")
+        out["conditions"]["grand_canonical"] = merged_moves([state for _w, state in moves])
     return out
 
 
@@ -389,24 +385,55 @@ NETWORK_CONDITIONS = (("temperature_K", "temperature (K)"), ("pressure_bar", "pr
                       ("grand_canonical", "grand canonical moves of water of the complex leg"))
 
 
-def water_moves_of(result: dict) -> dict | None:
-    """The state of the grand canonical moves of water of a leg (``run.grand_canonical``: whether it makes them, the
-    excess chemical potential and the standard volume); a result that does not record it made none if it holds no
-    counts of moves, and is not known (None) if it does (review of PR #19: complex legs with other chemical
-    potentials of water were combined into one network)."""
+def water_moves_of(result: dict, leg_dir: Path | None = None) -> dict:
+    """The state of the grand canonical moves of water of a leg: whether it makes them, and the excess chemical
+    potential and the standard volume where they are known (review of PR #19: complex legs with other chemical
+    potentials of water were combined into one network). The record of the leg (``run.grand_canonical``); for a
+    result of an earlier version, the settings its samples recorded (``hrex``, ``conditions.settings.gcmc``), else
+    whether it holds counts of moves (with or without, the two numbers not known; second review of PR #19)."""
     recorded = (result.get("run") or {}).get("grand_canonical")
     if recorded is not None:
         return recorded
-    return {"enabled": False} if result.get("gcmc") is None else None
+    if leg_dir is not None:
+        from cufep.rbfe.leg import water_moves_record
+        from cufep.sampling.storage import stored_conditions
+
+        _n, conditions = stored_conditions(Path(leg_dir) / "hrex")
+        settings = (conditions or {}).get("settings")
+        if isinstance(settings, dict):
+            return water_moves_record(settings.get("gcmc"))
+    return {"enabled": result.get("gcmc") is not None}
+
+
+def moves_differ(states: list[tuple[str, dict]]) -> list[str]:
+    """What differs among the states of the water moves of complex legs (``(where, state)``), whatever their order:
+    with and without the moves, and the excess chemical potential or the standard volume among those that know them."""
+    out = []
+    if len({bool(s.get("enabled")) for _w, s in states}) > 1:
+        out.append("grand canonical moves of water: " + ", ".join(
+            f"{where} {'with' if s.get('enabled') else 'without'}" for where, s in states))
+    for key, name in (("excess_chemical_potential_kcal_per_mol",
+                       "grand canonical moves of water, excess chemical potential (kcal/mol)"),
+                      ("standard_volume_nm3", "grand canonical moves of water, standard volume (nm^3)")):
+        known = [(where, s[key]) for where, s in states if s.get(key) is not None]
+        if len({round(float(v), 9) for _w, v in known}) > 1:
+            out.append(f"{name}: " + ", ".join(f"{where} {v:g}" for where, v in known))
+    return out
+
+
+def merged_moves(states: list[dict]) -> dict:
+    """One state of the water moves of legs that agree (:func:`moves_differ`): the numbers that any of them knows."""
+    out: dict = {}
+    for s in states:
+        for key, value in s.items():
+            if value is not None:
+                out[key] = value
+    return out
+
+
 #: what the prepared systems of all edges of one network must have been made from alike (rbfe.prep.edge_made_from)
 SHARED_PREPARATION = ("protein_sha256", "forcefield", "membrane", "solvation", "box_shape", "backend",
                       "thermodynamics", "dynamics")
-
-
-def _same_moves(a: dict, b: dict) -> bool:
-    from cufep.sampling.storage import _same
-
-    return _same(a, b)
 
 
 def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
@@ -419,7 +446,12 @@ def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
 
     out = []
     done = [r for r in results if "ddg" in r]
+    # the water moves of the complex legs: compared as the repeats of an edge are (moves_differ)
+    out += moves_differ([(r["edge"], (r.get("conditions") or {})["grand_canonical"]) for r in done
+                         if (r.get("conditions") or {}).get("grand_canonical") is not None])
     for key, name in NETWORK_CONDITIONS:
+        if key == "grand_canonical":
+            continue
         values = [(r["edge"], (r.get("conditions") or {}).get(key)) for r in done]
         known = [(edge, value) for edge, value in values if value is not None]
         if any(not _same(value, known[0][1]) for _edge, value in known[1:]):
@@ -456,6 +488,10 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
         # two states of one compound: experiment has no ddG between them (review of PR #19: +0.00 was given)
         if not same and experiment.get(r["ligand_a"]) is not None and experiment.get(r["ligand_b"]) is not None:
             r["exp_ddg"] = experiment[r["ligand_b"]] - experiment[r["ligand_a"]]
+            # of states: that of their compounds, not of what the edge computes (second review of PR #19)
+            r["exp_ddg_of"] = "the compounds" if compound_of else "the ligands"
+            if compound_of:
+                r["exp_compounds"] = [compound_of[r["ligand_a"]], compound_of[r["ligand_b"]]]
     differing = network_differences(out_dir, results)
     if differing:
         # each edge gives its ddG; no dG and no cycle closure is made from edges of other conditions
@@ -509,7 +545,7 @@ def write_results(out_dir: Path, summary: dict) -> None:
     def edges_table(fh) -> None:
         w = csv.writer(fh)
         w.writerow(["edge", "ligand_a", "ligand_b", "ddg_kcal_mol", "standard_error", "exp_ddg_kcal_mol",
-                    "network_ddg_kcal_mol", "network_standard_error",
+                    "exp_ddg_of", "network_ddg_kcal_mol", "network_standard_error",
                     "complex_dg", "solvent_dg", "windows_complex", "windows_solvent", "lowest_overlap_complex",
                     "lowest_overlap_solvent", "lowest_overlap_used_complex", "lowest_overlap_used_solvent",
                     "not_reliable", "backend_complex", "backend_solvent"])
@@ -520,7 +556,8 @@ def write_results(out_dir: Path, summary: dict) -> None:
             windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
             used = e.get("lowest_overlap_used") or {}
             w.writerow([e["edge"], e["ligand_a"], e["ligand_b"], fmt(e.get("ddg")), fmt(e.get("se")),
-                        fmt(e.get("exp_ddg")), fmt(e.get("network_ddg")), fmt(e.get("network_se")),
+                        fmt(e.get("exp_ddg")), e.get("exp_ddg_of", "") if e.get("exp_ddg") is not None else "",
+                        fmt(e.get("network_ddg")), fmt(e.get("network_se")),
                         fmt(e.get("complex_dg")), fmt(e.get("solvent_dg")),
                         joined(windows.get("complex")), joined(windows.get("solvent")),
                         fmt(overlap.get("complex")), fmt(overlap.get("solvent")), fmt(used.get("complex")),
@@ -557,7 +594,11 @@ def result_lines(summary: dict) -> list[str]:
     lines = []
     for e in summary["edges"]:
         if "ddg" in e:
-            exp = f" (experiment {e['exp_ddg']:+.2f})" if e.get("exp_ddg") is not None else ""
+            exp = ""
+            if e.get("exp_ddg") is not None:
+                of = (f" of the compounds {' -> '.join(e['exp_compounds'])}"
+                      if e.get("exp_ddg_of") == "the compounds" and e.get("exp_compounds") else "")
+                exp = f" (experiment{of} {e['exp_ddg']:+.2f})"
             flag = f"; NOT RELIABLE ({', '.join(e['not_reliable'])} leg)" if e.get("not_reliable") else ""
             lines.append(f"RESULT {e['edge']}: ddG = {e['ddg']:+.2f} ± {e['se']:.2f} kcal/mol{exp}{flag}")
         elif e.get("inconsistent_legs"):

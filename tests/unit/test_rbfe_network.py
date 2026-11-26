@@ -447,6 +447,34 @@ def test_a_run_of_states_gives_the_dg_of_its_compounds_again_from_its_directory(
     assert float(rows["C"]["dg_kcal_mol"]) == pytest.approx(summary["compounds"]["values"]["C"]["dg"], abs=1e-3)
 
 
+def test_the_experiment_of_an_edge_between_states_is_said_to_be_that_of_their_compounds(tmp_path):
+    """Second review of PR #19 (P2): `cufep rbfe run` and `analyze` gave an edge between states of two compounds the
+    experimental ddG of the compounds as "experiment" in edges.csv and the RESULT lines, beside the ddG of the edge,
+    which is another quantity (kT ln 2 apart for two equal binding modes). It is named that of the compounds; an edge
+    of a run without states keeps "experiment" of its ligands."""
+    import csv
+
+    from cufep.rbfe.run import combine_network, result_lines, write_results
+
+    _write_legs(tmp_path, "a~c", 0, _leg_result(-7.0), _leg_result(-6.5))
+    _write_legs(tmp_path, "b~c", 0, _leg_result(-8.0), _leg_result(-9.0))
+    states = {"compound": {"a": "A", "b": "A", "c": "C"}, "form": {"a": "", "b": "", "c": ""},
+              "fraction": {"a": 1.0, "b": 1.0, "c": 1.0}, "symmetry": {"A": 1, "C": 1}}
+    experiment = {"a": -9.0, "b": -9.0, "c": -8.0}
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "c"), ("b", "c")], 1, experiment, states, 300.0)
+    assert {e["edge"]: e["exp_ddg_of"] for e in summary["edges"]} == {"a~c": "the compounds", "b~c": "the compounds"}
+    write_results(tmp_path, summary)
+    rows = {r["edge"]: r for r in csv.DictReader((tmp_path / "edges.csv").open())}
+    assert rows["a~c"]["exp_ddg_kcal_mol"] == "1.000" and rows["a~c"]["exp_ddg_of"] == "the compounds"
+    line = next(x for x in result_lines(summary) if x.startswith("RESULT a~c"))
+    assert "(experiment of the compounds A -> C +1.00)" in line
+    plain = tmp_path / "plain"
+    _write_legs(plain, "a~c", 0, _leg_result(-7.0), _leg_result(-6.5))
+    summary = combine_network(plain, ["a", "c"], [("a", "c")], 1, experiment)
+    assert summary["edges"][0]["exp_ddg_of"] == "the ligands"
+    assert "(experiment +1.00)" in next(x for x in result_lines(summary) if x.startswith("RESULT a~c"))
+
+
 def test_a_custom_core_maps_only_its_atoms_and_the_records_of_other_edges_stay_as_they_were():
     """mapping.core_smarts restricts the mapping to atoms in a match of the pattern in both ligands; without it the
     records of a leg and of a prepared edge are those of earlier versions (the settings added are left out at their
@@ -523,4 +551,30 @@ def test_complex_legs_in_other_grand_canonical_ensembles_of_water_are_not_combin
     edge = combine_network(repeats, ["a", "b"], [("a", "b")], 2, {})["edges"][0]
     assert "ddg" not in edge and any("grand canonical" in item for item in edge["inconsistent_legs"])
     assert water_moves_of(_leg_result(-1.0)) == {"enabled": False}
-    assert water_moves_of({**_leg_result(-1.0), "gcmc": {"insertions_attempted": [1]}}) is None
+    assert water_moves_of({**_leg_result(-1.0), "gcmc": {"insertions_attempted": [1]}}) == {"enabled": True}
+
+
+def test_a_first_repeat_of_an_earlier_version_does_not_let_others_of_other_ensembles_pass(tmp_path, monkeypatch):
+    """Second review of PR #19 (P1): repeat 0 of an earlier version (counts of moves, no record of their settings),
+    repeats 1 and 2 at -6 and -4 kcal/mol: the first state was unknown, so neither was compared and the three were
+    averaged. All known states are compared with each other; a result of an earlier version has the settings its
+    samples recorded, else at least whether it made moves."""
+    from cufep.rbfe.run import combine_network, water_moves_of
+    from cufep.sampling import storage
+
+    old = {**_leg_result(-12.0), "gcmc": {"insertions_attempted": [1]}}
+    _write_legs(tmp_path, "a~b", 0, old, _leg_result(-10.5))
+    _write_legs(tmp_path, "a~b", 1, _with_moves(_leg_result(-11.0), -6.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "a~b", 2, _with_moves(_leg_result(-11.5), -4.0), _leg_result(-10.5))
+    edge = combine_network(tmp_path, ["a", "b"], [("a", "b")], 3, {})["edges"][0]
+    assert "ddg" not in edge and any("excess chemical potential" in item for item in edge["inconsistent_legs"])
+    # without moves against with them, whatever is known of the numbers
+    mixed = tmp_path / "mixed"
+    _write_legs(mixed, "a~b", 0, old, _leg_result(-10.5))
+    _write_legs(mixed, "a~b", 1, _with_moves(_leg_result(-11.0), None), _leg_result(-10.5))
+    assert "ddg" not in combine_network(mixed, ["a", "b"], [("a", "b")], 2, {})["edges"][0]
+    # the settings that the samples of a result of an earlier version recorded
+    monkeypatch.setattr(storage, "stored_conditions", lambda directory: (10, {"settings": {"gcmc": {
+        "excess_chemical_potential_kcal_per_mol": -6.0, "standard_volume_nm3": 0.0303}}}))
+    assert water_moves_of(old, tmp_path) == {"enabled": True, "excess_chemical_potential_kcal_per_mol": -6.0,
+                                             "standard_volume_nm3": 0.0303}

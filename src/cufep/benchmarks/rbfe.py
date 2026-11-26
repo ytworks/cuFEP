@@ -307,15 +307,16 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         # and the experiment of its compounds are not one quantity, e.g. kT ln 2 for two equal binding modes)
         pairs = list(dict.fromkeys(tuple(sorted((compound_of[r["ligand_a"]], compound_of[r["ligand_b"]])))
                                    for r in edges if compound_of[r["ligand_a"]] != compound_of[r["ligand_b"]]))
+        # the experimental value of the table of compounds (that of the run, else of the benchmark; second review)
         dg_of = {r["ligand"]: r for r in ligands}
         for ca, cb in pairs:
-            if experiment_of.get(ca) is None or experiment_of.get(cb) is None:
+            if dg_of[ca]["exp"] is None or dg_of[cb]["exp"] is None:
                 continue
             ours = (None if dg_of[ca]["cufep_rbfe"] is None or dg_of[cb]["cufep_rbfe"] is None
                     else dg_of[cb]["cufep_rbfe"] - dg_of[ca]["cufep_rbfe"])
             theirs = (None if dg_of[ca]["fepplus"] is None or dg_of[cb]["fepplus"] is None
                       else dg_of[cb]["fepplus"] - dg_of[ca]["fepplus"])
-            pair_rows.append({"edge": f"{ca}~{cb}", "exp_ddg": experiment_of[cb] - experiment_of[ca], "ddg": ours,
+            pair_rows.append({"edge": f"{ca}~{cb}", "exp_ddg": dg_of[cb]["exp"] - dg_of[ca]["exp"], "ddg": ours,
                               "ddg_error": None, "fepplus_bennett_ddg": theirs})
         lines.append(edge_row("cuFEP, the pairs of compounds the edges join",
                               [(r["ddg"], r["exp_ddg"]) for r in pair_rows if r["ddg"] is not None]))
