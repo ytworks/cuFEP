@@ -225,3 +225,24 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   記録した ddG +0.91 と +1.38(計画 `docs/plans/2026-11-25-rbfe.md` の記録)は評価器のずれのある計算。流し直すかは
   オーナーの判断。TYK2 のフル実行は image 2ecbcd2 で最初から(`runs/rbfe_bench_tyk2_2ecbcd2`)。
 - ABFE の repeat 間で GCMC の状態を照合しない件: オーナーの指示で issue #20 にした(PR #19 では直さない)。
+
+### 2026-11-26 オーナーの再レビュー(review 6068310367、7 件)
+各件を再現してから修正し、再現をテストにした(修正前のコードで失敗することを確認)。
+- P1 旧形式の repeat が先頭だと μ を比べなかった(旧 repeat 0、μ -6 と -4 の repeat 1、2 を平均) → 分かっている状態を
+  順によらず全部比べ、旧 leg は `hrex` の記録から μ と V° を読む(f1caad8)。
+- P2 状態のエッジの実験 ΔΔG が通常出力で化合物の値と分からない → `exp_ddg_of`、RESULT 行に「of the compounds」(f1caad8)。
+- P3 レポートの化合物の対が実行の実験値だけを見ていた(実験値なしの実行で 0 対) → 化合物の表の値(f1caad8)。
+- P2 長い配位子の球: 4 nm の箱、0〜2.10 nm の鎖で先頭が端なら半径 2.22 nm で拒否、中央なら 1.35 → 結合に沿って分子を
+  つないだ座標(`whole_pose`)で半径と中心、両端の状態も実際の順で(fc2ba44)。切れない分子は以前と同じ座標。
+- P2 ghost 水の数が変わっても旧平衡化を再利用(auto で 139 → 160) → `equil_ghosts.json` に記録して照合、違えば止まる。
+  記録なしは ABFE で配位子が切れない場合だけ使い、relative leg では使わない(507e435)。
+- P2 前処理の再利用で周期境界と SMARTS の規則の修正が効かない → 規則の版(`alchemical_water_rule`、`custom_core_rule`)を
+  働くエッジの記録にだけ入れ、無い・違う記録を拒否(bfdc30e)。
+- P2 torsion 修正前の leg を修正後の leg と組み合わせた → `run.hybrid_version`(キーなしは `grand_canonical` があれば 2)。
+  版 1 で REST2 があり B に core の proper torsion の項があるエッジ(準備済みの端状態から数える)の leg は欠けた leg として
+  外し、RESULT 行に再計算のコマンド(e90e819)。トルエン → フェノールの再現: 修正前 ΔΔG -1.50、修正後なし。
+- 確認: 各修正の焦点テスト(水の移動 59 件、ネットワーク・実行・REST2・ベンチマーク 81 件など)は通過。全体テスト
+  2ecbcd2: 844 passed。e90e819 の全体テストは実行中。GPU テストは TYK2 のフル実行が 8 GPU を使っているため未実行。
+- 実行中の TYK2(image 2ecbcd2)への影響: 記録は版 2(`grand_canonical` あり)、電荷変化と custom core は無く、TYK2 の
+  配位子は切れないので結果は同じ。ただし新しい image で再開すると complex leg の平衡化は ghost の記録が無いため拒否される:
+  再開は同じ image 2ecbcd2 で。
