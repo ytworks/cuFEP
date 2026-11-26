@@ -319,3 +319,11 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - P2 summary.json だけの RBFE ディレクトリの CLI レポート → 辺の一覧を持つ summary を RBFE と判定する。
 - この PR の途中の版が書いた形式(run の記録、ゴースト水の記録、試料の System の形 2 種、前処理の規則の版、退避の
   記録、summary の形)を一覧にし、今のコードで読めることをテストで確認した。
+
+### 2026-11-26 オーナーの 7 回目のレビュー(review 6070383388、3 件)
+修正前のコード(9d48578)で 3 件とも再現し、再現をテストにした。
+- P1 A2A の summary だけのレポートが化合物でなく 29 状態で集計し、4jS~4jR に実験 ΔΔG 0 を付けた → 状態と化合物の対応を
+  summary(`experiment_of_compound`、無ければ各化合物の状態)から取る。network.json の有無で同じ表と指標になる。
+- P2 08d58d5 の試料 0 行のチェックポイントで開始配置を作り直すと、別 System として拒否 → 記録された System の形を、
+  窓の照合と同じ記録(`stored_layout`)から読む。修正前は ConditionsError、修正後は続行して完了。
+- P3 再試行で平衡化を退避対象に加えた判断が記録に残らない → 何かを動かす前に `set_aside.json` を更新する。

@@ -1353,3 +1353,83 @@ def test_a_run_names_every_edge_it_does_not_take_and_how_to_prepare_them_again(t
         run_rbfe(rcfg, log=lambda line: None)
     assert "toluene~phenol" in str(refused.value) and "phenol~aniline" in str(refused.value)
     assert prepare_again_command(["toluene~phenol", "phenol~aniline"], out_dir) in str(refused.value)
+
+
+def test_a_checkpoint_of_08d58d5_without_samples_goes_on_with_start_configurations_made_again(
+        tmp_path, monkeypatch, deterministic_cpu):
+    """Seventh review of PR #19 (P2): a leg of 08d58d5 stopped after the checkpoint of its start and before its first
+    sample, without its start configurations: the form of its System was read from the samples (none), the hybrid
+    of the preparation chosen, and the check of the windows it keeps, which reads the conditions recorded with the
+    checkpoint, refused it as another System. The form is read where that check reads it: the leg goes on."""
+    import hashlib
+
+    import openmm as mm
+    from conftest import edit_attributes
+
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import EdgeLegJob, build_leg, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.sampling.hrex import ReplicaExchangeSampler
+    from cufep.sampling.storage import stored_layout
+    from cufep.workflow import alchemical_box
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    job = EdgeLegJob(edge="toluene~phenol", leg="complex", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                     config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True)
+
+    def stop(self, *args, **kwargs):
+        raise RuntimeError("stopped after the checkpoint of the start")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ReplicaExchangeSampler, "run", stop)
+        assert "stopped after the checkpoint" in run_hybrid_leg_safe(job)["error"]
+    leg_dir = edge_dir / "repeat_0" / "complex"
+    parts, attrs = stored_layout(leg_dir / "hrex")
+    assert (leg_dir / "hrex" / "checkpoint.npz").exists() and sum(p[1] for p in parts) == 0
+    # as 08d58d5 recorded it: the System with the fixed cell as its default cell; the start configurations missing
+    built = build_leg(rcfg, edge_dir, "complex")
+    with np.load(leg_dir / "equil.npz") as eq:
+        built.hybrid.system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in alchemical_box(eq, True)])
+    digest = hashlib.sha256(mm.XmlSerializer.serialize(built.hybrid.system).encode()).hexdigest()
+    edit_attributes(leg_dir / "hrex", set={"conditions": {**attrs["conditions"], "system_sha256": digest}})
+    (leg_dir / "start_configs.npz").unlink()
+    result = run_hybrid_leg_safe(job)
+    assert "error" not in result and np.isfinite(result["delta_g"])
+
+
+def test_an_archive_that_adds_the_pre_equilibration_records_it_before_it_moves_anything(tmp_path, monkeypatch):
+    """Seventh review of PR #19 (P3): an archive begun without the pre-equilibration (set_aside.json false) and taken
+    up by a call that sets it aside too kept that in memory only: stopped after it moved equil.npz, the next call
+    no longer knew, and left the record of the ghost waters behind. The record says it before anything is moved."""
+    from pathlib import Path as PathClass
+
+    from cufep.engine.leg import EQUIL_GHOSTS
+    from cufep.workflow import ARCHIVE_RECORD, archive_leg
+
+    leg_dir = tmp_path / "leg"
+    leg_dir.mkdir()
+    for name, text in (("schedule.yaml", "windows"), (EQUIL_GHOSTS, "{}"), ("equil.npz", "the pre-equilibration")):
+        (leg_dir / name).write_text(text)
+    stage = leg_dir / ".previous_1.partial"                          # an archive begun without it
+    stage.mkdir()
+    (stage / ARCHIVE_RECORD).write_text(json.dumps({"pre_equilibration": False}))
+    real = PathClass.rename
+
+    def stopping(self, target):
+        if PathClass(self).name == EQUIL_GHOSTS:
+            raise KeyboardInterrupt("stopped after equil.npz was moved")
+        return real(self, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(PathClass, "rename", stopping)
+        with pytest.raises(KeyboardInterrupt):
+            archive_leg(leg_dir, pre_equilibration=True)              # the pre-equilibration cannot be used now
+    assert (stage / "equil.npz").exists() and (leg_dir / EQUIL_GHOSTS).exists()
+    done = archive_leg(leg_dir)                                       # the next call: equil.npz is no longer there
+    assert (done / EQUIL_GHOSTS).exists() and (done / "equil.npz").exists() and not (leg_dir / EQUIL_GHOSTS).exists()

@@ -175,6 +175,20 @@ def edge_errors(pred, exp) -> dict[str, float | None]:
     return {"n": len(err), "rmse": float(np.sqrt(np.mean(err ** 2))), "mue": float(np.mean(np.abs(err)))}
 
 
+def states_of_a_summary(summary: dict) -> dict | None:
+    """The states of the compounds (``{"compound": state -> compound}``) as a summary of a relative run records them,
+    for a directory that keeps the summary without its network (seventh review of PR #19: the report of an A2A
+    summary alone compared the experiment of compounds with the dG of their 29 states, and an edge between two states
+    of one compound with an experimental ddG of 0): the compound of each state whose experimental value it has
+    (``experiment_of_compound``), else the states the dG of each compound combines (``compounds``). None for a run
+    without states."""
+    compound_of = dict(summary.get("experiment_of_compound") or {})
+    for compound, value in ((summary.get("compounds") or {}).get("values") or {}).items():
+        for state in (value or {}).get("weights") or {}:
+            compound_of.setdefault(state, compound)
+    return {"compound": compound_of} if compound_of else None
+
+
 def analysed_summary(run_dir: Path) -> dict:
     """The summary of a relative run as its directory gives it now: from its legs where it is the directory of a run
     (``edges/``, ``resolved_config.yaml``, ``network.json``), whatever results its legs have at the moment (fourth
@@ -205,7 +219,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     record = json.loads(network.read_text()) if network.exists() else {}
     # the states of the compounds as the run recorded them, whether its network gave dG or not (review of PR #19: an
     # incomplete network lost them, and an edge between two states of one compound got an experimental ddG of 0)
-    states = record.get("states")
+    states = record.get("states") or states_of_a_summary(summary)
     compound_of = dict((states or {}).get("compound") or {})
     compounds = summary.get("compounds")
     published = published_edges(name, by_state=bool(states))

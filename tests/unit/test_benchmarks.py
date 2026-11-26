@@ -895,3 +895,47 @@ def test_a_relative_summary_alone_is_reported_as_a_relative_run_from_the_command
     assert result.exit_code == 0, result.output
     assert result.output == report("tyk2", tmp_path / "run") + "\n"
     assert result.output.startswith("# cuFEP relative benchmark report: tyk2")
+
+
+def test_a_summary_of_states_alone_is_reported_as_the_run_with_its_network(tmp_path):
+    """Seventh review of PR #19 (P1): the report of an A2A summary without its network.json compared the experiment of
+    the 17 compounds with the dG of their 29 states, and the edge between the two states 4jS and 4jR of 4j with an
+    experimental ddG of 0. The states come from the summary (experiment_of_compound, the states of each compound):
+    the same compounds, statistics and edges as with the network."""
+    import shutil
+
+    from cufep.benchmarks.rbfe import published_edges, read_states, report
+
+    ref = read_reference("a2a")
+    states = read_states("a2a")
+    rng = np.random.default_rng(7)
+    dg_state = {s: ref[r["compound"]]["exp"] + 0.3 * rng.normal() for s, r in states.items()}
+    published = published_edges("a2a", by_state=True)
+    edges = [{"edge": f"{a}~{b}", "ligand_a": a, "ligand_b": b, "ddg": dg_state[b] - dg_state[a], "se": 0.3,
+              "network_ddg": dg_state[b] - dg_state[a], "network_se": 0.2, "not_reliable": []} for a, b in published]
+    compounds = {c: {"dg": v["exp"] + 0.5 * rng.normal(), "se": 0.2, "symmetry_number": 1,
+                     "weights": {s: 1.0 for s, r in states.items() if r["compound"] == c}} for c, v in ref.items()}
+    summary = {"ligands": list(states), "edges": edges, "notes": [], "cycle_closures": [],
+               "experiment_kcal_mol": {s: ref[r["compound"]]["exp"] for s, r in states.items()},
+               "experiment_of_compound": {s: r["compound"] for s, r in states.items()},
+               "dg": {"reference": "mean of the experimental values", "values": {}},
+               "compounds": {"temperature_K": 298.15, "experiment_kcal_mol": {c: v["exp"] for c, v in ref.items()},
+                             "values": compounds}}
+    _states_run(tmp_path / "with", "a2a", summary, states)
+    shutil.copytree(tmp_path / "with", tmp_path / "alone")
+    (tmp_path / "alone" / "network.json").unlink()
+    texts = {name: report("a2a", tmp_path / name) for name in ("with", "alone")}
+    for table in ("rbfe_report_ligands.csv", "rbfe_report_edges.csv"):
+        assert (tmp_path / "with" / table).read_text() == (tmp_path / "alone" / table).read_text(), table
+    assert "Compounds with a dG: 17 of 17" in texts["alone"]
+    rows = {name: [line for line in text.splitlines() if line.startswith("| ")] for name, text in texts.items()}
+    assert rows["with"] == rows["alone"]
+    edge = next(r for r in csv.DictReader((tmp_path / "alone" / "rbfe_report_edges.csv").open())
+                if r["edge"] == "4jS~4jR")
+    assert edge["exp_ddg"] == ""
+    # a summary of an earlier version without experiment_of_compound: the states of each compound
+    del summary["experiment_of_compound"]
+    (tmp_path / "alone" / "summary.json").write_text(json.dumps(summary))
+    report("a2a", tmp_path / "alone")
+    assert (tmp_path / "with" / "rbfe_report_ligands.csv").read_text() == (
+        tmp_path / "alone" / "rbfe_report_ligands.csv").read_text()

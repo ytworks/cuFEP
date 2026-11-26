@@ -270,10 +270,12 @@ def recorded_form_of_the_system(leg_dir: Path, xml: str, system, cell) -> str:
 
     import openmm as mm
 
-    from cufep.sampling.storage import stored_conditions
+    from cufep.sampling.storage import stored_layout
 
-    _n, stored = stored_conditions(Path(leg_dir) / "hrex")
-    digest = (stored or {}).get("system_sha256")
+    # the conditions as the samples, or the checkpoint of their start without samples, recorded them: what the check
+    # of kept windows compares (seventh review of PR #19: a checkpoint of 08d58d5 without samples was refused there)
+    _parts, attrs = stored_layout(Path(leg_dir) / "hrex")
+    digest = (attrs.get("conditions") or {}).get("system_sha256") if isinstance(attrs.get("conditions"), dict) else None
     if digest is None or digest == hashlib.sha256(xml.encode()).hexdigest():
         return xml
     before = system.getDefaultPeriodicBoxVectors()
