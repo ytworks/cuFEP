@@ -305,7 +305,7 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - P2 旧規則のエッジが複数あると 1 エッジずつの案内が失敗 → run の拒否も RESULT 行も、全エッジと、まとめて作り直す
   コマンドを示す。読めない `prep.json` のエッジは除外し、他のエッジの解析を続ける(修正前: JSONDecodeError で停止)。
 - P3 空白を含むエッジ名 → コマンドのエッジ名を shell 用に引用。
-- TYK2 のフル実行は image 08d58d5 で 07:06 UTC に開始(`runs/rbfe_bench_tyk2_08d58d5`)。今回の修正は、最初から流す
+- TYK2 のフル実行は image 08d58d5 で開始(`runs/rbfe_bench_tyk2_08d58d5`)。今回の修正は、最初から流す
   計算の数値を変えない(再開・再利用・解析の経路だけ)。eb36e30 の GPU テスト 75 passed。
 
 ### 2026-11-26 オーナーの 6 回目のレビュー(review 6070032983、5 件)
@@ -366,3 +366,14 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - P2 状態名からの推定が、状態を使わない現行の A2A 実行(4h、4jS)の dG を消した → network.json があればその記録、
   summary だけなら実行形式の記録(`run_directory`、`dg.reference_ligands`、辺の `exp_ddg_of`)を優先し、名前からの
   推定はどれも無い旧 summary に限る。
+
+### 2026-11-26 TYK2 のフル実行(RBFE、image 08d58d5)の結果
+- 8 GPU、22 エッジ(LOMAP)、5 ns/窓、既定(REST2 pocket、complex leg の GCMC、ALS)。終了コード 0、失敗した leg
+  なし。結果は `benchmarks/results/tyk2_rbfe/`(run が書いた報告書と表。今のコードの `cufep benchmark report` で
+  leg から作り直しても表は同一)。
+- 16 化合物すべてに dG、22 エッジすべてに ddG。実験に対して(95 % bootstrap、括弧内は FEP+ と cuFEP ABFE e77a6c5):
+  pairwise ddG RMSE 0.86 [0.57, 1.03](0.69、1.83)、RMSE(平均誤差を除く)0.59 [0.39, 0.70](0.47、1.25)、
+  Pearson R^2 0.81 [0.63, 0.94](0.86、0.35)、Kendall tau 0.68 [0.41, 0.89](0.81、0.47)。
+- エッジ: 自身の ddG の RMSE 0.79、ネットワークの ddG 0.75(22 エッジ)。FEP+ と共通の 11 エッジでは cuFEP 0.77、
+  FEP+ Bennett 0.58。重なりの基準(0.03)を下回った leg は ejm_31~ejm_45 の complex(0.022)だけ。
+- A2A のフル実行(29 状態)はまだ。

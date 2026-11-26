@@ -1,0 +1,23 @@
+edge,ligand_a,ligand_b,ddg_kcal_mol,standard_error,exp_ddg_kcal_mol,exp_ddg_of,network_ddg_kcal_mol,network_standard_error,complex_dg,solvent_dg,windows_complex,windows_solvent,lowest_overlap_complex,lowest_overlap_solvent,lowest_overlap_used_complex,lowest_overlap_used_solvent,not_reliable,backend_complex,backend_solvent
+ejm_31~ejm_42,ejm_31,ejm_42,0.484,0.166,-0.240,the ligands,0.303,0.148,14.180,13.696,9,9,0.073,0.097,0.073,0.097,,cupotential,cupotential
+ejm_31~ejm_44,ejm_31,ejm_44,3.283,0.467,2.120,the ligands,3.302,0.270,36.756,33.474,10,9,0.032,0.061,0.037,0.061,,cupotential,cupotential
+ejm_31~ejm_45,ejm_31,ejm_45,0.372,0.400,-0.020,the ligands,0.372,0.400,20.707,20.334,9,9,0.022,0.083,0.028,0.083,complex,openmm,openmm
+ejm_31~ejm_46,ejm_31,ejm_46,-1.338,0.190,-1.770,the ligands,-1.274,0.179,21.124,22.462,9,9,0.076,0.101,0.074,0.101,,cupotential,cupotential
+ejm_31~ejm_48,ejm_31,ejm_48,0.536,0.473,0.540,the ligands,1.317,0.296,24.611,24.075,10,9,0.040,0.070,0.039,0.072,,cupotential,cupotential
+ejm_42~ejm_54,ejm_42,ejm_54,-0.245,0.643,-0.750,the ligands,-0.368,0.367,-25.800,-25.555,9,9,0.071,0.159,0.087,0.159,,openmm,openmm
+ejm_43~ejm_42,ejm_43,ejm_42,-1.752,0.216,-1.520,the ligands,-1.748,0.200,-13.332,-11.580,9,9,0.052,0.100,0.060,0.100,,openmm,openmm
+ejm_44~ejm_43,ejm_44,ejm_43,-1.254,0.198,-0.840,the ligands,-1.250,0.186,-9.340,-8.086,9,9,0.048,0.096,0.056,0.097,,cupotential,cupotential
+ejm_47~ejm_31,ejm_47,ejm_31,0.277,0.324,0.160,the ligands,0.217,0.277,-23.385,-23.662,9,9,0.037,0.083,0.040,0.083,,cupotential,cupotential
+ejm_47~ejm_50,ejm_47,ejm_50,-0.094,0.484,0.720,the ligands,0.042,0.305,23.334,23.428,10,9,0.043,0.086,0.047,0.086,,cupotential,cupotential
+ejm_49~ejm_31,ejm_49,ejm_31,-0.743,0.383,-1.790,the ligands,-1.089,0.285,-33.966,-33.222,10,9,0.042,0.054,0.041,0.054,,cupotential,cupotential
+ejm_49~ejm_50,ejm_49,ejm_50,-1.573,0.363,-1.230,the ligands,-1.264,0.281,12.121,13.694,10,9,0.072,0.044,0.074,0.041,,cupotential,cupotential
+ejm_50~ejm_42,ejm_50,ejm_42,0.143,0.234,-0.800,the ligands,0.479,0.190,-33.011,-33.154,9,9,0.072,0.129,0.092,0.128,,openmm,openmm
+ejm_50~ejm_48,ejm_50,ejm_48,1.816,0.305,-0.020,the ligands,1.492,0.263,-21.111,-22.927,10,9,0.035,0.045,0.036,0.045,,cupotential,cupotential
+ejm_50~ejm_55,ejm_50,ejm_55,-0.133,0.298,-0.230,the ligands,-0.106,0.276,-48.243,-48.111,9,9,0.072,0.142,0.080,0.142,,openmm,openmm
+ejm_55~ejm_54,ejm_55,ejm_54,0.195,0.270,-1.320,the ligands,0.217,0.253,-11.800,-11.995,9,9,0.086,0.144,0.084,0.144,,cupotential,cupotential
+jmc_23~ejm_31,jmc_23,ejm_31,1.393,0.479,2.160,the ligands,1.800,0.260,-3.896,-5.289,9,9,0.059,0.088,0.065,0.089,,cupotential,cupotential
+jmc_23~jmc_27,jmc_23,jmc_27,0.947,0.265,0.420,the ligands,0.677,0.213,11.240,10.293,9,9,0.097,0.218,0.098,0.218,,cupotential,cupotential
+jmc_23~jmc_28,jmc_23,jmc_28,0.873,0.270,0.720,the ligands,1.025,0.228,17.185,16.311,9,9,0.069,0.148,0.084,0.148,,cupotential,cupotential
+jmc_27~ejm_46,jmc_27,ejm_46,-0.081,0.134,-0.030,the ligands,-0.151,0.128,6.153,6.234,9,9,0.079,0.125,0.077,0.125,,cupotential,cupotential
+jmc_28~jmc_30,jmc_28,jmc_30,-1.055,0.138,0.040,the ligands,-1.015,0.132,-4.683,-3.628,9,9,0.118,0.162,0.123,0.162,,cupotential,cupotential
+jmc_30~ejm_46,jmc_30,ejm_46,0.318,0.309,-0.370,the ligands,0.517,0.244,4.880,4.562,9,9,0.084,0.135,0.080,0.135,,cupotential,cupotential

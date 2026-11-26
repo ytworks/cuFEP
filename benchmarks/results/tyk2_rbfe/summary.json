@@ -1,0 +1,2026 @@
+{
+ "ligands": [
+  "jmc_23",
+  "ejm_47",
+  "ejm_49",
+  "ejm_31",
+  "ejm_45",
+  "ejm_44",
+  "ejm_43",
+  "ejm_50",
+  "ejm_42",
+  "ejm_55",
+  "ejm_48",
+  "ejm_54",
+  "jmc_28",
+  "jmc_27",
+  "jmc_30",
+  "ejm_46"
+ ],
+ "edges": [
+  {
+   "edge": "ejm_31~ejm_42",
+   "ligand_a": "ejm_31",
+   "ligand_b": "ejm_42",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.4837206313248491,
+     "se": 0.16644644915765705,
+     "complex_dg": 14.180112727967447,
+     "complex_se": 0.15318141646211603,
+     "solvent_dg": 13.6963920966426,
+     "solvent_se": 0.06511431553700214,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.07320383930411052,
+      "solvent": 0.09730908783110889
+     },
+     "lowest_overlap_used": {
+      "complex": 0.07262533592655246,
+      "solvent": 0.09730908783110889
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 48.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: few independent samples: lambda window 8 (morph stage) has 49 and gives MBAR 48 samples (its energy difference to the previous window is correlated over 41 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)"
+     ]
+    }
+   ],
+   "ddg": 0.4837206313248491,
+   "complex_dg": 14.180112727967447,
+   "solvent_dg": 13.6963920966426,
+   "se": 0.16644644915765705,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.07320383930411052,
+    "solvent": 0.09730908783110889
+   },
+   "lowest_overlap_used": {
+    "complex": 0.07262533592655246,
+    "solvent": 0.09730908783110889
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.2400000000000002,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.30335753721369324,
+   "network_se": 0.14757393661614723
+  },
+  {
+   "edge": "ejm_31~ejm_44",
+   "ligand_a": "ejm_31",
+   "ligand_b": "ejm_44",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 3.2829173237189653,
+     "se": 0.46734940112434376,
+     "complex_dg": 36.756436756630066,
+     "complex_se": 0.45603719122938735,
+     "solvent_dg": 33.473519432911104,
+     "solvent_se": 0.10220343901696227,
+     "windows": {
+      "complex": 10,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.03202698938157901,
+      "solvent": 0.060663734476993574
+     },
+     "lowest_overlap_used": {
+      "complex": 0.03715243943608641,
+      "solvent": 0.060663734476993615
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 100.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (2; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.10 (iterations 0-200 of the production): lambda windows 1 and 2 overlap by 0.028 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; block 4 of 5 (iterations 1200-1600 of the production): lambda windows 1 and 2 overlap by 0.022 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
+    }
+   ],
+   "ddg": 3.2829173237189653,
+   "complex_dg": 36.756436756630066,
+   "solvent_dg": 33.473519432911104,
+   "se": 0.46734940112434376,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.03202698938157901,
+    "solvent": 0.060663734476993574
+   },
+   "lowest_overlap_used": {
+    "complex": 0.03715243943608641,
+    "solvent": 0.060663734476993615
+   },
+   "windows": {
+    "complex": [
+     10
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 2.119999999999999,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 3.3015602317544857,
+   "network_se": 0.269782502348656
+  },
+  {
+   "edge": "ejm_31~ejm_45",
+   "ligand_a": "ejm_31",
+   "ligand_b": "ejm_45",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.3720587446509443,
+     "se": 0.3996770212235687,
+     "complex_dg": 20.706502802601943,
+     "complex_se": 0.38580406996218336,
+     "solvent_dg": 20.334444057951,
+     "solvent_se": 0.10438841360399966,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.021920235742226298,
+      "solvent": 0.08336651256763306
+     },
+     "lowest_overlap_used": {
+      "complex": 0.02799326954631665,
+      "solvent": 0.083370486615876
+     },
+     "not_reliable": [
+      "complex"
+     ],
+     "fewest_independent_samples": {
+      "complex": 80.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "openmm",
+      "solvent": "openmm"
+     },
+     "warnings": [
+      "complex: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
+      "complex: NOT RELIABLE: the overlap between lambda windows 1 and 2 (morph stage, lambda 0.12 and 0.25) is 0.022, below 0.03. Give that stage more lambda windows (lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) and run this leg again: cufep rbfe run CONFIG --edge NAME --leg complex --reschedule",
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (18; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.10 (iterations 0-200 of the production): lambda windows 1 and 2 overlap by 0.006 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; forward point 0.30 (iterations 0-600 of the production): lambda windows 1 and 2 overlap by 0.029 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; reverse point 0.30 (iterations 1400-2000 of the production): lambda windows 1 and 2 overlap by 0.029 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; ...",
+      "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "solvent: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)"
+     ]
+    }
+   ],
+   "ddg": 0.3720587446509443,
+   "complex_dg": 20.706502802601943,
+   "solvent_dg": 20.334444057951,
+   "se": 0.3996770212235687,
+   "not_reliable": [
+    "complex"
+   ],
+   "lowest_overlap": {
+    "complex": 0.021920235742226298,
+    "solvent": 0.08336651256763306
+   },
+   "lowest_overlap_used": {
+    "complex": 0.02799326954631665,
+    "solvent": 0.083370486615876
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "openmm"
+    ],
+    "solvent": [
+     "openmm"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.02000000000000135,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.3720587446509455,
+   "network_se": 0.39967702122356885
+  },
+  {
+   "edge": "ejm_31~ejm_46",
+   "ligand_a": "ejm_31",
+   "ligand_b": "ejm_46",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.3378846675129434,
+     "se": 0.18951032965172301,
+     "complex_dg": 21.124355237390784,
+     "complex_se": 0.18023698519493814,
+     "solvent_dg": 22.462239904903726,
+     "solvent_se": 0.05855590672634473,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.0758895839344909,
+      "solvent": 0.10052491635010936
+     },
+     "lowest_overlap_used": {
+      "complex": 0.07378380784510397,
+      "solvent": 0.10052491635010932
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 84.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -1.3378846675129434,
+   "complex_dg": 21.124355237390784,
+   "solvent_dg": 22.462239904903726,
+   "se": 0.18951032965172301,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.0758895839344909,
+    "solvent": 0.10052491635010936
+   },
+   "lowest_overlap_used": {
+    "complex": 0.07378380784510397,
+    "solvent": 0.10052491635010932
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -1.7700000000000014,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -1.2742285894670564,
+   "network_se": 0.17875191657992365
+  },
+  {
+   "edge": "ejm_31~ejm_48",
+   "ligand_a": "ejm_31",
+   "ligand_b": "ejm_48",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.5359329899926518,
+     "se": 0.47293114215356247,
+     "complex_dg": 24.61098798893793,
+     "complex_se": 0.4625311045360703,
+     "solvent_dg": 24.075054998945276,
+     "solvent_se": 0.09863489522129526,
+     "windows": {
+      "complex": 10,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.03963518707100944,
+      "solvent": 0.06979514857115798
+     },
+     "lowest_overlap_used": {
+      "complex": 0.039375476396184876,
+      "solvent": 0.07212765239222102
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 75.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 0.5359329899926518,
+   "complex_dg": 24.61098798893793,
+   "solvent_dg": 24.075054998945276,
+   "se": 0.47293114215356247,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.03963518707100944,
+    "solvent": 0.06979514857115798
+   },
+   "lowest_overlap_used": {
+    "complex": 0.039375476396184876,
+    "solvent": 0.07212765239222102
+   },
+   "windows": {
+    "complex": [
+     10
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 0.5399999999999991,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 1.31699576276346,
+   "network_se": 0.29550032027811646
+  },
+  {
+   "edge": "ejm_42~ejm_54",
+   "ligand_a": "ejm_42",
+   "ligand_b": "ejm_54",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.24484811925449151,
+     "se": 0.6426910734693069,
+     "complex_dg": -25.800064051815692,
+     "complex_se": 0.49887440299898034,
+     "solvent_dg": -25.5552159325612,
+     "solvent_se": 0.4051865569704169,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.07135999060371848,
+      "solvent": 0.15871357648587836
+     },
+     "lowest_overlap_used": {
+      "complex": 0.08727411085556312,
+      "solvent": 0.1589406882113281
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 167.0,
+      "solvent": 18.234143928609296
+     },
+     "backend": {
+      "complex": "openmm",
+      "solvent": "openmm"
+     },
+     "warnings": [
+      "complex: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
+      "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "solvent: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
+      "solvent: few independent samples: lambda window 8 (morph stage) has 18 and gives MBAR 19 samples (its energy difference to the previous window is correlated over 110 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg solvent --production-ns NS (or sampling.production_ns)",
+      "solvent: parts of the production without an estimate (3; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 8 keeps 2 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 8 keeps 2 sample(s) there; 4 are needed for an estimate; block 3 of 5 (iterations 800-1200 of the production): lambda window 8 keeps 3 sample(s) there; 4 are needed for an estimate"
+     ]
+    }
+   ],
+   "ddg": -0.24484811925449151,
+   "complex_dg": -25.800064051815692,
+   "solvent_dg": -25.5552159325612,
+   "se": 0.6426910734693069,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.07135999060371848,
+    "solvent": 0.15871357648587836
+   },
+   "lowest_overlap_used": {
+    "complex": 0.08727411085556312,
+    "solvent": 0.1589406882113281
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "openmm"
+    ],
+    "solvent": [
+     "openmm"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.75,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -0.36785376491948346,
+   "network_se": 0.36716102130293893
+  },
+  {
+   "edge": "ejm_43~ejm_42",
+   "ligand_a": "ejm_43",
+   "ligand_b": "ejm_42",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.751720868079521,
+     "se": 0.21580246832120878,
+     "complex_dg": -13.33156804703619,
+     "complex_se": 0.21011909656737468,
+     "solvent_dg": -11.57984717895667,
+     "solvent_se": 0.04920031088556844,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.05187114078319034,
+      "solvent": 0.09956228243879281
+     },
+     "lowest_overlap_used": {
+      "complex": 0.05989073913313474,
+      "solvent": 0.09956228243879285
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 143.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "openmm",
+      "solvent": "openmm"
+     },
+     "warnings": [
+      "complex: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
+      "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "solvent: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)"
+     ]
+    }
+   ],
+   "ddg": -1.751720868079521,
+   "complex_dg": -13.33156804703619,
+   "solvent_dg": -11.57984717895667,
+   "se": 0.21580246832120878,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.05187114078319034,
+    "solvent": 0.09956228243879281
+   },
+   "lowest_overlap_used": {
+    "complex": 0.05989073913313474,
+    "solvent": 0.09956228243879285
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "openmm"
+    ],
+    "solvent": [
+     "openmm"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -1.5199999999999996,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -1.7477458135397719,
+   "network_se": 0.19987442697764135
+  },
+  {
+   "edge": "ejm_44~ejm_43",
+   "ligand_a": "ejm_44",
+   "ligand_b": "ejm_43",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.253796692437308,
+     "se": 0.19780890353807468,
+     "complex_dg": -9.339786229526522,
+     "complex_se": 0.1890078691256,
+     "solvent_dg": -8.085989537089215,
+     "solvent_se": 0.058347131270829404,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.04794868779621463,
+      "solvent": 0.09632539541304311
+     },
+     "lowest_overlap_used": {
+      "complex": 0.056039727550443244,
+      "solvent": 0.09656583072852618
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 500.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -1.253796692437308,
+   "complex_dg": -9.339786229526522,
+   "solvent_dg": -8.085989537089215,
+   "se": 0.19780890353807468,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.04794868779621463,
+    "solvent": 0.09632539541304311
+   },
+   "lowest_overlap_used": {
+    "complex": 0.056039727550443244,
+    "solvent": 0.09656583072852618
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.8399999999999999,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -1.2504568810010206,
+   "network_se": 0.18561923228040078
+  },
+  {
+   "edge": "ejm_47~ejm_31",
+   "ligand_a": "ejm_47",
+   "ligand_b": "ejm_31",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.2774916508909789,
+     "se": 0.32372811286491576,
+     "complex_dg": -23.384988179940784,
+     "complex_se": 0.31508423207865227,
+     "solvent_dg": -23.662479830831764,
+     "solvent_se": 0.07430893455356247,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.037318468322208136,
+      "solvent": 0.08282527959124612
+     },
+     "lowest_overlap_used": {
+      "complex": 0.04003833694687322,
+      "solvent": 0.08282527959124646
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 112.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.10 (iterations 0-200 of the production): lambda windows 6 and 7 overlap by 0.026 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
+    }
+   ],
+   "ddg": 0.2774916508909789,
+   "complex_dg": -23.384988179940784,
+   "solvent_dg": -23.662479830831764,
+   "se": 0.32372811286491576,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.037318468322208136,
+    "solvent": 0.08282527959124612
+   },
+   "lowest_overlap_used": {
+    "complex": 0.04003833694687322,
+    "solvent": 0.08282527959124646
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 0.16000000000000014,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.21686216330462305,
+   "network_se": 0.2767222734858066
+  },
+  {
+   "edge": "ejm_47~ejm_50",
+   "ligand_a": "ejm_47",
+   "ligand_b": "ejm_50",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.09392614382080153,
+     "se": 0.4841303906500827,
+     "complex_dg": 23.334171139083395,
+     "complex_se": 0.4709639201324389,
+     "solvent_dg": 23.428097282904194,
+     "solvent_se": 0.11213929322270291,
+     "windows": {
+      "complex": 10,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.04324749692092807,
+      "solvent": 0.08584429702450654
+     },
+     "lowest_overlap_used": {
+      "complex": 0.04713852609304154,
+      "solvent": 0.08592124715871516
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 167.0,
+      "solvent": 667.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): block 2 of 5 (iterations 400-800 of the production): lambda windows 5 and 6 overlap by 0.029 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
+    }
+   ],
+   "ddg": -0.09392614382080153,
+   "complex_dg": 23.334171139083395,
+   "solvent_dg": 23.428097282904194,
+   "se": 0.4841303906500827,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.04324749692092807,
+    "solvent": 0.08584429702450654
+   },
+   "lowest_overlap_used": {
+    "complex": 0.04713852609304154,
+    "solvent": 0.08592124715871516
+   },
+   "windows": {
+    "complex": [
+     10
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 0.7199999999999989,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.04167013087893945,
+   "network_se": 0.30529920417217854
+  },
+  {
+   "edge": "ejm_49~ejm_31",
+   "ligand_a": "ejm_49",
+   "ligand_b": "ejm_31",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.7433088535790672,
+     "se": 0.3830501980159496,
+     "complex_dg": -33.96560445319385,
+     "complex_se": 0.3705609469499257,
+     "solvent_dg": -33.22229559961478,
+     "solvent_se": 0.09701566263048736,
+     "windows": {
+      "complex": 10,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.0424386853665703,
+      "solvent": 0.054355036992244546
+     },
+     "lowest_overlap_used": {
+      "complex": 0.040620445481530446,
+      "solvent": 0.054344050330391185
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 125.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): block 3 of 5 (iterations 800-1200 of the production): lambda windows 5 and 6 overlap by 0.027 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
+    }
+   ],
+   "ddg": -0.7433088535790672,
+   "complex_dg": -33.96560445319385,
+   "solvent_dg": -33.22229559961478,
+   "se": 0.3830501980159496,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.0424386853665703,
+    "solvent": 0.054355036992244546
+   },
+   "lowest_overlap_used": {
+    "complex": 0.040620445481530446,
+    "solvent": 0.054344050330391185
+   },
+   "windows": {
+    "complex": [
+     10
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -1.7899999999999991,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -1.088742687021514,
+   "network_se": 0.28537494312756023
+  },
+  {
+   "edge": "ejm_49~ejm_50",
+   "ligand_a": "ejm_49",
+   "ligand_b": "ejm_50",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.5733044862817422,
+     "se": 0.3625034883235122,
+     "complex_dg": 12.120934309529257,
+     "complex_se": 0.33834226109041265,
+     "solvent_dg": 13.694238795811,
+     "solvent_se": 0.13012798856103866,
+     "windows": {
+      "complex": 10,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.0720829786930053,
+      "solvent": 0.04352328118928704
+     },
+     "lowest_overlap_used": {
+      "complex": 0.07438930772162126,
+      "solvent": 0.04059317624032322
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 54.289268937291936,
+      "solvent": 667.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "solvent: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.10 (iterations 0-200 of the production): lambda windows 6 and 7 overlap by 0.025 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
+    }
+   ],
+   "ddg": -1.5733044862817422,
+   "complex_dg": 12.120934309529257,
+   "solvent_dg": 13.694238795811,
+   "se": 0.3625034883235122,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.0720829786930053,
+    "solvent": 0.04352328118928704
+   },
+   "lowest_overlap_used": {
+    "complex": 0.07438930772162126,
+    "solvent": 0.04059317624032322
+   },
+   "windows": {
+    "complex": [
+     10
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -1.2300000000000004,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -1.2639347194471977,
+   "network_se": 0.28114249077569664
+  },
+  {
+   "edge": "ejm_50~ejm_42",
+   "ligand_a": "ejm_50",
+   "ligand_b": "ejm_42",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.1430812056441126,
+     "se": 0.23399031692023745,
+     "complex_dg": -33.011029296057586,
+     "complex_se": 0.22158240529277284,
+     "solvent_dg": -33.1541105017017,
+     "solvent_se": 0.07518448029415717,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.07228852545436369,
+      "solvent": 0.1288218078185715
+     },
+     "lowest_overlap_used": {
+      "complex": 0.0917773646389421,
+      "solvent": 0.1280062362285876
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 286.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "openmm",
+      "solvent": "openmm"
+     },
+     "warnings": [
+      "complex: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
+      "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "solvent: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)"
+     ]
+    }
+   ],
+   "ddg": 0.1430812056441126,
+   "complex_dg": -33.011029296057586,
+   "solvent_dg": -33.1541105017017,
+   "se": 0.23399031692023745,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.07228852545436369,
+    "solvent": 0.1288218078185715
+   },
+   "lowest_overlap_used": {
+    "complex": 0.0917773646389421,
+    "solvent": 0.1280062362285876
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "openmm"
+    ],
+    "solvent": [
+     "openmm"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.7999999999999989,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.47854956963937684,
+   "network_se": 0.1896959027542319
+  },
+  {
+   "edge": "ejm_50~ejm_48",
+   "ligand_a": "ejm_50",
+   "ligand_b": "ejm_48",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 1.8161305641575882,
+     "se": 0.3045713782213267,
+     "complex_dg": -21.11099986003447,
+     "complex_se": 0.27959855470760253,
+     "solvent_dg": -22.92713042419206,
+     "solvent_se": 0.12078233578242409,
+     "windows": {
+      "complex": 10,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.035256413653047665,
+      "solvent": 0.04531554048048554
+     },
+     "lowest_overlap_used": {
+      "complex": 0.035611243342372444,
+      "solvent": 0.045197450022614216
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 250.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (3; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.10 (iterations 0-200 of the production): lambda windows 3 and 4 overlap by 0.030 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; block 3 of 5 (iterations 800-1200 of the production): lambda windows 3 and 4 overlap by 0.028 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; block 4 of 5 (iterations 1200-1600 of the production): lambda windows 3 and 4 overlap by 0.029 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
+    }
+   ],
+   "ddg": 1.8161305641575882,
+   "complex_dg": -21.11099986003447,
+   "solvent_dg": -22.92713042419206,
+   "se": 0.3045713782213267,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.035256413653047665,
+    "solvent": 0.04531554048048554
+   },
+   "lowest_overlap_used": {
+    "complex": 0.035611243342372444,
+    "solvent": 0.045197450022614216
+   },
+   "windows": {
+    "complex": [
+     10
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.019999999999999574,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 1.4921877951891438,
+   "network_se": 0.26326924878517916
+  },
+  {
+   "edge": "ejm_50~ejm_55",
+   "ligand_a": "ejm_50",
+   "ligand_b": "ejm_55",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.13261905651088196,
+     "se": 0.29811103223352964,
+     "complex_dg": -48.24317269413255,
+     "complex_se": 0.27483082187582863,
+     "solvent_dg": -48.11055363762166,
+     "solvent_se": 0.11549115501369399,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.07192729851324516,
+      "solvent": 0.1420000199149251
+     },
+     "lowest_overlap_used": {
+      "complex": 0.07999539816257538,
+      "solvent": 0.14245815995950034
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 400.0,
+      "solvent": 667.0
+     },
+     "backend": {
+      "complex": "openmm",
+      "solvent": "openmm"
+     },
+     "warnings": [
+      "complex: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
+      "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "solvent: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)"
+     ]
+    }
+   ],
+   "ddg": -0.13261905651088196,
+   "complex_dg": -48.24317269413255,
+   "solvent_dg": -48.11055363762166,
+   "se": 0.29811103223352964,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.07192729851324516,
+    "solvent": 0.1420000199149251
+   },
+   "lowest_overlap_used": {
+    "complex": 0.07999539816257538,
+    "solvent": 0.14245815995950034
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "openmm"
+    ],
+    "solvent": [
+     "openmm"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.23000000000000043,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -0.10615376964517431,
+   "network_se": 0.2756624243868957
+  },
+  {
+   "edge": "ejm_55~ejm_54",
+   "ligand_a": "ejm_55",
+   "ligand_b": "ejm_54",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.19515142123357684,
+     "se": 0.26992998486141817,
+     "complex_dg": -11.800065586086316,
+     "complex_se": 0.21075347901861116,
+     "solvent_dg": -11.995217007319892,
+     "solvent_se": 0.16865695304029793,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.08643382992872979,
+      "solvent": 0.14417062441274314
+     },
+     "lowest_overlap_used": {
+      "complex": 0.08424709394137127,
+      "solvent": 0.14409302084769834
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 87.0,
+      "solvent": 500.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 0.19515142123357684,
+   "complex_dg": -11.800065586086316,
+   "solvent_dg": -11.995217007319892,
+   "se": 0.26992998486141817,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.08643382992872979,
+    "solvent": 0.14417062441274314
+   },
+   "lowest_overlap_used": {
+    "complex": 0.08424709394137127,
+    "solvent": 0.14409302084769834
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -1.3199999999999985,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.2168495743650677,
+   "network_se": 0.25338528914586017
+  },
+  {
+   "edge": "jmc_23~ejm_31",
+   "ligand_a": "jmc_23",
+   "ligand_b": "ejm_31",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 1.39325698902146,
+     "se": 0.4793259914630458,
+     "complex_dg": -3.895938298005016,
+     "complex_se": 0.4758752964050813,
+     "solvent_dg": -5.289195287026476,
+     "solvent_se": 0.05741174412441941,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.05891283006601899,
+      "solvent": 0.08836521836301878
+     },
+     "lowest_overlap_used": {
+      "complex": 0.06541075021269702,
+      "solvent": 0.08932228598240297
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 87.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 1.39325698902146,
+   "complex_dg": -3.895938298005016,
+   "solvent_dg": -5.289195287026476,
+   "se": 0.4793259914630458,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.05891283006601899,
+    "solvent": 0.08836521836301878
+   },
+   "lowest_overlap_used": {
+    "complex": 0.06541075021269702,
+    "solvent": 0.08932228598240297
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 2.16,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 1.8004835173647802,
+   "network_se": 0.26002031423125194
+  },
+  {
+   "edge": "jmc_23~jmc_27",
+   "ligand_a": "jmc_23",
+   "ligand_b": "jmc_27",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.9465586052977732,
+     "se": 0.26460374970955347,
+     "complex_dg": 11.239885637871785,
+     "complex_se": 0.24263270325865913,
+     "solvent_dg": 10.293327032574012,
+     "solvent_se": 0.10556758815920476,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.09672039105296032,
+      "solvent": 0.21849787863481943
+     },
+     "lowest_overlap_used": {
+      "complex": 0.09759980948353192,
+      "solvent": 0.21849787863481857
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 143.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 0.9465586052977732,
+   "complex_dg": 11.239885637871785,
+   "solvent_dg": 10.293327032574012,
+   "se": 0.26460374970955347,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.09672039105296032,
+    "solvent": 0.21849787863481943
+   },
+   "lowest_overlap_used": {
+    "complex": 0.09759980948353192,
+    "solvent": 0.21849787863481857
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 0.41999999999999993,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.6768366378755035,
+   "network_se": 0.21270035327348294
+  },
+  {
+   "edge": "jmc_23~jmc_28",
+   "ligand_a": "jmc_23",
+   "ligand_b": "jmc_28",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.8734866809477412,
+     "se": 0.2696515651742914,
+     "complex_dg": 17.184805981702027,
+     "complex_se": 0.2636143097181726,
+     "solvent_dg": 16.311319300754285,
+     "solvent_se": 0.05674030589234137,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.06870459272280154,
+      "solvent": 0.14757949484446298
+     },
+     "lowest_overlap_used": {
+      "complex": 0.0844342475765814,
+      "solvent": 0.1475794948444628
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 118.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 0.8734866809477412,
+   "complex_dg": 17.184805981702027,
+   "solvent_dg": 16.311319300754285,
+   "se": 0.2696515651742914,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.06870459272280154,
+    "solvent": 0.14757949484446298
+   },
+   "lowest_overlap_used": {
+    "complex": 0.0844342475765814,
+    "solvent": 0.1475794948444628
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 0.7199999999999989,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 1.024719359840283,
+   "network_se": 0.22768552179330429
+  },
+  {
+   "edge": "jmc_27~ejm_46",
+   "ligand_a": "jmc_27",
+   "ligand_b": "ejm_46",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.08104092557439048,
+     "se": 0.13435617377720185,
+     "complex_dg": 6.152802187962922,
+     "complex_se": 0.12509657419180426,
+     "solvent_dg": 6.233843113537312,
+     "solvent_se": 0.04901457494994806,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.07921758182253173,
+      "solvent": 0.12462085982972149
+     },
+     "lowest_overlap_used": {
+      "complex": 0.07696298860481604,
+      "solvent": 0.1246208598297214
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 400.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -0.08104092557439048,
+   "complex_dg": 6.152802187962922,
+   "solvent_dg": 6.233843113537312,
+   "se": 0.13435617377720185,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.07921758182253173,
+    "solvent": 0.12462085982972149
+   },
+   "lowest_overlap_used": {
+    "complex": 0.07696298860481604,
+    "solvent": 0.1246208598297214
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.030000000000001137,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -0.15058170997777975,
+   "network_se": 0.12808120178002944
+  },
+  {
+   "edge": "jmc_28~jmc_30",
+   "ligand_a": "jmc_28",
+   "ligand_b": "jmc_30",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.0545175484182203,
+     "se": 0.13775395142372995,
+     "complex_dg": -4.683002867645673,
+     "complex_se": 0.12899783355440492,
+     "solvent_dg": -3.628485319227452,
+     "solvent_se": 0.04832918446571798,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.11812105338557892,
+      "solvent": 0.16243205502368918
+     },
+     "lowest_overlap_used": {
+      "complex": 0.1231856702439156,
+      "solvent": 0.16188094997452754
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 143.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -1.0545175484182203,
+   "complex_dg": -4.683002867645673,
+   "solvent_dg": -3.628485319227452,
+   "se": 0.13775395142372995,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.11812105338557892,
+    "solvent": 0.16243205502368918
+   },
+   "lowest_overlap_used": {
+    "complex": 0.1231856702439156,
+    "solvent": 0.16188094997452754
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": 0.040000000000000924,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": -1.0150492971104141,
+   "network_se": 0.1324938862768979
+  },
+  {
+   "edge": "jmc_30~ejm_46",
+   "ligand_a": "jmc_30",
+   "ligand_b": "ejm_46",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.3179833655404665,
+     "se": 0.30900918216592055,
+     "complex_dg": 4.879962062449475,
+     "complex_se": 0.30041070854186164,
+     "solvent_dg": 4.561978696909009,
+     "solvent_se": 0.07238840277439276,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.08405396916922256,
+      "solvent": 0.13496461802115584
+     },
+     "lowest_overlap_used": {
+      "complex": 0.07978451130249439,
+      "solvent": 0.135075075809601
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 182.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 0.3179833655404665,
+   "complex_dg": 4.879962062449475,
+   "solvent_dg": 4.561978696909009,
+   "se": 0.30900918216592055,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.08405396916922256,
+    "solvent": 0.13496461802115584
+   },
+   "lowest_overlap_used": {
+    "complex": 0.07978451130249439,
+    "solvent": 0.135075075809601
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "grand_canonical": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345
+    }
+   },
+   "exp_ddg": -0.370000000000001,
+   "exp_ddg_of": "the ligands",
+   "network_ddg": 0.5165848651678548,
+   "network_se": 0.24391247394139773
+  }
+ ],
+ "experiment_kcal_mol": {
+  "jmc_23": -11.7,
+  "ejm_47": -9.7,
+  "ejm_49": -7.75,
+  "ejm_31": -9.54,
+  "ejm_45": -9.56,
+  "ejm_44": -7.42,
+  "ejm_43": -8.26,
+  "ejm_50": -8.98,
+  "ejm_42": -9.78,
+  "ejm_55": -9.21,
+  "ejm_48": -9.0,
+  "ejm_54": -10.53,
+  "jmc_28": -10.98,
+  "jmc_27": -11.28,
+  "jmc_30": -10.94,
+  "ejm_46": -11.31
+ },
+ "cycle_closures": [
+  {
+   "ligands": [
+    "ejm_31",
+    "jmc_23",
+    "jmc_27",
+    "ejm_46"
+   ],
+   "sum_kcal_mol": 0.8101453582148663,
+   "se_kcal_mol": 0.5947556615360144
+  },
+  {
+   "ligands": [
+    "jmc_28",
+    "jmc_23",
+    "jmc_27",
+    "ejm_46",
+    "jmc_30"
+   ],
+   "sum_kcal_mol": 0.7285651816533953,
+   "se_kcal_mol": 0.524634652104732
+  },
+  {
+   "ligands": [
+    "ejm_47",
+    "ejm_50",
+    "ejm_49",
+    "ejm_31"
+   ],
+   "sum_kcal_mol": 0.45857783799089474,
+   "se_kcal_mol": 0.7856960986646517
+  },
+  {
+   "ligands": [
+    "ejm_42",
+    "ejm_50",
+    "ejm_49",
+    "ejm_31"
+   ],
+   "sum_kcal_mol": 1.1706350583834115,
+   "se_kcal_mol": 0.6004932323485408
+  },
+  {
+   "ligands": [
+    "ejm_48",
+    "ejm_50",
+    "ejm_49",
+    "ejm_31"
+   ],
+   "sum_kcal_mol": -0.45020194146226133,
+   "se_kcal_mol": 0.7710796475702653
+  },
+  {
+   "ligands": [
+    "ejm_42",
+    "ejm_54",
+    "ejm_55",
+    "ejm_50"
+   ],
+   "sum_kcal_mol": -0.16429927833307376,
+   "se_kcal_mol": 0.7934328381130876
+  },
+  {
+   "ligands": [
+    "ejm_42",
+    "ejm_43",
+    "ejm_44",
+    "ejm_31"
+   ],
+   "sum_kcal_mol": 0.206320868122713,
+   "se_kcal_mol": 0.5760372824921465
+  }
+ ],
+ "dg": {
+  "reference": "mean of the experimental values",
+  "reference_ligands": [
+   "jmc_23",
+   "ejm_47",
+   "ejm_49",
+   "ejm_31",
+   "ejm_45",
+   "ejm_44",
+   "ejm_43",
+   "ejm_50",
+   "ejm_42",
+   "ejm_55",
+   "ejm_48",
+   "ejm_54",
+   "jmc_28",
+   "jmc_27",
+   "jmc_30",
+   "ejm_46"
+  ],
+  "values": {
+   "jmc_23": {
+    "dg": -11.60492011050041,
+    "se": 0.2282904481012084
+   },
+   "ejm_47": {
+    "dg": -10.021298756440252,
+    "se": 0.267499148585058
+   },
+   "ejm_49": {
+    "dg": -8.715693906114117,
+    "se": 0.26593019384154
+   },
+   "ejm_31": {
+    "dg": -9.80443659313563,
+    "se": 0.11242299752016077
+   },
+   "ejm_45": {
+    "dg": -9.432377848484684,
+    "se": 0.3904009944964218
+   },
+   "ejm_44": {
+    "dg": -6.502876361381144,
+    "se": 0.24954394150599943
+   },
+   "ejm_43": {
+    "dg": -7.7533332423821655,
+    "se": 0.21281768587127617
+   },
+   "ejm_50": {
+    "dg": -9.979628625561315,
+    "se": 0.16828912067892116
+   },
+   "ejm_42": {
+    "dg": -9.501079055921936,
+    "se": 0.13681492025623124
+   },
+   "ejm_55": {
+    "dg": -10.085782395206488,
+    "se": 0.28264521506478446
+   },
+   "ejm_48": {
+    "dg": -8.48744083037217,
+    "se": 0.2684689529543541
+   },
+   "ejm_54": {
+    "dg": -9.86893282084142,
+    "se": 0.33474785898842435
+   },
+   "jmc_28": {
+    "dg": -10.580200750660127,
+    "se": 0.254641490811158
+   },
+   "jmc_27": {
+    "dg": -10.928083472624907,
+    "se": 0.19072981115244997
+   },
+   "jmc_30": {
+    "dg": -11.595250047770541,
+    "se": 0.2523231971363957
+   },
+   "ejm_46": {
+    "dg": -11.078665182602688,
+    "se": 0.16291857292709802
+   }
+  }
+ },
+ "notes": [],
+ "failed_in_this_run": []
+}
