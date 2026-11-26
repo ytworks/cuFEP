@@ -29,7 +29,8 @@ A run in a directory that holds results is refused before it writes anything if 
 it runs, or one whose results it combines) was made from other inputs or settings (protein, ligands, force
 field, solvation, bilayer, cutoff, ionic strength, pH ...), by an earlier rule of the preparation, or if its record
 cannot be read; the refusal names every such edge and one way to prepare them all again (the analysis leaves them
-out, with the same way). Edge names in these commands are quoted for the shell (names of ligands may hold spaces).
+out, with the same way). These commands name the run directory (`-o`, which need not be `output.dir` of the
+configuration) and quote edge names for the shell (names of ligands may hold spaces).
 
 ## Inputs
 

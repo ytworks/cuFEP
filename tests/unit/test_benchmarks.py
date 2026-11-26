@@ -878,3 +878,20 @@ def test_the_pairs_of_compounds_take_the_experiment_of_the_table_of_compounds(tm
     _states_run(tmp_path, "a2a", summary, states)
     text = report("a2a", tmp_path)
     assert "| cuFEP, the pairs of compounds the edges join | 1 | 0.00 |" in text
+
+
+def test_a_relative_summary_alone_is_reported_as_a_relative_run_from_the_command_line(tmp_path):
+    """Sixth review of PR #19 (P2): `cufep benchmark report tyk2 DIR` of a directory that keeps the summary of a
+    relative run alone (no network.json) went to the report of the absolute calculation, which failed on it. Such a
+    summary is that of a relative run."""
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep.benchmarks.rbfe import report
+
+    _relative_run(tmp_path / "run", "tyk2")
+    (tmp_path / "run" / "network.json").unlink()
+    result = CliRunner().invoke(cli.main, ["benchmark", "report", "tyk2", str(tmp_path / "run")])
+    assert result.exit_code == 0, result.output
+    assert result.output == report("tyk2", tmp_path / "run") + "\n"
+    assert result.output.startswith("# cuFEP relative benchmark report: tyk2")

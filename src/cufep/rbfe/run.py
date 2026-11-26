@@ -167,22 +167,30 @@ def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, onl
                             f"solvent leg, which {', '.join(missing)} does not have yet: run the solvent leg first")
 
 
-def rerun_command(edge: str, repeat: int, legs) -> str:
-    """The command that computes the legs ``legs`` of one repeat of an edge anew, and no other leg (the name of the
-    edge quoted for the shell: names of ligands may hold spaces, as `4e U`; fifth review of PR #19)."""
-    return (f"cufep rbfe run CONFIG --edge {shlex.quote(edge)} --repeat {repeat} "
+def _run_of(out_dir) -> str:
+    """`cufep rbfe run CONFIG` in the run directory ``out_dir`` (-o: a run directory need not be output.dir of the
+    configuration; sixth review of PR #19), quoted for the shell."""
+    return "cufep rbfe run CONFIG" + ("" if out_dir is None else f" -o {shlex.quote(str(out_dir))}")
+
+
+def rerun_command(edge: str, repeat: int, legs, out_dir=None) -> str:
+    """The command that computes the legs ``legs`` of one repeat of an edge of the run directory ``out_dir`` anew, and
+    no other leg (the name of the edge quoted for the shell: names of ligands may hold spaces, as `4e U`; fifth review
+    of PR #19)."""
+    return (f"{_run_of(out_dir)} --edge {shlex.quote(edge)} --repeat {repeat} "
             + " ".join(f"--leg {leg}" for leg in legs) + " --reschedule")
 
 
-def prepare_again_command(edges) -> str:
-    """How edges whose prepared systems this version does not take (other inputs or settings, an earlier rule, a
-    record that cannot be read) are computed again: all of them removed first, as a run checks every prepared edge of
-    the network before it writes anything (fifth review of PR #19: told one edge at a time, the run of the first was
-    refused for the next)."""
+def prepare_again_command(edges, out_dir=None) -> str:
+    """How edges of the run directory ``out_dir`` whose prepared systems this version does not take (other inputs or
+    settings, an earlier rule, a record that cannot be read) are computed again: all of them removed first, as a run
+    checks every prepared edge of the network before it writes anything (fifth review of PR #19: told one edge at a
+    time, the run of the first was refused for the next)."""
     edges = list(dict.fromkeys(edges))
+    where = "the run directory" if out_dir is None else shlex.quote(str(out_dir))
     return ("To compute " + ("it" if len(edges) == 1 else "them") + " again: remove "
-            + ", ".join(shlex.quote(f"edges/{edge}") for edge in edges) + " of the run directory, then cufep rbfe run "
-            "CONFIG " + " ".join(f"--edge {shlex.quote(edge)}" for edge in edges))
+            + ", ".join(shlex.quote(f"edges/{edge}") for edge in edges) + f" of {where}, then {_run_of(out_dir)} "
+            + " ".join(f"--edge {shlex.quote(edge)}" for edge in edges))
 
 
 def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs,
@@ -231,7 +239,7 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                     found += fixed_cell_problems(leg_dir)
                 if found:
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: {'; '.join(found)}")
-                    commands.append(rerun_command(edge, r, [leg]))
+                    commands.append(rerun_command(edge, r, [leg], out_dir))
     if problems:
         raise WorkflowError("; ".join(problems) + ". Nothing was changed. --reschedule sets aside what cannot be used "
                             "with the windows, samples and result of a leg in previous_<n>/ and computes it anew: "
@@ -325,7 +333,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
             refused.append((edge_name(a, b), str(exc)))
     if refused:
         raise WorkflowError("; ".join(message for _edge, message in refused) + ". Nothing was changed. "
-                            + prepare_again_command([edge for edge, _message in refused]))
+                            + prepare_again_command([edge for edge, _message in refused], out_dir))
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
     check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
@@ -676,19 +684,20 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     if prepared_before:
         left_note.append(f"{len(prepared_before)} edge(s) whose prepared systems this version does not take (an "
                          f"earlier rule, or a record that cannot be read) are left out ({', '.join(prepared_before)}); "
-                         + prepare_again_command(prepared_before))
+                         + prepare_again_command(prepared_before, out_dir))
     # the experimental value of a state is that of its compound (third review of PR #19: ligands.csv gave it as if it
     # were measured for the state)
-    of_compound = {"experiment_of_compound": dict(compound_of)} if compound_of else {}
+    # the directory the summary is of, for the commands its lines give (sixth review of PR #19)
+    recorded = {"run_directory": str(out_dir), **({"experiment_of_compound": dict(compound_of)} if compound_of else {})}
     if differing:
         # each edge gives its ddG; no dG and no cycle closure is made from edges of other conditions
-        return {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, **of_compound,
+        return {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, **recorded,
                 "cycle_closures": [], "dg": None, "inconsistent_edges": differing,
                 "notes": ["NO NETWORK: the edges with a ddG were not made under the same conditions ("
                           + "; ".join(differing) + "); their ddG are given one by one, without cycle closures "
                           "and without dG"] + left_note}
     measured = [Edge(r["ligand_a"], r["ligand_b"], r["ddg"], r["se"]) for r in results if "ddg" in r]
-    summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, **of_compound,
+    summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, **recorded,
                "cycle_closures": cycle_closures(measured), "dg": None, "notes": list(left_note)}
     import networkx as nx
 
@@ -786,7 +795,8 @@ def result_lines(summary: dict) -> list[str]:
         if e.get("earlier_preparation"):
             lines.append(f"RESULT {e['edge']}: no ddG; this version does not take its prepared systems: "
                          f"{'; '.join(e['earlier_preparation'])}. "
-                         + prepare_again_command([x["edge"] for x in summary["edges"] if x.get("earlier_preparation")]))
+                         + prepare_again_command([x["edge"] for x in summary["edges"] if x.get("earlier_preparation")],
+                                                 summary.get("run_directory")))
             continue
         if e.get("earlier_version"):
             left = e["earlier_version"]
@@ -795,7 +805,7 @@ def result_lines(summary: dict) -> list[str]:
                 by_repeat.setdefault(int(item["repeat"]), []).append(item["leg"])
             lines.append(f"RESULT {e['edge']}: left out: {'; '.join(item['why'] for item in left)}. To compute "
                          + ("it" if len(left) == 1 else "them") + " again: "
-                         + "; ".join(rerun_command(e["edge"], r, sorted(legs))
+                         + "; ".join(rerun_command(e["edge"], r, sorted(legs), summary.get("run_directory"))
                                      for r, legs in sorted(by_repeat.items())))
         if "ddg" in e:
             exp = ""

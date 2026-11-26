@@ -854,8 +854,7 @@ def test_legs_of_the_hybrid_before_its_torsion_fix_are_left_out_and_named_to_run
     edge, lines = edge_of("both", version_1(-12.0), version_1(-10.5))
     assert "ddg" not in edge and [item["leg"] for item in edge["earlier_version"]] == ["complex", "solvent"]
     assert f"REST2 left {n} terms of ligand B" in edge["earlier_version"][0]["why"]
-    assert any("cufep rbfe run CONFIG --edge 'toluene~phenol' --repeat 0 --leg complex --leg solvent --reschedule" in x
-               for x in lines)
+    assert any("--edge 'toluene~phenol' --repeat 0 --leg complex --leg solvent --reschedule" in x for x in lines)
     current = {**_leg_result(-12.0)}                                       # this version (hybrid_version 2)
     edge, lines = edge_of("solvent", current, version_1(-10.5))
     assert "ddg" not in edge and any("--repeat 0 --leg solvent --reschedule" in x and "--leg complex" not in x
@@ -968,8 +967,13 @@ def test_the_line_of_a_left_out_leg_runs_that_leg_alone_again(tmp_path, edges_of
     (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 2}}))
     (root / "network.json").write_text(json.dumps({"ligands": ["phenol", "toluene"], "edges": [["toluene", "phenol"]]}))
     line = next(x for x in result_lines(analyse_directory(root)) if x.startswith("RESULT toluene~phenol: left out"))
-    assert line.endswith("To compute it again: cufep rbfe run CONFIG --edge 'toluene~phenol' --repeat 0 --leg complex "
-                         "--reschedule") and "remove" not in line
+    assert line.endswith(f"To compute it again: cufep rbfe run CONFIG -o {root} --edge 'toluene~phenol' --repeat 0 "
+                         "--leg complex --reschedule") and "remove" not in line
+    # (sixth review, P2) the run directory is in the command: a directory made with -o is not output.dir of CONFIG
+    import shlex
+
+    words = shlex.split(line.split("To compute it again: ")[1])
+    assert words[words.index("-o") + 1] == str(root)
 
 
 def test_a_leg_of_version_1_without_a_heated_window_keeps_its_ddg(tmp_path, edges_of_version_1):
@@ -1084,7 +1088,8 @@ def test_a_leg_with_the_moves_is_computed_again_only_from_its_own_pre_equilibrat
     (leg_dir(old) / "result.json").unlink()
     with pytest.raises(WorkflowError, match="records no ghost waters") as refused:
         checked(old)
-    assert "cufep rbfe run CONFIG --edge 'toluene~phenol' --repeat 0 --leg complex --reschedule" in str(refused.value)
+    assert (f"cufep rbfe run CONFIG -o {old} --edge 'toluene~phenol' --repeat 0 --leg complex --reschedule"
+            in str(refused.value))
     checked(old, reschedule=True)
     anew = run_hybrid_leg_safe(job(old, reschedule=True))
     assert "error" not in anew and (leg_dir(old) / "equil_ghosts.json").exists()
@@ -1100,6 +1105,26 @@ def test_a_leg_with_the_moves_is_computed_again_only_from_its_own_pre_equilibrat
     _n, conditions = stored_conditions(leg_dir(out_dir) / "hrex")
     built = build_leg(rcfg, out_dir / "edges" / "toluene~phenol", "complex")
     assert conditions["system_sha256"] == hashlib.sha256(built.xml.encode()).hexdigest()
+    # (sixth review, P1) samples of eb36e30 and 08d58d5 (the full TYK2 benchmark), which recorded the same System with
+    # the fixed cell as its default cell, are continued and analysed again; a System of neither form is not
+    import openmm as mm
+    from conftest import edit_attributes
+
+    from cufep.workflow import alchemical_box
+
+    with np.load(leg_dir(out_dir) / "equil.npz") as eq:
+        fixed = alchemical_box(eq, True)
+    built.hybrid.system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in fixed])   # as 08d58d5 did
+    of_08d58d5 = hashlib.sha256(mm.XmlSerializer.serialize(built.hybrid.system).encode()).hexdigest()
+    assert of_08d58d5 != conditions["system_sha256"]
+    for name, digest, kept in (("of_08d58d5", of_08d58d5, True), ("other", "0" * 64, False)):
+        root = copy(name)
+        edit_attributes(leg_dir(root) / "hrex", set={"conditions": {**conditions, "system_sha256": digest}})
+        result = run_hybrid_leg_safe(job(root))
+        if kept:
+            assert "error" not in result and result["delta_g"] == first["delta_g"]
+        else:
+            assert "made under other conditions" in result["error"]
     # a checkpoint whose replicas are in another cell than the pre-equilibration fixes (a pre-equilibration made
     # again; fifth review: also one without samples, whose conditions are taken as new): not continued
     stale = copy("stale")
@@ -1187,7 +1212,7 @@ def test_an_edge_prepared_by_an_earlier_rule_is_left_out_by_every_entry_point(tm
         assert "ddg" not in summary["edges"][0] and summary["edges"][0]["earlier_preparation"], name
         assert any("whose prepared systems this version does not take" in note for note in summary["notes"]), name
         line = next(x for x in result_lines(summary) if x.startswith("RESULT toluene~phenol"))
-        assert "remove 'edges/toluene~phenol' of the run directory, then cufep rbfe run CONFIG --edge" in line, name
+        assert f"remove 'edges/toluene~phenol' of {root}, then cufep rbfe run CONFIG -o {root} --edge" in line, name
         report("tyk2", root)
         assert next(csv.DictReader((root / "rbfe_report_edges.csv").open()))["ddg"] == "", name
 
@@ -1219,6 +1244,16 @@ def test_an_archive_of_a_pre_equilibration_that_a_run_stopped_in_is_completed_an
     assert sorted(p.name for p in done.iterdir()) == sorted(["schedule.yaml", "result.json", EQUIL_GHOSTS,
                                                               "equil.npz"])
     assert not (leg_dir / EQUIL_GHOSTS).exists() and not list(leg_dir.glob(".previous_*"))
+    # (sixth review, P2) begun by a version that wrote no record (eb36e30, 08d58d5): the pre-equilibration in the
+    # archive and not in the leg was moved, and the record of its ghosts goes with it
+    for name, text in (("schedule.yaml", "windows"), (EQUIL_GHOSTS, "{}")):
+        (leg_dir / name).write_text(text)
+    stage = leg_dir / ".previous_2.partial"
+    stage.mkdir()
+    (stage / "equil.npz").write_bytes(b"the pre-equilibration set aside")
+    done = archive_leg(leg_dir)
+    assert done == leg_dir / "previous_2" and (done / EQUIL_GHOSTS).exists() and not (leg_dir / EQUIL_GHOSTS).exists()
+    assert not (done / ARCHIVE_RECORD).exists()
 
 
 def test_start_configurations_that_are_made_again_are_not_refused_for_their_cell(tmp_path):
@@ -1273,7 +1308,7 @@ def test_edges_to_prepare_again_are_named_together_and_their_names_quoted(tmp_pa
     assert "ddg" not in edges["c~d"] and "cannot be read" in edges["c~d"]["earlier_preparation"][0]
     assert edges["d~e"]["ddg"] == pytest.approx(-1.5)
     lines = [x for x in result_lines(summary) if x.startswith("RESULT a~b") or x.startswith("RESULT b~c")]
-    assert len(lines) == 2 and all(prepare_again_command(["a~b", "b~c", "c~d"]) in x for x in lines)
+    assert len(lines) == 2 and all(prepare_again_command(["a~b", "b~c", "c~d"], root) in x for x in lines)
     words = shlex.split(rerun_command("4e U~4b D", 0, ["complex"]))
     assert words[words.index("--edge") + 1] == "4e U~4b D"
     words = shlex.split(prepare_again_command(["4e U~4b D"]).split(" then ")[1])
@@ -1317,4 +1352,4 @@ def test_a_run_names_every_edge_it_does_not_take_and_how_to_prepare_them_again(t
     with pytest.raises(WorkflowError) as refused:
         run_rbfe(rcfg, log=lambda line: None)
     assert "toluene~phenol" in str(refused.value) and "phenol~aniline" in str(refused.value)
-    assert prepare_again_command(["toluene~phenol", "phenol~aniline"]) in str(refused.value)
+    assert prepare_again_command(["toluene~phenol", "phenol~aniline"], out_dir) in str(refused.value)

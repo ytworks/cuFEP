@@ -259,6 +259,30 @@ def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> i
     return terms_version_1_left_unscaled(hybrid.system)
 
 
+def recorded_form_of_the_system(leg_dir: Path, xml: str, system, cell) -> str:
+    """The XML of the System of a relative leg with grand canonical moves of water in the form its samples recorded:
+    that of the prepared hybrid (``xml``; every version but two), or the same System with the fixed cell ``cell`` as
+    its default cell (eb36e30 and 08d58d5, which ran the full TYK2 benchmark). The two differ in that default alone,
+    which no Context of the leg uses (each is given its cell); the cell of the samples is checked itself
+    (:func:`cufep.engine.leg.checkpoint_cell_problem`). Sixth review of PR #19: legs of 08d58d5 could not be continued
+    or analysed again."""
+    import hashlib
+
+    import openmm as mm
+
+    from cufep.sampling.storage import stored_conditions
+
+    _n, stored = stored_conditions(Path(leg_dir) / "hrex")
+    digest = (stored or {}).get("system_sha256")
+    if digest is None or digest == hashlib.sha256(xml.encode()).hexdigest():
+        return xml
+    before = system.getDefaultPeriodicBoxVectors()
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(cell, dtype=float)])
+    other = mm.XmlSerializer.serialize(system)                  # as eb36e30 and 08d58d5 made it
+    system.setDefaultPeriodicBoxVectors(*before)
+    return other if hashlib.sha256(other.encode()).hexdigest() == digest else xml
+
+
 def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
     """The hybrid System of a leg from its prepared end states, and a prepared system of it."""
     import openmm as mm
@@ -440,7 +464,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info, gcmc)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
-    cell = None
+    cell, spec_xml = None, built.xml
     if gcmc is not None:
         # the cell is fixed from here on (cufep.workflow.alchemical_box), the configuration moved into it as a
         # barostat moves it
@@ -460,6 +484,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         if why is not None:
             raise WorkflowError(f"{why}. Run the leg again with --reschedule (its windows, samples and result are set "
                                 "aside in previous_<n>/), or run the calculation in a new output.dir")
+        spec_xml = recorded_form_of_the_system(leg_dir, built.xml, hybrid.system, cell)
 
     # ---- 2. backend -------------------------------------------------------------------------------
     backend_name = chosen_backend(run, hybrid.system)
@@ -477,7 +502,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more) -> LegSpec:
-        return LegSpec(name=job.tag, system_xml=built.xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
+        return LegSpec(name=job.tag, system_xml=spec_xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
                        backend=backend, precision=_precision(rcfg, backend), platform=rcfg.backend.platform,
                        temperature_K=T, pressure_bar=None if gcmc is not None else rcfg.thermodynamics.pressure_bar,
                        barostat="none" if gcmc is not None else barostat,

@@ -50,8 +50,17 @@ EDGE_COLUMNS = ("edge", "ligand_a", "ligand_b", "exp_ddg", "exp_ddg_of", "ddg", 
 
 
 def is_relative_run(run_dir: str | Path) -> bool:
-    """A directory of ``cufep rbfe run`` (or of a relative benchmark): it holds the network of the run."""
-    return (Path(run_dir) / "network.json").exists()
+    """A directory of ``cufep rbfe run`` (or of a relative benchmark): it holds the network of the run, or (a
+    directory that keeps the summary alone) a summary of edges (sixth review of PR #19: such a directory went to the
+    report of the absolute calculation, which failed on it)."""
+    run_dir = Path(run_dir)
+    if (run_dir / "network.json").exists():
+        return True
+    try:
+        summary = json.loads((run_dir / "summary.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(summary, dict) and isinstance(summary.get("edges"), list) and "ligands" in summary
 
 
 def _entry(name: str) -> dict:

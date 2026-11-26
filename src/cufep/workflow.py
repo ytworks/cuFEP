@@ -2332,9 +2332,17 @@ def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
     # aside: the pre-equilibration too if it did (fifth review of PR #19: a call stopped between equil.npz and the
     # record of its ghosts left the record behind, and the call that completed it no longer knew)
     staging = sorted(leg_dir.glob(".previous_*.partial"))
-    if staging and (staging[0] / ARCHIVE_RECORD).exists():
-        pre_equilibration = pre_equilibration or bool(
-            (_read_json(staging[0] / ARCHIVE_RECORD) or {}).get("pre_equilibration"))
+    if staging:
+        record = staging[0] / ARCHIVE_RECORD
+        if record.exists():
+            pre_equilibration = pre_equilibration or bool((_read_json(record) or {}).get("pre_equilibration"))
+        else:
+            # begun by a version that wrote no record (eb36e30 to 08d58d5): a pre-equilibration in the archive and not
+            # in the leg was moved, not copied, and the record of its ghost waters goes with it (sixth review of
+            # PR #19); recorded before anything else is moved
+            moved = (staging[0] / "equil.npz").exists() and not (leg_dir / "equil.npz").exists()
+            pre_equilibration = pre_equilibration or moved
+            _write_json(record, {"pre_equilibration": bool(pre_equilibration)})
     present = [leg_dir / name for name in LEG_RUN_FILES if (leg_dir / name).exists()]
     if pre_equilibration:
         present += [leg_dir / name for name in ("equil.npz", EQUIL_GHOSTS) if (leg_dir / name).exists()]
