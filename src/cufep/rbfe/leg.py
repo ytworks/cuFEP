@@ -393,7 +393,9 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
             "has no barostat")
 
     # ---- 1. pre-equilibration of the hybrid System at lambda 0 ---------------------------------
-    eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info)
+    # the ghosts of a leg of an earlier version are not known (its sphere was of the hybrid, 2ecbcd2 of both end
+    # states, then of each molecule whole): such a pre-equilibration is refused
+    eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info, gcmc)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
     if gcmc is not None:

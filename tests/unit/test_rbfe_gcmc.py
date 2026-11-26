@@ -163,3 +163,41 @@ def test_the_sphere_of_an_edge_is_the_same_both_ways(edge):
                       hybrid_gcmc(rcfg, hybrid, top, box, both).radius_nm))
     assert abs(radii[0][0] - radii[1][0]) > 0.005                           # from the hybrid: not one sphere
     assert radii[0][1] == pytest.approx(radii[1][1], abs=1e-12)
+
+
+def test_a_pre_equilibration_of_other_ghost_waters_is_not_used_again(tmp_path, monkeypatch):
+    """Second review of PR #19 (P2): with `ghost_waters: auto` a radius of 1.05 nm instead of 1.00 nm gives 160 ghosts
+    instead of 139; equil.npz recorded `auto`, and a leg resumed after its pre-equilibration was fixed in the cell
+    equilibrated with the other waters. The ghosts are recorded before the pre-equilibration is made (equil_ghosts.json)
+    and a pre-equilibration of other ghosts, or of an earlier version whose ghosts are not known, is refused before
+    anything is written; one of the same ghosts is used again."""
+    import json
+    from types import SimpleNamespace
+
+    from cufep import workflow
+    from cufep.engine.leg import EQUIL_GHOSTS, pre_equilibrated
+
+    made = []
+
+    def fake_pre_equilibration(cfg, leg, prep, system, barostat, membrane_info, seed, equil_file, device, log):
+        assert (equil_file.parent / EQUIL_GHOSTS).exists()          # recorded before
+        made.append(1)
+        np.savez(equil_file, positions=np.zeros((1, 3)))
+
+    monkeypatch.setattr(workflow, "run_pre_equilibration", fake_pre_equilibration)
+    monkeypatch.setattr(workflow, "check_equil_file", lambda *args, **kwargs: True)
+    run = SimpleNamespace(leg_dir=tmp_path, job=SimpleNamespace(leg="complex"), cfg=None, seed=1, device0=None,
+                          log=lambda *a: None, timed=lambda *a: None)
+    moves = SimpleNamespace(ghosts=np.arange(139), waters=np.zeros((900, 3)))
+    pre_equilibrated(run, {}, None, "isotropic", {}, moves)
+    assert json.loads((tmp_path / EQUIL_GHOSTS).read_text())["ghosts"] == list(range(139)) and made == [1]
+    pre_equilibrated(run, {}, None, "isotropic", {}, moves)
+    assert made == [1]
+    more = SimpleNamespace(ghosts=np.arange(160), waters=moves.waters)
+    with pytest.raises(workflow.WorkflowError, match="made with 139 ghost waters and this run has 160"):
+        pre_equilibrated(run, {}, None, "isotropic", {}, more)
+    (tmp_path / EQUIL_GHOSTS).unlink()                               # a pre-equilibration of an earlier version
+    with pytest.raises(workflow.WorkflowError, match="records no ghost waters"):
+        pre_equilibrated(run, {}, None, "isotropic", {}, moves)
+    pre_equilibrated(run, {}, None, "isotropic", {}, moves, earlier_ghosts=np.arange(139))
+    assert made == [1] and not (tmp_path / EQUIL_GHOSTS).exists()

@@ -2723,7 +2723,17 @@ def run_leg(job: LegJob) -> dict:
     # ---- 1. pre-equilibration: plain MD of the fully interacting system -------------------
     equil_file = leg_dir / "equil.npz"
     in_membrane = is_complex and barostat == "membrane"
-    eq, equil_recorded = pre_equilibrated(run, prep, system, barostat, prep_info.get("membrane_info", {}))
+    earlier_ghosts = None
+    if gcmc is not None:
+        from cufep.sampling.relocation_mc import nearest_first_keeps_bonds
+
+        # every earlier version took the sphere from the images nearest to the first heavy atom of the ligand: where
+        # they keep the molecule whole, its ghosts were those of this run
+        heavy = np.asarray(prep["positions"], dtype=float)[gcmc.ligand_heavy]
+        if nearest_first_keeps_bonds(heavy, gcmc.ligand_heavy_bonds, np.asarray(prep["box"], dtype=float)):
+            earlier_ghosts = gcmc.ghosts
+    eq, equil_recorded = pre_equilibrated(run, prep, system, barostat, prep_info.get("membrane_info", {}), gcmc,
+                                          earlier_ghosts)
     # files of this leg that an earlier version wrote without a record of what they were made from
     origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
     if not equil_recorded:

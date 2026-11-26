@@ -113,10 +113,7 @@ def whole_pose(points: np.ndarray, bonds, box: np.ndarray) -> np.ndarray:
     x, box = np.asarray(points, dtype=float), np.asarray(box, dtype=float)
     simple = x[0] + nearest_image(x - x[0], box)
     pairs = np.asarray(list(bonds) if bonds is not None else [], dtype=np.int64).reshape(-1, 2)
-    if not len(pairs):
-        return simple
-    d = simple[pairs[:, 1]] - simple[pairs[:, 0]]
-    if np.allclose(d, nearest_image(d, box), rtol=0.0, atol=1e-9):
+    if nearest_first_keeps_bonds(points, bonds, box):
         return simple
     neighbours: dict[int, list[int]] = {i: [] for i in range(len(x))}
     for i, j in pairs:
@@ -142,6 +139,18 @@ def whole_pose(points: np.ndarray, bonds, box: np.ndarray) -> np.ndarray:
         else:
             out[members] += first_centre + nearest_image((centre - first_centre)[None], box)[0] - centre
     return out
+
+
+def nearest_first_keeps_bonds(points: np.ndarray, bonds, box: np.ndarray) -> bool:
+    """Whether the image of every point nearest to the first point keeps every bond whole: the pose of
+    :func:`whole_pose` is then the one of every version before it (the images nearest to the first atom)."""
+    x, box = np.asarray(points, dtype=float), np.asarray(box, dtype=float)
+    pairs = np.asarray(list(bonds) if bonds is not None else [], dtype=np.int64).reshape(-1, 2)
+    if not len(pairs):
+        return True
+    simple = x[0] + nearest_image(x - x[0], box)
+    d = simple[pairs[:, 1]] - simple[pairs[:, 0]]
+    return bool(np.allclose(d, nearest_image(d, box), rtol=0.0, atol=1e-9))
 
 
 def heavy_bonds(topology, heavy) -> np.ndarray:

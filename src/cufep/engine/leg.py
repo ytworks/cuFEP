@@ -58,14 +58,52 @@ def open_leg(job, cfg) -> LegRun:
                   device0=job.devices[0] if job.devices else None)
 
 
-def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_info: dict):
+#: beside ``equil.npz`` of a leg with grand canonical moves of water: the ghost waters its pre-equilibration was made
+#: with (rows of the waters of the moves)
+EQUIL_GHOSTS = "equil_ghosts.json"
+
+
+def check_equil_ghosts(equil_file: Path, gcmc, earlier_ghosts=None) -> None:
+    """Refuse a pre-equilibration of a leg with grand canonical moves of water whose ghost waters are not those of
+    this run (second review of PR #19: a change of the radius of the sphere changed the number of ghosts of ``auto``
+    from 139 to 160, and the leg was fixed in the cell equilibrated with 139). Its record (:data:`EQUIL_GHOSTS`), else
+    ``earlier_ghosts``, the ghosts that the versions which wrote no record chose for it (None: not known)."""
+    from cufep.workflow import WorkflowError
+
+    record = equil_file.parent / EQUIL_GHOSTS
+    current = [int(i) for i in gcmc.ghosts]
+    if record.exists():
+        stored = [int(i) for i in json.loads(record.read_text())["ghosts"]]
+        why = None if stored == current else (f"it was made with {len(stored)} ghost waters and this run has "
+                                              f"{len(current)}" + ("" if len(stored) != len(current) else
+                                                                    " others"))
+    elif earlier_ghosts is not None and [int(i) for i in earlier_ghosts] == current:
+        why = None
+    else:
+        why = "it records no ghost waters (an earlier version wrote it) and they are not known to be those of this run"
+    if why is not None:
+        raise WorkflowError(f"the pre-equilibration of this leg in {equil_file} cannot be used again: {why}. Nothing "
+                            f"was changed; remove {equil_file.name} of this leg to pre-equilibrate it again, or run "
+                            "the calculation in a new output.dir")
+
+
+def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_info: dict, gcmc=None,
+                     earlier_ghosts=None):
     """The pre-equilibration of the leg (``equil.npz``), made if the leg has none, checked against the settings of
-    this run: ``(its arrays, whether its file records what it was made with)``."""
+    this run: ``(its arrays, whether its file records what it was made with)``. With grand canonical moves of water
+    (``gcmc``) the ghost waters it is made with are recorded first, and checked when it is used again
+    (:func:`check_equil_ghosts`)."""
+    from cufep.files import publish_text
     from cufep.workflow import check_equil_file, run_pre_equilibration
 
     equil_file = run.leg_dir / "equil.npz"
     leg = run.job.leg
+    if equil_file.exists() and gcmc is not None:
+        check_equil_ghosts(equil_file, gcmc, earlier_ghosts)
     if not equil_file.exists():
+        if gcmc is not None:
+            publish_text(run.leg_dir / EQUIL_GHOSTS, json.dumps({"ghosts": [int(i) for i in gcmc.ghosts],
+                                                                 "waters": int(len(gcmc.waters))}))
         t0 = time.perf_counter()
         run_pre_equilibration(run.cfg, leg, prep, system, barostat, membrane_info, run.seed, equil_file, run.device0,
                               run.log)
