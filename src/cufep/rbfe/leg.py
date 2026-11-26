@@ -56,12 +56,20 @@ class EdgeLegJob(Job):
 
     edge: str
     edge_dir: str
+    #: the prepared systems of the edge the leg runs on (:func:`cufep.workflow.record_digest` of the record of the
+    #: edge), written into the marker of a leg that has started and into its error: a leg stopped before its result
+    #: says what its pre-equilibration and samples were made from, as its result does (sixteenth review of PR #19)
+    prepared_systems_sha256: str | None = None
 
     unit_key: ClassVar[str] = "edge"
 
     @property
     def name(self) -> str:
         return self.edge
+
+    def identity(self) -> dict:
+        made = self.prepared_systems_sha256
+        return {**super().identity(), **({"prepared_systems_sha256": made} if made else {})}
 
     @property
     def unit_dir(self) -> Path:

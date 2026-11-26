@@ -409,19 +409,20 @@ def check_results_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
     is (fifteenth and sixteenth reviews of PR #19: the run set the result aside, and the leg then stopped on the System
     of its samples).
 
-    A result of other prepared systems than the record of the edge (``prepared_systems_sha256``: a prep/ of another
-    receptor restored) is refused with or without --reschedule, which would keep the pre-equilibration made from them:
-    the way on is the preparation they were made from, or a new output directory. A leg that goes on from its samples
-    and whose result is not of this version of the hybrid (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`; main up to
-    e16c1f1 records none), or that has no result yet (stopped after the checkpoint of its start), is continued where
-    its samples are of the System this version makes of it (the checksum they recorded): a leg of main without REST2
-    is; one with REST2, whose torsions this version scales otherwise, is refused, with the command that computes it
-    anew. Legs of this version with a result are not built again here (their settings are compared by
-    :func:`check_samples_of_the_run`)."""
+    A leg computed from other prepared systems than the record of the edge (``prepared_systems_sha256`` of its result,
+    or, stopped before its result, of the marker of its start or of its error, which the job of this version writes:
+    a prep/ of another receptor restored) is refused with or without --reschedule, which would keep the
+    pre-equilibration made from them: the way on is the preparation they were made from, or a new output directory.
+    A leg that goes on from its samples and whose result is not of this version of the hybrid
+    (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`; main up to e16c1f1 records none), or that has no result yet (stopped
+    after the checkpoint of its start), is continued where its samples are of the System this version makes of it
+    (the checksum they recorded): a leg of main without REST2 is; one with REST2, whose torsions this version scales
+    otherwise, is refused, with the command that computes it anew from its pre-equilibration. Legs of this version
+    with a result are not built again here (their settings are compared by :func:`check_samples_of_the_run`)."""
     from cufep.engine.leg import goes_on_from_its_samples
     from cufep.rbfe.hybrid import HYBRID_VERSION
     from cufep.rbfe.leg import build_leg, system_of_the_samples
-    from cufep.workflow import record_digest
+    from cufep.workflow import STARTED_FILE, record_digest
 
     elsewhere, other_system, commands = [], [], []
     for a, b in edges:
@@ -442,7 +443,13 @@ def check_results_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                 except (OSError, ValueError):
                     result = None
                 result = result if isinstance(result, dict) else None
-                if result is not None and result.get("prepared_systems_sha256") not in (None, made):
+                # what the leg was made from, as its result, the marker of its start and its error record it (the
+                # marker and the error of the job of this version; sixteenth review of PR #19: a leg stopped before its
+                # result was told --reschedule, which keeps its pre-equilibration)
+                records = [result] + [_json_or_none(leg_dir / name) for name in
+                                      ("result.previous.json", STARTED_FILE, "error.json")]
+                if any(isinstance(rec, dict) and rec.get("prepared_systems_sha256") not in (None, made)
+                       for rec in records):
                     elsewhere.append(f"the {leg} leg of {edge}, repeat {r}")
                     continue
                 if reschedule or not goes_on_from_its_samples(leg_dir):
@@ -456,16 +463,24 @@ def check_results_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
     problems = []
     if elsewhere:
         problems.append(f"{'; '.join(elsewhere)}: computed from other prepared systems than the record of the edge "
-                        "(a preparation of other inputs restored beside them); their results stay as they are. Restore "
+                        "(a preparation of other inputs restored beside them); what they have stays as it is. Restore "
                         "the preparation they were computed from, or compute the edge in a new output.dir "
                         "(--reschedule would keep the pre-equilibration made from the other preparation)")
     if other_system:
         problems.append(f"{'; '.join(other_system)}: their samples were made with another System than this version "
-                        f"makes of them (version {HYBRID_VERSION} of the hybrid); their results stay as they are. "
+                        f"makes of them (version {HYBRID_VERSION} of the hybrid); what they have stays as it is. "
                         "Compute them anew with --reschedule (what they have is kept in previous_<n>/): "
                         + "; ".join(commands) + "; or run the other edges alone (--edge)")
     if problems:
         raise WorkflowError(". ".join(problems) + ". Nothing was changed")
+
+
+def _json_or_none(path: Path):
+    """The JSON of ``path``, or None where it is missing or cannot be read."""
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
@@ -624,6 +639,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     from cufep.rbfe.leg import EdgeLegJob
     from cufep.rbfe.prep import prepare_edge, prepared_edge
     from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
+    from cufep.workflow import record_digest
 
     t_run = time.time()
     ligands = ligands_of(rcfg)
@@ -695,7 +711,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     repeats = rcfg.sampling.repeats
     jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
                          devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
-                         reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]))
+                         reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]),
+                         prepared_systems_sha256=record_digest(infos[edge_name(a, b)].get("made_from")))
             for a, b in selected for r in repeats_run for leg in ("solvent", "complex")
             if not only_legs or leg in only_legs]
     t_prepared = time.time()

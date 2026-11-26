@@ -1237,7 +1237,10 @@ def test_a_run_of_one_repeat_runs_that_repeat_alone(tmp_path, monkeypatch):
 
     def no_jobs(jobs, gpus, factor, log):
         seen.extend((job.edge, job.repeat, job.leg) for job in jobs)
+        identities.extend(job.identity() for job in jobs)
         return [], None, False
+
+    identities = []
 
     protein = _protein()
     monkeypatch.setattr(run_module, "execute_jobs", no_jobs)
@@ -1248,6 +1251,12 @@ def test_a_run_of_one_repeat_runs_that_repeat_alone(tmp_path, monkeypatch):
     assert not (out_dir / "network.json").exists()
     run_rbfe(rcfg, log=lambda line: None, only_repeats=[1], only_legs=["complex"])
     assert seen == [("toluene~phenol", 1, "complex")]
+    # the job names the prepared systems it runs on, for the marker of its start and its error (sixteenth review)
+    from cufep.workflow import record_digest
+
+    made_from = json.loads((out_dir / "edges" / "toluene~phenol" / "prep" / "prep.json").read_text())["made_from"]
+    assert identities == [{"edge": "toluene~phenol", "leg": "complex", "repeat": 1,
+                           "prepared_systems_sha256": record_digest(made_from)}]
 
 
 def test_an_edge_prepared_by_an_earlier_rule_is_left_out_by_every_entry_point(tmp_path, edges_of_version_1):
@@ -2108,6 +2117,28 @@ def test_a_leg_this_version_cannot_continue_is_refused_before_the_run_writes(tmp
             check()
     # no result yet, the checkpoint of the start of another System: refused before anything is written
     result.unlink()
+    with pytest.raises(WorkflowError, match="another System than this version makes"):
+        check()
+    # (sixteenth review, P2) stopped before its result, of other prepared systems by the marker of its start or by its
+    # error, which the job of this version writes: refused with or without --reschedule (which would keep the
+    # pre-equilibration made from them), with the way on; of the same prepared systems, the System of its samples
+    # decides as above
+    from cufep.rbfe.leg import EdgeLegJob
+    from cufep.workflow import STARTED_FILE, begin_leg, write_leg_error
+
+    job = EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                     config={}, production_ns=0.005, prepared_systems_sha256="another receptor")
+    begin_leg(leg_dir, job)
+    assert json.loads((leg_dir / STARTED_FILE).read_text())["prepared_systems_sha256"] == "another receptor"
+    for _record in ("marker", "error"):
+        for reschedule in (False, True):
+            with pytest.raises(WorkflowError, match="other prepared systems") as refused:
+                check(reschedule)
+            assert "Restore the preparation they were computed from" in str(refused.value)
+        write_leg_error(leg_dir, "stopped", job)
+        assert not (leg_dir / STARTED_FILE).exists()
+    (leg_dir / "error.json").unlink()
+    begin_leg(leg_dir, EdgeLegJob(**{**job.__dict__, "prepared_systems_sha256": made}))
     with pytest.raises(WorkflowError, match="another System than this version makes"):
         check()
     assert prepared_edge(rcfg, *ligands, edge_dir, "cube") is not None
