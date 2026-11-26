@@ -1613,7 +1613,7 @@ def test_both_legs_of_an_edge_that_changes_the_charge_turn_their_water_into_one_
     info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     ions = {leg: info["legs"][leg]["alchemical_water"]["ion"] for leg in ("complex", "solvent")}
     assert ions["complex"]["name"] == "K" and ions["solvent"] == ions["complex"]
-    molecules = (ligands[0].to_rdkit(), ligands[1].to_rdkit())
+    molecules = (ligands[0], ligands[1])
     assert earlier_rules_of(info, molecules) == []
     # a record of an earlier version, each leg with its own ion
     info["legs"]["solvent"]["alchemical_water"]["ion"] = {**ions["solvent"], "name": "NA", "sigma_nm": 0.2439}
