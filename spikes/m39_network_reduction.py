@@ -47,38 +47,57 @@ def lomap_subset(names, scores, network):
     return [pair for pair in scores if frozenset(pair) in kept]
 
 
-def estimate(names, edges, experiment):
-    from cufep.benchmarks.stats import bootstrap, metrics
-    from cufep.rbfe.network import ligand_dg
+def compounds_of(names, states, experiment, edges, kt):
+    """dG and standard error of every compound (the states combined as cufep rbfe combines them)."""
+    from cufep.rbfe.network import compound_dg
 
-    dg = ligand_dg(names, edges, experiment)["values"]
-    pred, exp = [dg[n][0] for n in names], [experiment[n] for n in names]
+    if states:
+        compound_of = {n: states[n]["compound"] for n in names}
+        fraction = {n: float(states[n]["solution_fraction"]) for n in names}
+        symmetry = {states[n]["compound"]: int(states[n]["symmetry_number"]) for n in names}
+    else:
+        compound_of, fraction, symmetry = {n: n for n in names}, {}, {}
+    out = compound_dg(names, edges, compound_of, experiment, fraction, symmetry, kt)["compounds"]
+    return {c: (v["dg"], v["se"]) for c, v in out.items()}
+
+
+def estimate(names, edges, experiment, states, kt):
+    from cufep.benchmarks.stats import bootstrap, metrics
+
+    dg = compounds_of(names, states, experiment, edges, kt)
+    compounds = list(dg)
+    pred, exp = [dg[c][0] for c in compounds], [experiment[c] for c in compounds]
     m, ci = metrics(pred, exp), bootstrap(pred, exp)
     keys = ("pairwise_rmse", "pearson_r2", "kendall_tau", "rmse")
-    return {"edges": len(edges), "mean_predicted_se": float(np.mean([dg[n][1] for n in names])),
+    return {"edges": len(edges), "mean_predicted_se": float(np.mean([dg[c][1] for c in compounds])),
             **{k: m[k] for k in keys}, "intervals": {k: ci.get(k) for k in keys}}
 
 
-def equal_error_se(names, pairs, experiment):
-    """The mean standard error of the dG that a network gives when every edge has the error 1 (its topology alone)."""
-    from cufep.rbfe.network import Edge, ligand_dg
+def equal_error_se(names, pairs, experiment, states, kt):
+    """The mean standard error of the dG of the compounds that a network gives when every edge has the error 1 (its
+    topology alone; with states at equal free energies)."""
+    from cufep.rbfe.network import Edge
 
-    dg = ligand_dg(names, [Edge(a, b, 0.0, 1.0) for a, b in pairs], experiment)["values"]
-    return float(np.mean([dg[n][1] for n in names]))
+    dg = compounds_of(names, states, experiment, [Edge(a, b, 0.0, 1.0) for a, b in pairs], kt)
+    return float(np.mean([v[1] for v in dg.values()]))
 
 
 def main(name: str) -> None:
-    from cufep.benchmarks.rbfe import published_edges, rbfe_benchmark_config
+    from cufep.benchmarks.rbfe import published_edges, rbfe_benchmark_config, read_states
     from cufep.benchmarks.runner import read_reference
     from cufep.prep.ligand import load_ligands
     from cufep.rbfe.mapping import MappingSettings, plan_network
     from cufep.rbfe.network import Edge
+    from cufep.sampling.states import R_GAS
+    from cufep.workflow import KCAL
 
     cfg = rbfe_benchmark_config(name, "full")
     ligands = load_ligands(cfg.system.ligands)
     names = [lig.name for lig in ligands]
-    experiment = {k: v["exp"] for k, v in read_reference(name).items() if k in names}
-    published = published_edges(name)
+    states = read_states(name)                       # the states of the compounds (A2A), or none
+    kt = R_GAS * cfg.thermodynamics.temperature_K / KCAL
+    experiment = {k: v["exp"] for k, v in read_reference(name).items()}
+    published = published_edges(name, by_state=bool(states))
     m = cfg.mapping
     settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
                                map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
@@ -91,12 +110,13 @@ def main(name: str) -> None:
     planned = plan_network(ligands, settings, cfg.network.distance_cutoff, cfg.network.max_path_length,
                            cfg.network.require_cycle_covering)
     out = {"set": name, "ligands": len(names),
-           "a_every_published_edge": estimate(names, list(edges.values()), experiment),
-           "b_lomap_among_the_published_edges": estimate(names, [edges[p] for p in subset], experiment),
+           "a_every_published_edge": estimate(names, list(edges.values()), experiment, states, kt),
+           "b_lomap_among_the_published_edges": estimate(names, [edges[p] for p in subset], experiment, states, kt),
            "b_edges": [list(p) for p in subset], "scores": {f"{a}~{b}": s for (a, b), s in scores.items()},
-           "equal_errors_mean_se": {"a_published_map": equal_error_se(names, list(published), experiment),
-                                    "b_lomap_among_the_published_edges": equal_error_se(names, subset, experiment),
-                                    "c_lomap_among_all_pairs": equal_error_se(names, planned, experiment)},
+           "equal_errors_mean_se": {
+               "a_published_map": equal_error_se(names, list(published), experiment, states, kt),
+               "b_lomap_among_the_published_edges": equal_error_se(names, subset, experiment, states, kt),
+               "c_lomap_among_all_pairs": equal_error_se(names, planned, experiment, states, kt)},
            "c_edges": [list(p) for p in planned]}
     dest = Path("spikes/out/m39")
     dest.mkdir(parents=True, exist_ok=True)

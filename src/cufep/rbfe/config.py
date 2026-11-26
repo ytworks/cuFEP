@@ -40,6 +40,11 @@ class RbfeSystem(_Section):
     #: experimental binding free energies (kcal/mol): a CSV with the columns ``ligand`` and ``dg``; without it
     #: the tags ``r_exp_dg`` or ``exp_dg`` of the SDF records
     experiment: Path | None = None
+    #: ligands that are states of one compound (binding modes, rotamers, protonation or tautomeric forms): a CSV with
+    #: the columns ``ligand`` and ``compound``, and optional ``form`` and ``solution_fraction`` (the population of the
+    #: form in solution, 1 by default) and ``symmetry_number`` (of the compound, 1 by default); the dG of a compound
+    #: combines its states (cufep.rbfe.network.compound_dg). Without it every ligand is a compound of its own
+    states: Path | None = None
 
 
 class NetworkConfig(_Section):
@@ -235,7 +240,7 @@ def load_rbfe_config(path: str | Path) -> RbfeConfig:
     path = Path(path)
     data = yaml.safe_load(path.read_text()) or {}
     system = data.get("system", {})
-    for key in ("protein", "ligands", "experiment"):
+    for key in ("protein", "ligands", "experiment", "states"):
         if system.get(key) is not None and not Path(system[key]).is_absolute():
             system[key] = str((path.parent / system[key]).resolve())
     return RbfeConfig.model_validate(data)

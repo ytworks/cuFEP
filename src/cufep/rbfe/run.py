@@ -19,7 +19,7 @@ import yaml
 from cufep import jsonio
 from cufep.files import publish_text, publish_with
 from cufep.rbfe.config import RbfeConfig, RbfeSampling
-from cufep.rbfe.network import Edge, cycle_closures, edge_ddg, ligand_dg, network_ddg
+from cufep.rbfe.network import Edge, compound_dg, cycle_closures, edge_ddg, ligand_dg, network_ddg
 from cufep.rbfe.prep import edge_name
 from cufep.workflow import KCAL, WorkflowError, _Log, select_ligands
 
@@ -34,6 +34,72 @@ def ligands_of(rcfg: RbfeConfig) -> list:
     if any("~" in name or "/" in name for name in names):
         raise WorkflowError("a ligand name has '~' or '/', which name the directories of the edges")
     return ligands
+
+
+def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
+    """The compounds of the ligands (``system.states``; None without it): ``{"compound": {ligand: compound}, "form":
+    {ligand: form}, "fraction": {ligand: population in solution}, "symmetry": {compound: symmetry number}}``.
+    Refused (before anything is written) where it does not name every ligand of the run, where two states of one form
+    of a compound have other populations, where the populations of the forms of a compound do not add up to 1, or
+    where a compound has two symmetry numbers."""
+    if rcfg.system.states is None:
+        return None
+    path = rcfg.system.states
+    with open(path, newline="") as fh:
+        rows = {r["ligand"].strip(): r for r in csv.DictReader(fh)}
+    names = [lig.name for lig in ligands]
+    missing = [n for n in names if n not in rows]
+    if missing:
+        raise WorkflowError(f"system.states ({path}) does not name the ligands {', '.join(missing)}")
+    out = {"compound": {}, "form": {}, "fraction": {}, "symmetry": {}}
+    problems = []
+    for n in names:
+        r = rows[n]
+        compound = r["compound"].strip()
+        out["compound"][n] = compound
+        out["form"][n] = (r.get("form") or "").strip()
+        out["fraction"][n] = float(r.get("solution_fraction") or 1.0)
+        if not 0.0 < out["fraction"][n] <= 1.0:
+            problems.append(f"{n}: solution_fraction {out['fraction'][n]:g} is not in (0, 1]")
+    # what belongs to a compound is checked over all its rows in the file (a run may take some of its states)
+    for n, r in rows.items():
+        sigma = int(r.get("symmetry_number") or 1)
+        if sigma < 1:
+            problems.append(f"{n}: symmetry_number {sigma} is not a positive number")
+        if out["symmetry"].setdefault(r["compound"].strip(), sigma) != sigma:
+            problems.append(f"compound {r['compound'].strip()} has two symmetry numbers")
+    out["symmetry"] = {c: s for c, s in out["symmetry"].items() if c in set(out["compound"].values())}
+    # the forms of a compound are those of all its rows in the file (a run may take some of its states)
+    for compound in set(out["compound"].values()):
+        forms: dict[str, set] = {}
+        for r in rows.values():
+            if r["compound"].strip() == compound:
+                forms.setdefault((r.get("form") or "").strip(), set()).add(
+                    round(float(r.get("solution_fraction") or 1.0), 12))
+        if any(len(v) > 1 for v in forms.values()):
+            problems.append(f"compound {compound}: states of one form have other solution fractions")
+        elif abs(sum(next(iter(v)) for v in forms.values()) - 1.0) > 1e-6:
+            problems.append(f"compound {compound}: the solution fractions of its forms add up to "
+                            f"{sum(next(iter(v)) for v in forms.values()):g}, not 1")
+    if problems:
+        raise WorkflowError(f"system.states ({path}): " + "; ".join(problems))
+    # the states of the file that the run leaves out, by compound (the dG of such a compound combines the others)
+    out["left_out"] = {c: sorted(n for n, r in rows.items() if r["compound"].strip() == c and n not in names)
+                       for c in sorted(set(out["compound"].values()))}
+    out["left_out"] = {c: v for c, v in out["left_out"].items() if v}
+    return out
+
+
+def compound_experiment(states: dict, experiment: dict[str, float]) -> dict[str, float]:
+    """The experimental dG of every compound: that of its states (the value of a compound is given for each of its
+    states, the tags of their records); refused where two states of one compound have other values."""
+    out: dict[str, float] = {}
+    for ligand, compound in states["compound"].items():
+        if ligand in experiment:
+            if compound in out and abs(out[compound] - experiment[ligand]) > 1e-6:
+                raise WorkflowError(f"the states of compound {compound} have other experimental values")
+            out[compound] = float(experiment[ligand])
+    return out
 
 
 def experiment_of(rcfg: RbfeConfig, ligands) -> dict[str, float]:
@@ -173,7 +239,10 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, rcfg.sampling.repeats, only_legs)
     experiment = experiment_of(rcfg, ligands)
-    write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
+    states = states_of(rcfg, ligands)
+    if states is not None:
+        compound_experiment(states, experiment)            # refused before anything is written
+    write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment, states)
     publish_text(out_dir / "auto_report.md", report.to_markdown())
     protein.write_pdb(out_dir / "protein_prepared.pdb")
     infos = {}
@@ -197,7 +266,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     for line in failed_now:
         log(f"FAILED {line}")
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log)
-    summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, experiment)
+    summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, experiment, states,
+                              rcfg.thermodynamics.temperature_K)
     # what the exit code of `cufep rbfe run` says: whether a job of this run failed (review of PR #17)
     summary["failed_in_this_run"] = failed_now
     write_results(out_dir, summary)
@@ -207,13 +277,15 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
 
 
 def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, how: str,
-                    experiment: dict[str, float]) -> None:
+                    experiment: dict[str, float], states: dict | None = None) -> None:
     """The record of a run that its results are made from again (:func:`analyse_directory`): the configuration
-    and the network."""
+    and the network (with the compounds of its states, if it has some, and the temperature that combines them)."""
     publish_text(out_dir / "resolved_config.yaml", yaml.safe_dump(rcfg.model_dump(mode="json"), sort_keys=False))
-    publish_text(out_dir / "network.json", json.dumps({"ligands": list(ligands), "edges": [list(e) for e in edges],
-                                                       "edges_from": how, "experiment_kcal_mol": experiment},
-                                                      indent=1))
+    record = {"ligands": list(ligands), "edges": [list(e) for e in edges], "edges_from": how,
+              "experiment_kcal_mol": experiment}
+    if states is not None:
+        record.update(states=states, temperature_K=float(rcfg.thermodynamics.temperature_K))
+    publish_text(out_dir / "network.json", json.dumps(record, indent=1))
 
 
 def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
@@ -344,9 +416,10 @@ def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
 
 
 def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, str]], repeats: int,
-                    experiment: dict[str, float]) -> dict:
+                    experiment: dict[str, float], states: dict | None = None, temperature_K: float = 298.15) -> dict:
     """The results of the edges, the cycle closures and the dG of every ligand from the edges alone
-    (:func:`cufep.rbfe.network.ligand_dg`)."""
+    (:func:`cufep.rbfe.network.ligand_dg`); with ``states`` (:func:`states_of`) the dG of every compound from its
+    states (:func:`cufep.rbfe.network.compound_dg`), which then set the constant of the dG of the states too."""
     results = [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats) for a, b in edges]
     for r in results:
         if experiment.get(r["ligand_a"]) is not None and experiment.get(r["ligand_b"]) is not None:
@@ -369,9 +442,25 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     if not measured or not nx.is_connected(graph):
         summary["notes"].append("the edges with a ddG do not connect all ligands: no dG")
         return summary
-    dg = ligand_dg(ligands, measured, experiment)
-    summary["dg"] = {"reference": dg["reference"], "reference_ligands": dg["reference_ligands"],
-                     "values": {name: {"dg": v, "se": e} for name, (v, e) in dg["values"].items()}}
+    if states is None:
+        dg = ligand_dg(ligands, measured, experiment)
+        summary["dg"] = {"reference": dg["reference"], "reference_ligands": dg["reference_ligands"],
+                         "values": {name: {"dg": v, "se": e} for name, (v, e) in dg["values"].items()}}
+    else:
+        from cufep.sampling.states import R_GAS
+
+        by_compound = compound_dg(ligands, measured, states["compound"], compound_experiment(states, experiment),
+                                  states["fraction"], states["symmetry"], R_GAS * float(temperature_K) / KCAL)
+        summary["dg"] = {"reference": by_compound["reference"],
+                         "reference_compounds": by_compound["reference_compounds"],
+                         "values": by_compound["states"]}
+        summary["compounds"] = {"temperature_K": float(temperature_K),
+                                "experiment_kcal_mol": compound_experiment(states, experiment),
+                                "values": by_compound["compounds"]}
+        for c, left in (states.get("left_out") or {}).items():
+            summary["notes"].append(f"compound {c}: its states {', '.join(left)} of system.states are not in the run; "
+                                    "its dG combines the others")
+        dg = {"reference": by_compound["reference"]}
     # the ddG that the whole network gives every edge (that of an edge without its own ddG too)
     inferred = network_ddg(ligands, measured, [(r["ligand_a"], r["ligand_b"]) for r in results])
     for r in results:
@@ -415,8 +504,18 @@ def write_results(out_dir: Path, summary: dict) -> None:
             w.writerow([name, fmt(v.get("dg")), fmt(v.get("se")), fmt(summary["experiment_kcal_mol"].get(name)),
                         dg["reference"]])
 
+    def compounds_table(fh) -> None:
+        w = csv.writer(fh)
+        w.writerow(["compound", "dg_kcal_mol", "standard_error", "exp_dg_kcal_mol", "symmetry_number", "states"])
+        c = summary["compounds"]
+        for name, v in c["values"].items():
+            w.writerow([name, fmt(v["dg"]), fmt(v["se"]), fmt(c["experiment_kcal_mol"].get(name)), v["symmetry_number"],
+                        "; ".join(f"{s} {weight:.3f}" for s, weight in v["weights"].items())])
+
     publish_with(out_dir / "edges.csv", edges_table, newline="")
     publish_with(out_dir / "ligands.csv", ligands_table, newline="")
+    if summary.get("compounds"):
+        publish_with(out_dir / "compounds.csv", compounds_table, newline="")
     publish_text(out_dir / "summary.json", jsonio.dumps(summary, indent=1))
 
 
@@ -438,7 +537,16 @@ def result_lines(summary: dict) -> list[str]:
             lines.append(f"RESULT {e['edge']}: no ddG")
     for c in summary["cycle_closures"]:
         lines.append(f"cycle {' -> '.join(c['ligands'])}: sum of ddG {c['sum_kcal_mol']:+.2f} ± {c['se_kcal_mol']:.2f}")
-    if summary.get("dg"):
+    if summary.get("compounds"):
+        c = summary["compounds"]
+        for name, v in c["values"].items():
+            exp = c["experiment_kcal_mol"].get(name)
+            states = ", ".join(f"{s} {w:.2f}" for s, w in v["weights"].items())
+            lines.append(f"dG {name}: {v['dg']:.2f} ± {v['se']:.2f} kcal/mol (relative to the "
+                         f"{summary['dg']['reference']}; states {states}"
+                         + (f"; symmetry number {v['symmetry_number']}" if v["symmetry_number"] > 1 else "") + ")"
+                         + (f"; experiment {exp:.2f}" if exp is not None else ""))
+    elif summary.get("dg"):
         for name, v in summary["dg"]["values"].items():
             exp = summary["experiment_kcal_mol"].get(name)
             lines.append(f"dG {name}: {v['dg']:.2f} ± {v['se']:.2f} kcal/mol (relative to the "
@@ -477,4 +585,5 @@ def analyse_directory(out_dir: Path) -> dict:
                             "repeats")
     network = json.loads((out_dir / "network.json").read_text())
     return combine_network(out_dir, network["ligands"], [tuple(e) for e in network["edges"]], repeats,
-                           {k: float(v) for k, v in network.get("experiment_kcal_mol", {}).items()})
+                           {k: float(v) for k, v in network.get("experiment_kcal_mol", {}).items()},
+                           network.get("states"), float(network.get("temperature_K", 298.15)))

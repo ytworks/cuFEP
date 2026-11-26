@@ -2,8 +2,10 @@
 
 A set runs with the settings of its relative example (``rbfe_example`` in the registry): everything in that YAML
 but the input files, the choice of ligands, the edges and the output directory. ``full`` runs every ligand of the
-set and ``subset`` the five of the registry, both on the network that LOMAP plans (``network.edges`` not given);
-``smoke`` runs the first edge of the example, with the sampling shortened as for the absolute benchmarks.
+set and ``subset`` the five compounds of the registry, both on the network that LOMAP plans (``network.edges`` not
+given); a set with ``rbfe_states`` runs every state of those compounds (A2A: the 29 states of the published map) and
+combines them into compounds (``system.states``). ``smoke`` runs the first edge of the example as the example runs
+it, with the sampling shortened as for the absolute benchmarks.
 
 The report compares
     the dG of every ligand with experiment, with the published FEP+ predictions of the set and with the absolute
@@ -76,30 +78,51 @@ def rbfe_benchmark_config(name: str, tier: str, out_dir: str | Path | None = Non
         first = list((example.network.edges or [])[:1])
         if not first:
             raise KeyError(f"the relative example of '{name}' gives no edge for the smoke tier")
-        data["system"]["ligand_names"] = list(first[0])
+        # the edge as the example runs it: its ligands are records of the set, one per compound
+        data["system"].update(ligands=str(root / entry["ligands"]), states=None, ligand_names=list(first[0]))
         data["network"]["edges"] = [list(first[0])]
         _shorten(data, {"sampling": SMOKE_SAMPLING,
                         "lambda_schedule": {"adaptive": {"window_ps": 10, "equilibration_ps": 0}},
                         "membrane": {"equilibration_ns": 0.5}})
     else:
-        data["system"]["ligand_names"] = list(entry["subset"]) if tier == "subset" else None
+        compounds = list(entry["subset"]) if tier == "subset" else None
+        if entry.get("rbfe_states"):
+            states = read_states(name)
+            data["system"]["states"] = str(root / entry["rbfe_states"])
+            data["system"]["ligand_names"] = None if compounds is None else [
+                s for s, r in states.items() if r["compound"] in compounds]
+        else:
+            data["system"]["ligand_names"] = compounds
         data["network"]["edges"] = None
     return RbfeConfig.model_validate(data)
 
 
-def _record_names(name: str) -> dict[str, str]:
-    """The name in a relative run of each SDF record of the set that it runs (``ligands.csv``: record -> compound)."""
+def read_states(name: str) -> dict[str, dict]:
+    """The rows of ``rbfe_states`` of a set by state (empty for a set without one)."""
+    entry = _entry(name)
+    if not entry.get("rbfe_states"):
+        return {}
+    with open(data_root() / entry["rbfe_states"]) as fh:
+        return {r["ligand"].strip(): r for r in csv.DictReader(fh)}
+
+
+def _record_names(name: str, by_state: bool = False) -> dict[str, str]:
+    """The name in a relative run of each SDF record of the set: of the states of ``rbfe_states`` (``by_state``), or
+    of the record ``ligands.csv`` chose for each compound (record -> compound)."""
+    if by_state:
+        return {r["sdf_record"].strip(): s for s, r in read_states(name).items()}
     entry = _entry(name)
     with open(data_root() / entry["reference"]) as fh:
         return {r["sdf_record"].strip(): r["compound"].strip() for r in csv.DictReader(fh)}
 
 
-def published_edges(name: str) -> dict[tuple[str, str], dict]:
-    """The published FEP+ prediction of every edge of the set whose two ends are ligands of a relative run, as
-    (A, B) -> {bennett, bennett_error, ccc, ccc_error}, ddG = dG(B) - dG(A) in kcal/mol (the file's ``Lig 1``,
-    ``Lig 2``; its experimental ddG is the difference of the experimental dG of the two)."""
+def published_edges(name: str, by_state: bool = False) -> dict[tuple[str, str], dict]:
+    """The published FEP+ prediction of every edge of the set whose two ends are ligands of a relative run (states of
+    ``rbfe_states`` with ``by_state``), as (A, B) -> {bennett, bennett_error, ccc, ccc_error}, ddG = dG(B) - dG(A) in
+    kcal/mol (the file's ``Lig 1``, ``Lig 2``; its experimental ddG is the difference of the experimental dG of the
+    two)."""
     entry = _entry(name)
-    names = _record_names(name)
+    names = _record_names(name, by_state)
     out = {}
     with open(data_root() / entry["edge_predictions"]) as fh:
         for row in csv.DictReader(fh):
@@ -150,15 +173,27 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     summary = json.loads((run_dir / "summary.json").read_text())
     reference = read_reference(name)
     abfe = stored_abfe(name)
-    published = published_edges(name)
+    compounds = summary.get("compounds")
+    published = published_edges(name, by_state=compounds is not None)
     experiment = {k: float(v) for k, v in (summary.get("experiment_kcal_mol") or {}).items()}
-    dg = (summary.get("dg") or {}).get("values") or {}
+    if compounds is not None:
+        # the dG are those of the compounds, each from its states (system.states)
+        values, names_of = compounds["values"], list(compounds["values"])
+        experiment_of = {k: float(v) for k, v in compounds["experiment_kcal_mol"].items()}
+    else:
+        values, names_of = (summary.get("dg") or {}).get("values") or {}, list(summary["ligands"])
+        experiment_of = experiment
+    compound_of = {}
+    if compounds is not None:
+        for c, v in compounds["values"].items():
+            for state in v["weights"]:
+                compound_of[state] = c
 
     ligands = []
-    for lig in summary["ligands"]:
+    for lig in names_of:
         ref = reference.get(lig, {})
-        v = dg.get(lig) or {}
-        ligands.append({"ligand": lig, "exp": experiment.get(lig, ref.get("exp")), "cufep_rbfe": v.get("dg"),
+        v = values.get(lig) or {}
+        ligands.append({"ligand": lig, "exp": experiment_of.get(lig, ref.get("exp")), "cufep_rbfe": v.get("dg"),
                         "cufep_rbfe_error": v.get("se"), "fepplus": ref.get("fepplus"), "cufep_abfe": abfe.get(lig)})
     edges = []
     for e in summary["edges"]:
@@ -181,9 +216,15 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     with_ddg = [r for r in edges if r["ddg"] is not None]
     network = run_dir / "network.json"
     edges_from = json.loads(network.read_text()).get("edges_from", "") if network.exists() else ""
+    what = "Compounds" if compounds is not None else "Ligands"
     lines = [f"# cuFEP relative benchmark report: {name}", "", title, "",
-             f"Ligands with a dG: {len(with_dg)} of {len(ligands)}; edges with a ddG: {len(with_ddg)} of {len(edges)}"
+             f"{what} with a dG: {len(with_dg)} of {len(ligands)}; edges with a ddG: {len(with_ddg)} of {len(edges)}"
              + (f" (edges {edges_from})." if edges_from else "."), "",
+             *([] if compounds is None else [
+                 f"The {len(summary['ligands'])} ligands of the network are states of {len(ligands)} compounds "
+                 "(system.states): the dG of a compound combines its states, -kT ln sum P exp(-dG/kT) - kT ln s "
+                 "(docs/rbfe.md, \"States of a compound\"); the edges between two states of one compound are not "
+                 "among the edges compared with experiment.", ""]),
              "The dG of cuFEP come from the edges alone, their mean over the ligands with an experimental value set to "
              "the mean of those values (`docs/rbfe.md`, \"The network\"); the published FEP+ values are relative "
              "calculations shifted to the experimental mean of the whole published set, with 20 ns per lambda window "
@@ -250,17 +291,19 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         m = edge_errors([p for p, _ in pairs], [x for _, x in pairs])
         return f"| {label} | {m['n']} | {num(m['rmse'])} | {num(m['mue'])} |"
 
-    scored_edges = [r for r in edges if r["exp_ddg"] is not None]
+    scored_edges = [r for r in edges if r["exp_ddg"] is not None
+                    and (not compound_of or compound_of.get(r["ligand_a"]) != compound_of.get(r["ligand_b"]))]
     lines.append(edge_row("cuFEP, own", [(r["ddg"], r["exp_ddg"]) for r in scored_edges if r["ddg"] is not None]))
     lines.append(edge_row("cuFEP, network", [(r["network_ddg"], r["exp_ddg"]) for r in scored_edges
                                              if r["network_ddg"] is not None]))
     common = [r for r in scored_edges if r["ddg"] is not None and r["fepplus_bennett_ddg"] is not None]
     lines.append(edge_row("cuFEP, own, on the edges FEP+ also has", [(r["ddg"], r["exp_ddg"]) for r in common]))
     lines.append(edge_row("FEP+ Bennett, the same edges", [(r["fepplus_bennett_ddg"], r["exp_ddg"]) for r in common]))
-    names = {lig["ligand"] for lig in ligands}
-    exp_of = {r["ligand"]: r["exp"] for r in ligands}
+    exp_of = dict(experiment)
+    names = set(summary["ligands"])
     own_map = [(v["bennett"], exp_of[b] - exp_of[a]) for (a, b), v in published.items()
-               if a in names and b in names and exp_of.get(a) is not None and exp_of.get(b) is not None]
+               if a in names and b in names and exp_of.get(a) is not None and exp_of.get(b) is not None
+               and (not compound_of or compound_of.get(a) != compound_of.get(b))]
     lines.append(edge_row("FEP+ Bennett, its whole map among these ligands", own_map))
 
     text = "\n".join(lines) + "\n"

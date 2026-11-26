@@ -37,6 +37,8 @@ field, solvation, bilayer, cutoff, ionic strength, pH ...).
 - Experimental values (optional): `system.experiment` (a CSV with the columns `ligand` and `dg`, kcal/mol)
   or the SDF tags `r_exp_dg` or `exp_dg`. They set the one constant of the dG that the edges leave, and are
   given next to the results.
+- States of one compound (optional): `system.states`, a CSV with the columns `ligand` and `compound`, and
+  `form`, `solution_fraction` and `symmetry_number` ("States of a compound").
 - Ligands of any net charge (the box is neutralised with counterions, `thermodynamics.ionic_strength_M` of salt).
   An edge that changes the net charge by one charge has an alchemical water ("Edges that change the net charge");
   a larger change is refused before anything is written.
@@ -184,6 +186,38 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
     estimate against that mean;
   - without any: the mean of all estimates is 0 (cinnabar's output), dG relative to the mean of the network;
     the result says so.
+
+## States of a compound
+
+A compound may enter the network as several ligands, its states: binding modes or rotamers that do not interconvert
+in the complex but do in solution, and protonation or tautomeric forms (`system.states`; without it every ligand is
+a compound of its own). Each state is a node of the network and gets its dG from the edges; the dG of the compound
+combines them (`cufep.rbfe.network.compound_dg`):
+
+    dG(compound) = -kT ln sum_i P_i exp(-dG_i / kT) - kT ln s
+
+- P_i, the population of the form of state i in solution (`solution_fraction`, 1 for a compound of one form): the
+  combination of protonation states of Azimi et al. (J. Comput. Aided Mol. Des. 2022, eq 10, "The populations of
+  each protonation state of the ligands and the corresponding standard binding free energies are combined"; for an
+  acid of pKa at the pH of the assay P(A-) = alpha / (1 + alpha) and P(HA) = 1 / (1 + alpha), alpha = 10^(pH - pKa),
+  eqs 12 to 14); the pKa correction of de Oliveira et al. (J. Chem. Theory Comput. 2019, 15, 424), whose full text
+  could not be obtained, treats the same equilibrium. States of one form share its population; the populations of
+  the forms of a compound add up to 1.
+- Binding modes with P = 1: Ross et al. (Commun. Chem. 2023), Supplementary Equation 2, valid "as long as the binding
+  conformations do not interconvert in the complex simulations but can readily interconvert in the solvent
+  simulations".
+- s, the symmetry number of the compound (`symmetry_number`, 1 by default): a group with rotational symmetry that
+  turns freely in solution but not in the complex; Ross et al., Supplementary section 1.2.1: "cases like this need
+  to have their binding free energy lowered by kT ln(2)".
+
+The one constant the edges leave is set for the compounds (the mean over the compounds with an experimental value
+is the mean of those values; the value of a compound is that of its states, which must agree), and the states get
+the same constant. Standard errors from the covariance of the estimate, the states weighted by their share of the
+sum. `compounds.csv` gives every compound with its states and their weights. A run that takes only some states of a
+compound of the file combines those, and says so. Which states a compound has, their populations and its symmetry
+number are inputs: cuFEP does not find them. The relative benchmark of A2A takes them from the published map
+(`benchmarks/a2a/rbfe_states.csv`, made by `cufep.benchmarks.curate` from the unmodified inputs: the 29 records, the
+solvent pKa of Supplementary Table 17 at the pH of the assay, 7.5, and the symmetry numbers of Supplementary Table 16).
 
 ## Not in this version
 

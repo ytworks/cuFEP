@@ -124,3 +124,24 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   NonbondedForce は水の電荷の offset だけ、評価器が各状態の直接計算と一致、|dq| > 1 の拒否、準備した両レグの記録と
   hybrid と GCMC からの除外)。GPU: 電荷変化の hybrid の各状態で両バックエンドが厳しい Ewald 和と一致(hybrid の
   GPU テスト 15 件通過)。
+
+### 2026-11-26 手順 5: 化合物の状態(結合様式、回転異性体、プロトン化の形)と A2A の 29 状態
+- 一次資料: Ross et al. 2023 SI 式 2(結合様式、溶液中で入れ替わり complex では入れ替わらない)と 1.2.1(complex で回らない
+  対称な基は kT ln 2 下げる)、A2A の節(29 状態、表 16 の対称性補正 10 化合物、表 17 の溶液 pKa、pH 7.5、補正の順)は
+  全文を読んだ。pKa 補正の de Oliveira et al. 2019 は全文が手に入らなかった。同じ平衡の式を全文の読める Azimi et al.
+  2022(SAMPL8、arXiv:2107.05155)式 10、12〜14 から引用した: dG = −kT ln Σ P0(i) exp(−βdG(i))、P0(A−) = α/(1+α)、
+  P0(HA) = 1/(1+α)、α = 10^(pH−pKa)。
+- `system.states`(CSV: ligand、compound、form、solution_fraction、symmetry_number)と `compound_dg`:
+  dG(化合物) = −kT ln Σ_i P_i exp(−dG_i/kT) − kT ln s。定数は化合物の実験値の平均、状態にも同じ定数。SE は重み付きの
+  共分散。`compounds.csv`。状態の一部だけの run はその状態で合成し、そう書く。状態・割合・対称数は入力(検出しない)。
+  各化合物が 1 状態のときは今までの `ligand_dg` と同じ(`ligand_dg` をこの関数の上に作り直し、既存のテストは不変で通過)。
+- `benchmarks/a2a/rbfe_states.{sdf,csv}` を `curate.py` が未改変の入力から作る(29 記録、名前は空白を `_` に、4e・4f・4o の
+  形の割合を pKa 8.43・10.72・9.84 と pH 7.5 から、対称数 2 は表 16 の 10 化合物)。A2A の subset・full はこの状態で、
+  smoke は example の 1 エッジを状態なしで流す。レポートは化合物の dG を公開予測と比べ、同じ化合物の状態の間のエッジは
+  edgewise の誤差に入れない。
+- `spikes/m39 a2a`(公開エッジの Bennett ddG、29 状態、補正込み): (a) 公開 map の 46 本 pairwise RMSE 1.52 [0.83, 1.99]、
+  R² 0.53、τ 0.60、RMSE 1.05(Ross 2023 の表 15: 1.58 ± 0.10)。(b) その中から LOMAP の規則で 43 本: 1.52 [0.81, 1.98]、
+  0.53、0.62、1.04。等誤差の dG の平均 SE: (a) 0.703、(b) 0.769、(c) cuFEP が全ペアから選ぶ LOMAP の 37 本 0.872。
+- テスト(CPU): 化合物の式を合成真値で(結合様式 2、プロトン化の形 0.9/0.1、対称数 2、状態の値、重み、SE を共分散から)、
+  状態の設定の拒否(割合の和、対称数の食い違い、名前の無いリガンド、状態の実験値の食い違い)、run と analyze で同じ化合物、
+  状態ファイルが入力と表 16・17 どおり、化合物ごとのレポート。

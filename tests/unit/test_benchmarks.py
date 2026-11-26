@@ -590,19 +590,35 @@ def test_a_relative_benchmark_runs_with_the_settings_of_its_relative_example(tmp
             data["network"].pop("edges"), data.pop("output")
             return data
 
+        states = {}
+        if entry.get("rbfe_states"):
+            with open(root / entry["rbfe_states"]) as fh:
+                states = {r["ligand"]: r["compound"] for r in csv.DictReader(fh)}
         for tier, names in (("subset", entry["subset"]), ("full", None)):
             cfg = rbfe_benchmark_config(name, tier, tmp_path / tier)
-            assert settings(cfg) == settings(example)
-            assert cfg.system.ligand_names == names and cfg.network.edges is None
+            data = settings(cfg)
+            data["system"].pop("states")
+            expected = settings(example)
+            expected["system"].pop("states")
+            assert data == expected
+            if states:
+                # every state of the compounds of the tier, combined into compounds
+                assert cfg.system.states == root / entry["rbfe_states"]
+                assert cfg.system.ligand_names == (None if names is None else
+                                                   [s for s, c in states.items() if c in names])
+            else:
+                assert cfg.system.ligand_names == names and cfg.system.states is None
+            assert cfg.network.edges is None
             assert cfg.system.protein == root / entry["protein"] and cfg.system.ligands == root / entry["rbfe_ligands"]
         smoke = rbfe_benchmark_config(name, "smoke", tmp_path / "s")
         first = tuple(example.network.edges[0])
         assert [tuple(e) for e in smoke.network.edges] == [first] and smoke.system.ligand_names == list(first)
+        assert smoke.system.ligands == root / entry["ligands"] and smoke.system.states is None
         assert smoke.sampling.production_ns == 0.1 and smoke.lambda_schedule.adaptive.window("complex") == 10
         assert smoke.membrane.enabled is (name == "a2a")
         assert example.system.protein.read_bytes() == (root / entry["protein"]).read_bytes()
         # the example's records were written again by RDKit: the same atoms at the same places as the set's
-        records = _sdf_records(root / entry["rbfe_ligands"])
+        records = _sdf_records(root / entry["ligands"])
         for lig, record in _sdf_records(example.system.ligands).items():
             assert _atoms(record) == _atoms(records[lig])
     with pytest.raises(KeyError):
@@ -720,3 +736,72 @@ def test_a_relative_benchmark_run_is_the_relative_run_of_its_tier(tmp_path, monk
     assert (out / "rbfe_report.md").exists()
     frozen = CliRunner().invoke(cli.main, ["benchmark", "freeze", "tyk2", str(out)])
     assert frozen.exit_code != 0 and "is a relative run" in frozen.output
+
+
+def test_the_states_of_a2a_are_the_records_of_the_published_map_with_their_corrections():
+    """`rbfe_states` of A2A holds every record of the unmodified SDF as a state of its compound, as curate.py makes it:
+    the deprotonated phenols of 4e (both orientations), 4f and 4o with the populations of their forms at pH 7.5 from
+    the solvent pKa of Ross et al. 2023 (Supplementary Table 17; Azimi et al. 2022, eqs 12-14), the ten compounds of
+    Supplementary Table 16 with symmetry number 2, and each state with the experimental value of its compound."""
+    from cufep.benchmarks.curate import A2A_ASSAY_PH, A2A_SOLVENT_PKA, A2A_SYMMETRY_CORRECTED, compound_id, read_sdf
+
+    entry = load_registry()["a2a"]
+    with open(data_root() / entry["rbfe_states"]) as fh:
+        rows = list(csv.DictReader(fh))
+    records = read_sdf(data_root() / "benchmarks/a2a/inputs/a2a_hip278_ligands.sdf")
+    assert [r["sdf_record"] for r in rows] == [name for name, _ in records] and len(rows) == 29
+    ref = read_reference("a2a")
+    assert {r["compound"] for r in rows} == set(ref)
+    by_record = dict(records)
+    for r in rows:
+        assert r["compound"] == compound_id(r["sdf_record"]) and r["ligand"] == "_".join(r["sdf_record"].split())
+        assert float(r["exp_dg_kcal_mol"]) == pytest.approx(ref[r["compound"]]["exp"], abs=2e-3)
+        assert int(r["symmetry_number"]) == (2 if r["compound"] in A2A_SYMMETRY_CORRECTED else 1)
+        deprotonated = "deprotonated" in r["sdf_record"]
+        assert int(r["formal_charge"]) == (-1 if deprotonated else 0)
+        if r["compound"] in A2A_SOLVENT_PKA:
+            alpha = 10.0 ** (A2A_ASSAY_PH - A2A_SOLVENT_PKA[r["compound"]])
+            share = alpha / (1 + alpha) if deprotonated else 1 / (1 + alpha)
+            assert float(r["solution_fraction"]) == pytest.approx(share, abs=1e-6)
+        else:
+            assert float(r["solution_fraction"]) == 1.0 and not deprotonated
+        written = _sdf_records(data_root() / entry["rbfe_ligands"])[r["ligand"]]
+        assert _atoms(written) == _atoms(by_record[r["sdf_record"]])
+    assert sum(1 for r in rows if "deprotonated" in r["sdf_record"]) == 4
+
+
+def test_the_relative_report_of_states_compares_compounds(tmp_path):
+    """A relative run of states: the report compares the dG of the compounds with experiment and the published
+    predictions of the compounds, matches the published edges by state, and leaves the edges between two states of one
+    compound out of the edgewise errors."""
+    from cufep.benchmarks.rbfe import published_edges, read_states, report
+
+    ref = read_reference("a2a")
+    states = read_states("a2a")
+    rng = np.random.default_rng(5)
+    dg_state = {s: ref[r["compound"]]["exp"] + 0.3 * rng.normal() for s, r in states.items()}
+    published = published_edges("a2a", by_state=True)
+    assert ("4b_U", "4b_D") in published and len(published) == 46
+    edges = [{"edge": f"{a}~{b}", "ligand_a": a, "ligand_b": b, "ddg": dg_state[b] - dg_state[a], "se": 0.3,
+              "network_ddg": dg_state[b] - dg_state[a], "network_se": 0.2,
+              "exp_ddg": ref[states[b]["compound"]]["exp"] - ref[states[a]["compound"]]["exp"],
+              "lowest_overlap": {"complex": 0.1, "solvent": 0.2}, "not_reliable": []} for a, b in published]
+    compounds = {c: {"dg": v["exp"] + 0.5, "se": 0.2, "symmetry_number": 1,
+                     "weights": {s: 1.0 / sum(1 for r in states.values() if r["compound"] == c)
+                                 for s, r in states.items() if r["compound"] == c}} for c, v in ref.items()}
+    summary = {"ligands": list(states), "edges": edges, "notes": [], "cycle_closures": [],
+               "experiment_kcal_mol": {s: ref[r["compound"]]["exp"] for s, r in states.items()},
+               "dg": {"reference": "mean of the experimental values", "values": {}},
+               "compounds": {"temperature_K": 298.15, "experiment_kcal_mol": {c: v["exp"] for c, v in ref.items()},
+                             "values": compounds}}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    text = report("a2a", tmp_path)
+    assert "Compounds with a dG: 17 of 17; edges with a ddG: 46 of 46." in text
+    names = list(ref)
+    ours = metrics([compounds[n]["dg"] for n in names], [ref[n]["exp"] for n in names])
+    row = next(line for line in text.splitlines() if line.startswith("| pairwise ddG RMSE"))
+    assert row.split("|")[2].split("[")[0].strip() == f"{ours['pairwise_rmse']:.2f}"
+    between = [e for e in edges if states[e["ligand_a"]]["compound"] != states[e["ligand_b"]]["compound"]]
+    assert 0 < len(between) < len(edges)
+    assert f"| cuFEP, own | {len(between)} |" in text
+

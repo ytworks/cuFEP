@@ -339,3 +339,106 @@ def test_the_table_gives_the_overlap_among_the_samples_of_the_estimate(tmp_path)
     row = next(csv.DictReader((tmp_path / "edges.csv").open()))
     assert float(row["lowest_overlap_complex"]) == pytest.approx(0.12)
     assert float(row["lowest_overlap_used_complex"]) == pytest.approx(0.001) and row["not_reliable"] == "complex"
+
+
+def test_a_compound_combines_its_states_by_their_populations_and_its_symmetry():
+    """dG of a compound = -kT ln sum P exp(-dG_state/kT) - kT ln s, against synthetic truth: two binding modes (P 1),
+    two protonation forms (P 0.9 and 0.1), a symmetry number 2; the constant is set by the compounds with experimental
+    values, and the states get it too; the standard error is that of the weighted states (here, a tree of edges)."""
+    from cufep.rbfe.network import Edge, compound_dg
+
+    kt = 0.5925
+    truth = {"x_up": -10.0, "x_down": -9.2, "y_n": -11.0, "y_d": -12.5, "z": -8.0}
+    pairs = [("x_up", "x_down"), ("x_up", "y_n"), ("y_n", "y_d"), ("y_n", "z")]
+    edges = [Edge(a, b, truth[b] - truth[a], 0.2) for a, b in pairs]
+    compound_of = {"x_up": "x", "x_down": "x", "y_n": "y", "y_d": "y", "z": "z"}
+    fraction = {"y_n": 0.9, "y_d": 0.1}
+    symmetry = {"z": 2}
+
+    def exact(c):
+        members = [s for s in truth if compound_of[s] == c]
+        return -kt * math.log(sum(fraction.get(s, 1.0) * math.exp(-truth[s] / kt) for s in members)) \
+            - kt * math.log(symmetry.get(c, 1))
+
+    experiment = {"x": exact("x") + 0.4, "y": exact("y") - 0.4}         # mean of x and y as their exact mean
+    out = compound_dg(list(truth), edges, compound_of, experiment, fraction, symmetry, kt)
+    assert out["reference"] == "mean of the experimental values" and out["reference_compounds"] == ["x", "y"]
+    for c in ("x", "y", "z"):
+        assert out["compounds"][c]["dg"] == pytest.approx(exact(c), abs=1e-9)
+    for s, v in truth.items():
+        assert out["states"][s]["dg"] == pytest.approx(v, abs=1e-9)
+    w = out["compounds"]["y"]["weights"]
+    assert w["y_d"] == pytest.approx(0.1 * math.exp(1.5 / kt) / (0.9 + 0.1 * math.exp(1.5 / kt)))
+    assert out["compounds"]["z"]["symmetry_number"] == 2
+    # the error of the compounds against the mean of x and y, by the linearised weights and the covariance
+    from cufep.rbfe.network import mle
+
+    f, cov = mle(list(truth), edges)
+    names = list(truth)
+    gx = np.array([out["compounds"]["x"]["weights"].get(s, 0.0) for s in names])
+    gy = np.array([w.get(s, 0.0) for s in names])
+    gz = np.array([1.0 if s == "z" else 0.0 for s in names])
+    d = gz - (gx + gy) / 2
+    assert out["compounds"]["z"]["se"] == pytest.approx(math.sqrt(d @ cov @ d))
+
+
+def test_states_of_a_compound_are_read_and_their_contradictions_refused(tmp_path):
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import compound_experiment, states_of
+    from cufep.workflow import WorkflowError
+
+    class Lig:
+        def __init__(self, name):
+            self.name = name
+
+    def config(text):
+        (tmp_path / "states.csv").write_text(text)
+        return RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf",
+                                                     "states": str(tmp_path / "states.csv")}})
+
+    good = ("ligand,compound,form,solution_fraction,symmetry_number\n"
+            "a_n,a,neutral,0.8,1\na_d,a,deprotonated,0.2,1\nb,b,,1,2\nb_flip,b,,1,2\n")
+    ligands = [Lig(n) for n in ("a_n", "a_d", "b")]
+    states = states_of(config(good), ligands)
+    assert states["compound"] == {"a_n": "a", "a_d": "a", "b": "b"} and states["symmetry"] == {"a": 1, "b": 2}
+    assert states["fraction"]["a_d"] == 0.2 and states["left_out"] == {"b": ["b_flip"]}
+    for text, message in ((good.replace("0.2,1", "0.3,1"), "add up"), (good.replace("b_flip,b,,1,2", "b_flip,b,,1,3"),
+                                                                         "two symmetry numbers"),
+                          (good.replace("b,b,,1,2\n", ""), "does not name the ligands b")):
+        with pytest.raises(WorkflowError, match=message):
+            states_of(config(text), ligands)
+    assert compound_experiment(states, {"a_n": -9.0, "a_d": -9.0}) == {"a": -9.0}
+    with pytest.raises(WorkflowError, match="other experimental values"):
+        compound_experiment(states, {"a_n": -9.0, "a_d": -8.0})
+
+
+def test_a_run_of_states_gives_the_dg_of_its_compounds_again_from_its_directory(tmp_path):
+    """The network of a run with states records them: `cufep rbfe analyze` (analyse_directory) gives the same
+    compounds as the run, and compounds.csv has them."""
+    import csv
+    import json
+
+    from cufep.rbfe.run import analyse_directory, combine_network, write_results
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "b~c", 0, _leg_result(-8.0), _leg_result(-9.0))
+    _write_legs(tmp_path, "a~c", 0, _leg_result(-7.0), _leg_result(-6.5))
+    states = {"compound": {"a": "A", "b": "A", "c": "C"}, "form": {"a": "", "b": "", "c": ""},
+              "fraction": {"a": 1.0, "b": 1.0, "c": 1.0}, "symmetry": {"A": 1, "C": 2}}
+    experiment = {"a": -9.0, "b": -9.0, "c": -8.0}
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")], 1, experiment, states,
+                              300.0)
+    assert set(summary["compounds"]["values"]) == {"A", "C"}
+    assert summary["compounds"]["values"]["C"]["symmetry_number"] == 2
+    write_results(tmp_path, summary)
+    (tmp_path / "resolved_config.yaml").write_text("sampling: {repeats: 1}\n")
+    (tmp_path / "network.json").write_text(json.dumps({"ligands": ["a", "b", "c"],
+                                                       "edges": [["a", "b"], ["b", "c"], ["a", "c"]],
+                                                       "experiment_kcal_mol": experiment, "states": states,
+                                                       "temperature_K": 300.0}))
+    again = analyse_directory(tmp_path)
+    for c in ("A", "C"):
+        for key in ("dg", "se"):
+            assert again["compounds"]["values"][c][key] == pytest.approx(summary["compounds"]["values"][c][key])
+    rows = {r["compound"]: r for r in csv.DictReader((tmp_path / "compounds.csv").open())}
+    assert float(rows["C"]["dg_kcal_mol"]) == pytest.approx(summary["compounds"]["values"]["C"]["dg"], abs=1e-3)

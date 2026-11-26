@@ -67,7 +67,7 @@ OUTPUT_ROOT_NAMES = frozenset({
     "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "benchmark_report_ligands.png",
     "frozen_schedules", ".cufep.lock",
     # the output of a relative run (cufep.rbfe.run) and its benchmark report (cufep.benchmarks.rbfe)
-    "edges", "network.json", "edges.csv", "ligands.csv", "rbfe_report.md", "rbfe_report_ligands.csv",
+    "edges", "network.json", "edges.csv", "ligands.csv", "compounds.csv", "rbfe_report.md", "rbfe_report_ligands.csv",
     "rbfe_report_edges.csv", "rbfe_report.png", "rbfe_report_edges.png"})
 
 

@@ -112,18 +112,69 @@ def ligand_dg(ligands: list[str], edges: list[Edge], experiment: dict[str, float
     With experimental values the estimates are shifted so that the mean of those of the ligands with a value is
     the mean of the values (``reference``: ``"mean of the experimental values"``), and the standard error of a
     ligand is that of its estimate minus that mean; without any, the mean of all estimates is 0 (``reference``:
-    ``"mean of the network"``), and the standard error is that of a ligand against that mean."""
-    f, cov = mle(ligands, edges)
-    refs = [name for name in ligands if name in experiment]
-    members = refs or list(ligands)
-    w = np.zeros(len(ligands))
-    w[[ligands.index(name) for name in members]] = 1.0 / len(members)
-    target = float(np.mean([experiment[name] for name in refs])) if refs else 0.0
-    shift = target - float(w @ f)
-    values = {}
-    for i, name in enumerate(ligands):
-        d = -w.copy()
-        d[i] += 1.0
-        values[name] = (float(f[i] + shift), float(math.sqrt(max(d @ cov @ d, 0.0))))
+    ``"mean of the network"``), and the standard error is that of a ligand against that mean. Every ligand its own
+    compound of one state (:func:`compound_dg`)."""
+    out = compound_dg(ligands, edges, {name: name for name in ligands}, experiment)
+    return {"reference": out["reference"], "reference_ligands": out["reference_compounds"],
+            "values": {name: (v["dg"], v["se"]) for name, v in out["compounds"].items()}}
+
+
+def compound_dg(states: list[str], edges: list[Edge], compound_of: dict[str, str], experiment: dict[str, float],
+                fraction: dict[str, float] | None = None, symmetry: dict[str, int] | None = None,
+                kt: float = 0.5925) -> dict:
+    """dG of every compound from the edges between its states (kcal/mol).
+
+    The states of a compound are its binding modes, rotamers and protonation or tautomeric forms; each is a ligand
+    of the network. With f_i the estimate of state i (:func:`mle`), P_i the population of its form in solution
+    (``fraction``; 1 for a compound of one form) and s the symmetry number of the compound (``symmetry``; 1 by
+    default):
+
+        dG(compound) = -kT ln sum_i P_i exp(-f_i / kT) - kT ln s
+
+    the binding of a ligand of several states (Azimi et al., J. Comput. Aided Mol. Des. 2022, eq 10, for protonation
+    states with their populations in solution; Ross et al., Commun. Chem. 2023, Supplementary eq 2 for binding modes
+    that interconvert in solution but not in the complex, P = 1, and Supplementary section 1.2.1 for a symmetric group
+    that does not turn in the complex, s = 2: "lowered by kT ln(2)"). One constant is left as for the ligands of
+    :func:`ligand_dg`: the mean over the compounds with an experimental value is the mean of those values (else the
+    mean over all compounds is 0), and the states get the same constant. Standard errors from the covariance of the
+    estimate (linearised: the weights of the states in the sum). Returns ``{"reference", "reference_compounds",
+    "compounds": {name: {dg, se, weights, symmetry_number}}, "states": {name: {dg, se}}}``."""
+    f, cov = mle(states, edges)
+    fraction = fraction or {}
+    symmetry = symmetry or {}
+    compounds = list(dict.fromkeys(compound_of[s] for s in states))
+    index = {s: i for i, s in enumerate(states)}
+    value, gradient = {}, {}
+    for c in compounds:
+        members = [s for s in states if compound_of[s] == c]
+        logs = np.array([math.log(float(fraction.get(s, 1.0))) - f[index[s]] / kt for s in members])
+        top = float(logs.max())
+        weights = np.exp(logs - top)
+        total = float(weights.sum())
+        sigma = int(symmetry.get(c, 1))
+        value[c] = -kt * (top + math.log(total)) - kt * math.log(sigma)
+        g = np.zeros(len(states))
+        for s, w in zip(members, weights / total):
+            g[index[s]] = w
+        gradient[c] = g
+    refs = [c for c in compounds if c in experiment]
+    members = refs or compounds
+    mean_gradient = np.mean([gradient[c] for c in members], axis=0)
+    target = float(np.mean([experiment[c] for c in refs])) if refs else 0.0
+    shift = target - float(np.mean([value[c] for c in members]))
+
+    def error(d: np.ndarray) -> float:
+        return float(math.sqrt(max(d @ cov @ d, 0.0)))
+
+    out_compounds = {}
+    for c in compounds:
+        out_compounds[c] = {"dg": value[c] + shift, "se": error(gradient[c] - mean_gradient),
+                            "weights": {s: float(gradient[c][index[s]]) for s in states if compound_of[s] == c},
+                            "symmetry_number": int(symmetry.get(c, 1))}
+    out_states = {}
+    for s in states:
+        unit_vector = np.zeros(len(states))
+        unit_vector[index[s]] = 1.0
+        out_states[s] = {"dg": float(f[index[s]] + shift), "se": error(unit_vector - mean_gradient)}
     return {"reference": "mean of the experimental values" if refs else "mean of the network",
-            "reference_ligands": members, "values": values}
+            "reference_compounds": members, "compounds": out_compounds, "states": out_states}
