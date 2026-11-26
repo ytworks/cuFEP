@@ -484,6 +484,13 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
         raise WorkflowError(f"the record of the prepared systems {done} is not a record; remove the directory of the "
                             "edge to prepare it again")
     unusable = record_problems(info, (ligand_a, ligand_b))
+    # the files of the end states of both legs, which every leg loads (fifteenth review of PR #19: a prep/ restored
+    # without complex_b_system.xml stopped the leg after the run had set its result aside)
+    missing = [f"{leg}_{end}{suffix}" for leg in ("complex", "solvent") for end in ("a", "b")
+               for suffix in ("_system.xml", ".npz", "_topology.json")
+               if not (prep_dir / f"{leg}_{end}{suffix}").is_file()]
+    if missing:
+        unusable.append(f"its prepared systems are incomplete ({', '.join(missing)} missing)")
     if unusable:
         raise WorkflowError(f"the record of the prepared systems {done} cannot be used: {'; '.join(unusable)}; remove "
                             "the directory of the edge to prepare it again")

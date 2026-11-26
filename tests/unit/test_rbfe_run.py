@@ -1980,3 +1980,41 @@ def test_the_plan_gives_the_mapping_of_kartograf_and_the_one_the_preparation_lea
     assert ("edge methanol -> methane: 5 atoms mapped by Kartograf, 1 unique to methanol, 0 unique to methane; at most "
             "4 after the rule of the constrained bonds, 2 or more unique to methanol, 1 or more unique to methane"
             in result.output), result.output
+
+
+def test_a_leg_this_version_cannot_continue_is_refused_before_the_run_writes(tmp_path, edges_of_version_1):
+    """Fifteenth review of PR #19 (P2): a leg whose result is of other prepared systems than the record of its edge (a
+    prep/ of another receptor restored), or of version 1 of the hybrid (a REST2 leg of main), was run again: the run
+    set its result aside, and the leg stopped on the System of its samples. Such a leg is refused before the run
+    writes anything, its result as it is; so is an edge whose prepared systems are incomplete."""
+    import shutil
+
+    from test_rbfe_network import _leg_result, _write_legs
+
+    from cufep.rbfe.prep import prepared_edge
+    from cufep.rbfe.run import check_results_of_the_run
+    from cufep.workflow import WorkflowError, record_digest
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    shutil.copytree(edges_of_version_1["prep"], edge_dir / "prep")
+    made = record_digest(json.loads((edge_dir / "prep" / "prep.json").read_text())["made_from"])
+    current = {**_leg_result(-12.0), "prepared_systems_sha256": made}
+    _write_legs(out_dir, "toluene~phenol", 0, current, current)
+    check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], None, False)
+    result = edge_dir / "repeat_0" / "complex" / "result.json"
+    before = result.read_text()
+    for changed, why in (({"prepared_systems_sha256": "another receptor"}, "other prepared systems"),
+                         ({"run": {}}, "version 1 of the hybrid")):
+        result.write_text(json.dumps({**json.loads(before), **changed}))
+        with pytest.raises(WorkflowError, match=why) as refused:
+            check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], None, False)
+        assert "--repeat 0 --leg complex --reschedule" in str(refused.value)
+        check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], None, True)
+        check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    assert prepared_edge(rcfg, *ligands, edge_dir, "cube") is not None
+    (edge_dir / "prep" / "complex_b_system.xml").unlink()
+    with pytest.raises(WorkflowError, match="incomplete .complex_b_system.xml missing"):
+        prepared_edge(rcfg, *ligands, edge_dir, "cube")

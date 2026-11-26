@@ -403,6 +403,51 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
 
 
+def check_results_of_the_run(out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
+    """Before a run writes anything: a leg it runs whose result cannot be continued by this version is refused, with
+    the command that computes it anew; its result stays as it is (fifteenth review of PR #19: the run set the result
+    aside, and the leg then stopped on the System of its samples). Such a result: one of other prepared systems than
+    the record of the edge (``prepared_systems_sha256``), or of version 1 of the hybrid (main up to e16c1f1), whose
+    System this version does not make (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`). With --reschedule the leg is
+    computed anew and nothing is refused."""
+    from cufep.rbfe.hybrid import HYBRID_VERSION
+    from cufep.workflow import record_digest
+
+    if reschedule:
+        return
+    problems, commands = [], []
+    for a, b in edges:
+        edge = edge_name(a, b)
+        try:
+            info = json.loads((out_dir / "edges" / edge / "prep" / "prep.json").read_text())
+        except (OSError, ValueError):
+            continue                             # the check of the preparation says what is wrong with it
+        made = record_digest(info.get("made_from")) if isinstance(info, dict) else None
+        for r in repeats:
+            for leg in ("solvent", "complex"):
+                if only_legs and leg not in only_legs:
+                    continue
+                f = out_dir / "edges" / edge / f"repeat_{r}" / leg / "result.json"
+                try:
+                    result = json.loads(f.read_text()) if f.exists() else None
+                except (OSError, ValueError):
+                    result = None
+                if not isinstance(result, dict):
+                    continue
+                version = int(((result.get("run") or {}).get("hybrid_version")) or 1)
+                why = ("it was computed from other prepared systems than the record of the edge"
+                       if result.get("prepared_systems_sha256") not in (None, made) else
+                       f"it was computed with version {version} of the hybrid System, which this version (version "
+                       f"{HYBRID_VERSION}) does not continue" if version != HYBRID_VERSION else None)
+                if why:
+                    problems.append(f"the {leg} leg of {edge}, repeat {r}: {why}; its result stays as it is")
+                    commands.append(rerun_command(edge, r, [leg], out_dir))
+    if problems:
+        raise WorkflowError("; ".join(problems) + ". Nothing was changed. Compute these legs anew with --reschedule "
+                            "(what they have is kept in previous_<n>/): " + "; ".join(commands)
+                            + "; or run the other edges alone (--edge)")
+
+
 def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
     """Before a run writes anything: the lambda windows and start configurations of every leg it runs that would start
     its replica exchange from them (no samples, no checkpoint of their start) are compared with the settings of this
@@ -568,6 +613,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
     check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
+    check_results_of_the_run(out_dir, selected, repeats_run, only_legs, reschedule)
     check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     check_windows_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     states = states_of(rcfg, ligands)
