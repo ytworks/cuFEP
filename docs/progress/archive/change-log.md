@@ -5,6 +5,47 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-26 — [amendment] RBFE: the eleventh review of PR #19 (17 findings)
+- What: one ion for the alchemical water of both legs of an edge; mappings whose dummy atoms join mapped atoms refused;
+  compounds take their temperature from the legs used and their experiment to every state; the report compares edges
+  with the experiment of its table and shifts dG of another origin; a ring-closing bond is read where it is; core
+  SMARTS matched as sets of atoms; the ghosts of the start of a hybrid counted from its mapped atoms midway between
+  the end states (legs of earlier versions keep theirs: all 22 complex legs of the TYK2 run of 08d58d5 do).
+- Why: findings of the owner's review (review 6071024107); each reproduced on the code before the fix.
+- Verified: the unit tests of each file changed; the ghosts of the 22 complex legs of the TYK2 run rebuilt by the
+  code (`build_leg`) against their records. The full unit suite and the GPU tests: not run yet for these commits.
+- Refs: `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (eleventh review), `docs/rbfe.md` ("Sampling")
+
+### 2026-11-26 — [design] RBFE: grand canonical moves of water on by default, charge changes, relative benchmarks
+- What: plan `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (PR #19). `cufep benchmark run --protocol rbfe`
+  (LOMAP networks; pairwise and edgewise RMSE); every edge gets the ddG of the network; `sampling.gcmc` on by default
+  in the RBFE complex leg (off in the ABFE); edges that change the net charge by one get an alchemical water
+  (OpenFE's rule), larger changes are refused. docs/rbfe.md said LOMAP keeps edges of score 0.4 or more: lomap2 leaves
+  out pairs below 0.6 and joins the parts with the best pairs whatever their score (corrected).
+- Why: the owner's order of 2026-11-26 (the features of the published relative protocol, Ross et al. 2023) and the
+  owner's answers (GCMC on in RBFE; A2A with the 29 states of the published map).
+- Verified: CPU tests of each part (synthetic truth, end states against A and B Systems, refusals); GPU tests of the
+  hybrid with the moves and with the alchemical water on both backends. No run yet.
+- Refs: `docs/rbfe.md` ("Edges that change the net charge", "Sampling", "The network"); `spikes/m39`
+
+### 2026-11-26 — [progress] RBFE and the engine of a leg merged (PR #17 with PR #18)
+- What: the reviews of PR #17 (four rounds, 18 findings) and PR #18 (eight rounds, 20 findings) were each
+  reproduced first, fixed with a test, pushed and answered; on the owner's order after no further findings,
+  PR #18 was merged into `feat/rbfe` and PR #17 into main.
+- Verified: unit suites of the heads before the last fixes (#17 a0b1b52: 795 passed; #18 2babdd8: 803
+  passed), the tests of every later fix before and after it, CI of each PR; the ABFE fingerprint unchanged.
+- Refs: `docs/plans/2026-11-25-rbfe.md`, `docs/plans/2026-11-25-leg-engine.md` (records of the reviews)
+
+### 2026-11-26 — [amendment] RBFE: the nine findings of the review of PR #17
+- What: each end state in a force field with its own ligand (one template served A and B of one bonded graph:
+  System A had the charges of B in the test); the legs of an edge are checked as the ABFE checks them
+  (temperature, pressure, prepared systems) and a leg without a standard error does not count, the other
+  edges are combined; pH in the record of a prepared edge; the force field of the lipid patch for a 4-site
+  water; prepared edges checked before a run writes anything; exit code from the jobs of the run; the legs in
+  edges.csv from the repeats of the ddG; initial windows within max_windows. Each reproduced first, as a test.
+- Why: the review of PR #17 (2026-11-25); the examples were not affected (no such inputs, no reruns).
+- Refs: `docs/plans/2026-11-25-rbfe.md` (record); `docs/rbfe.md`
+
 ### 2026-11-25 — [progress] One engine of a leg: the ABFE and the RBFE as two protocols
 - What: `src/cufep/engine/` (protocols, steps of a leg, analysis of a path, jobs); `CommonConfig`; the relative
   leg runs on the engine without `shared()`, renamed results or the ABFE job. Found on the way: the timing of a
