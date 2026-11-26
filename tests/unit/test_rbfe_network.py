@@ -137,6 +137,8 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
     (tmp_path / "resolved_config.yaml").write_text(yaml.safe_dump(stored))
     (tmp_path / "network.json").write_text(json.dumps({"ligands": ["a", "b"], "edges": [["a", "b"]],
                                                        "experiment_kcal_mol": {"a": -9.0, "b": -10.0}}))
+    (tmp_path / "edges" / "a~b" / "prep").mkdir(parents=True)
+    (tmp_path / "edges" / "a~b" / "prep" / "prep.json").write_text(json.dumps({"made_from": {}, "legs": {}}))
     for leg, dg in (("complex", -12.0 * 4.184), ("solvent", -10.5 * 4.184)):
         leg_dir = tmp_path / "edges" / "a~b" / "repeat_0" / leg
         leg_dir.mkdir(parents=True)
@@ -160,8 +162,14 @@ def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float 
 
 
 def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
+    """The results of the two legs of a repeat of an edge, with a record of its prepared systems (an edge with results
+    and without one is left out)."""
     import json
 
+    prep = out_dir / "edges" / edge / "prep" / "prep.json"
+    if not prep.exists():
+        prep.parent.mkdir(parents=True, exist_ok=True)
+        prep.write_text(json.dumps({"made_from": {}, "legs": {}}))
     for leg, result in (("complex", complex_), ("solvent", solvent)):
         leg_dir = out_dir / "edges" / edge / f"repeat_{repeat}" / leg
         leg_dir.mkdir(parents=True)
@@ -634,3 +642,62 @@ def test_a_mapping_whose_dummy_atoms_join_two_mapped_atoms_is_refused(tmp_path):
         kartograf_mapping(propane, difluoro, MappingSettings(core_smarts="[CH3]"))
     whole = kartograf_mapping(propane, difluoro, MappingSettings())
     assert bridging_dummies(propane.to_rdkit(), difluoro.to_rdkit(), whole) == []
+
+
+def test_rows_of_states_that_contradict_each_other_or_fractions_outside_the_run_are_refused(tmp_path):
+    """Eleventh review of PR #19: (P2) the rows a,A / b,A / a,B became two compounds, and in the other order one: a
+    state named on two rows that say other things is refused, with the lines; (P3) the forms of a compound with
+    populations 0.6, 1.2 and -0.8 add up to 1 and passed with the first state alone: the population of every row of a
+    compound of the run is checked."""
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import states_of
+    from cufep.workflow import WorkflowError
+
+    class Lig:
+        def __init__(self, name):
+            self.name = name
+
+    def config(text):
+        (tmp_path / "states.csv").write_text(text)
+        return RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf",
+                                                     "states": str(tmp_path / "states.csv")}})
+
+    for text in ("ligand,compound\na,A\nb,A\na,B\n", "ligand,compound\na,B\nb,A\na,A\n"):
+        with pytest.raises(WorkflowError, match="names states twice with other values: a on lines 2 and 4"):
+            states_of(config(text), [Lig("a"), Lig("b")])
+    assert states_of(config("ligand,compound\na,A\nb,A\na,A\n"), [Lig("a"), Lig("b")])["compound"] == {
+        "a": "A", "b": "A"}                                              # the same row twice says nothing other
+    forms = ("ligand,compound,form,solution_fraction\n"
+             "x1,X,one,0.6\nx2,X,two,1.2\nx3,X,three,-0.8\n")
+    with pytest.raises(WorkflowError, match="x2: solution_fraction 1.2 is not in"):
+        states_of(config(forms), [Lig("x1")])
+
+
+def test_a_state_takes_the_experiment_of_its_compound_and_the_states_are_combined_at_the_temperature_of_their_legs(
+        tmp_path):
+    """Eleventh review of PR #19: (P2) with A1 = -10 and B1 = -9 kcal/mol the edge A2 -> B1 had no experimental ddG
+    and A2 no value in ligands.csv, though compounds.csv had both: a state takes the value of its compound; (P2) the
+    record of a later run at 310 K combined states whose legs were made at 298.15 K: they are combined at the
+    temperature of their legs, and a note says so; (P2) an edge with results whose record of the prepared systems is
+    missing is left out."""
+    import csv
+
+    from cufep.rbfe.run import combine_network, write_results
+
+    _write_legs(tmp_path, "A2~B1", 0, _leg_result(-12.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "A1~A2", 0, _leg_result(-8.0), _leg_result(-8.0))
+    states = {"compound": {"A1": "A", "A2": "A", "B1": "B"}, "form": {"A1": "", "A2": "", "B1": ""},
+              "fraction": {"A1": 1.0, "A2": 1.0, "B1": 1.0}, "symmetry": {"A": 1, "B": 1}}
+    summary = combine_network(tmp_path, ["A1", "A2", "B1"], [("A2", "B1"), ("A1", "A2")], 1,
+                              {"A1": -10.0, "B1": -9.0}, states, 310.0)
+    edges = {e["edge"]: e for e in summary["edges"]}
+    assert edges["A2~B1"]["exp_ddg"] == pytest.approx(1.0) and "exp_ddg" not in edges["A1~A2"]
+    assert summary["compounds"]["temperature_K"] == pytest.approx(298.15)
+    assert any("combined at 298.15 K" in note for note in summary["notes"])
+    write_results(tmp_path, summary)
+    rows = {r["ligand"]: r for r in csv.DictReader((tmp_path / "ligands.csv").open())}
+    assert rows["A2"]["exp_dg_kcal_mol"] == "-10.000" and rows["A2"]["exp_dg_of"] == "the compound A"
+    (tmp_path / "edges" / "A1~A2" / "prep" / "prep.json").unlink()
+    edges = {e["edge"]: e for e in combine_network(tmp_path, ["A1", "A2", "B1"], [("A2", "B1"), ("A1", "A2")], 1,
+                                                   {"A1": -10.0, "B1": -9.0}, states, 298.15)["edges"]}
+    assert "ddg" not in edges["A1~A2"] and "is missing" in edges["A1~A2"]["earlier_preparation"][0]

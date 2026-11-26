@@ -47,7 +47,21 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
         return None
     path = rcfg.system.states
     with open(path, newline="") as fh:
-        rows = {r["ligand"].strip(): r for r in csv.DictReader(fh)}
+        listed = [(line, r) for line, r in enumerate(csv.DictReader(fh), start=2)]
+    # a state named on two rows that say other things of it is refused, before the rows become one (eleventh review
+    # of PR #19: rows a,A / b,A / a,B made two compounds, and their order one)
+    rows: dict = {}
+    contradictions = []
+    for line, r in listed:
+        name = r["ligand"].strip()
+        said = {k: (v or "").strip() for k, v in r.items() if k != "ligand"}
+        if name in rows and rows[name][1] != said:
+            contradictions.append(f"{name} on lines {rows[name][0]} and {line} ({rows[name][1]} and {said})")
+        rows.setdefault(name, (line, said))
+    if contradictions:
+        raise WorkflowError(f"system.states ({path}) names states twice with other values: "
+                            + "; ".join(contradictions))
+    rows = {name: {"ligand": name, **said} for name, (_line, said) in rows.items()}
     names = [lig.name for lig in ligands]
     missing = [n for n in names if n not in rows]
     if missing:
@@ -59,10 +73,17 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
         compound = r["compound"].strip()
         out["compound"][n] = compound
         out["form"][n] = (r.get("form") or "").strip()
-        out["fraction"][n] = float(r.get("solution_fraction") or 1.0)
-        if not 0.0 < out["fraction"][n] <= 1.0:
-            problems.append(f"{n}: solution_fraction {out['fraction'][n]:g} is not in (0, 1]")
-    # what belongs to a compound is checked over all its rows in the file (a run may take some of its states)
+        out["fraction"][n] = _fraction(r)
+    # what belongs to a compound is checked over all its rows in the file (a run may take some of its states): the
+    # population of a form in solution, of the rows the run leaves out too, which the forms of the compound share
+    # (eleventh review of PR #19: 0.6, 1.2 and -0.8 added up to 1 and passed with the first state alone)
+    of_the_run = set(out["compound"].values())
+    for n, r in rows.items():
+        if r["compound"].strip() not in of_the_run:
+            continue
+        fraction = _fraction(r)
+        if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+            problems.append(f"{n}: solution_fraction {r.get('solution_fraction')} is not in (0, 1]")
     for n, r in rows.items():
         sigma = int(r.get("symmetry_number") or 1)
         if sigma < 1:
@@ -75,8 +96,7 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
         forms: dict[str, set] = {}
         for r in rows.values():
             if r["compound"].strip() == compound:
-                forms.setdefault((r.get("form") or "").strip(), set()).add(
-                    round(float(r.get("solution_fraction") or 1.0), 12))
+                forms.setdefault((r.get("form") or "").strip(), set()).add(round(_fraction(r), 12))
         if any(len(v) > 1 for v in forms.values()):
             problems.append(f"compound {compound}: states of one form have other solution fractions")
         elif abs(sum(next(iter(v)) for v in forms.values()) - 1.0) > 1e-6:
@@ -89,6 +109,15 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
                        for c in sorted(set(out["compound"].values()))}
     out["left_out"] = {c: v for c, v in out["left_out"].items() if v}
     return out
+
+
+def _fraction(row: dict) -> float:
+    """The population in solution of the state of a row of system.states (1 where it is not given; NaN where it is not
+    a number, which the check refuses)."""
+    try:
+        return float(row.get("solution_fraction") or 1.0)
+    except ValueError:
+        return float("nan")
 
 
 def compound_experiment(states: dict, experiment: dict[str, float]) -> dict[str, float]:
@@ -568,6 +597,11 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
 
     prep_file = Path(edge_dir) / "prep" / "prep.json"
     info = {}
+    if not prep_file.exists() and any(Path(edge_dir).glob("repeat_*/*/result.json")):
+        # what its legs were prepared by cannot be told (eleventh review of PR #19: without it an edge of an earlier
+        # rule came back into the analysis)
+        out["earlier_preparation"] = [f"its record of the prepared systems ({prep_file}) is missing"]
+        return out
     if prep_file.exists():
         try:
             info = json.loads(prep_file.read_text())
@@ -774,6 +808,11 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     states (:func:`cufep.rbfe.network.compound_dg`), which then set the constant of the dG of the states too."""
     results = [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats) for a, b in edges]
     compound_of = (states or {}).get("compound") or {}
+    if compound_of:
+        # the value of a compound is that of each of its states, also of a state the file gives none (eleventh review
+        # of PR #19: A1 = -10 and B1 = -9 gave no experimental ddG to A2 -> B1, nor A2 a value in ligands.csv)
+        of_compound = compound_experiment(states, experiment)
+        experiment = {s: of_compound[c] for s, c in compound_of.items() if c in of_compound}
     for r in results:
         same = compound_of and compound_of.get(r["ligand_a"]) == compound_of.get(r["ligand_b"])
         # two states of one compound: experiment has no ddG between them (review of PR #19: +0.00 was given)
@@ -821,6 +860,15 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     else:
         from cufep.sampling.states import R_GAS
 
+        # the states are combined at the temperature their legs were made at, which the edges share (network
+        # differences); the run record can be that of a later run that made none of them (eleventh review of PR #19:
+        # a third edge begun at 310 K weighted states of 298.15 K)
+        of_legs = {float(r["conditions"]["temperature_K"]) for r in results
+                   if "ddg" in r and (r.get("conditions") or {}).get("temperature_K") is not None}
+        if len(of_legs) == 1 and abs(next(iter(of_legs)) - float(temperature_K)) > 1e-9:
+            summary["notes"].append(f"the record of the run gives {float(temperature_K):g} K; the states are combined "
+                                    f"at {next(iter(of_legs)):g} K, the temperature of their legs")
+            temperature_K = next(iter(of_legs))
         by_compound = compound_dg(ligands, measured, states["compound"], compound_experiment(states, experiment),
                                   states["fraction"], states["symmetry"], R_GAS * float(temperature_K) / KCAL)
         summary["dg"] = {"reference": by_compound["reference"],

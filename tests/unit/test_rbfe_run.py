@@ -1581,3 +1581,26 @@ def test_both_legs_of_an_edge_that_changes_the_charge_turn_their_water_into_one_
     assert any("other ions" in why for why in earlier_rules_of(info))
     with pytest.raises(WorkflowError, match="other ions"):
         prepared_edge(rcfg, ligands[0], ligands[1], edge_dir, "cube")
+
+
+def test_the_plan_reads_the_states_as_the_run_does(tmp_path):
+    """Eleventh review of PR #19 (P3): `cufep rbfe plan` gave the mean of the experimental values of the states as the
+    reference, where the run takes the compounds, and did not read system.states, which the run refuses when it does
+    not name a ligand. The plan reads and checks it as the run does."""
+    from click.testing import CliRunner
+
+    from cufep import cli
+
+    out_dir = tmp_path / "run"
+    _ligands(tmp_path, out_dir)
+    (tmp_path / "protein.pdb").write_text("REMARK built in the test\n")
+    (tmp_path / "states.csv").write_text("ligand,compound\ntoluene,T\nphenol,P\n")
+    (tmp_path / "config.yaml").write_text("system: {protein: protein.pdb, ligands: ligands.sdf, states: states.csv}\n"
+                                          "network: {edges: [[toluene, phenol]]}\n")
+    result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
+    assert result.exit_code == 0, result.output
+    said = "dG of every compound from the edges, relative to the mean of the experimental values of the compounds"
+    assert said in result.output
+    (tmp_path / "states.csv").write_text("ligand,compound\ntoluene,T\n")
+    result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
+    assert result.exit_code != 0 and "does not name the ligands phenol" in result.output

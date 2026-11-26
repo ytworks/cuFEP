@@ -381,10 +381,22 @@ def rbfe_plan(config: str) -> None:
     click.echo(f"lambda windows: {ls.mode}" + (f" from {ls.adaptive.initial_windows}, overlap threshold "
                                                  f"{ls.adaptive.overlap_threshold:g} ({ls.adaptive.legs} leg decides)"
                                                  if ls.mode == "adaptive" else f", {ls.windows}"))
-    exp = experiment_of(rcfg, ligands)
+    # the reference the run takes: of the compounds where the ligands are states of them (system.states, read and
+    # checked as the run reads it; eleventh review of PR #19)
+    from cufep.rbfe.run import compound_experiment, states_of
+
+    try:
+        states = states_of(rcfg, ligands)
+        exp = experiment_of(rcfg, ligands)
+        of_compounds = compound_experiment(states, exp) if states is not None else None
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    reference = (("mean of the experimental values of the compounds " + ", ".join(of_compounds) if of_compounds
+                  else "mean of the network") if states is not None
+                 else ("mean of the experimental values of " + ", ".join(exp) if exp else "mean of the network"))
     click.echo(f"per window {rcfg.sampling.equilibration('complex'):g} ns equilibration and "
-               f"{rcfg.sampling.production_ns:g} ns production; dG of every ligand from the edges, relative to the "
-               + ("mean of the experimental values of " + ", ".join(exp) if exp else "mean of the network"))
+               f"{rcfg.sampling.production_ns:g} ns production; dG of every "
+               + ("compound" if states is not None else "ligand") + f" from the edges, relative to the {reference}")
 
 
 @rbfe.command("run")
