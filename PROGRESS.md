@@ -111,6 +111,15 @@ Open items:
 
 ## Change Log
 
+### 2026-11-27 — [amendment] RBFE: the mapping for the plugin decided by constraint lengths; earlier edges
+- What: a pair is left out of the mapping where its hydrogens are constrained to other lengths in the end states
+  (other elements, carbons of four and of three bonds, rings); a run on the plugin prepares again an edge prepared
+  with a mapping the plugin cannot run where no leg has a result (kept in `<edge>.earlier_mapping_<n>`), and refuses
+  one with results before it writes.
+- Why: the owner: every case automatic; the element-only decision missed ethylbenzene -> styrene (5 hydrogens of
+  0.1086 and 0.1094 nm on one carbon, reproduced on 5a87243).
+- Refs: 3fd1516, `docs/rbfe.md` ("Atom mapping")
+
 ### 2026-11-27 — [amendment] RBFE: every leg on the cuPotential plugin (the mapping of six edges)
 - What: a mapped pair of heavy atoms of other elements that both carry hydrogens is not mapped (Kartograf again,
   as its `filter_element_changes`); hydrogens of a mapped atom that would carry more than three are mapped closest
