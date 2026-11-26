@@ -190,3 +190,7 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   が厳しい Ewald 和と一致、評価器が各状態と 0.02 kT 以内): hybrid の GPU テスト 18 件通過。全体テスト 8d71d5b: 819 passed。
 - TYK2 の smoke(`--protocol rbfe`、1 エッジ、8 GPU、cufep:dev): exit 0、complex leg はプラグインで GCMC の挿入・削除が
   受理されている、レポートと図が書かれた。
+- A2A の機能確認(cufep:dev、作業ツリー 8403b80、8 GPU、0.1 ns の短い計算、数値に意味はない): 4o → 4o_deprotonated、
+  二重層、complex の GCMC(プラグイン)、両レグの alchemical water(Na+、dq = +1)、REST2、状態の合成(4o の重み 1.00、
+  脱プロトン化 0.00)が exit 0 で通った。結果の行に同じ化合物の状態の間の「experiment +0.00」が出ていた: 指摘 2 を
+  レポートだけで直していたので、`combine_network` で直した(edges.csv、summary.json、結果の行も同じになる)。

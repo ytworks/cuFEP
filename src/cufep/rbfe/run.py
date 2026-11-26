@@ -419,8 +419,11 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     (:func:`cufep.rbfe.network.ligand_dg`); with ``states`` (:func:`states_of`) the dG of every compound from its
     states (:func:`cufep.rbfe.network.compound_dg`), which then set the constant of the dG of the states too."""
     results = [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats) for a, b in edges]
+    compound_of = (states or {}).get("compound") or {}
     for r in results:
-        if experiment.get(r["ligand_a"]) is not None and experiment.get(r["ligand_b"]) is not None:
+        same = compound_of and compound_of.get(r["ligand_a"]) == compound_of.get(r["ligand_b"])
+        # two states of one compound: experiment has no ddG between them (review of PR #19: +0.00 was given)
+        if not same and experiment.get(r["ligand_a"]) is not None and experiment.get(r["ligand_b"]) is not None:
             r["exp_ddg"] = experiment[r["ligand_b"]] - experiment[r["ligand_a"]]
     differing = network_differences(out_dir, results)
     if differing:

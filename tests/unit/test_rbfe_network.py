@@ -429,6 +429,9 @@ def test_a_run_of_states_gives_the_dg_of_its_compounds_again_from_its_directory(
     summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")], 1, experiment, states,
                               300.0)
     assert set(summary["compounds"]["values"]) == {"A", "C"}
+    # two states of one compound have no experimental ddG between them (+0.00 was given), the others have theirs
+    edges = {e["edge"]: e for e in summary["edges"]}
+    assert "exp_ddg" not in edges["a~b"] and edges["b~c"]["exp_ddg"] == pytest.approx(1.0)
     assert summary["compounds"]["values"]["C"]["symmetry_number"] == 2
     write_results(tmp_path, summary)
     (tmp_path / "resolved_config.yaml").write_text("sampling: {repeats: 1}\n")
