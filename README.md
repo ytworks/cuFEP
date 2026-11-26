@@ -17,7 +17,8 @@ compute backend; stock OpenMM is the second backend and is always available. `cu
 **relative binding free energies (RBFE)** of a network of ligands with the same backends, sampling and
 analysis ([Relative binding free energies](#relative-binding-free-energies)).
 
-> **Status: version 0.1, under development.** Neutral ligands only, no cofactors yet. The
+> **Status: version 0.1, under development.** The ABFE takes neutral ligands only, the RBFE also charged
+> ligands and changes of one charge; no cofactors yet. The
 > interfaces and the defaults may still change. See [PROGRESS.md](PROGRESS.md) for the current
 > state and [Limitations](#limitations).
 
@@ -287,7 +288,14 @@ the lambda windows by adaptive lambda scheduling as the paper sets it for relati
 runs both legs with Hamiltonian replica exchange and REST2 on all GPUs, the complex leg in a bilayer when
 `membrane.enabled` is set. It reports the ddG of every edge, the cycle closures, and the dG of every ligand
 from the edges alone (maximum likelihood estimate), referenced to the mean of the experimental values that
-are given, else to the mean of the network.
+are given, else to the mean of the network, and the ddG that the whole network gives every edge.
+
+The complex leg samples its water with grand canonical moves by default (`sampling.gcmc`; the solvent leg runs at
+constant pressure). An edge that changes the net charge by one gets an alchemical water, which becomes a counterion
+of the other end state. A compound may enter the network as several states (binding modes, rotamers, protonation
+forms; `system.states`), whose dG combine into the dG of the compound with the populations of the forms in
+solution and its symmetry number. A custom core (`mapping.core_smarts`) restricts the mapping to the atoms of a
+SMARTS pattern. [docs/rbfe.md](docs/rbfe.md) gives the methods and their sources.
 
 | directory | system | ligands, experiment (kcal/mol) |
 |---|---|---|
@@ -309,6 +317,7 @@ cufep benchmark run tyk2 --tier smoke     # one ligand, very short: checks the p
 cufep benchmark run tyk2 --tier subset    # five ligands
 cufep benchmark run a2a --tier full       # every ligand
 cufep benchmark report tyk2 runs/benchmark_tyk2_subset
+cufep benchmark run tyk2 --tier full --protocol rbfe
 ```
 
 | set | target | ligands |
@@ -328,6 +337,13 @@ the raw errors (cuFEP only) from the like-for-like statistics. Every ligand with
 compared, NOT RELIABLE ones included; the report also compares the NOT RELIABLE ligands and the
 others apart and says where each NOT RELIABLE leg is below the level of overlap.
 
+With `--protocol rbfe` a set runs as relative calculations with the settings of its relative example
+(`examples/rbfe_tyk2`, `examples/rbfe_a2a_membrane`) on the network that LOMAP plans for its ligands (TYK2: 22
+edges for 16 ligands; A2A: the 29 states of its 17 compounds with the corrections of the published map). The report
+compares the dG of every compound and the ddG of every edge with experiment, the published FEP+ predictions and the
+recorded absolute run, by the pairwise and edgewise RMSE, R^2 and Kendall tau of Ross et al. 2023. The relative
+benchmarks have not been run yet.
+
 The full sets were run once with these settings (22 November 2026, commit e77a6c5): TYK2 16 of
 16 ligands, A2A 17 of 17 compounds, no result NOT RELIABLE. The RMSE after removing the mean
 error is 1.25 kcal/mol for TYK2 and 2.68 for A2A (FEP+ 0.47 and 1.08), Kendall tau 0.47 and 0.34
@@ -340,7 +356,8 @@ another ABFE method, and with an earlier run of both sets, is on the accuracy pa
 
 Version 0.1:
 
-- neutral ligands only (a ligand with a net charge stops with a message); no cofactors;
+- the ABFE takes neutral ligands only (a ligand with a net charge stops with a message); the RBFE refuses an
+  edge that changes the net charge by more than one; no cofactors;
 - no symmetry correction: the graph symmetry number of the ligand is reported, and a small
   symmetric ligand that turns over in its pocket leaves the unrestrained window without overlap,
   which the result reports;

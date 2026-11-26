@@ -64,6 +64,7 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
+- Plan `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (PR #19): steps 1-6 done, no run; m39 (published edges, LOMAP among them): pairwise RMSE TYK2 0.72 (22 edges) vs 0.70 (24), A2A 1.52 (43) vs 1.52 (46); pending the owner: the networks of the full runs, a REST2 region of the perturbed atoms (not done).
 - Plan `docs/plans/2026-11-25-rbfe.md` (done: PR #17 with PR #18 merged into main on 2026-11-26): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment. A2A example in the bilayer (image f6ac3b4): ddG +0.91 ± 0.30, +3.26 ± 0.12, +1.38 ± 0.26 (experiment +2.12, +0.72, -1.40), cycle closure -0.97 ± 0.41, dG RMSE 1.35 (FEP+ 0.83); both in the plan's record. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends. Plan `docs/plans/2026-11-25-leg-engine.md` (done, PR #18): one engine of a leg for both (`src/cufep/engine/`), steps 1-6 done; ABFE fingerprint and analysis of a stored run unchanged; the TYK2 relative example on its image agrees with image f6ac3b4 within the errors (the plan's record).
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
@@ -83,7 +84,7 @@ Open items:
   row "Starts of the complex leg"). Start A is the default of the complex leg since 2026-11-22:
   its three runs differ by 0.30 kcal/mol at most; B and C, with as many and more windows, by
   2.07 and 5.02, and that is not explained (C is not investigated, the owner's order).
-- Plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (done, PR #8): by the owner's order no unit tests, GPU tests or reviews were run for it (no file of `src/` changed).
+- Plan `docs/plans/2026-11-22-full-benchmarks-with-the-present-defaults.md` (done, PR #8): no tests or reviews by order.
 - Workers during the precalculation of adaptive lambda scheduling (both runs of PR #8; no fix yet):
   a leg asks once for one worker per window of its start and keeps them through all iterations
   (`request_devices(..., pinned=True)` in `src/cufep/workflow.py`). With a start of 30 windows two
@@ -100,10 +101,8 @@ Open items:
   (`max_windows` 100). The owner's decision (2026-11-21): this may happen, what counts is the
   accuracy. The level, the verdict and its message are unchanged; such a result is reported and
   compared, not left out (`docs/protocol.md`, "Why the threshold cannot go much higher").
-- The two runs of each set (3b45bfe and e77a6c5) are one calculation per ligand each and differ
-  in two defaults at once (`restraints.selection`, the start of the complex leg): their
-  difference does not by itself show the effect of either. How much one calculation varies is
-  measured for ejm_31 (the item on the complex leg above), ejm_49 and 4k (the item on the plan).
+- The two runs of each set (3b45bfe and e77a6c5), one calculation per ligand each, differ in two defaults at once
+  (`restraints.selection`, the start of the complex leg); how much one calculation varies: ejm_31, ejm_49, 4k (above).
 - `membrane.orientation: auto` stops unless two of its three methods agree within 15 degrees and
   5 A: a stop of cuFEP's own without a published basis. Kept as it is; waits for the owner's
   decision (`.claude/rules/fep-invariants.md`).

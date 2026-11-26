@@ -159,3 +159,8 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   変更なので、オーナーの判断を待つ(既定は pocket のままなので、今の計算には影響しない)。
 - テスト(CPU): custom core の一致・拒否、toluene → phenol で環の炭素 6 個だけ対応、LOMAP がその対応で網を作る、既定値の
   ときに記録が変わらない。
+
+### 2026-11-26 手順 7: README 2 言語と PROGRESS
+- README(英日): 状態の行(ABFE は中性のみ、RBFE は電荷と 1 の電荷変化)、RBFE の節(GCMC 既定 on、alchemical water、
+  化合物の状態、custom core、ネットワーク ddG)、ベンチマークの `--protocol rbfe`(まだ計算していない)、制限。
+  `check_readme_pair.py`、`check_names.py`、PROGRESS の予算(Current Status を 80 行に収めるため既存の 2 項目を圧縮)を通過。

@@ -16,7 +16,8 @@ exchange をマシンの全 GPU で行い、結合自由エネルギーを標準
 2 つ目のバックエンドとしていつでも使えます。`cufep rbfe` は、同じバックエンド、サンプリング、解析で、
 リガンドのネットワークの**相対結合自由エネルギー (RBFE)** を計算します ([相対結合自由エネルギー](#相対結合自由エネルギー))。
 
-> **状態: バージョン 0.1、開発中。** 中性のリガンドのみ対応し、補因子にはまだ対応していません。
+> **状態: バージョン 0.1、開発中。** ABFE は中性のリガンドのみ、RBFE は電荷を持つリガンドと電荷が 1 変わる
+> エッジにも対応します。補因子にはまだ対応していません。
 > インターフェースと既定値は今後変わることがあります。現在の状態は [PROGRESS.md](PROGRESS.md)
 > (英語)、制限は [制限](#制限) を参照してください。
 
@@ -278,8 +279,14 @@ cufep benchmark run tyk2 --tier smoke
 (Kartograf)、OpenFE の相対計算のプロトコルの規則で各 edge の hybrid topology を作り、論文が相対変換に
 定めたとおりの adaptive lambda scheduling で lambda window を選び、2 つの leg を REST2 付きの Hamiltonian
 replica exchange で全 GPU に配って回します。`membrane.enabled` のときは complex leg を二重膜に入れます。
-各 edge の ddG、cycle closure、edge だけから求めた各リガンドの dG (最尤推定) を報告し、dG の基準は
-与えた実験値の平均、実験値が無ければネットワークの平均です。
+各 edge の ddG、cycle closure、edge だけから求めた各リガンドの dG (最尤推定)、ネットワーク全体が各 edge に
+与える ddG を報告し、dG の基準は与えた実験値の平均、実験値が無ければネットワークの平均です。
+
+complex leg は既定で水を grand canonical の移動でサンプルします (`sampling.gcmc`。solvent leg は定圧)。正味の
+電荷が 1 変わる edge には alchemical water を置き、もう一方の端状態で対イオンにします。化合物は複数の状態
+(結合様式、回転異性体、プロトン化の形。`system.states`) としてネットワークに入れることができ、その dG を
+溶液中の形の存在比と対称数で化合物の dG に合成します。custom core (`mapping.core_smarts`) は対応を SMARTS の
+原子に限ります。方法とその出典は [docs/rbfe.md](docs/rbfe.md) にあります。
 
 | ディレクトリ | 系 | リガンド、実験値 (kcal/mol) |
 |---|---|---|
@@ -301,6 +308,7 @@ cufep benchmark run tyk2 --tier smoke     # 1 リガンド、ごく短い: パ�
 cufep benchmark run tyk2 --tier subset    # 5 リガンド
 cufep benchmark run a2a --tier full       # 全リガンド
 cufep benchmark report tyk2 runs/benchmark_tyk2_subset
+cufep benchmark run tyk2 --tier full --protocol rbfe
 ```
 
 | セット | 標的 | リガンド |
@@ -318,6 +326,12 @@ cuFEP を、実験値と、セットとともに公開されている FEP+ の�
 示します。結果のあるリガンドはすべて、NOT RELIABLE のものも含めて比較します。さらに NOT RELIABLE の
 リガンドとそれ以外を分けて比較し、NOT RELIABLE の leg がどこで overlap の基準を下回ったかを示します。
 
+`--protocol rbfe` では、セットを相対 example (`examples/rbfe_tyk2`、`examples/rbfe_a2a_membrane`) の設定の相対計算で、
+LOMAP がリガンドに作るネットワーク上で計算します (TYK2: 16 リガンドに 22 edge。A2A: 17 化合物の 29 状態を、公開
+map の補正とともに)。レポートは各化合物の dG と各 edge の ddG を、実験値、公開されている FEP+ の予測値、記録
+した ABFE の計算と、Ross ら 2023 の pairwise と edgewise の RMSE、R^2、Kendall τ で比較します。相対計算の
+ベンチマークはまだ計算していません。
+
 全セットをこの設定で 1 回ずつ計算しました (2026 年 11 月 22 日、コミット e77a6c5): TYK2 は 16 リガンド
 すべて、A2A は 17 化合物すべてに結果があり、NOT RELIABLE の結果はありません。平均誤差を除いた RMSE は
 TYK2 で 1.25 kcal/mol、A2A で 2.68 (FEP+ は 0.47 と 1.08)、Kendall τ は 0.47 と 0.34 (FEP+ は 0.81 と
@@ -330,7 +344,8 @@ TYK2 で 1.25 kcal/mol、A2A で 2.68 (FEP+ は 0.47 と 1.08)、Kendall τ は 
 
 バージョン 0.1:
 
-- 中性のリガンドのみ (正味の電荷を持つリガンドはメッセージを出して止まる)。補因子は未対応。
+- ABFE は中性のリガンドのみ (正味の電荷を持つリガンドはメッセージを出して止まる)。RBFE は正味の電荷が 2 以上
+  変わる edge を断る。補因子は未対応。
 - 対称性の補正はしない。リガンドのグラフの対称数は報告する。ポケットの中で裏返る小さな対称な
   リガンドでは、restraint のない window の overlap がなくなり、そのことが結果に出る。
 - 対称な POPC 型の二重膜のみ。grand canonical による水のサンプリングは、複合体レグのオプション
