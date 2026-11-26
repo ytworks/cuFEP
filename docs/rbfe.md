@@ -112,6 +112,20 @@ Hamiltonian replica exchange with REST2 on the whole hybrid ligand and the pocke
 `sampling.rest2` of the ABFE): 1 ns of equilibration and 5 ns of production per window, the defaults of
 OpenFE's relative protocol. One calculation per edge (`sampling.repeats: 1`).
 
+Grand canonical moves of water in the complex leg (`sampling.gcmc`, on by default here and off in the ABFE): the
+relative calculations of the public benchmark of Ross et al. (Commun. Chem. 2023) ran "All complex leg simulations
+... in the muVT ensemble whereby water molecules were sampled with grand canonical Monte Carlo; all solvent
+simulations were run in NPT". The moves are those of the ABFE (`docs/protocol.md`, "Grand canonical moves of
+water"; `src/cufep/sampling/gcmc.py`), with their settings: insertions and deletions of water in a sphere around the
+ligand, the waters farthest from the ligand ghosts from the pre-equilibration on (which has its barostat), and the
+replica exchange without a barostat in the mean cell of the pre-equilibration (in a complex leg without free MD
+its last cell). For a hybrid (cuFEP's own): the sphere is around the heavy atoms of both end states, so that A -> B
+and B -> A have one sphere; a water switched off has no charge and no Lennard-Jones in the NonbondedForce and no
+Lennard-Jones with the ligand at either end state; in the stand-in energy with which the trials are screened the
+ligand interacts with the parameters of both ends at full strength in every window, and the test with the full
+potential of the window that every trial that passes is given corrects it (what the stand-in is changes how many
+trials pass, not what is sampled). The solvent leg runs at constant pressure.
+
 ### Membrane proteins
 
 `membrane.enabled` builds the complex leg in a POPC bilayer (Lipid21) as the ABFE does, with the membrane
@@ -156,8 +170,7 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
 - A correction of the Lennard-Jones of the ligand with its surroundings beyond the cutoff: none, as OpenFE's
   relative protocol (`use_dispersion_correction: False` for the hybrid); the NonbondedForce of the
   environment keeps its own long-range correction.
-- Water moves (`sampling.relocation_mc`, `sampling.gcmc`) and `membrane.complex_leg: water`, which are of
-  the ABFE.
+- Water relocation moves (`sampling.relocation_mc`) and `membrane.complex_leg: water`, which are of the ABFE.
 
 ## All settings and their defaults
 
@@ -200,6 +213,15 @@ lambda_schedule:
 sampling:
   production_ns: 5.0
   equilibration_ns: 1.0
+  gcmc:
+    enabled: true
+    interval_ps: 4.0
+    attempts: 2500
+    batch_size: 1000
+    radius_margin_nm: 0.3
+    ghost_waters: auto
+    excess_chemical_potential_kcal_per_mol: auto
+    standard_volume_nm3: auto
 analysis:
   lrc: none
 output:
@@ -218,6 +240,7 @@ output:
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent 50 ps and 0; complex 500 ps after 500 ps | the solvent leg: the paper's; the complex leg: the values of the ABFE, measured on TYK2 (`docs/protocol.md`, "What was measured on TYK2") |
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
+| `sampling.gcmc.enabled` | true (the complex leg) | the owner's decision (2026-11-26); the relative calculations of the public benchmark (Ross et al. 2023) ran their complex legs in the muVT ensemble with grand canonical moves of water. The other settings of the moves are those of the ABFE (`docs/configuration.md`) |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |
 | `analysis.lrc` | none | OpenFE's `use_dispersion_correction: False` for the hybrid |
 | the constant of the dG (no setting) | the mean of the experimental values, else the mean of the network | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; cinnabar gives estimates of mean 0 |

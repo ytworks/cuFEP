@@ -89,3 +89,19 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - テスト(CPU): ネットワーク ddG(木では自身の値と誤差、三角形では閉路の和が 3 等分され SE が s√(2/3)、脚の失敗した
   エッジは経路の和)、相対ベンチマークの設定が example と同じ、レポートの数字が手計算と一致し `benchmark report` で同じ
   文字列、`benchmark run --protocol rbfe` が `run_rbfe` に同じ設定を渡し失敗で 1。
+
+### 2026-11-26 手順 3: RBFE の complex leg の GCMC(既定 on)
+- `sampling.gcmc` を RBFE で受け付け、既定 on(`RbfeGcmc`、complex leg だけ。溶媒は NPT)。ABFE の既定は off のまま。
+  移動・設定・判定は ABFE のもの(`src/cufep/sampling/gcmc.py`)。設定の照合は共通の `gcmc_problems` に切り出した。
+- hybrid のために変えたこと: 水の切り替え(`WaterSwitch`、`ghosts_off`、`every_water_on`)が hybrid のリガンドの LJ の
+  力 `cufep_hybrid_lj` の epsilonA・epsilonB にも効く(`lennard_jones_forces`)。試行の代用エネルギーでは、リガンドが両端の
+  パラメータで全強度で相互作用する(`stand_in_lambdas`、hybrid の状態には lambda_electrostatics が無い)。その後の全
+  ポテンシャルの判定が正すので、標本は変わらない(試行が通る割合だけが変わる)。
+- 計画から変えた点: 球の中心は「core の中心」でなく両端のリガンドの重原子全部の中心(A → B と B → A で同じ球。半径も
+  同じ規則)。
+- テストで見つかった不具合: RBFE で `sampling.gcmc` に一部(例 `attempts`)だけ書くと、既定 on の GCMC が off になった
+  (既定を default_factory で入れたため)。RBFE 用の型で `enabled` の既定を true にして直し、回帰テストに入れた。
+- テスト: CPU(hybrid の Context で水を切った値が、その水なしで作った hybrid と λ 0、0.3、0.7、1 で 1e-6 kJ/mol 以内で
+  一致。作った後に切った hybrid も同じ。hybrid の状態で移動が動き、Context の水の状態とエネルギーが一致。complex leg
+  だけに記録される)。GPU(両バックエンドで、切り替えた Context の全状態のエネルギーが全部の水の hybrid と 0.02 kT
+  以内、HREX で移動の回数・挿入・セル固定): `tests/gpu` の hybrid と GCMC の 22 件が通過(2 GPU)。

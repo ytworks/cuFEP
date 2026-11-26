@@ -14,6 +14,14 @@ The lambda windows (``lambda_schedule``)
     Windows that a leg does not choose itself start, all of them, from the end of its pre-equilibration, minimised in
     their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all windows at the same time
     on the GPUs of the leg; the equilibration of the replica exchange then relaxes them further.
+
+Grand canonical moves of water (``sampling.gcmc``, on by default in the complex leg)
+    As in the ABFE (:mod:`cufep.sampling.gcmc`): the waters farthest from the ligand are ghosts from the
+    pre-equilibration on, which has its barostat; the alchemical run has none and stays in the mean cell of the
+    pre-equilibration. The sphere is around the heavy atoms of the whole hybrid ligand (both end states, so that A ->
+    B and B -> A have one sphere; cuFEP's own). In the stand-in energy of the trials the ligand interacts with the
+    parameters of both ends at full strength in every window, and the test with the full potential of the window
+    corrects it (the scheme of the module: what U' is changes how many trials pass, not what is sampled).
 """
 from __future__ import annotations
 
@@ -25,7 +33,7 @@ from typing import ClassVar
 import numpy as np
 
 from cufep.engine.jobs import Job
-from cufep.workflow import KCAL, WorkflowError
+from cufep.workflow import KCAL, WorkflowError, gcmc_in
 
 #: the stage of the one coordinate of a relative transformation
 STAGES = ["morph"]
@@ -116,6 +124,64 @@ class HybridLeg:
     barostat: str
     membrane_info: dict
     info: dict
+    gcmc: object = None           # cufep.sampling.gcmc.GcmcSpec of a leg with grand canonical moves of water
+
+
+def hybrid_gcmc(rcfg, hybrid, topology, box):
+    """The grand canonical moves of water of a hybrid System (all its waters interacting): their specification
+    (:func:`cufep.sampling.gcmc.gcmc_spec`), with the ligand of the stand-in energy at the parameters of both end
+    states and fixed lambdas (the module's docstring)."""
+    import dataclasses
+
+    from cufep.sampling.gcmc import GcmcError, gcmc_spec
+    from cufep.workflow import gcmc_water_values
+
+    g = rcfg.sampling.gcmc
+    mu, volume = gcmc_water_values(rcfg)
+    try:
+        spec = gcmc_spec(hybrid.system, topology, hybrid.positions, np.asarray(box, dtype=float),
+                         list(hybrid.ligand_atoms), rcfg.dynamics.cutoff_nm, rcfg.alchemy.softcore_alpha, 1,
+                         rcfg.thermodynamics.temperature_K, g.interval_ps, g.attempts, g.batch_size,
+                         g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters))
+    except GcmcError as exc:
+        raise WorkflowError(f"sampling.gcmc cannot be used with this system: {exc}") from exc
+    charge, sigma, epsilon = (np.array(v, dtype=float) for v in (spec.charge, spec.sigma, spec.epsilon))
+    for h in hybrid.ligand_atoms:
+        q, s, e = hybrid.parameters_a[h] if h in hybrid.parameters_a else hybrid.parameters_b[h]
+        charge[h], sigma[h], epsilon[h] = q, s, e
+    return dataclasses.replace(spec, charge=charge, sigma=sigma, epsilon=epsilon, stand_in_lambdas=(1.0, 1.0))
+
+
+def molecules_of(system, topology, bonds) -> list[list[int]]:
+    """The molecules of a hybrid System (atoms joined by bonds of the topology, ``bonds`` and constraints, a virtual
+    site with its parents), for moving a configuration into another cell as a barostat moves it."""
+    parent = list(range(system.getNumParticles()))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def join(i: int, j: int) -> None:
+        parent[root(int(i))] = root(int(j))
+
+    for a, b in topology.bonds():
+        join(a.index, b.index)
+    for a, b in bonds:
+        join(a, b)
+    for k in range(system.getNumConstraints()):
+        i, j, _d = system.getConstraintParameters(k)
+        join(i, j)
+    for i in range(system.getNumParticles()):
+        if system.isVirtualSite(i):
+            site = system.getVirtualSite(i)
+            for k in range(site.getNumParticles()):
+                join(i, site.getParticle(k))
+    groups: dict[int, list[int]] = {}
+    for i in range(len(parent)):
+        groups.setdefault(root(i), []).append(i)
+    return list(groups.values())
 
 
 def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
@@ -140,19 +206,35 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
                                 rest2_atoms=hot_atoms)
     unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
     topology = hybrid_topology(a["topology"], b["topology"], unique_b)
+    gcmc = None
+    if gcmc_in(rcfg, leg):
+        from cufep.sampling.gcmc import ghosts_off
+
+        gcmc = hybrid_gcmc(rcfg, hybrid, topology, a["box"])
+        # every MD of the leg is of the System with the ghosts of the start switched off
+        ghosts_off(hybrid.system, gcmc.waters[gcmc.ghosts].reshape(-1))
     xml = mm.XmlSerializer.serialize(hybrid.system)
     prep = {"input_chains": info.get("input_chains"), "system_xml": xml, "topology": topology,
             "positions": hybrid.positions, "box": a["box"], "ligand": list(hybrid.ligand_atoms),
             "solute": sorted(set(a["solute"]) | set(hybrid.unique_new)), "protein": list(a["protein"])}
     leg_info = info["legs"][leg]
     return HybridLeg(hybrid=hybrid, xml=xml, prep=prep, hot_atoms=hot_atoms, hot_residues=hot_residues,
-                     barostat=leg_info["barostat"], membrane_info=leg_info.get("membrane_info") or {}, info=info)
+                     barostat=leg_info["barostat"], membrane_info=leg_info.get("membrane_info") or {}, info=info,
+                     gcmc=gcmc)
 
 
-def hybrid_settings(rcfg) -> dict:
-    """The settings of a relative run that the samples of a leg depend on beyond its System."""
-    return {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"), "mapping": rcfg.mapping.model_dump(mode="json")},
-            "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
+def hybrid_settings(rcfg, leg: str | None = None) -> dict:
+    """The settings of a relative run that the samples of a leg depend on beyond its System; the grand canonical
+    moves of water for the leg that makes them (written only there, so that the solvent leg and the legs of
+    earlier versions keep the record they had)."""
+    settings = {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"),
+                         "mapping": rcfg.mapping.model_dump(mode="json")},
+                "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
+    if gcmc_in(rcfg, leg):
+        from cufep.workflow import gcmc_record
+
+        settings["gcmc"] = gcmc_record(rcfg)
+    return settings
 
 
 def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None):
@@ -224,11 +306,27 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         + (f"REST2 on the ligand and {len(built.hot_atoms)} atoms of {len(built.hot_residues)} residues "
            f"({' '.join(built.hot_residues)}), {rest2_scale:g} times the temperature in the middle"
            if rest2_scale > 1.0 else "REST2 off"))
+    gcmc = built.gcmc
+    if gcmc is not None:
+        mu = gcmc.excess_chemical_potential_kj_per_mol / KCAL
+        log(f"grand canonical moves of water: sphere of {10 * gcmc.radius_nm:.1f} A around the hybrid ligand, Adams "
+            f"value B = {gcmc.adams:.3f} (excess chemical potential {mu:.3f} kcal/mol, standard volume "
+            f"{1000 * gcmc.standard_volume_nm3:.3f} A^3), {len(gcmc.ghosts)} of the "
+            f"{len(gcmc.waters)} waters are ghosts at the start (those farthest from the ligand); the alchemical run "
+            "has no barostat")
 
     # ---- 1. pre-equilibration of the hybrid System at lambda 0 ---------------------------------
     eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
+    if gcmc is not None:
+        # the cell is fixed from here on (cufep.workflow.alchemical_box), the configuration moved into it as a
+        # barostat moves it
+        from cufep.workflow import alchemical_box, positions_in_cell
+
+        cell = alchemical_box(eq, gcmc)
+        start = (positions_in_cell(start[0], start[1], cell,
+                                   molecules_of(hybrid.system, prep["topology"], hybrid.bonds)), cell, start[2])
 
     # ---- 2. backend -------------------------------------------------------------------------------
     backend_name = chosen_backend(run, hybrid.system)
@@ -242,18 +340,19 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
-    settings = hybrid_settings(rcfg)
+    settings = hybrid_settings(rcfg, job.leg)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more) -> LegSpec:
         return LegSpec(name=job.tag, system_xml=built.xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
                        backend=backend, precision=_precision(rcfg, backend), platform=rcfg.backend.platform,
-                       temperature_K=T, pressure_bar=rcfg.thermodynamics.pressure_bar, barostat=barostat,
+                       temperature_K=T, pressure_bar=None if gcmc is not None else rcfg.thermodynamics.pressure_bar,
+                       barostat="none" if gcmc is not None else barostat,
                        barostat_frequency=rcfg.dynamics.barostat_frequency, exchange=rcfg.sampling.exchange,
                        friction_per_ps=rcfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
                        steps_per_iteration=plan.steps_per_iteration, cpu_threads=rcfg.resources.cpu_threads_per_worker,
-                       box_safety=1.3 if barostat == "membrane" else None, settings=settings,
-                       mps_thread_percentage=thread_percentage(job.oversubscription), **more)
+                       box_safety=1.3 if barostat == "membrane" and gcmc is None else None, settings=settings,
+                       mps_thread_percentage=thread_percentage(job.oversubscription), gcmc=gcmc, **more)
 
     def from_pre_equilibration(schedule) -> list:
         """The start of every window that the leg does not choose itself: the end of the pre-equilibration,
@@ -324,7 +423,19 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                 pool_spec = spec_of(ends, backend, seed=seed + 23)
                 # the Context of this process, which walks through the windows of the first iteration
                 ctx, integ = leg_context(pool_spec, hybrid.system, start[1], start[0], start[2], run.device0, seed)
-                schedule, cfgs = adaptive_windows(run, pool_spec, ctx, integ, STAGES, als, n_atoms)
+
+                def inline_mover():
+                    """The moves of water of the windows that run in this process, on its Context."""
+                    if gcmc is None:
+                        return None, 0
+                    from cufep.sampling.gcmc import GcmcMover
+                    from cufep.sampling.worker import GCMC_STREAM, stream_seed
+                    from cufep.steps import md_steps
+
+                    return (GcmcMover(gcmc, ctx, stream_seed(seed + 23, 0, 0, GCMC_STREAM)),
+                            md_steps(gcmc.interval_ps, timestep_fs))
+
+                schedule, cfgs = adaptive_windows(run, pool_spec, ctx, integ, STAGES, als, n_atoms, inline_mover)
                 del ctx, integ
                 how = {"start_configurations": als.start_configurations,
                        **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {}),
@@ -375,9 +486,12 @@ def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLe
     free energy along the path (``delta_g``) is that of transforming A into B in the leg, and what the hybrid
     topology is made of."""
     from cufep.engine.leg import path_result
+    from cufep.workflow import gcmc_numbers
 
-    result, _ = path_result(leg_dir, analysis, run_record, {"edge": run_record.get("edge")}, samples=samples,
-                            schedule=schedule, command=RBFE_COMMAND)
+    result, of = path_result(leg_dir, analysis, run_record, {"edge": run_record.get("edge")}, samples=samples,
+                             schedule=schedule, command=RBFE_COMMAND)
+    # the grand canonical moves of water of the production that is analysed, by lambda window (None: none)
+    result["gcmc"] = gcmc_numbers(of["samples"], of["first"])
     if built is not None:
         h = built.hybrid
         result["hybrid"] = {"ligand_a": built.info["ligand_a"], "ligand_b": built.info["ligand_b"],

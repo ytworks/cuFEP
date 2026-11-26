@@ -385,3 +385,29 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
     core = {i: n_b_total - n_b + j for i, j in (RING_MAP if core_b is None else core_b).items()}
     box = np.asarray(modeller.topology.getPeriodicBoxVectors().value_in_unit(u.nanometer))
     return system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box
+
+
+def hybrid_edge_topology(n_particles: int, ligand: list[int], system):
+    """A topology of the hybrid System of the test edge in the order of its particles: the atoms of ligand A, the
+    waters (O, H, H), and the atoms unique to B last, as :func:`cufep.rbfe.leg.hybrid_topology` orders them."""
+    import openmm as mm
+    import openmm.app as app
+
+    top = app.Topology()
+    chain = top.addChain()
+    carbon, hydrogen, oxygen = (app.Element.getBySymbol(s) for s in ("C", "H", "O"))
+    ligand, residue, water = set(ligand), None, []
+    for i in range(n_particles):
+        if i in ligand:
+            if residue is None or residue.name != "LIG":
+                residue = top.addResidue("LIG", chain)
+            light = system.getParticleMass(i).value_in_unit(mm.unit.dalton) < 2.0
+            top.addAtom(f"X{i}", hydrogen if light else carbon, residue)
+            continue
+        if not water:
+            residue = top.addResidue("HOH", chain)
+        water.append(top.addAtom("O" if not water else f"H{len(water)}", oxygen if not water else hydrogen, residue))
+        if len(water) == 3:
+            top.addBond(water[0], water[1]), top.addBond(water[0], water[2])
+            water = []
+    return top

@@ -26,7 +26,8 @@ def test_documented_defaults_are_the_defaults_of_the_code(repo):
 
 
 @pytest.mark.parametrize("more, message", [
-    ({"sampling": {"gcmc": {"enabled": True}}}, "moves of the ABFE"),
+    ({"sampling": {"relocation_mc": {"enabled": True}}}, "move of the ABFE"),
+    ({"sampling": {"gcmc": {"batch_size": 3000}}}, "batch_size"),
     ({"membrane": {"enabled": True, "complex_leg": "water"}}, "complex_leg"),
     ({"network": {"edges": [["a", "a"]]}}, "to itself"),
     ({"network": {"edges": [["a", "b"], ["b", "a"]]}}, "twice"),

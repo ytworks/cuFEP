@@ -112,6 +112,10 @@ class GcmcSpec:
     excess_chemical_potential_kj_per_mol: float
     standard_volume_nm3: float
     ghosts: np.ndarray            # the waters (rows of ``waters``) that are ghosts at the start
+    #: (lambda_electrostatics, lambda_sterics) of the ligand in the stand-in energy U' of every state; None: those of
+    #: the state (an ABFE leg). A relative leg has no such pair: its ligand interacts in U' with the parameters of
+    #: both end states at full strength, which the test with the full potential corrects (cuFEP's own)
+    stand_in_lambdas: tuple[float, float] | None = None
 
     @property
     def adams(self) -> float:
@@ -141,17 +145,45 @@ def farthest_waters(waters: np.ndarray, positions: np.ndarray, box: np.ndarray, 
     return np.sort(order[:int(n)])
 
 
+def epsilon_parameters() -> dict[str, tuple[str, ...]]:
+    """The forces besides the NonbondedForce that hold the Lennard-Jones of the atoms with the ligand, by name, and
+    their per-particle parameters of epsilon: the soft-core force of the ABFE (:mod:`cufep.alchemy.factory`) and the
+    Lennard-Jones of the hybrid ligand with its environment (:mod:`cufep.rbfe.hybrid`, epsilon at either end)."""
+    from cufep.alchemy.factory import SOFTCORE_FORCE_NAME
+    from cufep.rbfe.hybrid import HYBRID_LJ_FORCE_NAME
+
+    return {SOFTCORE_FORCE_NAME: ("epsilon",), HYBRID_LJ_FORCE_NAME: ("epsilonA", "epsilonB")}
+
+
+def lennard_jones_forces(system) -> list[tuple]:
+    """(force, indices of its epsilon parameters) of every force of :func:`epsilon_parameters` in ``system``."""
+    import openmm as mm
+
+    known, out = epsilon_parameters(), []
+    for force in system.getForces():
+        if isinstance(force, mm.CustomNonbondedForce) and force.getName() in known:
+            names = [force.getPerParticleParameterName(k) for k in range(force.getNumPerParticleParameters())]
+            out.append((force, [names.index(n) for n in known[force.getName()]]))
+    return out
+
+
 def ghosts_off(system, atoms) -> None:
     """Take the nonbonded interactions of ``atoms`` out of ``system`` (changed in place): charge 0
-    and epsilon 0 in its NonbondedForce. For the System of a leg with the moves before anything
-    is made of it, so that its plain MD, its alchemical System and its tail correction all have
-    the ghosts of the start."""
+    and epsilon 0 in its NonbondedForce, and epsilon 0 in the forces of :func:`lennard_jones_forces` (the hybrid
+    System of a relative leg has one). For the System of a leg with the moves before anything is made of it, so
+    that its plain MD, its alchemical System and its tail correction all have the ghosts of the start."""
     import openmm as mm
 
     force = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
     for i in (int(a) for a in atoms):
         charge, sigma, epsilon = force.getParticleParameters(i)
         force.setParticleParameters(i, charge * 0.0, sigma, epsilon * 0.0)
+    for other, indices in lennard_jones_forces(system):
+        for i in (int(a) for a in atoms):
+            values = list(other.getParticleParameters(i))
+            for k in indices:
+                values[k] = 0.0
+            other.setParticleParameters(i, values)
 
 
 def every_water_on(system, spec: GcmcSpec) -> None:
@@ -163,6 +195,12 @@ def every_water_on(system, spec: GcmcSpec) -> None:
     force = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
     for i in (int(a) for a in np.asarray(spec.waters).reshape(-1)):
         force.setParticleParameters(i, float(spec.charge[i]), float(spec.sigma[i]), float(spec.epsilon[i]))
+    for other, indices in lennard_jones_forces(system):
+        for i in (int(a) for a in np.asarray(spec.waters).reshape(-1)):
+            values = list(other.getParticleParameters(i))
+            for k in indices:
+                values[k] = float(spec.epsilon[i])
+            other.setParticleParameters(i, values)
 
 
 def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, cutoff_nm: float,
@@ -215,17 +253,15 @@ class WaterSwitch:
     """Switches waters off and on in a live Context: for every site of the water, charge and
     epsilon in the force that holds the nonbonded parameters of all atoms (the stock
     NonbondedForce, or the cuPotential plugin's force that took its place) and epsilon in the
-    soft-core force of the ligand, if the System has one; then ``updateParametersInContext``.
+    forces of :func:`lennard_jones_forces` (the soft-core force of the ligand of the ABFE, the
+    Lennard-Jones of the hybrid ligand of a relative leg), if the System has one; then
+    ``updateParametersInContext``.
 
     A Context that was switched so gives the energies and forces of a System built so, on both
     backends (``spikes/m33_ghost_waters_on_the_backends.py``, the tests). ``on`` is what the
     Context has when this object is made: the System it was made of."""
 
     def __init__(self, context, spec: GcmcSpec, on: np.ndarray | None = None) -> None:
-        import openmm as mm
-
-        from cufep.alchemy.factory import SOFTCORE_FORCE_NAME
-
         self.context, self.waters = context, np.asarray(spec.waters, dtype=np.int64)
         system = context.getSystem()
         forces = [system.getForce(i) for i in range(system.getNumForces())]
@@ -233,15 +269,9 @@ class WaterSwitch:
         if len(found) != 1:
             raise GcmcError(f"the System has {len(found)} forces with the nonbonded parameters of the atoms, not one")
         self.nonbonded = found[0]
-        soft = [f for f in forces if isinstance(f, mm.CustomNonbondedForce) and f.getName() == SOFTCORE_FORCE_NAME]
-        self.softcore = soft[0] if soft else None
+        self.others = lennard_jones_forces(system)
         self.charge, self.sigma, self.epsilon = (np.asarray(v, dtype=float) for v in
                                                  (spec.charge, spec.sigma, spec.epsilon))
-        self.soft_epsilon = None
-        if self.softcore is not None:
-            names = [self.softcore.getPerParticleParameterName(k)
-                     for k in range(self.softcore.getNumPerParticleParameters())]
-            self.soft_epsilon = names.index("epsilon")
         self.on = spec.initial_on() if on is None else np.array(on, dtype=bool)
 
     def apply(self, on: np.ndarray) -> int:
@@ -255,13 +285,14 @@ class WaterSwitch:
             keep = 1.0 if on[water] else 0.0
             for i in (int(a) for a in self.waters[water]):
                 self.nonbonded.setParticleParameters(i, keep * self.charge[i], self.sigma[i], keep * self.epsilon[i])
-                if self.softcore is not None:
-                    values = list(self.softcore.getParticleParameters(i))
-                    values[self.soft_epsilon] = keep * self.epsilon[i]
-                    self.softcore.setParticleParameters(i, values)
+                for other, indices in self.others:
+                    values = list(other.getParticleParameters(i))
+                    for k in indices:
+                        values[k] = keep * self.epsilon[i]
+                    other.setParticleParameters(i, values)
         self.nonbonded.updateParametersInContext(self.context)
-        if self.softcore is not None:
-            self.softcore.updateParametersInContext(self.context)
+        for other, _indices in self.others:
+            other.updateParametersInContext(self.context)
         self.on = on.copy()
         return len(changed)
 
@@ -314,9 +345,11 @@ class GcmcMover:
     def _stand_in(self, x: np.ndarray, box: np.ndarray, state, on: np.ndarray):
         active = np.ones(len(self.spec.charge), dtype=bool)
         active[self.waters[~on].reshape(-1)] = False
+        fixed = self.spec.stand_in_lambdas
+        electrostatics, sterics = (state.lambda_electrostatics, state.lambda_sterics) if fixed is None else fixed
         if self.gpu is not None:
-            return self.gpu.load(x, box, state.lambda_electrostatics, state.lambda_sterics, active=active)
-        return StandIn(self.spec, x, box, state.lambda_electrostatics, state.lambda_sterics, active=active)
+            return self.gpu.load(x, box, electrostatics, sterics, active=active)
+        return StandIn(self.spec, x, box, electrostatics, sterics, active=active)
 
     # -- one batch of trials -------------------------------------------------------------------------
     def configuration(self, x: np.ndarray, box: np.ndarray, state, on: np.ndarray) -> dict:

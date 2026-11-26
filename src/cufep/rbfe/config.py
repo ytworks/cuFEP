@@ -20,12 +20,14 @@ from pydantic import Field, field_validator, model_validator
 from cufep.config.schema import (
     AnalysisConfig,
     CommonConfig,
+    GcmcConfig,
     OutputConfig,
     PrecalculationLengths,
     SamplingConfig,
     _of_leg,
     _Section,
     common_problems,
+    gcmc_problems,
 )
 
 
@@ -157,15 +159,26 @@ def initial_window_problems(schedule: HybridLambdaSchedule) -> list[str]:
     return []
 
 
+class RbfeGcmc(GcmcConfig):
+    """``sampling.gcmc`` of a relative calculation: the moves of the ABFE, on by default in the complex leg (the
+    owner's decision of 2026-11-26; the relative calculations of the public benchmark, Ross et al. 2023: "All complex
+    leg simulations were run in the muVT ensemble whereby water molecules were sampled with grand canonical Monte
+    Carlo"); the solvent leg runs at constant pressure. Its own class, so that a section that gives other settings
+    of the moves keeps them on."""
+
+    enabled: bool = True
+
+
 class RbfeSampling(SamplingConfig):
     #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol
     production_ns: float = 5.0
+    gcmc: RbfeGcmc = Field(default_factory=RbfeGcmc)
 
     @model_validator(mode="after")
     def _no_water_moves(self):
-        if self.relocation_mc.enabled or self.gcmc.enabled:
-            raise ValueError("sampling.relocation_mc and sampling.gcmc are moves of the ABFE; a relative "
-                             "calculation does not have them")
+        if self.relocation_mc.enabled:
+            raise ValueError("sampling.relocation_mc is a move of the ABFE; a relative calculation does not have it "
+                             "(its moves of water are sampling.gcmc)")
         if not isinstance(self.equilibration_ns, (int, float)):
             raise ValueError("sampling.equilibration_ns is one value for both legs")
         return self
@@ -202,6 +215,7 @@ class RbfeConfig(CommonConfig):
             problems.append("membrane.complex_leg: water is a setting of the ABFE; a relative calculation runs the "
                             "complex leg in the bilayer")
         problems += initial_window_problems(self.lambda_schedule)
+        problems += gcmc_problems(self)
         if problems:
             raise ValueError("; ".join(problems))
         return self
