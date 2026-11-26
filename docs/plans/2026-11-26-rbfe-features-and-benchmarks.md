@@ -224,3 +224,4 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   RBFE example(f6ac3b4)の 3 エッジは 0 で影響なし。A2A の RBFE example(f6ac3b4)は 4e~4b 12 項、4b~4o 11 項、4e~4o 0:
   記録した ddG +0.91 と +1.38(計画 `docs/plans/2026-11-25-rbfe.md` の記録)は評価器のずれのある計算。流し直すかは
   オーナーの判断。TYK2 のフル実行は image 2ecbcd2 で最初から(`runs/rbfe_bench_tyk2_2ecbcd2`)。
+- ABFE の repeat 間で GCMC の状態を照合しない件: オーナーの指示で issue #20 にした(PR #19 では直さない)。
