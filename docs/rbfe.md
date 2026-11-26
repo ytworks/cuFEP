@@ -94,10 +94,17 @@ the pattern is a set of atoms (the orders of the atoms of a symmetric pattern ar
 than 1000 matches in a ligand, the most that are searched, is refused. A mapping in which a group of atoms unique to
 one ligand is bonded to two or more mapped atoms is refused (its bonds and angles would hold the mapped atoms at both
 ends of the transformation): the mapping of each leg as the hybrid is made of it, after the rule of the constrained
-bonds, before anything of the edge is written; LOMAP plans no edge with one (with the hydrogens of constrained bonds
-taken out as that rule takes them); an edge prepared before this check is checked when it is taken again and in the
-analysis, which leaves it out. An edge whose record of its preparation is lost while its legs hold results is
-refused: it is prepared anew only when its directory is moved away.
+bonds, before anything of the edge is written; LOMAP plans no edge with one, and `cufep rbfe plan` shows none (with
+the pairs of a hydrogen and a heavy atom taken out as that rule takes them where the bonds of hydrogens are
+constrained); an edge prepared before this check is checked when it is taken again and in the analysis, which leaves
+it out. The record of a prepared edge (`prep/prep.json`) is checked before it is read: what it was made from, both
+legs, each a mapping that is not empty, one to one, of atom numbers of the two ligands, and the ion of an alchemical
+water; a record of another form leaves its edge out, with the reason, and the analysis of the other edges goes on. The
+ligands of the edge are those of its records (`ligand_a.json`, `ligand_b.json`), else those of the input of the run
+that the record was made from (its digests): the run writes their records again, the analysis reads the SDF of the
+run. A custom core of version 2 of its rule (whose search could stop before a match) is taken where Kartograf, run
+again with the settings of its record, gives the mapping it recorded. An edge whose record of its preparation is lost
+while its legs hold results is refused: it is prepared anew only when its directory is moved away.
 
 ### Hybrid topology
 
@@ -166,9 +173,10 @@ not (the NonbondedForce, which the plugin carries, has electrostatic lambdas of 
 ligand and with the environment carries the factor of its hot atoms (s for two, sqrt(s) for one), every proper
 torsion of four hot atoms s, as REST2 scales them (Wang, Friesner and Berne 2011). A bond of two mapped atoms is
 read in the end state that has it (a bond that closes a ring in B is a bond to a ring); version 1 of the rule read it
-in A, and a leg whose hot atoms the two versions choose otherwise records the version with its settings: samples of
-version 1 are not continued (refused before a run writes anything), and their free energy, whose end states are not
-scaled, stays in the analysis. The charges of an alchemical water
+in A, and a leg whose hot atoms the two versions choose otherwise records the version with its settings. Samples
+of such a leg that record no version are continued where the System they record is that of the hot atoms of this
+rule (versions 48eea8c to e0f9743 chose them and recorded no version), and refused before a run writes anything
+where it is that of version 1; their free energy, whose end states are not scaled, stays in the analysis. The charges of an alchemical water
 are cold whatever the region. The energies of every state equal those of a System with the scaling written into its
 parameters (`tests/unit/test_rbfe_rest2_region.py`), on both backends (`tests/gpu`).
 
@@ -181,8 +189,8 @@ ligand, the waters farthest from the ligand ghosts from the pre-equilibration on
 replica exchange without a barostat in the mean cell of the pre-equilibration (in a complex leg without free MD
 its last cell). For a hybrid (cuFEP's own): the radius of the sphere is from the heavy atoms of
 both end states, so that A -> B and B -> A have one radius, and the centre of the sphere of a move is the centre of
-the heavy atoms of the hybrid ligand (the mapped atoms and the unique atoms of both ends) in the configuration of that
-move, the same atoms both ways: one configuration has one sphere (the two hybrids start from other configurations,
+the heavy atoms of the hybrid ligand (the atoms heavy in either end state, by the elements of both: an atom of A
+mapped onto a hydrogen of B is one of them both ways) in the configuration of that move, the same atoms both ways: one configuration has one sphere (the two hybrids start from other configurations,
 the mapped atoms where A or B has them), each molecule taken whole along its bonds (those of the hybrid System, which its topology
 does not all hold) and the two end states put together by their centres, so that a ligand longer than half the cell
 has the sphere of the molecule whatever atom comes first; the ghosts of the start are the waters farthest from the
@@ -191,8 +199,10 @@ ways (the hybrid holds the mapped atoms where A has them; earlier versions count
 pre-equilibration or samples they made keeps those ghosts: where the record of the pre-equilibration names no
 centre and has them, or without a record where the leg goes on from its samples; a leg that goes on from its
 samples has the ghosts whose System has the checksum its samples recorded, whatever its record), checked against the
-sphere around the centre they were counted from; the ghost waters a pre-equilibration was made with are recorded
-beside it (`equil_ghosts.json`, with the centre: a list of numbers of waters); a record that is not that is a
+sphere around the centre they were counted from (the one the record names, else every centre whose rule gives
+them, of which one suffices; the earlier centre with the heavy atoms of A, as earlier versions took them); the ghost
+waters a pre-equilibration was made with are recorded beside it (`equil_ghosts.json`, with the centre: a set of
+numbers of the waters of the leg, each once); a record that is not that is a
 pre-equilibration whose ghosts are not known, and it is read only by a leg that would start from it; a
 leg that would start its replica exchange from a pre-equilibration of other
 ghosts or without that record (a relative leg does not take one on trust), or from start configurations in another

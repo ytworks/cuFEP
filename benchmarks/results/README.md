@@ -43,7 +43,7 @@ How to read them, and the comparison with experiment, FEP+ and another ABFE meth
   experiment and the published prediction of the same edge). Files: `rbfe_report_ligands.csv`,
   `rbfe_report_edges.csv`, the two figures, `summary.json`, `edges.csv`, `ligands.csv`, `network.json`.
 - Analysed again: `cufep benchmark report tyk2 <run directory>` of later commits of PR #19 gives the same tables
-  from the stored legs of this run (checked with the code of 376a137).
+  from the stored legs of this run (checked with the code of 376a137 and of 9dacb52).
 - Computed again: a run made from the start by a later commit does not start from the same configurations. Since
   e0f9743 the ghost waters of the start of a complex leg are counted from the mapped atoms midway between the two
   end states; for 5 of these 22 complex legs that chooses one other water as a ghost (the legs of this run keep
