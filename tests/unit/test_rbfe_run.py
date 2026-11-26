@@ -1809,12 +1809,19 @@ def test_a_leg_whose_hot_atoms_the_earlier_rule_chose_otherwise_is_refused_befor
     unique_b = sorted(j for j in end["b"]["ligand"] if j not in set(end["core_map"].values()))
     hot = leg_module.perturbed_region(edge_dir, end["a"], end["b"], end["core_map"], unique_b)
     of_rule_1 = hot[1:]
-    monkeypatch.setattr(leg_module, "perturbed_region", lambda *args, rule=None: of_rule_1 if rule == 1 else hot)
+
+    def by_rule(*args, rule=None, inputs=None):
+        return of_rule_1 if rule == 1 else hot
+
+    def of_rule_1_only(*args, rule=None, inputs=None):
+        return of_rule_1
+
+    monkeypatch.setattr(leg_module, "perturbed_region", by_rule)
     assert hybrid_settings(rcfg, "solvent", edge_dir)["sampling.rest2"]["hot_region_rule"] == 2
     made_now = hashlib.sha256(build_leg(rcfg, edge_dir, "solvent").xml.encode()).hexdigest()
-    monkeypatch.setattr(leg_module, "perturbed_region", lambda *args, rule=None: of_rule_1)
+    monkeypatch.setattr(leg_module, "perturbed_region", of_rule_1_only)
     made_by_rule_1 = hashlib.sha256(build_leg(rcfg, edge_dir, "solvent").xml.encode()).hexdigest()
-    monkeypatch.setattr(leg_module, "perturbed_region", lambda *args, rule=None: of_rule_1 if rule == 1 else hot)
+    monkeypatch.setattr(leg_module, "perturbed_region", by_rule)
     assert made_now != made_by_rule_1
     # (thirteenth review, P2) samples of 48eea8c to e0f9743: the hot atoms of this rule, no version recorded; their
     # System is that of this rule, and they are continued (they were refused for the record of the version)
@@ -1825,6 +1832,25 @@ def test_a_leg_whose_hot_atoms_the_earlier_rule_chose_otherwise_is_refused_befor
     with pytest.raises(WorkflowError, match="hot atoms of version 1") as refused:
         check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
     assert "--reschedule" in str(refused.value)
+    # (fourteenth review, P2) a leg of e0f9743 stopped before its replica exchange (its windows and their start
+    # configurations, which record no version of the rule and not the System they were made with): refused before a
+    # run writes anything, with the command that starts it anew (it was refused in the leg after the run had written
+    # its record); --reschedule sets the windows aside
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.rbfe.leg import STAGES
+    from cufep.rbfe.run import check_windows_of_the_run
+
+    monkeypatch.setattr(storage, "stored_layout", lambda d: ([], {}))          # no samples, no checkpoint
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    schedule = fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES})
+    schedule.save(leg_dir / "schedule.yaml")
+    np.savez(leg_dir / "start_configs.npz", positions=np.zeros((len(schedule.states), 1, 3)),
+             made_with=json.dumps({"states": [state.to_dict() for state in schedule.states],
+                                   "settings": hybrid_settings(rcfg, "solvent")}))
+    with pytest.raises(WorkflowError, match="were made with other settings") as refused:
+        check_windows_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    assert "--leg solvent --reschedule" in str(refused.value)
+    check_windows_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], True)
 
 
 def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is_refused_before_writing(tmp_path):

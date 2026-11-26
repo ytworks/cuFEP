@@ -420,6 +420,51 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
 
 
+def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool,
+                             inputs=None) -> None:
+    """Before a run writes anything: the lambda windows and start configurations of every leg it runs that would start
+    its replica exchange from them (no samples, no checkpoint of their start) are compared with the settings of this
+    run as the leg compares them (:func:`cufep.workflow.check_windows_settings`), and refused with the command that
+    starts the leg anew (fourteenth review of PR #19: a leg of e0f9743 with REST2 on the perturbed region, stopped
+    before its replica exchange, was refused for the version of the rule of the hot atoms after the run had written
+    its record; the System its windows were made with is not recorded, so that their origin cannot be proven)."""
+    from cufep.alchemy.schedule import Schedule
+    from cufep.engine.leg import goes_on_from_its_samples
+    from cufep.rbfe.leg import hybrid_settings
+    from cufep.workflow import check_windows_settings, start_record_of, starts_are_of
+
+    if reschedule:
+        return                                   # the windows are set aside and chosen anew
+    problems, commands = [], []
+    for a, b in edges:
+        edge = edge_name(a, b)
+        for r in repeats:
+            for leg in ("solvent", "complex"):
+                if only_legs and leg not in only_legs:
+                    continue
+                leg_dir = out_dir / "edges" / edge / f"repeat_{r}" / leg
+                sched, start = leg_dir / "schedule.yaml", leg_dir / "start_configs.npz"
+                if not (sched.exists() and start.exists()) or goes_on_from_its_samples(leg_dir):
+                    continue
+                try:
+                    made, schedule = start_record_of(start), Schedule.load(sched)
+                except (OSError, ValueError, KeyError):
+                    continue                     # files the leg does not take: it makes its windows again
+                if not starts_are_of(made, schedule):
+                    continue                     # start configurations of other windows: made again
+                try:
+                    check_windows_settings(made, hybrid_settings(rcfg, leg, out_dir / "edges" / edge, inputs), start,
+                                           lambda *args: None)
+                except WorkflowError as exc:
+                    why = str(exc).split(". Nothing was changed")[0]
+                    problems.append(f"the {leg} leg of {edge}, repeat {r}: {why}")
+                    commands.append(rerun_command(edge, r, [leg], out_dir))
+    if problems:
+        raise WorkflowError("; ".join(problems) + ". Nothing was changed. Start these legs anew with --reschedule "
+                            "(what they have is kept in previous_<n>/): " + "; ".join(commands)
+                            + "; or run the calculation in a new output.dir")
+
+
 def iteration_of_the_leg(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: int,
                          stored_timestep_fs: float | None = None) -> dict:
     """What the samples of a leg of this run record of its dynamics, as the leg makes them: the time step of its
@@ -543,6 +588,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
     check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
     check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
+    check_windows_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
     states = states_of(rcfg, ligands)
     experiment = experiment_of(rcfg, ligands, states)
     if states is not None:
