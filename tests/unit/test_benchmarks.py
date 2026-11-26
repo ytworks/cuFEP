@@ -998,3 +998,32 @@ def test_a_summary_of_2ecbcd2_with_states_alone_is_taken_for_a_run_of_states(tmp
     row = next(csv.DictReader((tmp_path / "compounds" / "rbfe_report_edges.csv").open()))
     assert float(row["exp_ddg"]) == pytest.approx(ref["4e"]["exp"] - ref["4b"]["exp"])
     assert row["exp_ddg_of"] == "the ligands"
+
+
+def test_a_run_of_ligands_named_as_states_is_reported_as_a_run_of_ligands(tmp_path):
+    """Tenth review of PR #19 (P2): 4h and 4jS run as ligands, without system.states: their dG were in the summary
+    with the reference of ligands, and the report took the run for one of states by the name 4jS and gave "Compounds
+    with a dG: 0 of 2", with its network.json and without it. The network says whether the run had states, and a
+    summary that records its format is read by it; the names decide only for a summary that records neither."""
+    import shutil
+
+    from cufep.benchmarks.rbfe import report
+
+    exp = {"4h": -10.0, "4jS": -10.887}
+    summary = {"ligands": ["4h", "4jS"], "cycle_closures": [], "notes": [], "run_directory": "runs/x",
+               "experiment_kcal_mol": exp,
+               "dg": {"reference": "mean of the experimental values", "reference_ligands": ["4h", "4jS"],
+                      "values": {"4h": {"dg": -10.2, "se": 0.2}, "4jS": {"dg": -10.6, "se": 0.2}}},
+               "edges": [{"edge": "4h~4jS", "ligand_a": "4h", "ligand_b": "4jS", "ddg": -0.4, "se": 0.3,
+                          "exp_ddg": exp["4jS"] - exp["4h"], "exp_ddg_of": "the ligands", "not_reliable": []}]}
+    (tmp_path / "with").mkdir()
+    (tmp_path / "with" / "summary.json").write_text(json.dumps(summary))
+    (tmp_path / "with" / "network.json").write_text(json.dumps({"ligands": ["4h", "4jS"], "edges": [["4h", "4jS"]],
+                                                                "edges_from": "given"}))
+    shutil.copytree(tmp_path / "with", tmp_path / "alone")
+    (tmp_path / "alone" / "network.json").unlink()
+    for name in ("with", "alone"):
+        text = report("a2a", tmp_path / name)
+        assert "Ligands with a dG: 2 of 2" in text, name
+        rows = {r["ligand"]: r for r in csv.DictReader((tmp_path / name / "rbfe_report_ligands.csv").open())}
+        assert float(rows["4jS"]["cufep_rbfe"]) == pytest.approx(-10.6), name

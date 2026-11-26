@@ -1415,6 +1415,25 @@ def test_a_checkpoint_of_08d58d5_without_samples_goes_on_with_start_configuratio
     with pytest.raises(WorkflowError, match="exchange: hrex -> none"):
         check_samples_of_the_run(other_exchange, edge_dir.parent.parent, [("toluene", "phenol")], [0], None, False)
     check_samples_of_the_run(other_exchange, edge_dir.parent.parent, [("toluene", "phenol")], [0], None, True)
+    # (tenth review, P2) another length of an iteration: other MD steps per iteration of the samples (625 -> 1250 at
+    # 4 fs in the review), refused before the run writes
+    longer = rcfg.model_validate({**rcfg.model_dump(mode="json"), "sampling": {
+        **rcfg.model_dump(mode="json")["sampling"], "time_per_iteration_ps": 2 * rcfg.sampling.time_per_iteration_ps}})
+    with pytest.raises(WorkflowError, match="steps_per_iteration"):
+        check_samples_of_the_run(longer, edge_dir.parent.parent, [("toluene", "phenol")], [0], None, False)
+    # (tenth review, P2) another temperature: the pre-equilibration cannot be used again, so --reschedule, which keeps
+    # it, is not the way; refused before anything is set aside, with or without --reschedule, and no command of this
+    # directory is offered
+    from cufep.rbfe.run import check_pre_equilibrations_of_the_run
+
+    warmer = rcfg.model_validate({**rcfg.model_dump(mode="json"), "thermodynamics": {
+        **rcfg.model_dump(mode="json")["thermodynamics"], "temperature_K": 310.0}})
+    for reschedule in (False, True):
+        with pytest.raises(WorkflowError, match="cannot be used again") as refused:
+            check_pre_equilibrations_of_the_run(warmer, edge_dir.parent.parent, [("toluene", "phenol")], [0],
+                                                ["complex"], reschedule)
+        assert "temperature_K" in str(refused.value) and "--reschedule" not in str(refused.value)
+    check_pre_equilibrations_of_the_run(rcfg, edge_dir.parent.parent, [("toluene", "phenol")], [0], ["complex"], True)
     bare = tmp_path / "bare"
     shutil.copytree(edge_dir.parent, bare / "edges")
     (bare / "edges" / "toluene~phenol" / "repeat_0" / "complex" / "hrex" / "manifest.json").unlink()

@@ -355,3 +355,14 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   実行とみなし、状態ファイルで対応を取る。化合物の summary は変わらない。
 - 修正前のコード(7cdf18c)で失敗することを確認。7cdf18c で変更したファイルのテスト(test_sampling、test_workflow を
   含む)は 34 + 142 + 99 passed。9d48578 の全体テスト 868 passed。
+
+### 2026-11-26 オーナーの 10 回目のレビュー(review 6070952813、3 件)
+9 回目に新設した RBFE の書き込み前の照合が、leg の中の照合(平衡化、反復の刻み)を全部は覆っていなかった。
+- P2 時間刻みからの反復のステップ数を比べていなかった → 平衡化の実際の時間刻みから本計算と同じ
+  `planned_iterations` でステップ数を求め、時間刻み・バロスタットと一緒に照合する。
+- P2 温度などを変えた leg に `--reschedule` を案内したが、平衡化を再利用できずに退避の後で失敗 → 書き込みの前に
+  平衡化の記録を照合し(ABFE と同じ `check_equil_file`、`--reschedule` でも)、再利用できなければ `--reschedule`
+  を案内せず、元の設定か新しい出力先を案内する。
+- P2 状態名からの推定が、状態を使わない現行の A2A 実行(4h、4jS)の dG を消した → network.json があればその記録、
+  summary だけなら実行形式の記録(`run_directory`、`dg.reference_ligands`、辺の `exp_ddg_of`)を優先し、名前からの
+  推定はどれも無い旧 summary に限る。

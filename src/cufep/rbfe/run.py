@@ -214,9 +214,7 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
     from cufep.rbfe.leg import build_leg
     from cufep.workflow import gcmc_in
 
-    if reschedule:
-        return
-    problems, commands = [], []
+    problems, commands, kept_problems = [], [], []
     for a, b in edges:
         edge = edge_name(a, b)
         edge_dir = out_dir / "edges" / edge
@@ -227,23 +225,60 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                     continue
                 found = []
                 # an archive that --reschedule began and did not complete (fifth review of PR #19, as the ABFE)
-                unfinished = unfinished_archive_problem(leg_dir, leg, r, False)
+                unfinished = None if reschedule else unfinished_archive_problem(leg_dir, leg, r, False)
                 if unfinished is not None:
                     found.append(unfinished)
-                if gcmc_in(rcfg, leg) and (leg_dir / "equil.npz").exists():
-                    if starts_anew(leg_dir, False):
-                        why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
-                               else equil_ghosts_problem(leg_dir / "equil.npz", build_leg(rcfg, edge_dir, leg).gcmc))
-                        if why is not None:
-                            found.append(f"its pre-equilibration cannot start its replica exchange: {why}")
+                if not (leg_dir / "equil.npz").exists():
+                    if found:
+                        problems.append(f"the {leg} leg of {edge}, repeat {r}: {'; '.join(found)}")
+                        commands.append(rerun_command(edge, r, [leg], out_dir))
+                    continue
+                set_aside = False
+                if gcmc_in(rcfg, leg) and starts_anew(leg_dir, reschedule):
+                    why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
+                           else equil_ghosts_problem(leg_dir / "equil.npz", build_leg(rcfg, edge_dir, leg).gcmc))
+                    if why is not None and reschedule:
+                        set_aside = True                 # --reschedule sets it aside; a new one is made
+                    elif why is not None:
+                        found.append(f"its pre-equilibration cannot start its replica exchange: {why}")
+                if not set_aside:
+                    # a pre-equilibration that is used again must have been made with the settings of this run, as the
+                    # ABFE checks it before a run (check_equil_file; tenth review of PR #19: --reschedule kept one of
+                    # another temperature, and the leg was refused after it had set its result aside). No command of
+                    # this directory makes it again: other settings need a new output directory
+                    why = equil_settings_problem(rcfg, edge_dir, leg, r)
+                    if why is not None:
+                        kept_problems.append(f"the {leg} leg of {edge}, repeat {r}: {why}")
+                if gcmc_in(rcfg, leg) and not reschedule:
                     found += fixed_cell_problems(leg_dir)
                 if found:
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: {'; '.join(found)}")
                     commands.append(rerun_command(edge, r, [leg], out_dir))
+    if kept_problems:
+        raise WorkflowError("; ".join(kept_problems))
     if problems:
         raise WorkflowError("; ".join(problems) + ". Nothing was changed. --reschedule sets aside what cannot be used "
                             "with the windows, samples and result of a leg in previous_<n>/ and computes it anew: "
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
+
+
+def equil_settings_problem(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: int) -> str | None:
+    """Why the pre-equilibration of a leg of a relative run cannot be used again by this run (made with other settings:
+    :func:`cufep.workflow.check_equil_file`, the check the leg makes); None where it can."""
+    import numpy as np
+
+    from cufep.workflow import check_equil_file, leg_seed
+
+    leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
+    info = json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
+    in_membrane = leg == "complex" and (info.get("legs") or {}).get(leg, {}).get("barostat") == "membrane"
+    try:
+        with np.load(leg_dir / "equil.npz") as eq:
+            check_equil_file(eq, leg_dir / "equil.npz", rcfg, leg, in_membrane, leg_seed(rcfg, repeat, leg),
+                             lambda message: None)
+    except WorkflowError as exc:
+        return str(exc)
+    return None
 
 
 def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
@@ -281,7 +316,9 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                 current = {"temperature_K": float(rcfg.thermodynamics.temperature_K),
                            "pressure_bar": None if gcmc_in(rcfg, leg) else float(rcfg.thermodynamics.pressure_bar),
                            "friction_per_ps": float(rcfg.dynamics.friction_per_ps),
+                           "barostat_frequency": int(rcfg.dynamics.barostat_frequency),
                            "exchange": str(rcfg.sampling.exchange), "settings": hybrid_settings(rcfg, leg)}
+                current.update(iteration_of_the_leg(rcfg, out_dir / "edges" / edge, leg, r))
                 differing = conditions_differences({key: stored[key] for key in current if key in stored}, current)
                 if differing:
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: its samples ({rows} iterations"
@@ -292,6 +329,28 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
         raise WorkflowError("; ".join(problems) + ". Nothing was changed. Use the settings they were made with, or "
                             "start these legs anew with --reschedule (what they have is kept in previous_<n>/): "
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
+
+
+def iteration_of_the_leg(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: int) -> dict:
+    """What the samples of a leg of this run record of its dynamics, as the leg makes them: the time step of its
+    pre-equilibration, the MD steps of an iteration from it (:func:`cufep.workflow.planned_iterations`), and the
+    barostat (none with grand canonical moves of water). Empty without the pre-equilibration (tenth review of PR #19:
+    a run with another length of an iteration passed the check before it and wrote its record)."""
+    import numpy as np
+
+    from cufep.workflow import gcmc_in, planned_iterations
+
+    leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
+    if not (leg_dir / "equil.npz").exists():
+        return {}
+    with np.load(leg_dir / "equil.npz") as eq:
+        timestep_fs = float(eq["timestep_fs"])
+    plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
+                              rcfg.sampling.production_ns)
+    info = json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
+    barostat = "none" if gcmc_in(rcfg, leg) else (info.get("legs") or {}).get(leg, {}).get("barostat")
+    return {"timestep_fs": timestep_fs, "steps_per_iteration": int(plan.steps_per_iteration),
+            **({"barostat": barostat} if barostat is not None else {})}
 
 
 def check_legs_have_their_windows(out_dir: Path, edges, repeats, only_legs) -> None:

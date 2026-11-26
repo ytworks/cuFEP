@@ -201,9 +201,16 @@ def states_of_a_summary(summary: dict, name: str | None = None) -> dict | None:
                 compound_of.setdefault(edge["ligand_b"], ends[1])
     ligands = list(summary.get("ligands") or [])
     of_benchmark = read_states(name) if name is not None and _entry(name).get("rbfe_states") else {}
-    # a name that only a state of the benchmark has (4jS, not a compound): a run of states, whatever the summary
-    # records of it (ninth review of PR #19: a summary of 2ecbcd2 has neither experiment_of_compound, compounds nor
-    # notes on its edges, and an edge within 4j was compared with an experimental ddG of 0)
+    # what a summary records of a run without states: the version that writes its directory writes the compounds of
+    # a run of states too; the reference of the dG of ligands; the experiment of an edge as that of its ligands
+    # (tenth review of PR #19: a run of the ligands 4h and 4jS without system.states lost its dG to the names)
+    without_states = ("run_directory" in summary or bool((summary.get("dg") or {}).get("reference_ligands"))
+                      or any(e.get("exp_ddg_of") == "the ligands" for e in summary.get("edges") or []))
+    if not compound_of and not of_states and without_states:
+        return None
+    # a summary that records neither (2ecbcd2, a network that gave no dG): a name that only a state of the benchmark
+    # has (4jS, not a compound) makes it a run of states (ninth review: an edge within 4j was compared with an
+    # experimental ddG of 0)
     compounds_of_benchmark = set(read_reference(name)) if of_benchmark else set()
     if any(s in of_benchmark and s not in compounds_of_benchmark for s in ligands):
         of_states = True
@@ -245,7 +252,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     record = json.loads(network.read_text()) if network.exists() else {}
     # the states of the compounds as the run recorded them, whether its network gave dG or not (review of PR #19: an
     # incomplete network lost them, and an edge between two states of one compound got an experimental ddG of 0)
-    states = record.get("states") or states_of_a_summary(summary, name)
+    # the network records whether the run had states; a summary alone is read for them (states_of_a_summary)
+    states = record.get("states") if network.exists() else states_of_a_summary(summary, name)
     compound_of = dict((states or {}).get("compound") or {})
     compounds = summary.get("compounds")
     published = published_edges(name, by_state=bool(states))
