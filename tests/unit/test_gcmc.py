@@ -640,3 +640,29 @@ def test_trials_evaluated_with_the_stand_in_energy_give_the_waters_of_the_plain_
     # tolerance: about four times the scatter of the difference of two chains, from six chains of each mover
     # with other seeds (means 4.51 and 4.49, standard deviations 0.19 and 0.24)
     assert with_stand_in.mean() == pytest.approx(plain.mean(), abs=1.2)
+
+
+def test_the_windows_started_in_this_process_make_the_moves_a_worker_makes(water_ligand_system):
+    """Review of PR #19 (P2): the windows that a leg does not choose itself start with a short MD
+    (cufep.engine.leg.starts_from). In a pool every worker made the moves of water in it (two in 10 ps at 4 ps), in
+    this process none were made: the start depended on the GPUs a leg was granted. Started in this process, every
+    window makes the moves too and its configuration says which waters interact."""
+    from types import SimpleNamespace
+
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.engine.leg import starts_from
+    from cufep.sampling.worker import LegSpec
+
+    system, pos, box, ligand = water_ligand_system
+    moves, alch, _tail = leg_with_moves(system, pos, box, ligand)
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 2})
+    spec = LegSpec(name="gcmc", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=system.getNumParticles(),
+                   backend="openmm", platform="CPU", precision="mixed", temperature_K=300.0, pressure_bar=None,
+                   barostat="none", timestep_fs=2.0, steps_per_iteration=10, seed=5, gcmc=moves)
+    run = SimpleNamespace(job=SimpleNamespace(inline=True, control=None, devices=[None]), device0=None, seed=5,
+                          cfg=SimpleNamespace(sampling=SimpleNamespace(time_per_iteration_ps=0.02)), log=lambda m: None)
+    configs = starts_from(run, spec, schedule, (pos, box, np.zeros_like(pos)), alch.system, system.getNumParticles(),
+                          10, 0.08)
+    assert len(configs) == len(schedule.states)
+    assert all(len(c) == 4 and c[3].dtype == bool and len(c[3]) == len(moves.waters) for c in configs)

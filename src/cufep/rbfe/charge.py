@@ -62,11 +62,18 @@ def _is_solvent(residue) -> bool:
 def alchemical_water(topology, positions_nm, cutoff_nm: float = WATER_CUTOFF_NM) -> list[int]:
     """The atoms (indices of the system) of the water that takes the charge (the module's rule)."""
     import mdtraj
+    import openmm.unit as unit
 
     from cufep.prep.protein import WATER
 
     positions = np.asarray(positions_nm, dtype=float)
     traj = mdtraj.Trajectory(positions[None], mdtraj.Topology.from_openmm(topology))
+    box = topology.getPeriodicBoxVectors()
+    if box is None:
+        raise ChargeChangeError("the system has no periodic cell to choose the alchemical water in")
+    # the distances are of the nearest image only with the cell (review of PR #19: without it a water 0.2 nm from the
+    # solutes across the boundary of the cell counted as 2.8 nm away)
+    traj.unitcell_vectors = np.asarray(box.value_in_unit(unit.nanometer), dtype=float)[None]
     residues = list(topology.residues())
     solute = [a.index for r in residues if not _is_solvent(r) for a in r.atoms()]
     waters = [r for r in residues if r.name in WATER]

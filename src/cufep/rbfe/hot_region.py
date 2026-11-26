@@ -74,7 +74,7 @@ def _end_graph(molecule, to_hybrid: dict[int, int]) -> dict:
         systems = [s for s in systems if not s & ring] + [merged]
     system_of = {i: s for s in systems for i in s}
     return {"neighbours": neighbours, "heavy": heavy, "element": element, "rotatable": rotatable,
-            "ring_system": system_of}
+            "ring_system": system_of, "rings": rings}
 
 
 def perturbed_hot_atoms(molecule_a, molecule_b, to_hybrid_a: dict[int, int], to_hybrid_b: dict[int, int],
@@ -118,7 +118,9 @@ def perturbed_hot_atoms(molecule_a, molecule_b, to_hybrid_a: dict[int, int], to_
 
     def fits(candidate: set[int]) -> bool:
         heavy_atoms = sum(1 for i in candidate if heavy[i])
-        ring = any(i in a["ring_system"] or i in b["ring_system"] for i in candidate)
+        # "contains a ring": a whole ring of either end is in the region (one atom of a ring is not; second review of
+        # PR #19)
+        ring = any(r <= candidate for r in a["rings"] + b["rings"])
         return heavy_atoms <= (MAX_HEAVY_ATOMS_WITH_RING if ring else MAX_HEAVY_ATOMS)
 
     changed_any, stopped = True, False

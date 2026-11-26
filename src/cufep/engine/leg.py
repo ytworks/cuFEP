@@ -178,9 +178,31 @@ def starts_from(run: LegRun, start_spec, schedule, start: tuple, system, n_atoms
             done = pool.run(tasks)
     else:
         ctx, integ = leg_context(start_spec, system, start[1], start[0], start[2], run.device0, run.seed)
-        done = [run_window(ctx, integ, task) for task in tasks]
+        # the moves of water a worker of the pool makes in these windows (cufep.sampling.worker, window_mover): the
+        # same here, so that the start does not depend on the GPUs a leg is granted (review of PR #19)
+        mover, interval_steps = window_moves(start_spec, ctx)
+        done = [run_window(ctx, integ, task, mover, interval_steps) for task in tasks]
         del ctx, integ
     return [d["config"] for d in done]
+
+
+def window_moves(spec, context) -> tuple:
+    """(mover, MD steps between its moves) of the moves of water of ``spec`` on ``context`` for a window run in this
+    process, as a worker of a pool makes them (its first worker's stream of random numbers); (None, 0) without."""
+    from cufep.sampling.worker import GCMC_STREAM, RELOCATION_STREAM, stream_seed
+    from cufep.steps import md_steps
+
+    if spec.gcmc is not None:
+        from cufep.sampling.gcmc import GcmcMover
+
+        return (GcmcMover(spec.gcmc, context, stream_seed(spec.seed, 0, 0, GCMC_STREAM)),
+                md_steps(spec.gcmc.interval_ps, spec.timestep_fs))
+    if spec.relocation is not None:
+        from cufep.sampling.relocation_mc import RelocationMover
+
+        return (RelocationMover(spec.relocation, context, stream_seed(spec.seed, 0, 0, RELOCATION_STREAM)),
+                md_steps(spec.relocation.interval_ps, spec.timestep_fs))
+    return None, 0
 
 
 def with_fallback(run: LegRun, backend_name: str, run_with):

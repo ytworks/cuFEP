@@ -201,3 +201,22 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - ABFE の fingerprint(`spikes/m38`、Reference platform)は main(e16c1f1)と 8403b80 で同一。
 - TYK2: image cufep:a1f54d9(コミットから)、8 GPU、`cufep benchmark run tyk2 --tier full --protocol rbfe -o
   runs/rbfe_bench_tyk2_a1f54d9`。終わったら報告し、続いて A2A(29 状態)。
+
+### 2026-11-26 オーナーのレビュー(c63b353、8 件)と 2 回目の独立レビュー
+- 2 回目の独立レビュー(1948096..c63b353)の重大な指摘: hybrid の core の proper torsion に REST2 の係数を前に付けたため、
+  `(1+rest2_ds)*(1-λ)*U1 + λ*U2` となり B の項がスケールされていなかった(main の RBFE からの不具合)。既定の RBFE で
+  評価器(s 倍)と Context がずれ、B にだけある core の proper torsion を持つエッジでは MBAR のエネルギーが Hamiltonian と
+  違う。実行中の TYK2 では 22 エッジ中 4 エッジ(ejm_42~ejm_54 14 項、ejm_50~ejm_42 2、ejm_50~ejm_55 9、ejm_55~ejm_54 12)。
+  TYK2 のフル実行を止め、係数が項全体に掛かるよう直し、修正前のコードで 2 つのテスト(書き込んだ System、評価器)が失敗
+  することを確かめた。同じレビューの指摘: hot region の上限で「環を含む」を環の原子 1 つで数えていた → 環全体が入ったとき
+  だけ 30(修正前は 30、修正後は 24 の例をテストに)。leg の記録の cutoff は既定でない実行がこのブランチに無い。
+- オーナーのレビュー(各件を再現してから修正、テストは修正前のコードで失敗することを確認):
+  P1 水の化学ポテンシャルの違う complex leg をまとめていた → レグが GCMC の状態(有無、μ、標準体積)を記録し、エッジ間と
+  repeat 間で照合。P2 alchemical water の距離にセルが無かった → MDTraj にセルを渡す。P2 不完全なネットワークで状態の
+  対応が失われた → network.json から読む。P2 状態のエッジと化合物の実験を比べていた → 実験とは化合物の対の ddG で比べ、
+  状態のエッジは公開の同じエッジとだけ比べる(図も)。P2 開始用 MD の GCMC が GPU の割り当てで変わった → 単一デバイス
+  でも worker と同じ移動。P2 GCMC 球の半径が向きで変わった → 両端の重原子から。P2 core_smarts が立体化学を無視 →
+  useChirality。P3 plan が実行できない電荷変化を表示 → plan でも拒否。
+- 同じ問題が ABFE にも残る点(オーナーの判断を待つ): ABFE の repeat 間でも GCMC の μ は照合していない(結果ファイルを
+  変えるので今回は触らない)。
+- 全体テスト c63b353: 835 passed。hybrid と水の移動の GPU テスト 22 件(2 GPU)通過。

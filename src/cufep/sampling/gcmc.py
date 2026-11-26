@@ -206,13 +206,16 @@ def every_water_on(system, spec: GcmcSpec) -> None:
 def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, cutoff_nm: float,
               softcore_alpha: float, softcore_b: int, temperature_K: float, interval_ps: float, attempts: int,
               batch_size: int, radius_margin_nm: float, excess_chemical_potential_kcal_per_mol: float,
-              standard_volume_nm3: float, ghost_waters: int | None) -> GcmcSpec:
+              standard_volume_nm3: float, ghost_waters: int | None,
+              radius_from_nm: np.ndarray | None = None) -> GcmcSpec:
     """What a mover needs, from the ``system`` of a leg with every water interacting, its
     ``topology`` and the pose that was prepared. The waters and the sphere are found as for the
     water relocation moves (:func:`cufep.sampling.relocation_mc.relocation_spec`, with its
     conditions). ``ghost_waters`` None: as many as the sphere would hold if it were all bulk water
     (its volume by the standard volume, rounded up; cuFEP's own: the sources give examples of 10 to
-    50 and no rule). Raises GcmcError where the moves cannot be made."""
+    50 and no rule). ``radius_from_nm``: the heavy atoms whose largest distance gives the radius, where they are not
+    those of the ligand in ``positions`` (the two end states of a relative leg). Raises GcmcError where the moves cannot
+    be made."""
     try:
         base = relocation_spec(system, topology, positions, box, ligand, cutoff_nm, softcore_alpha, softcore_b,
                                temperature_K, 1, None, interval_ps, radius_margin_nm)
@@ -220,6 +223,15 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
         raise
     except RelocationError as exc:
         raise GcmcError(str(exc)) from exc
+    if radius_from_nm is not None:
+        import dataclasses
+
+        from cufep.sampling.relocation_mc import sphere_radius
+
+        pose = np.asarray(radius_from_nm, dtype=float)
+        pose = pose[0] + nearest_image(pose - pose[0], np.asarray(box, dtype=float))
+        base = dataclasses.replace(base, radius_nm=sphere_radius(pose, radius_margin_nm))
+        check_cell(np.asarray(box, dtype=float), base.radius_nm, float(cutoff_nm))
     if int(attempts) < 1 or int(batch_size) < 1:
         raise GcmcError("attempts and batch_size are at least 1")
     if not float(standard_volume_nm3) > 0.0:

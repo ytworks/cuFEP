@@ -314,8 +314,18 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             out["repeats"].append({"repeat": r, "no_standard_error": no_error})
             continue
         c, s = legs["complex"], legs["solvent"]
+        # the complex legs of all repeats in the state of one grand canonical ensemble of water (review of PR #19)
+        moves = water_moves_of(c)
+        if complete and moves is not None and complete[0][1].get("grand_canonical_state") is not None \
+                and not _same_moves(moves, complete[0][1]["grand_canonical_state"]):
+            out["repeats"].append({"repeat": r, "inconsistent_legs": [
+                f"grand canonical moves of water: complex leg of repeat {r} {moves}, of the first repeat "
+                f"{complete[0][1]['grand_canonical_state']}"], "complex_dg": c["delta_g"] / KCAL,
+                "solvent_dg": s["delta_g"] / KCAL})
+            continue
+        c = {**c, "grand_canonical_state": moves}
         # the two legs of the repeat are compared before they are subtracted (second review of PR #17)
-        pair = [(f"{leg} leg of repeat {r}", legs[leg]) for leg in legs]
+        pair = [(f"complex leg of repeat {r}", c), (f"solvent leg of repeat {r}", s)]
         differ, _ = cycle_differences(pair)
         if differ:
             out["repeats"].append({"repeat": r, "inconsistent_legs": differ, "complex_dg": c["delta_g"] / KCAL,
@@ -364,18 +374,39 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         out["windows"] = {leg: sorted({r["windows"][leg] for r in done}) for leg in ("complex", "solvent")}
         out["backend"] = {leg: sorted({str(r["backend"][leg]) for r in done}) for leg in ("complex", "solvent")}
         # the conditions of the legs, which the edges of one network must share (combine_network)
-        out["conditions"] = {key: complete[0][1].get(key) for key, _ in NETWORK_CONDITIONS}
+        out["conditions"] = {key: complete[0][1].get(key) for key, _ in NETWORK_CONDITIONS
+                             if key != "grand_canonical"}
+        out["conditions"]["grand_canonical"] = complete[0][1].get("grand_canonical_state")
     return out
 
 
-#: what the edges combined into one network must share, as their legs record it: the thermodynamic state and the
-#: treatment of the dispersion tail. (The prepared systems differ from edge to edge; what they are made from besides
-#: the ligands is compared by network_differences.)
+#: what the edges combined into one network must share, as their legs record it: the thermodynamic state (with the
+#: grand canonical moves of water of the complex leg, :func:`water_moves_of`) and the treatment of the dispersion tail.
+#: (The prepared systems differ from edge to edge; what they are made from besides the ligands is compared by
+#: network_differences.)
 NETWORK_CONDITIONS = (("temperature_K", "temperature (K)"), ("pressure_bar", "pressure (bar)"),
-                      ("lrc_method", "correction for the dispersion tail"))
+                      ("lrc_method", "correction for the dispersion tail"),
+                      ("grand_canonical", "grand canonical moves of water of the complex leg"))
+
+
+def water_moves_of(result: dict) -> dict | None:
+    """The state of the grand canonical moves of water of a leg (``run.grand_canonical``: whether it makes them, the
+    excess chemical potential and the standard volume); a result that does not record it made none if it holds no
+    counts of moves, and is not known (None) if it does (review of PR #19: complex legs with other chemical
+    potentials of water were combined into one network)."""
+    recorded = (result.get("run") or {}).get("grand_canonical")
+    if recorded is not None:
+        return recorded
+    return {"enabled": False} if result.get("gcmc") is None else None
 #: what the prepared systems of all edges of one network must have been made from alike (rbfe.prep.edge_made_from)
 SHARED_PREPARATION = ("protein_sha256", "forcefield", "membrane", "solvation", "box_shape", "backend",
                       "thermodynamics", "dynamics")
+
+
+def _same_moves(a: dict, b: dict) -> bool:
+    from cufep.sampling.storage import _same
+
+    return _same(a, b)
 
 
 def network_differences(out_dir: Path, results: list[dict]) -> list[str]:

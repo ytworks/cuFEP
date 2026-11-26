@@ -357,6 +357,12 @@ def rbfe_plan(config: str) -> None:
         edges, _how = edges_of(rcfg, ligands, click.echo)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
+    from cufep.rbfe.charge import charge_change_problems
+
+    # what `cufep rbfe run` refuses, the plan refuses (review of PR #19: a change of two charges was shown as possible)
+    problems = charge_change_problems(ligands, edges)
+    if problems:
+        raise click.ClickException("; ".join(problems))
     experiment = experiment_of(rcfg, ligands)
     by_name = {lig.name: lig for lig in ligands}
     m = rcfg.mapping

@@ -23,7 +23,7 @@ def charged_edge():
     from cufep.rbfe.charge import alchemical_water, ion_parameters, water_into_ion
 
     system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge(PHENOLATE, PHENOLATE_MAP)
-    top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a)
+    top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a, box)
     water = alchemical_water(top_a, pos_a, 0.8)
     ion = ion_parameters(system_a, top_a, +1, mm.app.ForceField("amber14/tip3p.xml"))
     shift = len(ligand_a)                      # B: the same waters, its ligand last
@@ -149,3 +149,28 @@ def test_a_change_of_more_than_one_charge_is_refused():
         "the edge b -> d changes the net charge by +2 (from -1 to +1); an alchemical water takes a change of one "
         "charge only"]
     assert len(charge_change_problems(ligands, [("a", "c")])) == 1
+
+
+def test_the_alchemical_water_is_chosen_by_distances_across_the_boundary_of_the_cell():
+    """Review of PR #19 (P2): in a cell of 3 nm a solute atom at x = 0.1 nm and a water at x = 2.9 nm are 0.2 nm apart
+    across the boundary; without the cell MDTraj measured 2.8 nm and took that water. The one 1.4 nm away is taken."""
+    import openmm.app as app
+
+    from cufep.rbfe.charge import alchemical_water
+
+    top = app.Topology()
+    chain = top.addChain()
+    ligand = top.addResidue("LIG", chain)              # two atoms: a residue of one atom is an ion, a solvent
+    top.addBond(top.addAtom("C1", app.Element.getBySymbol("C"), ligand),
+                top.addAtom("C2", app.Element.getBySymbol("C"), ligand))
+    positions = [[0.1, 1.5, 1.5], [0.1, 1.5, 1.35]]
+    for x in (2.9, 1.5):
+        res = top.addResidue("HOH", chain)
+        o = top.addAtom("O", app.Element.getBySymbol("O"), res)
+        for name, dy in (("H1", 0.08), ("H2", -0.08)):
+            top.addBond(o, top.addAtom(name, app.Element.getBySymbol("H"), res))
+            positions.append([x, 1.5 + dy, 1.55])
+        positions.insert(len(positions) - 2, [x, 1.5, 1.5])
+    top.setPeriodicBoxVectors(np.eye(3) * 3.0 * u.nanometer)
+    assert alchemical_water(top, np.array(positions), 0.8) == [5, 6, 7]
+

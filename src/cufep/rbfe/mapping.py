@@ -46,13 +46,15 @@ def mapping_settings(m) -> MappingSettings:
 
 
 def core_atoms(molecule, smarts: str) -> set[int]:
-    """The atoms of an RDKit molecule (with its hydrogens) in any match of ``smarts``; MappingError without one."""
+    """The atoms of an RDKit molecule (with its hydrogens) in any match of ``smarts``, its stereochemistry respected (a
+    pattern without it matches either configuration; review of PR #19: a pattern of one configuration matched the
+    other); MappingError without one."""
     from rdkit import Chem
 
     pattern = Chem.MolFromSmarts(smarts)
     if pattern is None:
         raise MappingError(f"mapping.core_smarts {smarts!r} is not a SMARTS pattern")
-    matches = molecule.GetSubstructMatches(pattern, uniquify=False, useChirality=False)
+    matches = molecule.GetSubstructMatches(pattern, uniquify=False, useChirality=True)
     if not matches:
         raise MappingError(f"mapping.core_smarts {smarts!r} matches no atom of {molecule.GetProp('_Name')}"
                            if molecule.HasProp("_Name") else f"mapping.core_smarts {smarts!r} matches no atom")

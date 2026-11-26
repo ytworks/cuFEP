@@ -773,8 +773,11 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
 
     impropers = mm.CustomTorsionForce(CORE_TORSION_ENERGY)
     impropers.setName(CORE_TORSION_FORCE_NAME)
-    propers = mm.CustomTorsionForce(("(1+hot*rest2_ds)*" if cold_ligand else "(1+rest2_ds)*" if rest2 else "")
-                                    + CORE_TORSION_ENERGY)
+    # the REST2 factor multiplies the whole torsion, the term of A and the term of B (review of PR #19: prefixed to the
+    # expression it multiplied the term of A alone, so a term only B has was never scaled)
+    factor = "(1+hot*rest2_ds)" if cold_ligand else "(1+rest2_ds)" if rest2 else None
+    propers = mm.CustomTorsionForce(CORE_TORSION_ENERGY if factor is None
+                                    else f"{factor}*U_torsion; U_torsion = {CORE_TORSION_ENERGY}")
     propers.setName(CORE_PROPER_TORSION_FORCE_NAME)
     for force in (impropers, propers):
         for p in ("periodicity1", "phase1", "K1", "periodicity2", "phase2", "K2"):

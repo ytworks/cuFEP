@@ -466,6 +466,12 @@ def test_a_custom_core_maps_only_its_atoms_and_the_records_of_other_edges_stay_a
         core_atoms(toluene, "C(=O)N")
     with pytest.raises(MappingError, match="not a SMARTS"):
         core_atoms(toluene, "c1cc(")
+    # review of PR #19: the stereochemistry of the pattern is respected; a pattern without it matches either
+    same, other = (Chem.AddHs(Chem.MolFromSmiles(s)) for s in ("CC[C@@H](F)Cl", "CC[C@H](F)Cl"))
+    assert core_atoms(same, "C[C@@H](F)Cl") == {1, 2, 3, 4}                # the CH2, the stereocentre, F, Cl
+    with pytest.raises(MappingError, match="matches no atom"):
+        core_atoms(other, "C[C@@H](F)Cl")
+    assert core_atoms(other, "CC(F)Cl") == core_atoms(same, "CC(F)Cl")
     plain = RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf"}})
     recorded = hybrid_settings(plain, "solvent")["rbfe"]
     assert "core_smarts" not in recorded["mapping"] and "alchemical_water_cutoff_nm" not in recorded["alchemy"]
@@ -486,3 +492,35 @@ def test_a_directory_analysed_without_states_keeps_no_compounds_of_before(tmp_pa
     (tmp_path / "compounds.csv").write_text("compound,dg_kcal_mol\nX,-9.0\n")
     write_results(tmp_path, combine_network(tmp_path, ["a", "b"], [("a", "b")], 1, {}))
     assert not (tmp_path / "compounds.csv").exists()
+
+
+def _with_moves(result: dict, mu: float | None) -> dict:
+    """A complex leg with grand canonical moves of water at the excess chemical potential ``mu`` (None: without)."""
+    moves = {"enabled": False} if mu is None else {"enabled": True, "excess_chemical_potential_kcal_per_mol": mu,
+                                                   "standard_volume_nm3": 0.0303}
+    return {**result, "run": {"grand_canonical": moves}, "gcmc": None if mu is None else {"insertions_attempted": [1]}}
+
+
+def test_complex_legs_in_other_grand_canonical_ensembles_of_water_are_not_combined(tmp_path):
+    """Review of PR #19 (P1): A~B run with the moves at -6 kcal/mol and B~C at -4 kcal/mol passed every check and gave
+    one set of dG, though B's complex leg is of another ensemble in each. Edges of other moves of water give their
+    ddG one by one, without a network; two repeats of one edge in other ensembles give no ddG; edges of one ensemble
+    combine; a complex leg of an earlier version without a record of its moves and without counts made none."""
+    from cufep.rbfe.run import combine_network, water_moves_of
+
+    _write_legs(tmp_path, "a~b", 0, _with_moves(_leg_result(-12.0), -6.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "b~c", 0, _with_moves(_leg_result(-8.0), -4.0), _leg_result(-9.0))
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {})
+    assert summary["dg"] is None and any("grand canonical" in item for item in summary["inconsistent_edges"])
+    assert {e["edge"]: "ddg" in e for e in summary["edges"]} == {"a~b": True, "b~c": True}
+    same = tmp_path / "same"
+    _write_legs(same, "a~b", 0, _with_moves(_leg_result(-12.0), -6.0), _leg_result(-10.5))
+    _write_legs(same, "b~c", 0, _with_moves(_leg_result(-8.0), -6.0), _leg_result(-9.0))
+    assert combine_network(same, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {})["dg"] is not None
+    repeats = tmp_path / "repeats"
+    _write_legs(repeats, "a~b", 0, _with_moves(_leg_result(-12.0), -6.0), _leg_result(-10.5))
+    _write_legs(repeats, "a~b", 1, _with_moves(_leg_result(-11.0), -4.0), _leg_result(-10.5))
+    edge = combine_network(repeats, ["a", "b"], [("a", "b")], 2, {})["edges"][0]
+    assert "ddg" not in edge and any("grand canonical" in item for item in edge["inconsistent_legs"])
+    assert water_moves_of(_leg_result(-1.0)) == {"enabled": False}
+    assert water_moves_of({**_leg_result(-1.0), "gcmc": {"insertions_attempted": [1]}}) is None

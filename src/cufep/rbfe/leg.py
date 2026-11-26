@@ -133,12 +133,14 @@ class HybridLeg:
     gcmc: object = None           # cufep.sampling.gcmc.GcmcSpec of a leg with grand canonical moves of water
 
 
-def hybrid_gcmc(rcfg, hybrid, topology, box):
+def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None):
     """The grand canonical moves of water of a hybrid System (all its waters interacting): their specification
     (:func:`cufep.sampling.gcmc.gcmc_spec`), with the ligand of the stand-in energy at fixed lambdas, its atoms with
     the parameters of A and those unique to B with the parameters of B (the module's docstring; the alchemical water
     enters it as the NonbondedForce has it, its charges of A and no Lennard-Jones). The test with the full potential
-    corrects what the stand-in leaves out."""
+    corrects what the stand-in leaves out. The radius of the sphere is from the heavy atoms of both end states in
+    their poses (``end_heavy_nm``), so that A -> B and B -> A have one sphere (review of PR #19: from the hybrid, which
+    holds the mapped atoms where A has them)."""
     import dataclasses
 
     from cufep.sampling.gcmc import GcmcError, gcmc_spec
@@ -150,7 +152,8 @@ def hybrid_gcmc(rcfg, hybrid, topology, box):
         spec = gcmc_spec(hybrid.system, topology, hybrid.positions, np.asarray(box, dtype=float),
                          list(hybrid.ligand_atoms), rcfg.dynamics.cutoff_nm, rcfg.alchemy.softcore_alpha, 1,
                          rcfg.thermodynamics.temperature_K, g.interval_ps, g.attempts, g.batch_size,
-                         g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters))
+                         g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters),
+                         radius_from_nm=end_heavy_nm)
     except GcmcError as exc:
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {exc}") from exc
     charge, sigma, epsilon = (np.array(v, dtype=float) for v in (spec.charge, spec.sigma, spec.epsilon))
@@ -209,6 +212,13 @@ def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int],
     return sorted(perturbed_hot_atoms(molecules[0], molecules[1], to_a, to_b, set(core_map)))
 
 
+def end_heavy(end: dict) -> list:
+    """The positions (nm) of the heavy atoms of the ligand of a prepared end state."""
+    atoms = list(end["topology"].atoms())
+    positions = np.asarray(end["positions"], dtype=float)
+    return [positions[i] for i in end["ligand"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
+
+
 def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
     """The hybrid System of a leg from its prepared end states, and a prepared system of it."""
     import openmm as mm
@@ -238,7 +248,7 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
     if gcmc_in(rcfg, leg):
         from cufep.sampling.gcmc import ghosts_off
 
-        gcmc = hybrid_gcmc(rcfg, hybrid, topology, a["box"])
+        gcmc = hybrid_gcmc(rcfg, hybrid, topology, a["box"], end_heavy(a) + end_heavy(b))
         # every MD of the leg is of the System with the ghosts of the start switched off
         ghosts_off(hybrid.system, gcmc.waters[gcmc.ghosts].reshape(-1))
     xml = mm.XmlSerializer.serialize(hybrid.system)
@@ -265,6 +275,17 @@ def settings_as_recorded(section) -> dict:
     :data:`PREPARATION_ONLY`)."""
     return {k: v for k, v in section.model_dump(mode="json").items()
             if k not in PREPARATION_ONLY and (k not in SETTINGS_ADDED or v != SETTINGS_ADDED[k])}
+
+
+def water_moves_record(gcmc: dict | None) -> dict:
+    """What of the grand canonical moves of water of a leg its thermodynamic state is: whether it makes them, and the
+    excess chemical potential and the standard volume of water they are made with (the Adams value of Ross et al.
+    2017); the other settings of the moves change how they sample, not the ensemble."""
+    if gcmc is None:
+        return {"enabled": False}
+    return {"enabled": True,
+            "excess_chemical_potential_kcal_per_mol": float(gcmc["excess_chemical_potential_kcal_per_mol"]),
+            "standard_volume_nm3": float(gcmc["standard_volume_nm3"])}
 
 
 def hybrid_settings(rcfg, leg: str | None = None) -> dict:
@@ -515,6 +536,9 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                   "timestep_fs": timestep_fs, "notes": list(run.notes), "origin_not_recorded": [],
                   # the prepared systems of the edge, which the legs of one ddG must share (edge_result)
                   "prepared_systems_sha256": record_digest(built.info.get("made_from")),
+                  # the thermodynamic state of the grand canonical moves of water, which the complex legs of one network
+                  # must share (cufep.rbfe.run.water_moves_of; review of PR #19)
+                  "grand_canonical": water_moves_record(settings.get("gcmc")),
                   "rest2": {"scale": float(rest2_scale), "hot_protein_atoms": len(built.hot_atoms),
                             "hot_residues": built.hot_residues, "torsion_terms_scaled": hybrid.rest2_torsions,
                             "scale_of_window": [float(st.rest2_scale) for st in schedule.states]}}

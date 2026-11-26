@@ -770,10 +770,18 @@ def test_the_states_of_a2a_are_the_records_of_the_published_map_with_their_corre
     assert sum(1 for r in rows if "deprotonated" in r["sdf_record"]) == 4
 
 
+def _states_run(path, name: str, summary: dict, states: dict) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "summary.json").write_text(json.dumps(summary))
+    (path / "network.json").write_text(json.dumps({"ligands": summary["ligands"], "edges": [
+        [e["ligand_a"], e["ligand_b"]] for e in summary["edges"]], "edges_from": "planned by LOMAP",
+        "states": {"compound": {s: r["compound"] for s, r in states.items()}}}))
+
+
 def test_the_relative_report_of_states_compares_compounds(tmp_path):
     """A relative run of states: the report compares the dG of the compounds with experiment and the published
-    predictions of the compounds, matches the published edges by state, and leaves the edges between two states of one
-    compound out of the edgewise errors."""
+    predictions of the compounds, matches the published edges by state, compares experiment with the pairs of compounds
+    the edges join, and an edge between states only with the published prediction of the same edge."""
     from cufep.benchmarks.rbfe import published_edges, read_states, report
 
     ref = read_reference("a2a")
@@ -784,27 +792,67 @@ def test_the_relative_report_of_states_compares_compounds(tmp_path):
     assert ("4b_U", "4b_D") in published and len(published) == 46
     edges = [{"edge": f"{a}~{b}", "ligand_a": a, "ligand_b": b, "ddg": dg_state[b] - dg_state[a], "se": 0.3,
               "network_ddg": dg_state[b] - dg_state[a], "network_se": 0.2,
-              "exp_ddg": ref[states[b]["compound"]]["exp"] - ref[states[a]["compound"]]["exp"],
               "lowest_overlap": {"complex": 0.1, "solvent": 0.2}, "not_reliable": []} for a, b in published]
-    compounds = {c: {"dg": v["exp"] + 0.5, "se": 0.2, "symmetry_number": 1,
-                     "weights": {s: 1.0 / sum(1 for r in states.values() if r["compound"] == c)
-                                 for s, r in states.items() if r["compound"] == c}} for c, v in ref.items()}
+    compounds = {c: {"dg": v["exp"] + 0.5 * rng.normal(), "se": 0.2, "symmetry_number": 1,
+                     "weights": {s: 1.0 for s, r in states.items() if r["compound"] == c}} for c, v in ref.items()}
     summary = {"ligands": list(states), "edges": edges, "notes": [], "cycle_closures": [],
                "experiment_kcal_mol": {s: ref[r["compound"]]["exp"] for s, r in states.items()},
                "dg": {"reference": "mean of the experimental values", "values": {}},
                "compounds": {"temperature_K": 298.15, "experiment_kcal_mol": {c: v["exp"] for c, v in ref.items()},
                              "values": compounds}}
-    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    _states_run(tmp_path, "a2a", summary, states)
     text = report("a2a", tmp_path)
-    assert "Compounds with a dG: 17 of 17; edges with a ddG: 46 of 46." in text
+    assert "Compounds with a dG: 17 of 17; edges with a ddG: 46 of 46 (edges planned by LOMAP)." in text
     names = list(ref)
     ours = metrics([compounds[n]["dg"] for n in names], [ref[n]["exp"] for n in names])
     row = next(line for line in text.splitlines() if line.startswith("| pairwise ddG RMSE"))
     assert row.split("|")[2].split("[")[0].strip() == f"{ours['pairwise_rmse']:.2f}"
-    between = [e for e in edges if states[e["ligand_a"]]["compound"] != states[e["ligand_b"]]["compound"]]
-    assert 0 < len(between) < len(edges)
-    assert f"| cuFEP, own | {len(between)} |" in text
-    # review of PR #19: an edge between two states of one compound has no experimental ddG (it was 0 in the figure)
+    pairs = {tuple(sorted((states[a]["compound"], states[b]["compound"]))) for a, b in published
+             if states[a]["compound"] != states[b]["compound"]}
+    expected = float(np.sqrt(np.mean([((compounds[cb]["dg"] - compounds[ca]["dg"]) - (ref[cb]["exp"] - ref[ca]["exp"]))
+                                      ** 2 for ca, cb in pairs])))
+    assert f"| cuFEP, the pairs of compounds the edges join | {len(pairs)} | {expected:.2f} |" in text
     rows = {r["edge"]: r for r in csv.DictReader((tmp_path / "rbfe_report_edges.csv").open())}
-    assert rows["4b_U~4b_D"]["exp_ddg"] == "" and rows["4b_U~4b_D"]["ddg"] != ""
+    assert rows["4b_U~4b_D"]["exp_ddg"] == "" and rows["4b_U~4b_D"]["exp_ddg_of"] == "the compounds"
 
+
+def test_the_report_of_states_keeps_them_when_the_network_gives_no_dg(tmp_path):
+    """Review of PR #19 (P2): with an incomplete network (no compounds in the summary) the report lost which compound
+    each state is: the edge 4jS~4jR got an experimental ddG of +0.00 and lost the published Bennett value +0.84.
+    The states come from network.json."""
+    from cufep.benchmarks.rbfe import published_edges, read_states, report
+
+    states = read_states("a2a")
+    published = published_edges("a2a", by_state=True)
+    assert published[("4jS", "4jR")]["bennett"] == pytest.approx(0.84, abs=0.01)
+    summary = {"ligands": list(states), "edges": [
+        {"edge": "4jS~4jR", "ligand_a": "4jS", "ligand_b": "4jR", "ddg": 0.5, "se": 0.3, "not_reliable": []}],
+        "notes": ["the edges with a ddG do not connect all ligands: no dG"], "cycle_closures": [], "dg": None,
+        "experiment_kcal_mol": {s: float(r["exp_dg_kcal_mol"]) for s, r in states.items()}}
+    _states_run(tmp_path, "a2a", summary, states)
+    report("a2a", tmp_path)
+    row = next(csv.DictReader((tmp_path / "rbfe_report_edges.csv").open()))
+    assert row["exp_ddg"] == "" and float(row["fepplus_bennett_ddg"]) == pytest.approx(0.84, abs=0.01)
+
+
+def test_experiment_is_compared_with_the_compounds_not_with_an_edge_between_states(tmp_path):
+    """Review of PR #19 (P2): A with two equal binding modes and B with one, every state at dG 0: the edge A1 -> B
+    computes 0 and the compounds differ by kT ln 2 (+0.41 kcal/mol at 298 K). Experiment is compared with the pair of
+    compounds: with an experimental ddG of +0.41 the error is 0, not 0.41."""
+    from cufep.benchmarks.rbfe import read_states, report
+
+    kt_ln2 = 0.0019872 * 298.15 * np.log(2.0)
+    states = {s: r for s, r in read_states("a2a").items() if r["compound"] in ("4b", "4e")}
+    two = [s for s in states if states[s]["compound"] == "4b"]
+    one = [s for s in states if states[s]["compound"] == "4e"][0]
+    exp = {"4b": -10.0 - kt_ln2, "4e": -10.0}
+    compounds = {"4b": {"dg": -10.0 - kt_ln2, "se": 0.1, "symmetry_number": 1, "weights": {s: 0.5 for s in two}},
+                 "4e": {"dg": -10.0, "se": 0.1, "symmetry_number": 1, "weights": {one: 1.0}}}
+    summary = {"ligands": two + [one], "edges": [
+        {"edge": f"{two[0]}~{one}", "ligand_a": two[0], "ligand_b": one, "ddg": 0.0, "se": 0.1, "not_reliable": []}],
+        "notes": [], "cycle_closures": [], "dg": {"reference": "mean of the experimental values", "values": {}},
+        "experiment_kcal_mol": {s: exp[states[s]["compound"]] for s in two + [one]},
+        "compounds": {"temperature_K": 298.15, "experiment_kcal_mol": exp, "values": compounds}}
+    _states_run(tmp_path, "a2a", summary, states)
+    text = report("a2a", tmp_path)
+    assert "| cuFEP, the pairs of compounds the edges join | 1 | 0.00 |" in text

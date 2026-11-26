@@ -387,13 +387,16 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
     return system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box
 
 
-def hybrid_edge_topology(n_particles: int, ligand: list[int], system):
+def hybrid_edge_topology(n_particles: int, ligand: list[int], system, box=None):
     """A topology of the hybrid System of the test edge in the order of its particles: the atoms of ligand A, the
-    waters (O, H, H), and the atoms unique to B last, as :func:`cufep.rbfe.leg.hybrid_topology` orders them."""
+    waters (O, H, H), and the atoms unique to B last, as :func:`cufep.rbfe.leg.hybrid_topology` orders them; with
+    ``box`` (nm) its periodic cell."""
     import openmm as mm
     import openmm.app as app
 
     top = app.Topology()
+    if box is not None:
+        top.setPeriodicBoxVectors([mm.Vec3(*row) for row in box] * mm.unit.nanometer)
     chain = top.addChain()
     carbon, hydrogen, oxygen = (app.Element.getBySymbol(s) for s in ("C", "H", "O"))
     ligand, residue, water = set(ligand), None, []

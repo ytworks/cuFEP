@@ -43,7 +43,8 @@ from cufep.benchmarks.stats import bootstrap, metrics
 REPORT_FILES = ("rbfe_report.md", "rbfe_report_ligands.csv", "rbfe_report_edges.csv")
 FIGURES = ("rbfe_report.png", "rbfe_report_edges.png")
 LIGAND_COLUMNS = ("ligand", "exp", "cufep_rbfe", "cufep_rbfe_error", "fepplus", "cufep_abfe")
-EDGE_COLUMNS = ("edge", "ligand_a", "ligand_b", "exp_ddg", "ddg", "ddg_error", "network_ddg", "network_ddg_error",
+EDGE_COLUMNS = ("edge", "ligand_a", "ligand_b", "exp_ddg", "exp_ddg_of", "ddg", "ddg_error", "network_ddg",
+                "network_ddg_error",
                 "fepplus_bennett_ddg", "fepplus_bennett_error", "fepplus_ccc_ddg", "fepplus_ccc_error",
                 "lowest_overlap_complex", "lowest_overlap_solvent", "not_reliable")
 
@@ -173,21 +174,23 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     summary = json.loads((run_dir / "summary.json").read_text())
     reference = read_reference(name)
     abfe = stored_abfe(name)
+    network = run_dir / "network.json"
+    record = json.loads(network.read_text()) if network.exists() else {}
+    # the states of the compounds as the run recorded them, whether its network gave dG or not (review of PR #19: an
+    # incomplete network lost them, and an edge between two states of one compound got an experimental ddG of 0)
+    states = record.get("states")
+    compound_of = dict((states or {}).get("compound") or {})
     compounds = summary.get("compounds")
-    published = published_edges(name, by_state=compounds is not None)
+    published = published_edges(name, by_state=bool(states))
     experiment = {k: float(v) for k, v in (summary.get("experiment_kcal_mol") or {}).items()}
-    if compounds is not None:
+    if states:
         # the dG are those of the compounds, each from its states (system.states)
-        values, names_of = compounds["values"], list(compounds["values"])
-        experiment_of = {k: float(v) for k, v in compounds["experiment_kcal_mol"].items()}
+        names_of = list(dict.fromkeys(compound_of[s] for s in summary["ligands"]))
+        values = (compounds or {}).get("values") or {}
+        experiment_of = {compound_of[s]: v for s, v in experiment.items() if s in compound_of}
     else:
         values, names_of = (summary.get("dg") or {}).get("values") or {}, list(summary["ligands"])
         experiment_of = experiment
-    compound_of = {}
-    if compounds is not None:
-        for c, v in compounds["values"].items():
-            for state in v["weights"]:
-                compound_of[state] = c
 
     ligands = []
     for lig in names_of:
@@ -206,7 +209,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             # two states of one compound: experiment has no ddG between them (review of PR #19: 0 in the figure)
             exp_ddg = None
         overlap = e.get("lowest_overlap") or {}
-        edges.append({"edge": e["edge"], "ligand_a": a, "ligand_b": b, "exp_ddg": exp_ddg, "ddg": e.get("ddg"),
+        edges.append({"edge": e["edge"], "ligand_a": a, "ligand_b": b, "exp_ddg": exp_ddg,
+                      "exp_ddg_of": "the compounds" if states else "the ligands", "ddg": e.get("ddg"),
                       "ddg_error": e.get("se"), "network_ddg": e.get("network_ddg"),
                       "network_ddg_error": e.get("network_se"), "fepplus_bennett_ddg": pub.get("bennett"),
                       "fepplus_bennett_error": pub.get("bennett_error"), "fepplus_ccc_ddg": pub.get("ccc"),
@@ -217,17 +221,17 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     title = load_registry()[name]["title"]
     with_dg = [r for r in ligands if r["cufep_rbfe"] is not None]
     with_ddg = [r for r in edges if r["ddg"] is not None]
-    network = run_dir / "network.json"
-    edges_from = json.loads(network.read_text()).get("edges_from", "") if network.exists() else ""
-    what = "Compounds" if compounds is not None else "Ligands"
+    edges_from = record.get("edges_from", "")
+    what = "Compounds" if states else "Ligands"
     lines = [f"# cuFEP relative benchmark report: {name}", "", title, "",
              f"{what} with a dG: {len(with_dg)} of {len(ligands)}; edges with a ddG: {len(with_ddg)} of {len(edges)}"
              + (f" (edges {edges_from})." if edges_from else "."), "",
-             *([] if compounds is None else [
+             *([] if not states else [
                  f"The {len(summary['ligands'])} ligands of the network are states of {len(ligands)} compounds "
                  "(system.states): the dG of a compound combines its states, -kT ln sum P exp(-dG/kT) - kT ln s "
-                 "(docs/rbfe.md, \"States of a compound\"); the edges between two states of one compound are not "
-                 "among the edges compared with experiment.", ""]),
+                 "(docs/rbfe.md, \"States of a compound\"). Experiment measures compounds: the ddG compared with it "
+                 "are those of the pairs of compounds the edges join, from the dG of the compounds; an edge between "
+                 "states is compared with the published prediction of the same edge only.", ""]),
              "The dG of cuFEP come from the edges alone, their mean over the ligands with an experimental value set to "
              "the mean of those values (`docs/rbfe.md`, \"The network\"); the published FEP+ values are relative "
              "calculations shifted to the experimental mean of the whole published set, with 20 ns per lambda window "
@@ -276,10 +280,12 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     lines += ["", "## Per edge (kcal/mol)", "",
               "ddG = dG(B) - dG(A). Own: the edge's two legs; network: dG(B) - dG(A) of the estimate from all edges "
               "(what the cycle closure correction gives an edge); FEP+: the published prediction of the same edge "
-              "(Bennett and cycle closure corrected), where the published map has it. An edge between two states of "
-              "one compound has no experimental ddG.", "",
-              "| edge | experiment | cuFEP own | cuFEP network | FEP+ Bennett | FEP+ CCC | lowest overlap complex, "
-              "solvent | NOT RELIABLE |", "|---|---|---|---|---|---|---|---|"]
+              "(Bennett and cycle closure corrected), where the published map has it. "
+              + ("The experiment of an edge between states is that of their two compounds (none within one "
+                 "compound); it is not what the edge computes." if states else ""), "",
+              f"| edge | {'experiment (of the compounds)' if states else 'experiment'} | cuFEP own | cuFEP network | "
+              "FEP+ Bennett | FEP+ CCC | lowest overlap complex, solvent | NOT RELIABLE |",
+              "|---|---|---|---|---|---|---|---|"]
     for r in edges:
         own = "" if r["ddg"] is None else f"{r['ddg']:+.2f} ± {r['ddg_error']:.2f}"
         net = "" if r["network_ddg"] is None else f"{r['network_ddg']:+.2f} ± {r['network_ddg_error']:.2f}"
@@ -295,28 +301,53 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         m = edge_errors([p for p, _ in pairs], [x for _, x in pairs])
         return f"| {label} | {m['n']} | {num(m['rmse'])} | {num(m['mue'])} |"
 
-    scored_edges = [r for r in edges if r["exp_ddg"] is not None
-                    and (not compound_of or compound_of.get(r["ligand_a"]) != compound_of.get(r["ligand_b"]))]
-    lines.append(edge_row("cuFEP, own", [(r["ddg"], r["exp_ddg"]) for r in scored_edges if r["ddg"] is not None]))
-    lines.append(edge_row("cuFEP, network", [(r["network_ddg"], r["exp_ddg"]) for r in scored_edges
-                                             if r["network_ddg"] is not None]))
-    common = [r for r in scored_edges if r["ddg"] is not None and r["fepplus_bennett_ddg"] is not None]
-    lines.append(edge_row("cuFEP, own, on the edges FEP+ also has", [(r["ddg"], r["exp_ddg"]) for r in common]))
-    lines.append(edge_row("FEP+ Bennett, the same edges", [(r["fepplus_bennett_ddg"], r["exp_ddg"]) for r in common]))
-    exp_of = dict(experiment)
-    names = set(summary["ligands"])
-    own_map = [(v["bennett"], exp_of[b] - exp_of[a]) for (a, b), v in published.items()
-               if a in names and b in names and exp_of.get(a) is not None and exp_of.get(b) is not None
-               and (not compound_of or compound_of.get(a) != compound_of.get(b))]
-    lines.append(edge_row("FEP+ Bennett, its whole map among these ligands", own_map))
+    pair_rows = []
+    if states:
+        # experiment against the ddG of the pairs of compounds that the edges join (review of PR #19: a state edge
+        # and the experiment of its compounds are not one quantity, e.g. kT ln 2 for two equal binding modes)
+        pairs = list(dict.fromkeys(tuple(sorted((compound_of[r["ligand_a"]], compound_of[r["ligand_b"]])))
+                                   for r in edges if compound_of[r["ligand_a"]] != compound_of[r["ligand_b"]]))
+        dg_of = {r["ligand"]: r for r in ligands}
+        for ca, cb in pairs:
+            if experiment_of.get(ca) is None or experiment_of.get(cb) is None:
+                continue
+            ours = (None if dg_of[ca]["cufep_rbfe"] is None or dg_of[cb]["cufep_rbfe"] is None
+                    else dg_of[cb]["cufep_rbfe"] - dg_of[ca]["cufep_rbfe"])
+            theirs = (None if dg_of[ca]["fepplus"] is None or dg_of[cb]["fepplus"] is None
+                      else dg_of[cb]["fepplus"] - dg_of[ca]["fepplus"])
+            pair_rows.append({"edge": f"{ca}~{cb}", "exp_ddg": experiment_of[cb] - experiment_of[ca], "ddg": ours,
+                              "ddg_error": None, "fepplus_bennett_ddg": theirs})
+        lines.append(edge_row("cuFEP, the pairs of compounds the edges join",
+                              [(r["ddg"], r["exp_ddg"]) for r in pair_rows if r["ddg"] is not None]))
+        lines.append(edge_row("FEP+ (published dG of the compounds), the same pairs",
+                              [(r["fepplus_bennett_ddg"], r["exp_ddg"]) for r in pair_rows
+                               if r["fepplus_bennett_ddg"] is not None]))
+        same_edges = [(r["ddg"], r["fepplus_bennett_ddg"]) for r in edges
+                      if r["ddg"] is not None and r["fepplus_bennett_ddg"] is not None]
+        m = edge_errors([p for p, _ in same_edges], [x for _, x in same_edges])
+        lines += ["", f"Edges between states against the published prediction of the same edge (FEP+ Bennett, no "
+                      f"experiment): {m['n']} edges, RMSE {num(m['rmse'])}, MUE {num(m['mue'])} kcal/mol."]
+    else:
+        scored_edges = [r for r in edges if r["exp_ddg"] is not None]
+        lines.append(edge_row("cuFEP, own", [(r["ddg"], r["exp_ddg"]) for r in scored_edges if r["ddg"] is not None]))
+        lines.append(edge_row("cuFEP, network", [(r["network_ddg"], r["exp_ddg"]) for r in scored_edges
+                                                 if r["network_ddg"] is not None]))
+        common = [r for r in scored_edges if r["ddg"] is not None and r["fepplus_bennett_ddg"] is not None]
+        lines.append(edge_row("cuFEP, own, on the edges FEP+ also has", [(r["ddg"], r["exp_ddg"]) for r in common]))
+        lines.append(edge_row("FEP+ Bennett, the same edges",
+                              [(r["fepplus_bennett_ddg"], r["exp_ddg"]) for r in common]))
+        names = set(summary["ligands"])
+        own_map = [(v["bennett"], experiment[b] - experiment[a]) for (a, b), v in published.items()
+                   if a in names and b in names and experiment.get(a) is not None and experiment.get(b) is not None]
+        lines.append(edge_row("FEP+ Bennett, its whole map among these ligands", own_map))
 
     text = "\n".join(lines) + "\n"
     if write:
-        _save(run_dir, text, ligands, edges, name)
+        _save(run_dir, text, ligands, edges, name, pair_rows if states else None)
     return text
 
 
-def _save(run_dir: Path, text: str, ligands: list[dict], edges: list[dict], name: str) -> None:
+def _save(run_dir: Path, text: str, ligands: list[dict], edges: list[dict], name: str, pairs=None) -> None:
     from cufep.files import publish_text, publish_with
 
     publish_text(run_dir / "rbfe_report.md", text)
@@ -330,10 +361,12 @@ def _save(run_dir: Path, text: str, ligands: list[dict], edges: list[dict], name
         publish_with(path, table, newline="")
     for figure in FIGURES:
         (run_dir / figure).unlink(missing_ok=True)     # never the figure of an earlier state of the run
-    _plot(run_dir, ligands, edges, name)
+    _plot(run_dir, ligands, edges if pairs is None else pairs, name, pairs is not None)
 
 
-def _plot(run_dir: Path, ligands: list[dict], edges: list[dict], name: str) -> None:
+def _plot(run_dir: Path, ligands: list[dict], edges: list[dict], name: str, of_compounds: bool = False) -> None:
+    """The figures: the dG against experiment, and the ddG against experiment (of the edges, or with states of the
+    pairs of compounds the edges join)."""
     plt = _pyplot()
     if plt is None:
         return
@@ -342,7 +375,9 @@ def _plot(run_dir: Path, ligands: list[dict], edges: list[dict], name: str) -> N
              (("cufep_rbfe", "cufep_rbfe_error", "cuFEP RBFE"), ("fepplus", None, "FEP+ (published)")),
              "dG"),
             ("rbfe_report_edges.png", [r for r in edges if r["ddg"] is not None and r["exp_ddg"] is not None],
-             "exp_ddg", (("ddg", "ddg_error", "cuFEP, own"), ("fepplus_bennett_ddg", None, "FEP+ Bennett (same edge)")),
+             "exp_ddg", (("ddg", "ddg_error", "cuFEP, compounds" if of_compounds else "cuFEP, own"),
+                         ("fepplus_bennett_ddg", None,
+                          "FEP+ (published dG of the compounds)" if of_compounds else "FEP+ Bennett (same edge)")),
              "ddG")):
         if not rows:
             continue

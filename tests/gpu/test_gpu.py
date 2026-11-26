@@ -1043,7 +1043,7 @@ def test_backends_agree_at_every_state_of_a_hybrid_that_changes_the_charge():
     ring = {**{i: i for i in range(1, 7)}, **{10 + k: 7 + k for k in range(5)}}
     system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge("[O-]c1ccccc1", ring,
                                                                                          box_nm=3.2)
-    top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a)
+    top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a, box)
     water = alchemical_water(top_a, pos_a, 0.8)
     water_into_ion(system_b, [i - len(ligand_a) for i in water],
                    ion_parameters(system_a, top_a, +1, mm.app.ForceField("amber14/tip3p.xml")))

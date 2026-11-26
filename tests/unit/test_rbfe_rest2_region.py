@@ -56,6 +56,17 @@ def test_the_hot_atoms_grow_from_the_perturbation_along_rotatable_bonds_and_ring
     assert len(hot & heavy) == MAX_HEAVY_ATOMS_WITH_RING
     chain_hot = sorted(i for i in hot & heavy if i < 28)
     assert chain_hot == list(range(28 - len(chain_hot), 28))                # from the ring outwards
+    # second review of PR #19: from a perturbation at the end of a chain of 23 carbons the region reaches 24 heavy
+    # atoms before the ring; one more atom, the first of the ring, is not "a ring", so the limit is 24 and the ring
+    # stays cold (it was let in, under the limit of 30)
+    from cufep.rbfe.hot_region import MAX_HEAVY_ATOMS
+
+    a, b, to_a, to_b, core = _pair("c1ccccc1" + "C" * 23, "c1ccccc1" + "C" * 23 + "O")
+    hot = perturbed_hot_atoms(a, b, to_a, to_b, core)
+    element = {to_b[j]: b.GetAtomWithIdx(j).GetAtomicNum() for j in range(b.GetNumAtoms())}
+    element.update({i: a.GetAtomWithIdx(i).GetAtomicNum() for i in range(a.GetNumAtoms())})
+    heavy = {i for i in hot if element[i] > 1}
+    assert len(heavy) == MAX_HEAVY_ATOMS and not heavy & set(range(6))
 
 
 def _scaled(system, hot: set[int], s: float, ligand: set[int]):
@@ -82,6 +93,21 @@ def _scaled(system, hot: set[int], s: float, ligand: set[int]):
     return out
 
 
+def _change_a_core_torsion(system_b, ligand_b: list[int], core: dict[int, int]) -> int:
+    """Double the force constant of the first proper torsion of four core atoms of B and turn its phase by pi, so that
+    it carries energy in the pose of A (a term the hybrid then holds once for A and once for B); returns how many
+    terms changed."""
+    core_b = set(core.values())
+    for force in system_b.getForces():
+        if isinstance(force, mm.PeriodicTorsionForce):
+            for k in range(force.getNumTorsions()):
+                i, j, m, n, per, phase, kk = force.getTorsionParameters(k)
+                if all(x in core_b for x in (i, j, m, n)) and kk.value_in_unit(u.kilojoule_per_mole) > 0.5:
+                    force.setTorsionParameters(k, i, j, m, n, per, phase + math.pi * u.radian, 2.0 * kk)
+                    return 1
+    return 0
+
+
 def _at(ctx, state) -> float:
     for name, value in state.as_parameters().items():
         if name in ctx.getParameters():
@@ -94,7 +120,7 @@ def _ring_and_unique(hybrid) -> list[int]:
     return sorted(set(hybrid.unique_old) | set(hybrid.unique_new) | {1, 2, 3, 4, 5, 6})
 
 
-@pytest.mark.parametrize("case", ["part of the ligand", "alchemical water"])
+@pytest.mark.parametrize("case", ["part of the ligand", "alchemical water", "a core torsion that changes"])
 def test_the_states_have_the_energy_of_the_rest2_scaling_written_into_the_system(case):
     """At x 0.3 and 0.7 and REST2 scale 1.5 (s = 1/1.5) the hybrid with REST2 on a part of the ligand (or on the whole
     ligand with an alchemical water, whose charges are cold) has the energy of the hybrid without REST2 made from end
@@ -107,7 +133,7 @@ def test_the_states_have_the_energy_of_the_rest2_scaling_written_into_the_system
 
         ring = {**{i: i for i in range(1, 7)}, **{10 + k: 7 + k for k in range(5)}}
         system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge("[O-]c1ccccc1", ring)
-        top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a)
+        top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a, box)
         water = alchemical_water(top_a, pos_a, 0.8)
         water_into_ion(system_b, [i - len(ligand_a) for i in water],
                        ion_parameters(system_a, top_a, +1, mm.app.ForceField("amber14/tip3p.xml")))
@@ -115,6 +141,9 @@ def test_the_states_have_the_energy_of_the_rest2_scaling_written_into_the_system
     else:
         system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge()
         more = {}
+        if case == "a core torsion that changes":
+            # review of PR #19: the REST2 factor multiplied the term of A of a core torsion alone
+            assert _change_a_core_torsion(system_b, ligand_b, core) == 1
     plain = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, **more)
     hot = _ring_and_unique(plain) if case == "part of the ligand" else list(plain.ligand_atoms)
     rest2 = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, rest2=True,
@@ -135,7 +164,7 @@ def test_the_states_have_the_energy_of_the_rest2_scaling_written_into_the_system
         assert _at(ctx, HybridState(x)) == pytest.approx(_at(unscaled_ctx, HybridState(x)), abs=2e-3)
 
 
-@pytest.mark.parametrize("case", ["part of the ligand", "alchemical water"])
+@pytest.mark.parametrize("case", ["part of the ligand", "alchemical water", "a core torsion that changes"])
 def test_the_evaluator_gives_every_rest2_state_of_a_hybrid_with_cold_charges(case):
     """The evaluation of all states (nine evaluations of the main group per half, the others in a = sqrt(s)) equals
     setting each state, along a leg with REST2 2.0 in the middle, after MD in a scaled state. Before the evaluation in
@@ -150,12 +179,16 @@ def test_the_evaluator_gives_every_rest2_state_of_a_hybrid_with_cold_charges(cas
 
         ring = {**{i: i for i in range(1, 7)}, **{10 + k: 7 + k for k in range(5)}}
         system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge("[O-]c1ccccc1", ring)
-        top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a)
+        top_a = hybrid_edge_topology(system_a.getNumParticles(), ligand_a, system_a, box)
         water = alchemical_water(top_a, pos_a, 0.8)
         water_into_ion(system_b, [i - len(ligand_a) for i in water],
                        ion_parameters(system_a, top_a, +1, mm.app.ForceField("amber14/tip3p.xml")))
         hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, rest2=True,
                                     alchemical_water=water)
+    elif case == "a core torsion that changes":
+        system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge()
+        assert _change_a_core_torsion(system_b, ligand_b, core) == 1
+        hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, rest2=True)
     else:
         system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge()
         plain = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
@@ -171,7 +204,7 @@ def test_the_evaluator_gives_every_rest2_state_of_a_hybrid_with_cold_charges(cas
     integ.step(50)
     states = fixed_schedule(["morph"], {"morph": 8}, rest2_scale=2.0).states
     evaluator = HybridEnergyEvaluator(ctx, states, 298.15, None)
-    assert evaluator.by_atom
+    assert evaluator.by_atom == (case != "a core torsion that changes")
     fast, _ = evaluator.reduced_potentials()
     beta = 1.0 / (R_GAS * 298.15)
     slow = np.array([beta * _at(ctx, state) for state in states])

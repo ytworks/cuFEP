@@ -746,3 +746,27 @@ def test_the_perturbed_region_of_a_prepared_edge_is_chosen_by_the_rule(tmp_path)
     prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     built = build_leg(rcfg, edge_dir, "complex")
     assert built.hybrid.rest2_ligand_atoms == built.hybrid.ligand_atoms and built.hot_atoms == []
+
+
+def test_the_plan_refuses_an_edge_that_the_run_refuses(tmp_path):
+    """Review of PR #19 (P3): `cufep rbfe plan` showed an edge from a charge of -1 to +1 as "+2 (an alchemical water)"
+    and ended with 0, where `cufep rbfe run` refuses it. The plan refuses it with the same reason."""
+    from click.testing import CliRunner
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep import cli
+
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, smiles in (("acetate", "CC(=O)[O-]"), ("ammonium", "CC[NH3+]")):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        AllChem.EmbedMolecule(mol, randomSeed=3)
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    (tmp_path / "protein.pdb").write_text("REMARK built in the test\n")
+    (tmp_path / "config.yaml").write_text("system: {protein: protein.pdb, ligands: ligands.sdf}\n"
+                                          "network: {edges: [[acetate, ammonium]]}\n")
+    result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
+    assert result.exit_code != 0 and "changes the net charge by +2" in result.output
+

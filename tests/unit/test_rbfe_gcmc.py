@@ -132,3 +132,34 @@ def test_the_moves_are_on_by_default_in_the_complex_leg_only_and_recorded_there(
     assert "gcmc" not in hybrid_settings(off, "complex")
     # a section that gives other settings of the moves keeps them on (they went off when only `attempts` was given)
     assert _rbfe_config(gcmc={"attempts": 5000}).sampling.gcmc.enabled
+
+
+def test_the_sphere_of_an_edge_is_the_same_both_ways(edge):
+    """Review of PR #19: the radius of the sphere came from the hybrid, which holds the mapped atoms where A has them;
+    with a mapped atom of B 0.1 nm from where A has it, A -> B and B -> A had spheres of other radii (and other Adams
+    values). The radius comes from the heavy atoms of both end states: one sphere both ways."""
+    from cufep.rbfe.hybrid import make_hybrid_system
+    from cufep.rbfe.leg import hybrid_gcmc
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = edge
+    pos_b = np.array(pos_b, dtype=float)
+    centre = pos_a[ligand_a].mean(axis=0)
+    far = max((i for i in core if system_a.getParticleMass(i).value_in_unit(mm.unit.dalton) > 2.0),
+              key=lambda i: np.linalg.norm(pos_a[i] - centre))                 # the heavy mapped atom farthest out
+    outwards = (pos_a[far] - centre) / np.linalg.norm(pos_a[far] - centre)
+    pos_b[core[far]] = pos_a[far] + 0.1 * outwards                         # B has it 0.1 nm farther out
+    rcfg = _rbfe_config(gcmc={"ghost_waters": 6})
+
+    def heavy(system, positions, ligand):
+        return [positions[i] for i in ligand if system.getParticleMass(i).value_in_unit(mm.unit.dalton) > 2.0]
+
+    both = heavy(system_a, pos_a, ligand_a) + heavy(system_b, pos_b, ligand_b)
+    forward = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
+    backward = make_hybrid_system(system_b, pos_b, ligand_b, system_a, pos_a, ligand_a, {j: i for i, j in core.items()})
+    radii = []
+    for hybrid, n in ((forward, forward.system.getNumParticles()), (backward, backward.system.getNumParticles())):
+        top = hybrid_edge_topology(n, list(hybrid.ligand_atoms), hybrid.system, box)
+        radii.append((hybrid_gcmc(rcfg, hybrid, top, box).radius_nm,
+                      hybrid_gcmc(rcfg, hybrid, top, box, both).radius_nm))
+    assert abs(radii[0][0] - radii[1][0]) > 0.005                           # from the hybrid: not one sphere
+    assert radii[0][1] == pytest.approx(radii[1][1], abs=1e-12)
