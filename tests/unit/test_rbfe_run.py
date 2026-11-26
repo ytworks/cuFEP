@@ -1772,10 +1772,30 @@ def test_a_leg_whose_hot_atoms_the_earlier_rule_chose_otherwise_is_refused_befor
                                                               {"conditions": of_version_1})
                                                              if Path(d) == hrex else ([], {})))
     check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
-    monkeypatch.setattr(leg_module, "perturbed_region",
-                        lambda *args, rule=None: [0] if rule == 1 else [0, 1])      # the rules choose otherwise
+    # the rules choose otherwise (the hot atoms of version 1 one fewer): this version records its rule with the leg
+    import hashlib
+
+    from cufep.rbfe.leg import build_leg
+    from cufep.rbfe.prep import load_end_states
+
+    end = load_end_states(edge_dir, "solvent")
+    unique_b = sorted(j for j in end["b"]["ligand"] if j not in set(end["core_map"].values()))
+    hot = leg_module.perturbed_region(edge_dir, end["a"], end["b"], end["core_map"], unique_b)
+    of_rule_1 = hot[1:]
+    monkeypatch.setattr(leg_module, "perturbed_region", lambda *args, rule=None: of_rule_1 if rule == 1 else hot)
     assert hybrid_settings(rcfg, "solvent", edge_dir)["sampling.rest2"]["hot_region_rule"] == 2
-    with pytest.raises(WorkflowError, match="hot_region_rule") as refused:
+    made_now = hashlib.sha256(build_leg(rcfg, edge_dir, "solvent").xml.encode()).hexdigest()
+    monkeypatch.setattr(leg_module, "perturbed_region", lambda *args, rule=None: of_rule_1)
+    made_by_rule_1 = hashlib.sha256(build_leg(rcfg, edge_dir, "solvent").xml.encode()).hexdigest()
+    monkeypatch.setattr(leg_module, "perturbed_region", lambda *args, rule=None: of_rule_1 if rule == 1 else hot)
+    assert made_now != made_by_rule_1
+    # (thirteenth review, P2) samples of 48eea8c to e0f9743: the hot atoms of this rule, no version recorded; their
+    # System is that of this rule, and they are continued (they were refused for the record of the version)
+    of_version_1["system_sha256"] = made_now
+    check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    # samples of version 1: their System is another; refused before anything is written, their result stays
+    of_version_1["system_sha256"] = made_by_rule_1
+    with pytest.raises(WorkflowError, match="hot atoms of version 1") as refused:
         check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
     assert "--reschedule" in str(refused.value)
 

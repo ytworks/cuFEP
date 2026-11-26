@@ -366,8 +366,10 @@ def hot_region_rule_of(rcfg, edge_dir: Path, leg: str) -> dict:
     present rule chooses otherwise than version 1 did (a bond that closes a ring in B); empty elsewhere, so that the
     records of the other legs are those of earlier versions. The samples of such a leg made by version 1 record no
     rule: a run refuses to continue them before it writes anything, and their result stays (twelfth review of PR #19:
-    the leg was refused after its result had been set aside). Their free energy is not changed by the hot atoms (the
-    end states are not scaled), and the analysis takes it."""
+    the leg was refused after its result had been set aside), unless the System they recorded is the one of the hot
+    atoms of this rule (versions 48eea8c to e0f9743 chose them and recorded no version; thirteenth review,
+    :func:`settings_of_the_samples`). Their free energy is not changed by the hot atoms (the end states are not
+    scaled), and the analysis takes it."""
     from cufep.rbfe.hot_region import HOT_REGION_RULE
     from cufep.rbfe.prep import load_end_states
 
@@ -383,6 +385,52 @@ def hot_region_rule_of(rcfg, edge_dir: Path, leg: str) -> dict:
     now = perturbed_region(edge_dir, a, b, end["core_map"], unique_b)
     before = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, rule=1)
     return {} if now == before else {"hot_region_rule": HOT_REGION_RULE}
+
+
+def without_the_hot_region_rule(settings: dict) -> dict:
+    """``settings`` of a leg (:func:`hybrid_settings`) without the version of the rule of the hot atoms."""
+    rest2 = settings.get("sampling.rest2")
+    if not isinstance(rest2, dict) or "hot_region_rule" not in rest2:
+        return settings
+    return {**settings, "sampling.rest2": {k: v for k, v in rest2.items() if k != "hot_region_rule"}}
+
+
+def settings_of_the_samples(leg_dir: Path, settings: dict) -> dict:
+    """The settings of a leg in the form its samples (or the checkpoint of their start) recorded them: without the
+    version of the rule of the hot atoms where they were made before it was recorded (48eea8c to e0f9743, which chose
+    the hot atoms of the present rule and recorded no version; thirteenth review of PR #19). Whether they were made
+    with the hot atoms of this rule the System decides, which they record too (:func:`system_of_the_samples`)."""
+    from cufep.sampling.storage import StorageError, _same, stored_layout
+
+    try:
+        _parts, attrs = stored_layout(Path(leg_dir) / "hrex")
+    except (StorageError, OSError, ValueError):
+        return settings
+    stored = (attrs.get("conditions") or {}).get("settings") if isinstance(attrs.get("conditions"), dict) else None
+    without = without_the_hot_region_rule(settings)
+    if without is not settings and isinstance(stored, dict) and _same(stored, without):
+        return without
+    return settings
+
+
+def system_of_the_samples(leg_dir: Path, xml: str) -> bool | None:
+    """Whether the samples of a leg (or the checkpoint of their start) were made with the System ``xml`` of the leg,
+    in either form they recorded it (:func:`recorded_form_of_the_system`); None where they record no checksum."""
+    import hashlib
+
+    import openmm as mm
+
+    digest = _samples_system_digest(leg_dir)
+    if digest is None:
+        return None
+    if hashlib.sha256(xml.encode()).hexdigest() == digest:
+        return True
+    cell = _fixed_cell_of(leg_dir)
+    if cell is None:
+        return False
+    system = mm.XmlSerializer.deserialize(xml)
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(cell, dtype=float)])
+    return hashlib.sha256(mm.XmlSerializer.serialize(system).encode()).hexdigest() == digest
 
 
 def hybrid_heavy_atoms(hybrid, a: dict, b: dict) -> list[int]:
@@ -717,7 +765,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
-    settings = hybrid_settings(rcfg, job.leg, edge_dir)
+    settings = settings_of_the_samples(leg_dir, hybrid_settings(rcfg, job.leg, edge_dir))
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more) -> LegSpec:

@@ -360,7 +360,7 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
     with the same comparison, so that a refused run leaves the directory as it was (ninth review of PR #19, the class
     of the ABFE's ``check_leg_reuse``). A checkpoint without the record of its conditions is refused; samples of an
     earlier version without one are left to the leg (analysed, not continued). The System is compared in the leg."""
-    from cufep.rbfe.leg import hybrid_settings
+    from cufep.rbfe.leg import build_leg, hybrid_settings, settings_of_the_samples, system_of_the_samples
     from cufep.sampling.storage import checkpoint_without_conditions, conditions_differences, stored_layout
     from cufep.workflow import gcmc_in
 
@@ -384,12 +384,27 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                         problems.append(f"the {leg} leg of {edge}, repeat {r}: {checkpoint_without_conditions(hrex)}")
                         commands.append(rerun_command(edge, r, [leg], out_dir))
                     continue
+                leg_dir = out_dir / "edges" / edge / f"repeat_{r}" / leg
+                settings = hybrid_settings(rcfg, leg, out_dir / "edges" / edge)
+                recorded = settings_of_the_samples(leg_dir, settings)
+                if recorded is not settings:
+                    # samples that record no version of the rule of the hot atoms where the two versions choose other
+                    # atoms: they are continued only where their System is that of the hot atoms of this rule
+                    # (thirteenth review of PR #19: those of 48eea8c to e0f9743 are; those of version 1 are not)
+                    same = system_of_the_samples(leg_dir, build_leg(rcfg, out_dir / "edges" / edge, leg, leg_dir,
+                                                                    False).xml)
+                    if not same:
+                        problems.append(f"the {leg} leg of {edge}, repeat {r}: its samples were made with the hot "
+                                        "atoms of version 1 of the rule of sampling.rest2.region: perturbed (a bond "
+                                        "that closes a ring read in A), not those of this version; its result stays")
+                        commands.append(rerun_command(edge, r, [leg], out_dir))
+                        continue
+                    settings = recorded
                 current = {"temperature_K": float(rcfg.thermodynamics.temperature_K),
                            "pressure_bar": None if gcmc_in(rcfg, leg) else float(rcfg.thermodynamics.pressure_bar),
                            "friction_per_ps": float(rcfg.dynamics.friction_per_ps),
                            "barostat_frequency": int(rcfg.dynamics.barostat_frequency),
-                           "exchange": str(rcfg.sampling.exchange),
-                           "settings": hybrid_settings(rcfg, leg, out_dir / "edges" / edge)}
+                           "exchange": str(rcfg.sampling.exchange), "settings": settings}
                 current.update(iteration_of_the_leg(rcfg, out_dir / "edges" / edge, leg, r, stored.get("timestep_fs")))
                 differing = conditions_differences({key: stored[key] for key in current if key in stored}, current)
                 if differing:
