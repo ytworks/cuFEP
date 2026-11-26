@@ -258,3 +258,20 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - 修正(d512824): stand-in は自分のデバイスを process の現在のデバイスにする。GPU テスト(GPU 1 の stand-in の process
   が持つ context): 修正前 [0, 1]、修正後 [1]。
 - TYK2 は image d512824 で最初からやり直す(`runs/rbfe_bench_tyk2_d512824`)。2ecbcd2 の出力は残す。
+
+### 2026-11-26 オーナーの 3 回目のレビュー(review 6068766012、9 件)
+各件を修正前のコード(d512824)で再現し、再現をテストにした(9 件とも修正前に失敗、F2 と F5 は単独でも確認)。
+- P1 `benchmark report` が `rbfe analyze` の除外した leg の ΔΔG を古い `summary.json` から戻す(+0.91) → leg のある
+  ディレクトリはレポートも `analyse_directory` で集計し、除外を注記する。
+- P2 平衡化を作り直すと古いセルの開始配置で本計算(修正前: エラーなしで実行) → 水の移動のある leg は、開始配置の
+  セルが平衡化の固定セルと違えば拒否し、`--reschedule` を案内する。ファイルの形式は変えない。
+- P2 案内された `--reschedule` が旧 GCMC leg を進められない → ghost 水の照合を `--reschedule` が退避する前に行う。
+  拒否文の手順(`equil.npz` と `equil_ghosts.json` を消して `--reschedule`)で leg が再計算できることを統合テストで確認。
+  版 1 の complex leg の RESULT 行は、平衡化の削除を先に案内する。
+- P2 B 固有原子とコアの結合が無い(hybrid の topology) → hybrid の結合を球の判定とムーバーに渡す(重原子 17 成分 → 1)。
+- P2 両端の分子の像がそろわない(A が先で 2.25 nm、拒否。B が先で 1.395) → 分子を中心の最近接像でそろえる(両方 1.395)。
+- P2 版 1 の `perturbed` 領域を今の規則で数えていた → 判定できないとして外す。
+- P2 加熱した窓の無い版 1 の leg まで外していた → `scale_of_window` がすべて 1 なら採用。
+- P2 前処理のファイル欠落で `rbfe analyze` 全体が止まる → その leg だけを判定できないとして外す。
+- P3 `ligands.csv` の状態の実験値 → `exp_dg_of`(the compound 4j)。
+- GPU テスト d512824: 75 passed。全体のユニットテスト e90e819: 851 passed。
