@@ -175,14 +175,16 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     from cufep.rbfe.run import analyse_directory, combine_network, edge_result, write_results, write_run_files
 
     out_dir = tmp_path / "run"
-    ligands = _ligands(tmp_path, out_dir)
+    # chlorobenzene: a change of one atom without hydrogens, small enough for three windows of these short legs
+    # (toluene -> phenol now takes the methyl and the hydroxyl out of the mapping for the plugin)
+    ligands = _ligands(tmp_path, out_dir, "Clc1ccccc1", "chlorobenzene", 7)
     rcfg = _config(tmp_path, out_dir, mode, legs)
-    edge_dir = out_dir / "edges" / "toluene~phenol"
+    edge_dir = out_dir / "edges" / "toluene~chlorobenzene"
     info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     assert info["legs"]["complex"]["core_atoms"] == info["legs"]["solvent"]["core_atoms"] >= 11
     # (seventeenth review) the windows of the solvent leg are those of this run where the complex leg takes them
     token = "this run" if (mode, legs) == ("adaptive", "solvent") else None
-    jobs = [EdgeLegJob(edge="toluene~phenol", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
+    jobs = [EdgeLegJob(edge="toluene~chlorobenzene", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
                          config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True,
                          windows_token=token)
             for leg in ("solvent", "complex")]
@@ -206,26 +208,26 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
         assert len(solvent["lambda_windows"]["morph"]) == 3
     assert all(np.isfinite(r["delta_g"]) and r["delta_g_error"] > 0 for r in results)
     h = solvent["hybrid"]
-    assert h["core_atoms"] + h["unique_old_atoms"] == 15 and h["core_atoms"] + h["unique_new_atoms"] == 13
-    edge = edge_result(edge_dir, "toluene", "phenol", 1)
+    assert h["core_atoms"] + h["unique_old_atoms"] == 15 and h["core_atoms"] + h["unique_new_atoms"] == 12
+    edge = edge_result(edge_dir, "toluene", "chlorobenzene", 1)
     assert edge["ddg"] == pytest.approx((complex_["delta_g"] - solvent["delta_g"]) / 4.184)
-    summary = combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
-                              {"toluene": -5.0, "phenol": -5.6})
+    summary = combine_network(out_dir, ["toluene", "chlorobenzene"], [("toluene", "chlorobenzene")], 1,
+                              {"toluene": -5.0, "chlorobenzene": -5.6})
     dg = summary["dg"]["values"]
     assert summary["dg"]["reference"] == "mean of the experimental values"
-    assert dg["phenol"]["dg"] - dg["toluene"]["dg"] == pytest.approx(edge["ddg"])
-    assert dg["phenol"]["dg"] + dg["toluene"]["dg"] == pytest.approx(-10.6)
+    assert dg["chlorobenzene"]["dg"] - dg["toluene"]["dg"] == pytest.approx(edge["ddg"])
+    assert dg["chlorobenzene"]["dg"] + dg["toluene"]["dg"] == pytest.approx(-10.6)
     write_results(out_dir, summary)
     first = (out_dir / "edges.csv").read_text()
     # `cufep rbfe analyze` makes the same results from the files of the run
-    write_run_files(out_dir, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given",
-                    {"toluene": -5.0, "phenol": -5.6})
+    write_run_files(out_dir, rcfg, ["toluene", "chlorobenzene"], [("toluene", "chlorobenzene")], "given",
+                    {"toluene": -5.0, "chlorobenzene": -5.6})
     assert analyse_directory(out_dir) == summary
     # called again: the legs are complete, their results are made again from the same samples
     again = [run_hybrid_leg_safe(job) for job in jobs]
     assert [r["delta_g"] for r in again] == [r["delta_g"] for r in results]
-    write_results(out_dir, combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
-                                           {"toluene": -5.0, "phenol": -5.6}))
+    write_results(out_dir, combine_network(out_dir, ["toluene", "chlorobenzene"], [("toluene", "chlorobenzene")], 1,
+                                           {"toluene": -5.0, "chlorobenzene": -5.6}))
     assert (out_dir / "edges.csv").read_text() == first
 
 
@@ -243,14 +245,16 @@ def test_a_leg_with_samples_keeps_its_windows_when_their_start_configurations_ar
     monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
     monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
     out_dir = tmp_path / "run"
-    ligands = _ligands(tmp_path, out_dir)
+    # chlorobenzene: a change of one atom without hydrogens, small enough for three windows of these short legs
+    # (toluene -> phenol now takes the methyl and the hydroxyl out of the mapping for the plugin)
+    ligands = _ligands(tmp_path, out_dir, "Clc1ccccc1", "chlorobenzene", 7)
     # windows that adaptive lambda scheduling chose, started by its walk (the start the review names)
     rcfg = _config(tmp_path, out_dir, "adaptive")
-    edge_dir = out_dir / "edges" / "toluene~phenol"
+    edge_dir = out_dir / "edges" / "toluene~chlorobenzene"
     prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
 
     def job(cfg) -> EdgeLegJob:
-        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+        return EdgeLegJob(edge="toluene~chlorobenzene", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
                           config=cfg.model_dump(mode="json"), production_ns=cfg.sampling.production_ns, inline=True)
 
     first = run_hybrid_leg_safe(job(rcfg))
