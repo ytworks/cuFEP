@@ -202,6 +202,9 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         exp_ddg = e.get("exp_ddg")
         if exp_ddg is None and experiment.get(a) is not None and experiment.get(b) is not None:
             exp_ddg = experiment[b] - experiment[a]
+        if compound_of and compound_of.get(a) == compound_of.get(b):
+            # two states of one compound: experiment has no ddG between them (review of PR #19: 0 in the figure)
+            exp_ddg = None
         overlap = e.get("lowest_overlap") or {}
         edges.append({"edge": e["edge"], "ligand_a": a, "ligand_b": b, "exp_ddg": exp_ddg, "ddg": e.get("ddg"),
                       "ddg_error": e.get("se"), "network_ddg": e.get("network_ddg"),
@@ -273,7 +276,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     lines += ["", "## Per edge (kcal/mol)", "",
               "ddG = dG(B) - dG(A). Own: the edge's two legs; network: dG(B) - dG(A) of the estimate from all edges "
               "(what the cycle closure correction gives an edge); FEP+: the published prediction of the same edge "
-              "(Bennett and cycle closure corrected), where the published map has it.", "",
+              "(Bennett and cycle closure corrected), where the published map has it. An edge between two states of "
+              "one compound has no experimental ddG.", "",
               "| edge | experiment | cuFEP own | cuFEP network | FEP+ Bennett | FEP+ CCC | lowest overlap complex, "
               "solvent | NOT RELIABLE |", "|---|---|---|---|---|---|---|---|"]
     for r in edges:

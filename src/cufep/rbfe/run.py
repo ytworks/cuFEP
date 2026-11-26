@@ -238,13 +238,15 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     states = states_of(rcfg, ligands)
     if states is not None:
         compound_experiment(states, experiment)            # refused before anything is written
-    write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment, states)
-    publish_text(out_dir / "auto_report.md", report.to_markdown())
-    protein.write_pdb(out_dir / "protein_prepared.pdb")
     infos = {}
     for a, b in selected:
         infos[edge_name(a, b)] = prepare_edge(rcfg, by_name[a], by_name[b], protein,
                                               out_dir / "edges" / edge_name(a, b), box_shape, log)
+    # the record of the run after its edges are prepared: an edge whose preparation stops (no alchemical water, no
+    # mapping) leaves the record of the run whose results the directory holds (review of PR #19)
+    write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment, states)
+    publish_text(out_dir / "auto_report.md", report.to_markdown())
+    protein.write_pdb(out_dir / "protein_prepared.pdb")
     cfg_dict = rcfg.model_dump(mode="json")
     repeats = rcfg.sampling.repeats
     jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
@@ -512,6 +514,8 @@ def write_results(out_dir: Path, summary: dict) -> None:
     publish_with(out_dir / "ligands.csv", ligands_table, newline="")
     if summary.get("compounds"):
         publish_with(out_dir / "compounds.csv", compounds_table, newline="")
+    else:
+        (out_dir / "compounds.csv").unlink(missing_ok=True)     # never the compounds of an earlier state
     publish_text(out_dir / "summary.json", jsonio.dumps(summary, indent=1))
 
 

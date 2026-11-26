@@ -164,3 +164,29 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - README(英日): 状態の行(ABFE は中性のみ、RBFE は電荷と 1 の電荷変化)、RBFE の節(GCMC 既定 on、alchemical water、
   化合物の状態、custom core、ネットワーク ddG)、ベンチマークの `--protocol rbfe`(まだ計算していない)、制限。
   `check_readme_pair.py`、`check_names.py`、PROGRESS の予算(Current Status を 80 行に収めるため既存の 2 項目を圧縮)を通過。
+
+### 2026-11-26 オーナーの指示: `sampling.rest2.region: perturbed` を実装、レビューの 5 件
+- オーナー(2026-11-26):「これ実装して」。hot region の規則(ヘルプ全文)を `src/cufep/rbfe/hot_region.py` に引用して実装。
+  ヘルプが書いていない点は cuFEP の選択として記録(変わる原子 = unique 原子と元素が変わる対応原子、回転可能な結合 = RDKit
+  の数え方の重原子の単結合、3 つの場合の順、パスの繰り返し、水素は重原子に従う)。両レグで、タンパク質の hot 原子は
+  なし。既定は pocket のまま。
+- hybrid: cold のリガンド原子の電荷は √s を掛けない 3 つの λ(`*_cold`)、リガンド内の対・環境との対・ねじれは原子ごとの
+  hot フラグ(hot–hot s、hot–cold √s、4 原子 hot のねじれ s)。NonbondedForce の global parameter は 8 つ。リガンド全体
+  が hot のときは System が以前と同じ(XML が一致)。評価器: cold の電荷がある System では主群を (x, √s) の双 2 次式で
+  半分あたり 9 回、群 1 と 5 を √s の 2 次式で評価。
+- 自分で見つけた手順 4 の不具合(レビューの指摘 1 と同じ): REST2 on(既定)で alchemical water があると、水の電荷が √s を
+  含む λ で補間され、評価器が水と環境の LJ も √s 倍していた。中間の窓の MBAR のエネルギーが Hamiltonian と食い違う
+  (両端は正しい)。水の電荷を cold の λ にし、上の評価で直した。修正前のコード(8d71d5b)で評価器のテストが失敗すること
+  を確かめた。
+- レビュー(独立、差分全体)の残り 4 件、すべて再現テストを付けて修正し、修正前のコードで失敗することを確かめた:
+  (2) 同じ化合物の状態の間のエッジが図と表で実験 ddG 0 → 実験 ddG なし。(3) alchemical water の cutoff が既定でないと全
+  エッジのレグの記録に入った → レグの記録に入れない(準備の記録だけ)。(4) 水が無いときなど準備で止まったとき、run の記録
+  を先に書いていた → エッジの準備の後に書く。(5) 古い compounds.csv が残った → 化合物が無ければ消す。
+  指摘でなかった注意: GCMC の代用エネルギーの docstring を実装どおりに直した。custom core は SMARTS に入らない水素も
+  unique になる(書いてあるとおり)。
+- テスト: CPU(規則: butylbenzene → 4-butylphenol でメチルだけ cold、炭素 28 の鎖で重原子 30 で止まる; 各状態のエネルギー
+  が「hot 原子の電荷 ×√s、ε ×s、hot のねじれ ×s を書き込んだ System」と x 0.3・0.7 で一致、alchemical water でも; 評価器
+  が各状態の直接計算と一致; 全体 hot で XML 不変; ABFE はこの region を断る)。GPU(global parameter 8 つで両バックエンド
+  が厳しい Ewald 和と一致、評価器が各状態と 0.02 kT 以内): hybrid の GPU テスト 18 件通過。全体テスト 8d71d5b: 819 passed。
+- TYK2 の smoke(`--protocol rbfe`、1 エッジ、8 GPU、cufep:dev): exit 0、complex leg はプラグインで GCMC の挿入・削除が
+  受理されている、レポートと図が書かれた。

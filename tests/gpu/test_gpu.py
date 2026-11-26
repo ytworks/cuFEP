@@ -1052,3 +1052,62 @@ def test_backends_agree_at_every_state_of_a_hybrid_that_changes_the_charge():
     assert_backends_give_the_energies_of_a_tight_ewald_sum(hybrid.system, schedule.states, hybrid.positions, box,
                                                            pressure=1.0)
 
+
+
+@pytest.fixture(scope="module")
+def partly_hot_hybrid():
+    """Toluene into phenol in a 3.2 nm box with REST2 on the unique atoms and the ring carbons only (the ring
+    hydrogens cold): the NonbondedForce the plugin replaces has eight global parameters (the charges of the hot and
+    of the cold atoms under three lambdas each, rest2_dq, rest2_ds)."""
+    from conftest import build_hybrid_edge
+
+    from cufep.rbfe.hybrid import make_hybrid_system
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge(box_nm=3.2)
+    plain = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
+    hot = sorted(set(plain.unique_old) | set(plain.unique_new) | {1, 2, 3, 4, 5, 6})
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, rest2=True,
+                                rest2_ligand_atoms=hot)
+    (nb,) = [f for f in hybrid.system.getForces() if isinstance(f, mm.NonbondedForce)]
+    assert nb.getNumGlobalParameters() == 8
+    return hybrid, fixed_schedule(["morph"], {"morph": 8}, rest2_scale=3.0), box
+
+
+@needs_plugin
+def test_backends_agree_at_every_state_of_a_hybrid_hot_in_part(partly_hot_hybrid):
+    """Each backend gives the differences between the windows that a tight Ewald sum gives, with REST2 on a part of
+    the ligand (the risk of the plugin with eight global parameters of offsets)."""
+    hybrid, schedule, box = partly_hot_hybrid
+    assert_backends_give_the_energies_of_a_tight_ewald_sum(hybrid.system, schedule.states, hybrid.positions, box,
+                                                           pressure=1.0)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_the_states_of_a_hybrid_hot_in_part_match_setting_each_state(partly_hot_hybrid, backend):
+    """The evaluation of all states with cold charges equals switching the Context to each state, after dynamics in
+    a scaled state, on both backends."""
+    import openmm.unit as u
+
+    from cufep.sampling.states import set_state
+
+    hybrid, schedule, box = partly_hot_hybrid
+    be = get_backend(backend)
+    integ = be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=3)
+    ctx = be.make_context(be.prepare_system(hybrid.system), integ, 0)
+    ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+    ctx.setPositions(hybrid.positions)
+    k = len(schedule.states) // 2
+    set_state(ctx, schedule.states[k])
+    mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 100)
+    ctx.setVelocitiesToTemperature(300 * u.kelvin, 5)
+    integ.step(250)
+    red = make_state_evaluator(ctx, schedule.states, 300.0, None).reduced_potentials(restore=schedule.states[k])[0]
+    kt = 8.31446261815324e-3 * 300.0
+    direct = []
+    for state in schedule.states:
+        set_state(ctx, state)
+        direct.append(ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole) / kt)
+    direct = np.array(direct)
+    error = (red - red[0]) - (direct - direct[0])
+    assert np.max(np.abs(error)) < 0.02, error

@@ -700,3 +700,49 @@ def test_a_custom_core_restricts_the_mapping_of_an_edge_and_of_the_network(tmp_p
     assert all(full[i] == j for i, j in core.items())
     edges = plan_network(ligands, MappingSettings(core_smarts="c1ccccc1"), require_cycle_covering=False)
     assert [tuple(sorted(e)) for e in edges] == [("phenol", "toluene")]
+
+
+def test_an_edge_whose_preparation_stops_leaves_the_record_of_the_run_before(tmp_path, monkeypatch):
+    """Review of PR #19: an edge that changes the charge in a box without a water far enough from the solutes stopped
+    in its preparation after the run had written resolved_config.yaml and network.json, which then described a run
+    that never began. The record of the run is written after its edges are prepared."""
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe import prep as prep_module
+    from cufep.rbfe.charge import ChargeChangeError
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import run_rbfe
+
+    out_dir = tmp_path / "run"
+    _ligands(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    rcfg = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"]]}})
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+
+    def no_water(*args, **kwargs):
+        raise ChargeChangeError("no water is farther than 0.8 nm from the solutes")
+
+    monkeypatch.setattr(prep_module, "prepare_edge", no_water)
+    with pytest.raises(ChargeChangeError):
+        run_rbfe(rcfg, log=lambda line: None)
+    assert not (out_dir / "network.json").exists() and not (out_dir / "resolved_config.yaml").exists()
+
+
+def test_the_perturbed_region_of_a_prepared_edge_is_chosen_by_the_rule(tmp_path):
+    """sampling.rest2.region: perturbed in a leg: the hot atoms come from the two prepared ligands; toluene -> phenol,
+    whose unique atoms sit on the ring by bonds that are not rotatable, has the ring and both substituents hot, the
+    whole hybrid ligand; no protein residue is hot."""
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import build_leg
+    from cufep.rbfe.prep import prepare_edge
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    data["sampling"]["rest2"] = {**data["sampling"]["rest2"], "region": "perturbed"}
+    rcfg = RbfeConfig.model_validate(data)
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    built = build_leg(rcfg, edge_dir, "complex")
+    assert built.hybrid.rest2_ligand_atoms == built.hybrid.ligand_atoms and built.hot_atoms == []

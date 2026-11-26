@@ -138,6 +138,21 @@ Hamiltonian replica exchange with REST2 on the whole hybrid ligand and the pocke
 `sampling.rest2` of the ABFE): 1 ns of equilibration and 5 ns of production per window, the defaults of
 OpenFE's relative protocol. One calculation per edge (`sampling.repeats: 1`).
 
+`sampling.rest2.region: perturbed` (a choice; the default is `pocket`) puts only the atoms around the perturbation
+of the hybrid ligand into the hot region, in both legs, and no protein residue (`residues` may add some): the default
+hot atoms of the relative calculations of the public benchmark, by the rule its help states ("The perturbed atoms are
+grouped into sets in which the atoms are contiguously connected ... The process stops when the next addition would
+exceed the maximum number of heavy atoms, which is 24 if the hot region does not contain a ring, or 30 if the hot
+region contains a ring"), quoted in full in `src/cufep/rbfe/hot_region.py` with cuFEP's choices where it is silent (the
+perturbed atoms are the unique atoms and the mapped atoms whose element changes; a rotatable bond is a single bond
+outside a ring between two heavy atoms with another heavy neighbour each, as RDKit counts them; hydrogens follow their
+heavy atom). The ligand is then hot only in part: a charge of a hot atom carries sqrt(s) and one of a cold atom does
+not (the NonbondedForce, which the plugin carries, has electrostatic lambdas of each kind), and every pair inside the
+ligand and with the environment carries the factor of its hot atoms (s for two, sqrt(s) for one), every proper
+torsion of four hot atoms s, as REST2 scales them (Wang, Friesner and Berne 2011). The charges of an alchemical water
+are cold whatever the region. The energies of every state equal those of a System with the scaling written into its
+parameters (`tests/unit/test_rbfe_rest2_region.py`), on both backends (`tests/gpu`).
+
 Grand canonical moves of water in the complex leg (`sampling.gcmc`, on by default here and off in the ABFE): the
 relative calculations of the public benchmark of Ross et al. (Commun. Chem. 2023) ran "All complex leg simulations
 ... in the muVT ensemble whereby water molecules were sampled with grand canonical Monte Carlo; all solvent
@@ -231,9 +246,6 @@ solvent pKa of Supplementary Table 17 at the pH of the assay, 7.5, and the symme
   relative protocol (`use_dispersion_correction: False` for the hybrid); the NonbondedForce of the
   environment keeps its own long-range correction.
 - Water relocation moves (`sampling.relocation_mc`) and `membrane.complex_leg: water`, which are of the ABFE.
-- A REST2 region of the perturbed atoms of the ligand alone: the hybrid scales the charges of the whole ligand
-  through its three electrostatic lambdas, and a part of the ligand at another scale would need lambdas of its own
-  on the cuPotential plugin.
 
 ## All settings and their defaults
 
@@ -308,6 +320,7 @@ output:
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
 | `sampling.gcmc.enabled` | true (the complex leg) | the owner's decision (2026-11-26); the relative calculations of the public benchmark (Ross et al. 2023) ran their complex legs in the muVT ensemble with grand canonical moves of water. The other settings of the moves are those of the ABFE (`docs/configuration.md`) |
+| `sampling.rest2.region: perturbed` | a choice, not the default | the default hot atoms of the relative calculations of the public benchmark (the rule of the help of its program, `src/cufep/rbfe/hot_region.py`); the default stays the region of the ABFE, the owner's choice of 2026-11-20 |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |
 | `analysis.lrc` | none | OpenFE's `use_dispersion_correction: False` for the hybrid |
 | the constant of the dG (no setting) | the mean of the experimental values, else the mean of the network | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; cinnabar gives estimates of mean 0 |

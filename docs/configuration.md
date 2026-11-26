@@ -140,7 +140,7 @@ sampling:
   checkpoint_interval_ps: 250.0
   rest2:
     scale: 1.5                    # temperature of the hot region / temperature of the run, mid-leg; 1.0 = off
-    region: pocket                # pocket (also protein residues near the ligand) | ligand
+    region: pocket                # pocket (also protein residues near the ligand) | ligand | perturbed (RBFE only)
     pocket_cutoff_nm: 0.4
     residues: []                  # protein residues added to the hot region, as in the input PDB: ["960", "A:981", "B:898A"]
   relocation_mc:                  # water relocation moves in the complex leg (RelocationMC of Ding et al.)

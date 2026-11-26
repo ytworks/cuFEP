@@ -804,4 +804,7 @@ def test_the_relative_report_of_states_compares_compounds(tmp_path):
     between = [e for e in edges if states[e["ligand_a"]]["compound"] != states[e["ligand_b"]]["compound"]]
     assert 0 < len(between) < len(edges)
     assert f"| cuFEP, own | {len(between)} |" in text
+    # review of PR #19: an edge between two states of one compound has no experimental ddG (it was 0 in the figure)
+    rows = {r["edge"]: r for r in csv.DictReader((tmp_path / "rbfe_report_edges.csv").open())}
+    assert rows["4b_U~4b_D"]["exp_ddg"] == "" and rows["4b_U~4b_D"]["ddg"] != ""
 

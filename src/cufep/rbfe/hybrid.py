@@ -104,6 +104,9 @@ LAMBDA_BONDS = "lambda_bonds"
 LAMBDA_ANGLES = "lambda_angles"
 LAMBDA_TORSIONS = "lambda_torsions"
 ELECTROSTATIC_LAMBDAS = (LAMBDA_ELECTROSTATICS_CORE, LAMBDA_ELECTROSTATICS_DELETE, LAMBDA_ELECTROSTATICS_INSERT)
+#: the electrostatic lambdas of the charges that REST2 does not scale (the cold atoms of a ligand that is hot only in
+#: part, the alchemical water): those of the hot atoms carry sqrt(s), these do not
+COLD_ELECTROSTATIC_LAMBDAS = tuple(name + "_cold" for name in ELECTROSTATIC_LAMBDAS)
 STERIC_LAMBDAS = (LAMBDA_STERICS_CORE, LAMBDA_STERICS_INSERT, LAMBDA_STERICS_DELETE)
 BONDED_LAMBDAS = (LAMBDA_BONDS, LAMBDA_ANGLES, LAMBDA_TORSIONS)
 
@@ -160,6 +163,21 @@ _CHARGE = "q{k}0{dq} + q{k}c*" + LAMBDA_ELECTROSTATICS_CORE + " + q{k}d*" + LAMB
     + " + q{k}i*" + LAMBDA_ELECTROSTATICS_INSERT
 
 
+def ligand_coulomb_energy_by_atom() -> str:
+    """Coulomb energy of a pair inside a ligand that is hot only in part: the charges under the unscaled
+    electrostatic lambdas, each times sqrt(s) if its atom is hot (``h1``, ``h2``)."""
+    cold = dict(zip(ELECTROSTATIC_LAMBDAS, COLD_ELECTROSTATIC_LAMBDAS))
+    qq = ("(qq0 + qqc*" + cold[LAMBDA_ELECTROSTATICS_CORE] + " + qqd*" + cold[LAMBDA_ELECTROSTATICS_DELETE]
+          + " + qqi*" + cold[LAMBDA_ELECTROSTATICS_INSERT] + ")*(1+h1*rest2_dq)*(1+h2*rest2_dq)")
+
+    def charge(k: int) -> str:
+        return (f"(q{k}0 + q{k}c*{cold[LAMBDA_ELECTROSTATICS_CORE]} + q{k}d*{cold[LAMBDA_ELECTROSTATICS_DELETE]}"
+                f" + q{k}i*{cold[LAMBDA_ELECTROSTATICS_INSERT]})*(1+h{k}*rest2_dq)")
+
+    return (f"{ONE_4PI_EPS0!r}*(product*q1*q2 + (1-product)*qq)/r;"
+            f"qq = {qq}; q1 = {charge(1)}; q2 = {charge(2)}")
+
+
 def ligand_coulomb_energy(rest2: bool) -> str:
     """Coulomb energy of a pair inside the ligand: ``product`` 1 for the product of the two charges, 0
     for the charge product of an exception, both as offsets under the electrostatic lambdas."""
@@ -204,6 +222,8 @@ class HybridSystem:
     #: environment atoms whose parameters go from those of A to those of B (the water that is an ion in B,
     #: cufep.rbfe.charge)
     alchemical_water: tuple[int, ...] = ()
+    #: the atoms of the ligand in the hot region of REST2 (all of them unless region: perturbed)
+    rest2_ligand_atoms: tuple[int, ...] = ()
     #: pairs of bonded atoms of the hybrid System (bonds and constraints of both end states)
     bonds: frozenset = field(default_factory=frozenset)
 
@@ -261,7 +281,7 @@ def _same_environment_term(what: str, key, in_a, in_b) -> None:
 
 def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.System, positions_b, ligand_b,
                        core_map: dict[int, int], softcore_alpha: float = SOFTCORE_ALPHA, rest2: bool = False,
-                       rest2_atoms=(), alchemical_water=()) -> HybridSystem:
+                       rest2_atoms=(), alchemical_water=(), rest2_ligand_atoms=None) -> HybridSystem:
     """The hybrid System of two end states.
 
     ``system_a`` and ``system_b`` hold the same environment, atom for atom in the same order, and the
@@ -272,7 +292,12 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     environment atoms (indices of A) whose nonbonded parameters differ in B, the water that is an ion in B
     (:mod:`cufep.rbfe.charge`): their charges go with ``lambda_electrostatics_core`` (offsets in the
     NonbondedForce), their Lennard-Jones with everything with ``lambda_sterics_core`` (the force of the ligand
-    with its environment; none in the NonbondedForce), as those of a core atom.
+    with its environment; none in the NonbondedForce), as those of a core atom. ``rest2_ligand_atoms`` (hybrid
+    indices; None: the whole ligand) are the atoms of the ligand in the hot region of REST2 (``region: perturbed``,
+    :mod:`cufep.rbfe.hot_region`); the others are cold: their charges go with electrostatic lambdas that do not carry
+    sqrt(s), and every pair or torsion of the ligand carries the factor of its hot atoms (s for two, sqrt(s) for one).
+    The charges of the alchemical water are cold too. With the whole ligand hot and no alchemical water the System is
+    the one of before.
     """
     lig_a, lig_b = sorted(int(i) for i in ligand_a), sorted(int(i) for i in ligand_b)
     set_a, set_b = set(lig_a), set(lig_b)
@@ -315,6 +340,15 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     alchemical = {int(i) for i in alchemical_water}
     if any(i in set_a or i < 0 or i >= n_a for i in alchemical):
         raise AlchemyError("alchemical_water must be environment atoms")
+    hot_ligand = set(ligand) if rest2_ligand_atoms is None else {int(i) for i in rest2_ligand_atoms}
+    if rest2_ligand_atoms is not None and not rest2:
+        raise AlchemyError("rest2_ligand_atoms given without rest2")
+    if not hot_ligand <= ligand_set:
+        raise AlchemyError("rest2_ligand_atoms must be atoms of the ligand")
+    # a ligand hot only in part: its pairs and torsions carry the factor of their hot atoms
+    cold_ligand = bool(rest2) and hot_ligand != ligand_set
+    # charges that REST2 does not scale (cold ligand atoms, the alchemical water) need lambdas without sqrt(s)
+    uses_cold = bool(rest2) and (cold_ligand or bool(alchemical))
     env_b_of = dict(zip(env_a, env_b))
     for i, j in zip(env_a, env_b):
         if particles_a[i] != particles_b[j] and i not in alchemical:
@@ -504,7 +538,7 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     nb.setUseDispersionCorrection(nb_a.getUseDispersionCorrection())
     nb.setUseSwitchingFunction(False)
     nb.setExceptionsUsePeriodicBoundaryConditions(nb_a.getExceptionsUsePeriodicBoundaryConditions())
-    for name in ELECTROSTATIC_LAMBDAS:
+    for name in ELECTROSTATIC_LAMBDAS + (COLD_ELECTROSTATIC_LAMBDAS if uses_cold else ()):
         nb.addGlobalParameter(name, 0.0)
     #: charges of the ligand: base, and the offsets under core, delete and insert
     charge = {}
@@ -532,12 +566,15 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             qb = particles_b[env_b_of[h]][0]
             nb.addParticle(qa, sa, 0.0)
             if qb != qa:
-                nb.addParticleParameterOffset(LAMBDA_ELECTROSTATICS_CORE, h, qb - qa, 0.0, 0.0)
+                # not hot: without sqrt(s) where REST2 scales the charges of the ligand
+                core_lambda = COLD_ELECTROSTATIC_LAMBDAS[0] if uses_cold else LAMBDA_ELECTROSTATICS_CORE
+                nb.addParticleParameterOffset(core_lambda, h, qb - qa, 0.0, 0.0)
         else:
             nb.addParticle(*particles_a[h])
     for h in ligand:
         _q0, dc, dd, di = charge[h]
-        for name, d in zip(ELECTROSTATIC_LAMBDAS, (dc, dd, di)):
+        names = ELECTROSTATIC_LAMBDAS if h in hot_ligand or not cold_ligand else COLD_ELECTROSTATIC_LAMBDAS
+        for name, d in zip(names, (dc, dd, di)):
             if d != 0.0:
                 nb.addParticleParameterOffset(name, h, d, 0.0, 0.0)
     for (i, j), (qq, s, e) in exceptions_a.items():
@@ -554,22 +591,29 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             nb.addException(i, j, 0.0, 0.3, 0.0)
 
     # ---- pairs inside the ligand -------------------------------------------------------------
-    coulomb = mm.CustomBondForce(ligand_coulomb_energy(rest2))
+    coulomb = mm.CustomBondForce(ligand_coulomb_energy_by_atom() if cold_ligand else ligand_coulomb_energy(rest2))
     coulomb.setName(LIGAND_COULOMB_FORCE_NAME)
-    for name in ("product", "q10", "q1c", "q1d", "q1i", "q20", "q2c", "q2d", "q2i", "qq0", "qqc", "qqd", "qqi"):
+    for name in ("product", "q10", "q1c", "q1d", "q1i", "q20", "q2c", "q2d", "q2i", "qq0", "qqc", "qqd", "qqi") \
+            + (("h1", "h2") if cold_ligand else ()):
         coulomb.addPerBondParameter(name)
-    lj = mm.CustomBondForce(("(1+rest2_ds)*" if rest2 else "") + LIGAND_LJ_ENERGY)
+    lj = mm.CustomBondForce(("(1+h1*rest2_dq)*(1+h2*rest2_dq)*" if cold_ligand else "(1+rest2_ds)*" if rest2 else "")
+                            + LIGAND_LJ_ENERGY)
     lj.setName(LIGAND_LJ_FORCE_NAME)
-    for name in ("sigmaA", "epsilonA", "sigmaB", "epsilonB", "unique_old", "unique_new"):
+    for name in ("sigmaA", "epsilonA", "sigmaB", "epsilonB", "unique_old", "unique_new") \
+            + (("h1", "h2") if cold_ligand else ()):
         lj.addPerBondParameter(name)
-    for name in ELECTROSTATIC_LAMBDAS:
+    for name in (COLD_ELECTROSTATIC_LAMBDAS if cold_ligand else ELECTROSTATIC_LAMBDAS):
         coulomb.addGlobalParameter(name, 0.0)
     lj.addGlobalParameter("softcore_alpha", float(softcore_alpha))
     for name in STERIC_LAMBDAS:
         lj.addGlobalParameter(name, 0.0)
     if rest2:
         coulomb.addGlobalParameter(REST2_DQ, 0.0)
-        lj.addGlobalParameter(REST2_DS, 0.0)
+        lj.addGlobalParameter(REST2_DQ if cold_ligand else REST2_DS, 0.0)
+
+    def hot_flags(i: int, j: int) -> list[float]:
+        """The flags of a pair of a ligand hot only in part (none otherwise)."""
+        return [float(i in hot_ligand), float(j in hot_ligand)] if cold_ligand else []
 
     def lj_end(h: int, end: str):
         """sigma and epsilon of a ligand atom at one end (a unique atom: its sigma, epsilon 0, as OpenFE)."""
@@ -630,9 +674,9 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
                     sig_b, eps_b = 0.5 * (sbi + sbj), math.sqrt(ebi * ebj)
                 flags = (1.0, 0.0) if old else (0.0, 1.0)
             if any(v != 0.0 for v in coulomb_terms[1:]):
-                coulomb.addBond(i, j, coulomb_terms)
+                coulomb.addBond(i, j, coulomb_terms + hot_flags(i, j))
             if eps_a != 0.0 or eps_b != 0.0:
-                lj.addBond(i, j, [sig_a, eps_a, sig_b, eps_b, *flags])
+                lj.addBond(i, j, [sig_a, eps_a, sig_b, eps_b, *flags] + hot_flags(i, j))
     periodic = nb_a.getExceptionsUsePeriodicBoundaryConditions()
     coulomb.setUsesPeriodicBoundaryConditions(periodic)
     lj.setUsesPeriodicBoundaryConditions(periodic)
@@ -645,11 +689,11 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
         raise AlchemyError("rest2_atoms must be environment atoms")
     if alchemical & set(hot_env):
         raise AlchemyError("the alchemical water is in the hot region of REST2")
-    region = ligand_set | set(hot_env)
+    region = hot_ligand | set(hot_env)
     if rest2:
         nb.addGlobalParameter(REST2_DQ, 0.0)
         nb.addGlobalParameter(REST2_DS, 0.0)
-        for h in ligand:
+        for h in sorted(hot_ligand):
             q0 = charge[h][0]
             if q0 != 0.0:
                 nb.addParticleParameterOffset(REST2_DQ, h, q0, 0.0, 0.0)
@@ -729,16 +773,23 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
 
     impropers = mm.CustomTorsionForce(CORE_TORSION_ENERGY)
     impropers.setName(CORE_TORSION_FORCE_NAME)
-    propers = mm.CustomTorsionForce(("(1+rest2_ds)*" if rest2 else "") + CORE_TORSION_ENERGY)
+    propers = mm.CustomTorsionForce(("(1+hot*rest2_ds)*" if cold_ligand else "(1+rest2_ds)*" if rest2 else "")
+                                    + CORE_TORSION_ENERGY)
     propers.setName(CORE_PROPER_TORSION_FORCE_NAME)
     for force in (impropers, propers):
         for p in ("periodicity1", "phase1", "K1", "periodicity2", "phase2", "K2"):
             force.addPerTorsionParameter(p)
         force.addGlobalParameter(LAMBDA_TORSIONS, 0.0)
+    if cold_ligand:
+        propers.addPerTorsionParameter("hot")
     if rest2:
         propers.addGlobalParameter(REST2_DS, 0.0)
     for atoms, values in core_torsions:
-        (propers if proper(atoms) else impropers).addTorsion(*atoms, values)
+        if proper(atoms):
+            # a ligand hot only in part: a proper torsion is scaled if its four atoms are hot (the rule of the ABFE)
+            propers.addTorsion(*atoms, values + ([float(all(x in hot_ligand for x in atoms))] if cold_ligand else []))
+        else:
+            impropers.addTorsion(*atoms, values)
     impropers.setForceGroup(HYBRID_GROUP)
     propers.setForceGroup(HYBRID_HOT_GROUP)
     out.addForce(impropers)
@@ -757,7 +808,8 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
                         unique_new=tuple(unique_new), a_to_hybrid=a_to_h, b_to_hybrid=b_to_h,
                         parameters_a=params_a, parameters_b=params_b, softcore_alpha=float(softcore_alpha),
                         rest2=bool(rest2), rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions,
-                        bonds=frozenset(bonds_hybrid), alchemical_water=tuple(sorted(alchemical)))
+                        bonds=frozenset(bonds_hybrid), alchemical_water=tuple(sorted(alchemical)),
+                        rest2_ligand_atoms=tuple(sorted(hot_ligand)) if rest2 else ())
 
 
 def _copy_virtual_site(site):

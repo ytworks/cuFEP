@@ -529,8 +529,10 @@ class Rest2Config(_Section):
     scale: float = Field(default=1.5, ge=1.0)
     #: complex leg: ligand = the ligand only; pocket = also the protein residues that have a
     #: heavy atom within pocket_cutoff_nm of a heavy atom of the ligand in the prepared structure.
-    #: pocket is the owner's choice of 2026-11-20 (the default of SOMD2 is the ligand)
-    region: Literal["ligand", "pocket"] = "pocket"
+    #: pocket is the owner's choice of 2026-11-20 (the default of SOMD2 is the ligand). perturbed (a relative
+    #: calculation only): the atoms around the perturbation of the hybrid ligand, in both legs, and no protein
+    #: residue (cufep.rbfe.hot_region)
+    region: Literal["ligand", "pocket", "perturbed"] = "pocket"
     pocket_cutoff_nm: float = Field(default=0.4, gt=0.0)
     #: protein residues added to the hot region, named as in the input PDB: "960", with the chain
     #: of the input "B:960", with an insertion code "B:898A"
@@ -839,6 +841,10 @@ def configuration_problems(cfg: "Config") -> list[str]:
             f"membrane.complex_leg is 'water': the bilayer is then built for the MD from which the restraint is "
             f"chosen, which only restraints.selection: interactions has (it is '{cfg.restraints.selection}'). Use "
             "restraints.selection: interactions, or membrane.complex_leg: bilayer")
+    if cfg.sampling.rest2.region == "perturbed":
+        problems.append("sampling.rest2.region: perturbed is the region of a relative calculation (the atoms around "
+                        "the perturbation); in an absolute calculation the whole ligand is perturbed: use ligand or "
+                        "pocket")
     gcmc = cfg.sampling.gcmc
     problems += gcmc_problems(cfg)
     if gcmc.enabled:

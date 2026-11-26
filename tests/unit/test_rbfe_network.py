@@ -469,3 +469,17 @@ def test_a_custom_core_maps_only_its_atoms_and_the_records_of_other_edges_stay_a
     custom = RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf"},
                                         "mapping": {"core_smarts": "c1ccccc1"}})
     assert hybrid_settings(custom, "solvent")["rbfe"]["mapping"]["core_smarts"] == "c1ccccc1"
+    # review of PR #19: the cutoff of the alchemical water is of the preparation of an edge, never of a leg's record
+    other = RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf"},
+                                       "alchemy": {"alchemical_water_cutoff_nm": 1.0}})
+    assert hybrid_settings(other, "solvent") == hybrid_settings(plain, "solvent")
+
+
+def test_a_directory_analysed_without_states_keeps_no_compounds_of_before(tmp_path):
+    """Review of PR #19: compounds.csv of an earlier run with states stayed next to results without compounds."""
+    from cufep.rbfe.run import combine_network, write_results
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    (tmp_path / "compounds.csv").write_text("compound,dg_kcal_mol\nX,-9.0\n")
+    write_results(tmp_path, combine_network(tmp_path, ["a", "b"], [("a", "b")], 1, {}))
+    assert not (tmp_path / "compounds.csv").exists()

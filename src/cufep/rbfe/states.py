@@ -38,6 +38,8 @@ import openmm.unit as unit
 from cufep.alchemy.factory import MAIN_GROUP, REST2_DQ, REST2_DS, REST2_GROUP, SOFTCORE_GROUP
 from cufep.engine.protocol import HYBRID, canonical_stage, rest2_scale_along_leg
 from cufep.rbfe.hybrid import (
+    COLD_ELECTROSTATIC_LAMBDAS,
+    ELECTROSTATIC_LAMBDAS,
     HYBRID_GROUP,
     HYBRID_HOT_GROUP,
     HYBRID_LJ_FORCE_NAME,
@@ -87,8 +89,9 @@ class HybridState:
         s = self.rest2_energy_scale
         a = math.sqrt(s)
         out = lambda_functions(self.lambda_hybrid)
-        for name in (LAMBDA_ELECTROSTATICS_CORE, LAMBDA_ELECTROSTATICS_DELETE, LAMBDA_ELECTROSTATICS_INSERT):
-            out[name] = out[name] * a          # the ligand is hot: its charges carry sqrt(s)
+        for name, cold in zip(ELECTROSTATIC_LAMBDAS, COLD_ELECTROSTATIC_LAMBDAS):
+            out[cold] = out[name]              # the charges REST2 does not scale (a System without them ignores it)
+            out[name] = out[name] * a          # the hot atoms of the ligand: their charges carry sqrt(s)
         out[REST2_DQ] = a - 1.0
         out[REST2_DS] = s - 1.0
         return out
@@ -118,6 +121,18 @@ def _electrostatics(half: int, g: float, a: float) -> dict[str, float]:
     if half == 0:
         return {LAMBDA_ELECTROSTATICS_CORE: g, LAMBDA_ELECTROSTATICS_DELETE: 2.0 * g, LAMBDA_ELECTROSTATICS_INSERT: 0.0}
     return {LAMBDA_ELECTROSTATICS_CORE: g, LAMBDA_ELECTROSTATICS_DELETE: a, LAMBDA_ELECTROSTATICS_INSERT: 2.0 * g - a}
+
+
+def _charges(half: int, x: float, a: float) -> dict[str, float]:
+    """The electrostatic lambdas of the hot charges (times a = sqrt(s)) and of the cold ones at ``x`` in one half."""
+    values = _electrostatics(half, x, 1.0)
+    out = {name: values[name] * a for name in ELECTROSTATIC_LAMBDAS}
+    out.update({cold: values[name] for name, cold in zip(ELECTROSTATIC_LAMBDAS, COLD_ELECTROSTATIC_LAMBDAS)})
+    return out
+
+
+#: the values of a = sqrt(s) at which a group whose terms carry 1, a or a^2 is evaluated (a System with cold charges)
+_A_DESIGN = (1.0, 0.75, 0.5)
 
 
 #: (g, a) at which the main group is evaluated in a half with REST2 (those of the ABFE, cufep.sampling.states)
@@ -153,6 +168,9 @@ class HybridEnergyEvaluator:
         self._hot_environment = self.rest2_active and self._has_hot_environment()
         groups = {f.getForceGroup() for f in context.getSystem().getForces()}
         self._has = {g: g in groups for g in (SOFTCORE_GROUP, REST2_GROUP, HYBRID_GROUP, HYBRID_HOT_GROUP)}
+        # a System with charges that REST2 does not scale (a ligand hot in part, an alchemical water): every group
+        # is a polynomial in a = sqrt(s) of terms of 1, a and a^2, and the main group in (x, a) of degree two in each
+        self.by_atom = COLD_ELECTROSTATIC_LAMBDAS[0] in params
 
     def _has_hot_environment(self) -> bool:
         for force in self.context.getSystem().getForces():
@@ -178,7 +196,38 @@ class HybridEnergyEvaluator:
 
     def _set_x(self, x: float) -> None:
         """Every lambda at ``x`` without REST2 scaling (the charges included)."""
-        self._set(lambda_functions(x))
+        values = lambda_functions(x)
+        if self.by_atom:
+            values.update({cold: values[name] for name, cold in zip(ELECTROSTATIC_LAMBDAS, COLD_ELECTROSTATIC_LAMBDAS)})
+        self._set(values)
+
+    def _in_a(self, group: int) -> np.ndarray:
+        """A group whose terms carry 1, a or a^2 at the a of each state: three evaluations per distinct x."""
+        table = {}
+        for x in self._x_unique:
+            values = []
+            for a in _A_DESIGN:
+                self._set_rest2(a)
+                self._set_x(float(x))
+                values.append(self._group(group))
+            table[float(x)] = np.polyfit(_A_DESIGN, values, 2)
+        self._set_rest2(1.0)
+        return np.array([np.polyval(table[float(x)], a) for x, a in zip(self._x, self._a)])
+
+    def _main_by_atom(self, half: int, members: np.ndarray) -> np.ndarray:
+        """The main group with cold charges: of degree two in x (in one half) and in a, nine evaluations."""
+        xs = (0.0, 0.25, 0.5) if half == 0 else (0.5, 0.75, 1.0)
+        values = np.empty((3, 3))
+        for i, x in enumerate(xs):
+            for j, a in enumerate(_A_DESIGN):
+                self._set_rest2(a)
+                self._set(_charges(half, x, a))
+                values[i, j] = self._group(MAIN_GROUP)
+        vx, va = np.vander(xs, 3, increasing=True), np.vander(_A_DESIGN, 3, increasing=True)
+        coefficients = np.linalg.solve(vx, np.linalg.solve(va, values.T).T)
+        x, a = self._x[members], self._a[members]
+        return np.einsum("kp,pq,kq->k", np.vander(x, 3, increasing=True), coefficients,
+                         np.vander(a, 3, increasing=True))
 
     def main_group(self) -> np.ndarray:
         out = np.empty(len(self.states))
@@ -186,7 +235,9 @@ class HybridEnergyEvaluator:
         for half, members in enumerate(halves):
             if not np.any(members):
                 continue
-            if self.rest2_active:
+            if self.by_atom:
+                out[members] = self._main_by_atom(half, members)
+            elif self.rest2_active:
                 values = []
                 for g, a in _MAIN_DESIGN:
                     self._set_rest2(a)
@@ -216,6 +267,8 @@ class HybridEnergyEvaluator:
     def softcore_group(self) -> np.ndarray:
         if not self._has[SOFTCORE_GROUP]:
             return np.zeros(len(self.states))
+        if self.by_atom and self.rest2_active:
+            return self._in_a(SOFTCORE_GROUP)
         full = self._per_x(SOFTCORE_GROUP)                       # at a = 1: A + B
         if not self.rest2_active:
             return full
@@ -231,7 +284,8 @@ class HybridEnergyEvaluator:
         if self._has[HYBRID_GROUP]:
             out += self._per_x(HYBRID_GROUP)
         if self._has[HYBRID_HOT_GROUP]:
-            out += self._s * self._per_x(HYBRID_HOT_GROUP)
+            out += self._in_a(HYBRID_HOT_GROUP) if self.by_atom and self.rest2_active \
+                else self._s * self._per_x(HYBRID_HOT_GROUP)
         return out
 
     def rest2_group(self) -> np.ndarray:

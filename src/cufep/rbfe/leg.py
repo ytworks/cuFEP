@@ -135,8 +135,10 @@ class HybridLeg:
 
 def hybrid_gcmc(rcfg, hybrid, topology, box):
     """The grand canonical moves of water of a hybrid System (all its waters interacting): their specification
-    (:func:`cufep.sampling.gcmc.gcmc_spec`), with the ligand of the stand-in energy at the parameters of both end
-    states and fixed lambdas (the module's docstring)."""
+    (:func:`cufep.sampling.gcmc.gcmc_spec`), with the ligand of the stand-in energy at fixed lambdas, its atoms with
+    the parameters of A and those unique to B with the parameters of B (the module's docstring; the alchemical water
+    enters it as the NonbondedForce has it, its charges of A and no Lennard-Jones). The test with the full potential
+    corrects what the stand-in leaves out."""
     import dataclasses
 
     from cufep.sampling.gcmc import GcmcError, gcmc_spec
@@ -190,6 +192,23 @@ def molecules_of(system, topology, bonds) -> list[list[int]]:
     return list(groups.values())
 
 
+def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int], unique_b: list[int]) -> list[int]:
+    """The hot atoms of the hybrid ligand by the rule of :mod:`cufep.rbfe.hot_region`, from the two prepared ligands
+    (their bonds and bond orders; atom i of a ligand is atom ``ligand[i]`` of its System)."""
+    from openff.toolkit import Molecule
+
+    from cufep.rbfe.hot_region import perturbed_hot_atoms
+
+    prep = Path(edge_dir) / "prep"
+    molecules = [Molecule.from_json((prep / f"ligand_{end}.json").read_text()).to_rdkit() for end in ("a", "b")]
+    n_a = len(a["positions"])
+    b_to_hybrid = {j: i for i, j in core_map.items()}
+    b_to_hybrid.update({j: n_a + k for k, j in enumerate(unique_b)})
+    to_a = {i: int(atom) for i, atom in enumerate(a["ligand"])}
+    to_b = {i: b_to_hybrid[int(atom)] for i, atom in enumerate(b["ligand"])}
+    return sorted(perturbed_hot_atoms(molecules[0], molecules[1], to_a, to_b, set(core_map)))
+
+
 def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
     """The hybrid System of a leg from its prepared end states, and a prepared system of it."""
     import openmm as mm
@@ -207,11 +226,13 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
         hot_atoms, hot_residues = rest2_region(rest2, a["topology"], a["positions"], a["ligand"], a["protein"],
                                                info.get("input_chains"))
     water = (info["legs"][leg].get("alchemical_water") or {}).get("atoms_a", [])
+    unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
+    hot_ligand = perturbed_region(edge_dir, a, b, end["core_map"], unique_b) \
+        if rest2_on and rest2.region == "perturbed" else None
     hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                 mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
                                 end["core_map"], softcore_alpha=rcfg.alchemy.softcore_alpha, rest2=rest2_on,
-                                rest2_atoms=hot_atoms, alchemical_water=water)
-    unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
+                                rest2_atoms=hot_atoms, alchemical_water=water, rest2_ligand_atoms=hot_ligand)
     topology = hybrid_topology(a["topology"], b["topology"], unique_b, water)
     gcmc = None
     if gcmc_in(rcfg, leg):
@@ -232,13 +253,18 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
 
 #: settings added after the first relative calculations, with their defaults: a record of the samples or the windows
 #: of a leg leaves them out at these values, so that the legs of earlier versions are taken up as they were
-SETTINGS_ADDED = {"alchemical_water_cutoff_nm": 0.8, "core_smarts": None}
+SETTINGS_ADDED = {"core_smarts": None}
+#: settings of the preparation of an edge alone, never of the record of a leg (the prepared edge records them where
+#: they act, cufep.rbfe.prep.edge_made_from; review of PR #19: the cutoff of the alchemical water entered the record of
+#: the legs of every edge when it was not 0.8)
+PREPARATION_ONLY = ("alchemical_water_cutoff_nm",)
 
 
 def settings_as_recorded(section) -> dict:
-    """A section of the configuration as the records of a leg hold it (:data:`SETTINGS_ADDED`)."""
+    """A section of the configuration as the records of a leg hold it (:data:`SETTINGS_ADDED`,
+    :data:`PREPARATION_ONLY`)."""
     return {k: v for k, v in section.model_dump(mode="json").items()
-            if k not in SETTINGS_ADDED or v != SETTINGS_ADDED[k]}
+            if k not in PREPARATION_ONLY and (k not in SETTINGS_ADDED or v != SETTINGS_ADDED[k])}
 
 
 def hybrid_settings(rcfg, leg: str | None = None) -> dict:
@@ -321,8 +347,9 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     rest2_scale = rest2.scale if rest2.scale > 1.0 else 1.0
     log(f"hybrid: {len(hybrid.core)} core atoms, {len(hybrid.unique_old)} unique to "
         f"{built.info['ligand_a']}, {len(hybrid.unique_new)} unique to {built.info['ligand_b']}; "
-        + (f"REST2 on the ligand and {len(built.hot_atoms)} atoms of {len(built.hot_residues)} residues "
-           f"({' '.join(built.hot_residues)}), {rest2_scale:g} times the temperature in the middle"
+        + (f"REST2 on {len(hybrid.rest2_ligand_atoms)} of the {len(hybrid.ligand_atoms)} atoms of the ligand "
+           f"(sampling.rest2.region: {rest2.region}) and {len(built.hot_atoms)} atoms of {len(built.hot_residues)} "
+           f"residues ({' '.join(built.hot_residues)}), {rest2_scale:g} times the temperature in the middle"
            if rest2_scale > 1.0 else "REST2 off")
         + ("" if not hybrid.alchemical_water else
            f"; the net charge changes: water {hybrid.alchemical_water[0]} becomes "
