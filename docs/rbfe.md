@@ -148,7 +148,10 @@ solvent leg (the paper's), 500 ps after 500 ps in the complex leg (the values of
 iteration at the same time on the GPUs of the leg. The paper decides the windows of both legs from the ligand
 in solution (`legs: solvent`); in the TYK2 example that left a pair of windows of a complex leg at an overlap of
 0.013. A schedule is used only with the REST2 scale it was made with: a run compares the scale of every schedule its
-legs would use, those a complex leg takes from the solvent leg included, before it writes anything. `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
+legs would use, those a complex leg takes from the solvent leg included, before it writes anything. A complex leg
+takes the windows of its solvent leg again after `--reschedule` of the complex leg alone: windows of the solvent leg
+of another scale are made usable by setting that scale, or by choosing them anew first (`--leg solvent
+--reschedule`). `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
 number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, minimised
 in their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all at the same time on
 the GPUs of the leg; the equilibration of the replica exchange then relaxes them further. (At lambda 0 the atoms

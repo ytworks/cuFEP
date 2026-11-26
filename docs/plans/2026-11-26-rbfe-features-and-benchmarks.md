@@ -501,3 +501,6 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   理由(`protein_sha256`)まで照合(3c1405b、1b11a85)。
 - 修正前(3f8209a)で再現: System が同じ main の脚を拒否、案内が `--reschedule` でそれを付けると拒否されない、
   倍率違いのスケジュールが事前検査を通る(DID NOT RAISE)。
+- 追記(4708580211): 借りた窓の拒否が `--leg complex --reschedule` を案内し、それは同じ溶媒の窓を借り直して
+  事前検査を飛ばす → `--reschedule` でも、この実行で溶媒脚の窓を作り直さない限り照合し、案内は窓の倍率に合わせる
+  か溶媒脚の窓を先に作り直す(`--leg solvent --reschedule`)(b05610e。3c1405b で DID NOT RAISE を再現)。
