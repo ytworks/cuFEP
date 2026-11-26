@@ -220,3 +220,7 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - 同じ問題が ABFE にも残る点(オーナーの判断を待つ): ABFE の repeat 間でも GCMC の μ は照合していない(結果ファイルを
   変えるので今回は触らない)。
 - 全体テスト c63b353: 835 passed。hybrid と水の移動の GPU テスト 22 件(2 GPU)通過。
+- core の torsion の不具合の、以前の記録への影響(`count_b_torsions`、B にだけある core の proper torsion の項): TYK2 の
+  RBFE example(f6ac3b4)の 3 エッジは 0 で影響なし。A2A の RBFE example(f6ac3b4)は 4e~4b 12 項、4b~4o 11 項、4e~4o 0:
+  記録した ddG +0.91 と +1.38(計画 `docs/plans/2026-11-25-rbfe.md` の記録)は評価器のずれのある計算。流し直すかは
+  オーナーの判断。TYK2 のフル実行は image 2ecbcd2 で最初から(`runs/rbfe_bench_tyk2_2ecbcd2`)。
