@@ -503,6 +503,11 @@ class GpuStandIn:
 
         self.cp, self.spec = cp, spec
         self.device = cp.cuda.Device(int(device))
+        # the device of the Context is the current one of the process from here on: `with self.device` returns to the
+        # device that was current before, the first (0) where none was set, and CUDA 12 makes a context there (the
+        # full TYK2 benchmark: every worker with the moves held one on GPU 0 too, whatever its GPU, until GPU 0 had more
+        # than the 60 clients of an MPS server and the workers that started then failed: cudaErrorDevicesUnavailable)
+        self.device.use()
         waters = np.asarray(spec.waters)
         self.n_w, self.n_s = waters.shape
         group = np.full(len(spec.charge), -1, dtype=np.int32)

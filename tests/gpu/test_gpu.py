@@ -767,6 +767,49 @@ def test_the_trial_energies_with_ghosts_on_the_gpu_are_those_of_the_processor(gc
         assert np.abs(everything - reference.water_energies(which, moves.cutoff_nm)).max() > 1.0   # (ghosts count)
 
 
+def _devices_of_a_stand_in(moves, pos, box, device: int, q) -> None:
+    import os
+    import subprocess
+
+    from cufep.sampling.relocation_mc import GpuStandIn
+
+    gpu = GpuStandIn(moves, device)
+    gpu.load(pos, box, 1.0, 1.0).water_energies(np.arange(3), moves.cutoff_nm)
+    bus = dict(reversed([s.strip() for s in line.split(",")]) for line in subprocess.run(
+        ["nvidia-smi", "--query-gpu=index,pci.bus_id", "--format=csv,noheader"], capture_output=True,
+        text=True).stdout.splitlines())
+    apps = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,gpu_bus_id", "--format=csv,noheader"],
+                          capture_output=True, text=True).stdout.splitlines()
+    q.put(sorted({int(bus[b.strip()]) for pid, b in (line.split(",") for line in apps) if int(pid) == os.getpid()}))
+
+
+@needs_cuda
+def test_the_stand_in_on_a_gpu_makes_a_context_on_that_gpu_alone(gcmc_leg):
+    """The full relative TYK2 benchmark: the stand-in of the water moves on GPU k returned the process to device 0
+    after each use, and CUDA 12 made a context there; with every worker of the moves holding one on GPU 0, GPU 0 had
+    more than the 60 clients of an MPS server and workers failed to start (cudaErrorDevicesUnavailable). A process
+    with the stand-in on GPU 1 holds a context on GPU 1 alone."""
+    import multiprocessing
+
+    if _cuda_devices() < 2:
+        pytest.skip("needs two CUDA devices")
+    _alch, _all_on, _schedule, pos, box, _ligand, moves = gcmc_leg
+    ctx = multiprocessing.get_context("spawn")
+    q = ctx.Queue()
+    child = ctx.Process(target=_devices_of_a_stand_in, args=(moves, np.asarray(pos, dtype=float),
+                                                             np.asarray(box, dtype=float), 1, q))
+    child.start()
+    devices = q.get(timeout=300)
+    child.join()
+    assert devices == [1]
+
+
+def _cuda_devices() -> int:
+    import cupy
+
+    return int(cupy.cuda.runtime.getDeviceCount())
+
+
 @needs_cuda
 @pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
 def test_waters_switched_in_a_context_give_the_energies_of_a_system_built_so(gcmc_leg, backend):
