@@ -187,6 +187,32 @@ def test_jobs_wait_for_room_on_a_single_gpu_without_mps(tmp_path, monkeypatch):
     assert spans[1][0] >= spans[0][1]                  # the second began after the first had ended
 
 
+def test_jobs_that_become_ready_while_others_run_start_while_those_run(tmp_path, monkeypatch):
+    """The owner, 2026-11-26: a relative run prepared all its 37 edges (two minutes each in a bilayer) before its first
+    job. Jobs that ``more`` gives while others run join the queue: the second began before the first had ended; in
+    this process (no GPU) they run after those given."""
+    monkeypatch.setattr(scheduler, "JOB_FUNCTION", job_doubles.heartbeat_job)
+    first, second = _jobs(tmp_path, ["short-3.0", "short-0.5"])
+    jobs = [first]
+
+    def more():
+        return ([second], False) if (first.leg_dir / "heartbeat").exists() else ([], True)
+
+    assert len(scheduler.run_jobs(jobs, [0, 1], log=lambda m: None, mps=False, more=more)) == 2
+    assert jobs == [first, second]
+    assert float((second.leg_dir / "began").read_text()) < float((first.leg_dir / "ended").read_text())
+
+    class Quick(LegJob):
+        def runner(self):
+            return lambda job: {"ran": job.ligand}
+
+    given = [Quick(ligand="a", leg="solvent", repeat=0, lig_dir=str(tmp_path / "a"), devices=[], config={},
+                   production_ns=1.0)]
+    later = iter([([], True), ([Quick(**{**given[0].__dict__, "ligand": "b"})], True), ([], False)])
+    assert scheduler.run_jobs(given, [None], more=lambda: next(later), poll_seconds=0.01) == [{"ran": "a"},
+                                                                                            {"ran": "b"}]
+
+
 def _start_run(out, names):
     """A run of heartbeat jobs in a process of its own, leader of its own process group, as at a terminal."""
     code = (f"import sys; sys.path.insert(0, {str(TESTS)!r}); import job_doubles; "

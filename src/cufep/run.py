@@ -249,15 +249,16 @@ def _run(cfg: Config, out_dir: Path, reschedule: bool, log, only_ligands=None, o
     return summary
 
 
-def execute_jobs(jobs: list, gpus: list, factor, log) -> tuple[list, object, bool]:
+def execute_jobs(jobs: list, gpus: list, factor, log, more=None) -> tuple[list, object, bool]:
     """Run the jobs on the GPUs, with cuFEP's MPS daemon where several workers share a GPU and a monitor of the
-    GPUs: (results, monitor, whether MPS was used). One function for `cufep run` and `cufep rbfe run`."""
+    GPUs: (results, monitor, whether MPS was used). One function for `cufep run` and `cufep rbfe run`. ``more``: jobs
+    that become ready while these run (:func:`cufep.scheduler.run_jobs`), added to ``jobs``."""
     real_gpus = [g for g in gpus if g is not None]
     monitor = GpuMonitor(real_gpus)              # maps the run's devices to nvidia-smi's before MPS starts
     daemon = mps.start(log) if real_gpus and factor != 1 else None
     monitor.start()
     try:
-        results = run_jobs(jobs, gpus, log, oversubscription=factor, mps=daemon is not None)
+        results = run_jobs(jobs, gpus, log, oversubscription=factor, mps=daemon is not None, more=more)
     finally:
         monitor.stop()
         if daemon is not None:

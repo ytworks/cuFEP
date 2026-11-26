@@ -743,15 +743,6 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     experiment = experiment_of(rcfg, ligands, states)
     if states is not None:
         compound_experiment(states, experiment)            # refused before anything is written
-    infos = {}
-    for a, b in selected:
-        infos[edge_name(a, b)] = prepare_edge(rcfg, by_name[a], by_name[b], protein,
-                                              out_dir / "edges" / edge_name(a, b), box_shape, log)
-    # the record of the run after its edges are prepared: an edge whose preparation stops (no alchemical water, no
-    # mapping) leaves the record of the run whose results the directory holds (review of PR #19)
-    write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment, states)
-    publish_text(out_dir / "auto_report.md", report.to_markdown())
-    protein.write_pdb(out_dir / "protein_prepared.pdb")
     cfg_dict = rcfg.model_dump(mode="json")
     repeats = rcfg.sampling.repeats
     # a run that chooses the windows of the solvent legs anew while the complex legs that take them run beside them:
@@ -759,20 +750,50 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     both_anew = (reschedule and (not only_legs or set(only_legs) >= {"solvent", "complex"})
                  and rcfg.lambda_schedule.mode == "adaptive" and rcfg.lambda_schedule.adaptive.legs == "solvent")
     token = uuid.uuid4().hex if both_anew else None
-    jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
-                         devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
-                         reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]),
-                         prepared_systems_sha256=record_digest(infos[edge_name(a, b)].get("made_from")),
-                         windows_token=token)
-            for a, b in selected for r in repeats_run for leg in ("solvent", "complex")
-            if not only_legs or leg in only_legs]
-    t_prepared = time.time()
-    log(f"{len(jobs)} job(s) of {len(selected)} edge(s) x 2 legs x {len(repeats_run)} repeat(s); per lambda window "
+    legs_run = [leg for leg in ("solvent", "complex") if not only_legs or leg in only_legs]
+
+    def jobs_of(edge: str, info: dict) -> list:
+        return [EdgeLegJob(edge=edge, leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge), devices=[],
+                           config=cfg_dict, production_ns=float(rcfg.sampling.production_ns), reschedule=reschedule,
+                           n_atoms=int(info["legs"][leg]["n_atoms_a"]),
+                           prepared_systems_sha256=record_digest(info.get("made_from")), windows_token=token)
+                for r in repeats_run for leg in legs_run]
+
+    def write_record() -> None:
+        # the record of the run once an edge is prepared: a run whose first edge cannot be prepared (no alchemical
+        # water, no mapping) leaves the record of the run whose results the directory holds (review of PR #19)
+        write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment, states)
+        publish_text(out_dir / "auto_report.md", report.to_markdown())
+        protein.write_pdb(out_dir / "protein_prepared.pdb")
+
+    log(f"{len(selected) * len(repeats_run) * len(legs_run)} job(s) of {len(selected)} edge(s) x "
+        f"{len(legs_run)} leg(s) x {len(repeats_run)} repeat(s); per lambda window "
         f"{rcfg.sampling.equilibration('complex'):g} ns equilibration and "
         f"{rcfg.sampling.production_ns:g} ns production")
     gpus = list(rcfg.resources.gpus) if rcfg.resources.gpus else [None]
-    results, monitor, mps_used = execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor, log)
-    failed_now = failed_jobs(results)
+    unprepared: list[str] = []
+    if gpus == [None]:
+        # one job at a time in this process: every edge is prepared first
+        jobs = []
+        for a, b in selected:
+            jobs += jobs_of(edge_name(a, b), prepare_edge(rcfg, by_name[a], by_name[b], protein,
+                                                         out_dir / "edges" / edge_name(a, b), box_shape, log))
+        write_record()
+        t_prepared = time.time()
+        results, monitor, mps_used = execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor, log)
+    else:
+        # the legs of an edge start as soon as it is prepared, while the next edges are prepared (the owner, 2026-11-26:
+        # the 37 edges of A2A in a bilayer took two minutes each before the first job). An edge that cannot be
+        # prepared before any job has started stops the run as before; one after that is a failure of this run, and
+        # the others go on
+        jobs, (results, monitor, mps_used), t_prepared = _run_while_edges_are_prepared(
+            [(edge_name(a, b), by_name[a], by_name[b]) for a, b in selected],
+            lambda lig_a, lig_b, edge: prepare_edge(rcfg, lig_a, lig_b, protein, out_dir / "edges" / edge,
+                                                    box_shape, log),
+            jobs_of, write_record, lambda jobs, more: execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor,
+                                                                   log, more),
+            unprepared, log)
+    failed_now = unprepared + failed_jobs(results)
     for line in failed_now:
         log(f"FAILED {line}")
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log)
@@ -784,6 +805,81 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     for line in result_lines(summary):
         log(line)
     return summary
+
+
+def _run_while_edges_are_prepared(edges, prepare, jobs_of, write_record, execute, unprepared: list, log):
+    """Prepare the edges ``edges`` (name, ligand A, ligand B) one after the other in a thread of their own while the
+    jobs of those prepared run: ``prepare(lig_a, lig_b, name)`` gives the record of an edge and
+    ``jobs_of(name, record)`` its jobs; ``write_record()`` writes the record of the run once the first edge is
+    prepared, before any job starts; ``execute(jobs, more)`` runs the jobs and those ``more`` gives as their edges are
+    prepared
+    (:func:`cufep.run.execute_jobs`). An edge that cannot be prepared before any has been stops the run, nothing of it
+    started (the exception of its preparation); one after that is added to ``unprepared`` and the others go on.
+    Returns ``(every job, what execute returned, when the first jobs were ready)``."""
+    import queue
+    import threading
+    import traceback
+
+    ready: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    def preparation() -> None:
+        started = False
+        try:
+            for name, lig_a, lig_b in edges:
+                if stop.is_set():
+                    return
+                try:
+                    record = prepare(lig_a, lig_b, name)
+                    if not started:
+                        write_record()
+                        started = True
+                except Exception as exc:  # noqa: BLE001 - the failure of that edge, said by the run
+                    ready.put(("failed", name, exc, traceback.format_exc()))
+                    if not started:
+                        return                   # before any job: the run stops, as it did
+                    continue
+                ready.put(("prepared", name, record, None))
+        finally:
+            ready.put(("done", None, None, None))
+
+    thread = threading.Thread(target=preparation, name="preparation of the edges", daemon=True)
+    thread.start()
+    jobs: list = []
+    kind, name, payload, trace = ready.get()
+    if kind == "failed":
+        raise payload
+    if kind == "done":                           # no edge to prepare
+        write_record()
+    else:
+        jobs += jobs_of(name, payload)
+    t_ready = time.time()
+    done = kind == "done"
+
+    def more():
+        nonlocal done
+        new = []
+        while not done:
+            try:
+                kind, name, payload, trace = ready.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "done":
+                done = True
+            elif kind == "failed":
+                why = str(payload) if isinstance(payload, WorkflowError) else f"{type(payload).__name__}: {payload}"
+                log(f"the preparation of {name} stopped: {why}" + ("" if isinstance(payload, WorkflowError)
+                                                                   else f"\n{trace}"))
+                unprepared.append(f"{name}: its preparation stopped: {why}")
+            else:
+                new += jobs_of(name, payload)
+        return new, not done
+
+    try:
+        out = execute(jobs, more)
+    finally:
+        stop.set()
+    return jobs, out, t_ready
 
 
 def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, how: str,

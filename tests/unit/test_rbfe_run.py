@@ -521,6 +521,81 @@ def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before
     assert all((out_dir / name).read_bytes() == data for name, data in before.items())
 
 
+def test_the_legs_of_an_edge_start_when_it_is_prepared_while_the_next_edges_are_prepared(tmp_path, monkeypatch):
+    """The owner, 2026-11-26: the run prepared all 37 edges of A2A (two minutes each in a bilayer) before it started
+    the first job. On GPUs the legs of an edge start as soon as it is prepared, the record of the run written before;
+    an edge whose preparation stops after that is a failure of the run and the others go on; one that stops before
+    any job stops the run, the record of the directory as it was."""
+    import threading
+    import time
+
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe import prep as prep_module
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import run_rbfe
+    from cufep.workflow import WorkflowError
+
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, smiles in (("toluene", "Cc1ccccc1"), ("phenol", "Oc1ccccc1"), ("aniline", "Nc1ccccc1")):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        AllChem.EmbedMolecule(mol, randomSeed=11)
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+    monkeypatch.setattr(run_module, "write_timing", lambda *args, **kwargs: None)
+
+    def run(out_dir, stops=()):
+        data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+        rcfg = RbfeConfig.model_validate({**data, "resources": {**data["resources"], "gpus": [0]},
+                                          "network": {"edges": [["toluene", "phenol"], ["phenol", "aniline"]]}})
+        events, first_jobs = [], threading.Event()
+
+        def prepare(cfg, a, b, protein, edge_dir, box_shape, log):
+            name = f"{a.name}~{b.name}"
+            if name == "phenol~aniline":
+                events.append(("waited for the jobs of the first edge", first_jobs.wait(30)))
+            if name in stops:
+                raise WorkflowError(f"no alchemical water for {name}")
+            events.append(("prepared", name, (out_dir / "network.json").exists()))
+            return {"made_from": {"ligand_a": a.name}, "legs": {"solvent": {"n_atoms_a": 15},
+                                                                 "complex": {"n_atoms_a": 15}}}
+
+        def execute(jobs, gpus, factor, log, more=None):
+            events.append(("jobs", [job.edge for job in jobs], (out_dir / "network.json").exists()))
+            first_jobs.set()
+            coming = True
+            while coming:
+                new, coming = more()
+                if new:
+                    events.append(("jobs", [job.edge for job in new]))
+                    jobs.extend(new)
+                time.sleep(0.01)
+            return [], None, False
+
+        monkeypatch.setattr(prep_module, "prepare_edge", prepare)
+        monkeypatch.setattr(run_module, "execute_jobs", execute)
+        return run_rbfe(rcfg, log=lambda line: None), events
+
+    summary, events = run(tmp_path / "run")
+    assert events == [("prepared", "toluene~phenol", False), ("jobs", ["toluene~phenol"] * 2, True),
+                      ("waited for the jobs of the first edge", True), ("prepared", "phenol~aniline", True),
+                      ("jobs", ["phenol~aniline"] * 2)]
+    assert summary["failed_in_this_run"] == []
+    summary, events = run(tmp_path / "later", stops=("phenol~aniline",))
+    assert summary["failed_in_this_run"] == ["phenol~aniline: its preparation stopped: no alchemical water for "
+                                             "phenol~aniline"]
+    assert events[-1] == ("waited for the jobs of the first edge", True)
+    with pytest.raises(WorkflowError, match="no alchemical water for toluene~phenol"):
+        run(tmp_path / "first", stops=("toluene~phenol",))
+    assert not (tmp_path / "first" / "network.json").exists()
+
+
 def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_path, monkeypatch, edges_of_version_1):
     """Second review of PR #17: A~B finished, then the protein changed and only B~C was run (--edge): B~C had no
     prepared systems yet and passed, and the network combined the A~B of the other protein. Every prepared edge of

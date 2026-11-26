@@ -421,26 +421,39 @@ def _stop_started(running: dict[int, dict], jobs: list[Job], log, grace: float) 
 
 
 def run_jobs(jobs: list[Job], gpus: list, log=print, oversubscription="auto", mps: bool = False,
-             max_running: int | None = None, poll_seconds: float = 0.2) -> list[dict]:
-    """Run all jobs on the given devices and return their results in order."""
-    if not jobs:
+             max_running: int | None = None, poll_seconds: float = 0.2, more=None) -> list[dict]:
+    """Run all jobs on the given devices and return their results in order.
+
+    ``more``: jobs that become ready while these run, a callable that returns ``(new jobs, whether more will come)``
+    without waiting (a relative run starts the legs of an edge as soon as the edge is prepared). They are added to
+    ``jobs``, the list given, in the order they come, and run as those were."""
+    if not jobs and more is None:
         return []
     if not gpus or gpus == [None]:
         results = []                                   # no GPU: one job at a time, in this process
-        for job in jobs:
-            job.devices, job.inline = [None], True
-            results.append(job.runner()(job))
-        return results
+        coming = more is not None
+        while True:
+            while len(results) < len(jobs):
+                job = jobs[len(results)]
+                job.devices, job.inline = [None], True
+                results.append(job.runner()(job))
+            if not coming:
+                return results
+            new, coming = more()
+            jobs.extend(new)
+            if coming and not new:
+                time.sleep(poll_seconds)
     gpus = list(gpus)
     max_running = max_running or max(2, len(gpus))
-    return _run_started_jobs(jobs, gpus, log, oversubscription, mps, max_running, poll_seconds)
+    return _run_started_jobs(jobs, gpus, log, oversubscription, mps, max_running, poll_seconds, more)
 
 
 def _run_started_jobs(jobs: list[Job], gpus: list, log, oversubscription, mps: bool, max_running: int,
-                      poll_seconds: float) -> list[dict]:
+                      poll_seconds: float, more=None) -> list[dict]:
     for job in jobs:
         job.oversubscription = oversubscription_for(job.n_atoms, oversubscription, mps)
     waiting = list(range(len(jobs)))
+    coming = more is not None
     running: dict[int, dict] = {}
     ctx = mp.get_context("spawn")
     t0 = time.time()
@@ -479,7 +492,14 @@ def _run_started_jobs(jobs: list[Job], gpus: list, log, oversubscription, mps: b
         for sig in (signal.SIGTERM, signal.SIGHUP):
             previous[sig] = signal.signal(sig, interrupted)
     try:
-        while waiting or running:
+        while waiting or running or coming:
+            if coming:
+                # jobs that became ready meanwhile join the queue in the order they come
+                new, coming = more()
+                for job in new:
+                    job.oversubscription = oversubscription_for(job.n_atoms, oversubscription, mps)
+                    jobs.append(job)
+                    waiting.append(len(jobs) - 1)
             # start waiting jobs, as long as their first worker fits
             while waiting and len(running) < max_running and (not running or first_worker_fits(waiting[0])):
                 i = waiting.pop(0)
