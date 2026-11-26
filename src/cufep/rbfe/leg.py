@@ -230,12 +230,23 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
                      gcmc=gcmc)
 
 
+#: settings added after the first relative calculations, with their defaults: a record of the samples or the windows
+#: of a leg leaves them out at these values, so that the legs of earlier versions are taken up as they were
+SETTINGS_ADDED = {"alchemical_water_cutoff_nm": 0.8, "core_smarts": None}
+
+
+def settings_as_recorded(section) -> dict:
+    """A section of the configuration as the records of a leg hold it (:data:`SETTINGS_ADDED`)."""
+    return {k: v for k, v in section.model_dump(mode="json").items()
+            if k not in SETTINGS_ADDED or v != SETTINGS_ADDED[k]}
+
+
 def hybrid_settings(rcfg, leg: str | None = None) -> dict:
     """The settings of a relative run that the samples of a leg depend on beyond its System; the grand canonical
     moves of water for the leg that makes them (written only there, so that the solvent leg and the legs of
     earlier versions keep the record they had)."""
-    settings = {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"),
-                         "mapping": rcfg.mapping.model_dump(mode="json")},
+    settings = {"rbfe": {"alchemy": settings_as_recorded(rcfg.alchemy),
+                         "mapping": settings_as_recorded(rcfg.mapping)},
                 "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
     if gcmc_in(rcfg, leg):
         from cufep.workflow import gcmc_record

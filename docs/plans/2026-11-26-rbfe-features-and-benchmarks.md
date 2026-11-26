@@ -145,3 +145,17 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - テスト(CPU): 化合物の式を合成真値で(結合様式 2、プロトン化の形 0.9/0.1、対称数 2、状態の値、重み、SE を共分散から)、
   状態の設定の拒否(割合の和、対称数の食い違い、名前の無いリガンド、状態の実験値の食い違い)、run と analyze で同じ化合物、
   状態ファイルが入力と表 16・17 どおり、化合物ごとのレポート。
+
+### 2026-11-26 手順 6: custom core を実装、REST2 の perturbed の領域は保留(オーナーの判断待ち)
+- `mapping.core_smarts`(既定なし): SMARTS に一致する原子だけを両リガンドで対応させ、残りは各リガンドの unique 原子
+  (soft-core で変わる)。エッジの対応と LOMAP のネットワーク(`CoreMapper`)の両方に効く。マッピングの設定を作る 4 か所を
+  共通の `mapping_settings` に一本化。新しい設定は既定値のとき、準備した記録とレグの記録に入れない(以前の run を
+  そのまま続けられる、`SETTINGS_ADDED`)。`-modify-dihe`(custom core のねじれを途中で 0 にする)は実装しない
+  (REST2 が hot region のねじれを s で縮める)。
+- `sampling.rest2.region: perturbed`(公開プロトコルの hot region の既定: 変わる原子の断片に回転可能な結合の先を足し、
+  重原子 24、環を含めば 30 まで; ヘルプ全文を読んだ)は実装していない。分かった事実: cuFEP の hybrid の REST2 はリガンド
+  全体が hot である前提で、3 つの電荷の λ に √s を畳み込んでいる。リガンドの一部だけを hot にするには、hot と cold の
+  リガンド原子で別の電荷の λ がプラグインに要る(m36 で確かめたのは global parameter 5 つまで)。計画の想定より大きな
+  変更なので、オーナーの判断を待つ(既定は pocket のままなので、今の計算には影響しない)。
+- テスト(CPU): custom core の一致・拒否、toluene → phenol で環の炭素 6 個だけ対応、LOMAP がその対応で網を作る、既定値の
+  ときに記録が変わらない。

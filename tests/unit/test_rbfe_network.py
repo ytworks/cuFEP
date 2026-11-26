@@ -442,3 +442,30 @@ def test_a_run_of_states_gives_the_dg_of_its_compounds_again_from_its_directory(
             assert again["compounds"]["values"][c][key] == pytest.approx(summary["compounds"]["values"][c][key])
     rows = {r["compound"]: r for r in csv.DictReader((tmp_path / "compounds.csv").open())}
     assert float(rows["C"]["dg_kcal_mol"]) == pytest.approx(summary["compounds"]["values"]["C"]["dg"], abs=1e-3)
+
+
+def test_a_custom_core_maps_only_its_atoms_and_the_records_of_other_edges_stay_as_they_were():
+    """mapping.core_smarts restricts the mapping to atoms in a match of the pattern in both ligands; without it the
+    records of a leg and of a prepared edge are those of earlier versions (the settings added are left out at their
+    defaults)."""
+    from rdkit import Chem
+
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import hybrid_settings
+    from cufep.rbfe.mapping import MappingError, core_atoms, within_core
+
+    toluene = Chem.AddHs(Chem.MolFromSmiles("Cc1ccccc1"))
+    ring = core_atoms(toluene, "c1ccccc1")
+    assert ring == {1, 2, 3, 4, 5, 6}
+    mapping = {i: i for i in range(15)}
+    assert within_core(mapping, ring, ring) == {i: i for i in ring}
+    with pytest.raises(MappingError, match="matches no atom"):
+        core_atoms(toluene, "C(=O)N")
+    with pytest.raises(MappingError, match="not a SMARTS"):
+        core_atoms(toluene, "c1cc(")
+    plain = RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf"}})
+    recorded = hybrid_settings(plain, "solvent")["rbfe"]
+    assert "core_smarts" not in recorded["mapping"] and "alchemical_water_cutoff_nm" not in recorded["alchemy"]
+    custom = RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf"},
+                                        "mapping": {"core_smarts": "c1ccccc1"}})
+    assert hybrid_settings(custom, "solvent")["rbfe"]["mapping"]["core_smarts"] == "c1ccccc1"

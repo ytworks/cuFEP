@@ -78,7 +78,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
         oxygen_first,
         water_into_ion,
     )
-    from cufep.rbfe.mapping import MappingSettings, constrained_bond_rule, kartograf_mapping, lomap_score
+    from cufep.rbfe.mapping import constrained_bond_rule, kartograf_mapping, lomap_score, mapping_settings
     from cufep.workflow import WorkflowError, _check_box, _remove_clashing_waters
 
     prep_dir = Path(edge_dir) / "prep"
@@ -97,11 +97,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     for lig in (ligand_a, ligand_b):
         assign_partial_charges(lig, cfg.forcefield.ligand_charges, cache_dir=Path(cfg.output.dir) / "cache")
     m = cfg.mapping
-    settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
-                               map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
-                               map_exact_ring_matches_only=m.map_exact_ring_matches_only,
-                               allow_partial_fused_rings=m.allow_partial_fused_rings,
-                               allow_bond_breaks=m.allow_bond_breaks)
+    settings = mapping_settings(m)
     mapping = kartograf_mapping(ligand_a, ligand_b, settings)
     score = lomap_score(ligand_a, ligand_b, mapping)
     ffspec = ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water, lipid=cfg.forcefield.lipid,
@@ -234,7 +230,10 @@ def edge_made_from(cfg, ligand_a, ligand_b, box_shape: str) -> dict:
     return {"protein_sha256": digest, "ligand_a": ligand_a.digest(), "ligand_b": ligand_b.digest(),
             "forcefield": cfg.forcefield.model_dump(mode="json"), "membrane": cfg.membrane.model_dump(mode="json"),
             "solvation": cfg.solvation.model_dump(mode="json"), "box_shape": box_shape,
-            "mapping": cfg.mapping.model_dump(mode="json"), "backend": cfg.backend.name,
+            # (a custom core only where one is given, so that the records of the other edges are those of earlier
+            # versions)
+            "mapping": {k: v for k, v in cfg.mapping.model_dump(mode="json").items()
+                        if k != "core_smarts" or v is not None}, "backend": cfg.backend.name,
             # the pH sets the protonation states of a protein given without hydrogens (review of PR #17)
             "thermodynamics": {"ionic_strength_M": cfg.thermodynamics.ionic_strength_M, "ph": cfg.thermodynamics.ph},
             "dynamics": {k: getattr(cfg.dynamics, k) for k in ("cutoff_nm", "hmr_mass_amu", "constraints")},

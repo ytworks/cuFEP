@@ -686,3 +686,17 @@ def test_an_edge_that_changes_the_charge_has_an_alchemical_water_in_both_legs(tm
         if built.gcmc is not None:
             assert not set(water["atoms_a"]) & set(built.gcmc.waters.reshape(-1).tolist())
 
+
+
+def test_a_custom_core_restricts_the_mapping_of_an_edge_and_of_the_network(tmp_path):
+    """With mapping.core_smarts of the ring carbons, toluene -> phenol maps the six ring carbons only (Kartograf's
+    mapping without the core has the ring hydrogens too), and LOMAP plans its network from mappings so restricted."""
+    from cufep.rbfe.mapping import MappingSettings, kartograf_mapping, plan_network
+
+    ligands = _ligands(tmp_path, tmp_path / "run")
+    full = kartograf_mapping(ligands[0], ligands[1])
+    core = kartograf_mapping(ligands[0], ligands[1], MappingSettings(core_smarts="c1ccccc1"))
+    assert sorted(core) == [1, 2, 3, 4, 5, 6] and len(full) > len(core)
+    assert all(full[i] == j for i, j in core.items())
+    edges = plan_network(ligands, MappingSettings(core_smarts="c1ccccc1"), require_cycle_covering=False)
+    assert [tuple(sorted(e)) for e in edges] == [("phenol", "toluene")]

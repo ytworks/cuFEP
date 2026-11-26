@@ -83,6 +83,9 @@ class MappingConfig(_Section):
     map_exact_ring_matches_only: bool = True
     allow_partial_fused_rings: bool = True
     allow_bond_breaks: bool = False
+    #: a custom core (SMARTS): only atoms in a match of it in both ligands are mapped, so that the rest is unique to
+    #: each ligand, perturbed and in the soft-core; None: Kartograf's mapping as it is
+    core_smarts: str | None = None
 
 
 class HybridAlchemyConfig(_Section):

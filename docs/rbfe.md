@@ -79,6 +79,11 @@ which are those of OpenFE's relative protocol. Then OpenFE's rule from perses: w
 between two mapped atoms changes its length, or is constrained at one end only, its hydrogen leaves the
 mapping.
 
+A custom core (`mapping.core_smarts`, a SMARTS pattern; none by default) restricts the mapping to the atoms in a
+match of the pattern in both ligands: the other atoms are unique to each ligand and change with the soft-core, as a
+group that is "decoupled in the intermediate lambda windows" to sample it better (the custom cores of Ross et al.
+2023, Supplementary section "OX2"). The network of LOMAP is planned from the mappings so restricted.
+
 ### Hybrid topology
 
 The rules of the HybridTopologyFactory of OpenFE's relative protocol (openfe 1.13, from perses), with
@@ -226,6 +231,9 @@ solvent pKa of Supplementary Table 17 at the pH of the assay, 7.5, and the symme
   relative protocol (`use_dispersion_correction: False` for the hybrid); the NonbondedForce of the
   environment keeps its own long-range correction.
 - Water relocation moves (`sampling.relocation_mc`) and `membrane.complex_leg: water`, which are of the ABFE.
+- A REST2 region of the perturbed atoms of the ligand alone: the hybrid scales the charges of the whole ligand
+  through its three electrostatic lambdas, and a part of the ligand at another scale would need lambdas of its own
+  on the cuPotential plugin.
 
 ## All settings and their defaults
 
@@ -244,6 +252,7 @@ mapping:
   map_exact_ring_matches_only: true
   allow_partial_fused_rings: true
   allow_bond_breaks: false
+  core_smarts: null
 alchemy:
   softcore_alpha: 0.85
   alchemical_water_cutoff_nm: 0.8
@@ -288,6 +297,7 @@ output:
 
 | settings | recommended value | basis |
 |---|---|---|
+| `mapping.core_smarts` | none | a custom core is a choice for a series, not a default: Kartograf's mapping as it is |
 | `mapping.*` | Kartograf's defaults | Kartograf (Ries et al. 2024); the defaults of OpenFE's relative protocol (since openfe 1.7) |
 | `alchemy.softcore_alpha` | 0.85 | Gapsys et al. 2012; OpenFE's `softcore_alpha` |
 | `alchemy.alchemical_water_cutoff_nm` | 0.8 | OpenFE's `explicit_charge_correction_cutoff` |

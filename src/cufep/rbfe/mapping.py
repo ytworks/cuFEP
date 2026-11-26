@@ -31,6 +31,54 @@ class MappingSettings:
     map_exact_ring_matches_only: bool = True
     allow_partial_fused_rings: bool = True
     allow_bond_breaks: bool = False
+    #: a custom core: only atoms in a match of this SMARTS in both ligands are mapped (None: Kartograf's mapping)
+    core_smarts: str | None = None
+
+
+def mapping_settings(m) -> MappingSettings:
+    """The settings of the mapping from the ``mapping`` section of a relative configuration (one function for every
+    place that maps)."""
+    return MappingSettings(atom_max_distance=m.atom_max_distance_A,
+                           map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
+                           map_exact_ring_matches_only=m.map_exact_ring_matches_only,
+                           allow_partial_fused_rings=m.allow_partial_fused_rings,
+                           allow_bond_breaks=m.allow_bond_breaks, core_smarts=m.core_smarts)
+
+
+def core_atoms(molecule, smarts: str) -> set[int]:
+    """The atoms of an RDKit molecule (with its hydrogens) in any match of ``smarts``; MappingError without one."""
+    from rdkit import Chem
+
+    pattern = Chem.MolFromSmarts(smarts)
+    if pattern is None:
+        raise MappingError(f"mapping.core_smarts {smarts!r} is not a SMARTS pattern")
+    matches = molecule.GetSubstructMatches(pattern, uniquify=False, useChirality=False)
+    if not matches:
+        raise MappingError(f"mapping.core_smarts {smarts!r} matches no atom of {molecule.GetProp('_Name')}"
+                           if molecule.HasProp("_Name") else f"mapping.core_smarts {smarts!r} matches no atom")
+    return {int(i) for match in matches for i in match}
+
+
+def within_core(mapping: dict[int, int], core_a: set[int], core_b: set[int]) -> dict[int, int]:
+    """The pairs of ``mapping`` whose two atoms are in the custom core of their ligand."""
+    return {i: j for i, j in mapping.items() if i in core_a and j in core_b}
+
+
+class CoreMapper:
+    """Kartograf's mapper whose mappings keep only the atoms of the custom core (for the network of LOMAP, which
+    calls ``suggest_mappings``)."""
+
+    def __init__(self, mapper, smarts: str) -> None:
+        self.mapper, self.smarts = mapper, smarts
+
+    def suggest_mappings(self, a, b):
+        from gufe import LigandAtomMapping
+
+        core_a, core_b = core_atoms(a.to_rdkit(), self.smarts), core_atoms(b.to_rdkit(), self.smarts)
+        for m in self.mapper.suggest_mappings(a, b):
+            kept = within_core(dict(m.componentA_to_componentB), core_a, core_b)
+            if kept:
+                yield LigandAtomMapping(a, b, componentA_to_componentB=kept)
 
 
 def _component(ligand):
@@ -57,7 +105,14 @@ def kartograf_mapping(ligand_a, ligand_b, settings: MappingSettings | None = Non
     if not mappings or not mappings[0].componentA_to_componentB:
         raise MappingError(f"Kartograf maps no atom of {ligand_a.name} onto {ligand_b.name}: are the poses "
                            "placed on each other?")
-    return {int(i): int(j) for i, j in mappings[0].componentA_to_componentB.items()}
+    mapping = {int(i): int(j) for i, j in mappings[0].componentA_to_componentB.items()}
+    if settings.core_smarts:
+        mapping = within_core(mapping, core_atoms(ligand_a.to_rdkit(), settings.core_smarts),
+                              core_atoms(ligand_b.to_rdkit(), settings.core_smarts))
+        if not mapping:
+            raise MappingError(f"no atom of {ligand_a.name} and {ligand_b.name} that Kartograf maps is in the custom "
+                               f"core {settings.core_smarts!r}")
+    return mapping
 
 
 def lomap_score(ligand_a, ligand_b, mapping: dict[int, int]) -> float:
@@ -125,7 +180,8 @@ def plan_network(ligands, settings: MappingSettings | None = None, distance_cuto
 
     settings = settings or MappingSettings()
     components = [_component(lig) for lig in ligands]
-    network = generate_lomap_network(components, mappers=[_mapper(settings)], scorer=default_lomap_score,
+    mapper = _mapper(settings) if not settings.core_smarts else CoreMapper(_mapper(settings), settings.core_smarts)
+    network = generate_lomap_network(components, mappers=[mapper], scorer=default_lomap_score,
                                      distance_cutoff=distance_cutoff, max_path_length=max_path_length,
                                      require_cycle_covering=require_cycle_covering)
     return sorted((e.componentA.name, e.componentB.name) for e in network.edges)

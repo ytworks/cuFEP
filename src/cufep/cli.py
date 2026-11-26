@@ -348,7 +348,7 @@ def _load_rbfe(config: str):
 @click.argument("config", type=click.Path(exists=True, dir_okay=False))
 def rbfe_plan(config: str) -> None:
     """Show the ligands, the edges and their atom mappings of CONFIG, without simulating."""
-    from cufep.rbfe.mapping import MappingSettings, kartograf_mapping, lomap_score
+    from cufep.rbfe.mapping import kartograf_mapping, lomap_score, mapping_settings
     from cufep.rbfe.run import edges_of, experiment_of, ligands_of
 
     rcfg = _load_rbfe(config)
@@ -360,11 +360,7 @@ def rbfe_plan(config: str) -> None:
     experiment = experiment_of(rcfg, ligands)
     by_name = {lig.name: lig for lig in ligands}
     m = rcfg.mapping
-    settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
-                               map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
-                               map_exact_ring_matches_only=m.map_exact_ring_matches_only,
-                               allow_partial_fused_rings=m.allow_partial_fused_rings,
-                               allow_bond_breaks=m.allow_bond_breaks)
+    settings = mapping_settings(m)
     for lig in ligands:
         exp = experiment.get(lig.name)
         click.echo(f"ligand {lig.name}: {lig.n_atoms} atoms" + (f", experiment {exp:.2f} kcal/mol" if exp else ""))

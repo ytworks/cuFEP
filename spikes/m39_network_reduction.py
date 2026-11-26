@@ -86,7 +86,7 @@ def main(name: str) -> None:
     from cufep.benchmarks.rbfe import published_edges, rbfe_benchmark_config, read_states
     from cufep.benchmarks.runner import read_reference
     from cufep.prep.ligand import load_ligands
-    from cufep.rbfe.mapping import MappingSettings, plan_network
+    from cufep.rbfe.mapping import mapping_settings, plan_network
     from cufep.rbfe.network import Edge
     from cufep.sampling.states import R_GAS
     from cufep.workflow import KCAL
@@ -99,11 +99,7 @@ def main(name: str) -> None:
     experiment = {k: v["exp"] for k, v in read_reference(name).items()}
     published = published_edges(name, by_state=bool(states))
     m = cfg.mapping
-    settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
-                               map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
-                               map_exact_ring_matches_only=m.map_exact_ring_matches_only,
-                               allow_partial_fused_rings=m.allow_partial_fused_rings,
-                               allow_bond_breaks=m.allow_bond_breaks)
+    settings = mapping_settings(m)
     scores = scores_of(ligands, list(published), settings)
     subset = lomap_subset(names, scores, cfg.network)
     edges = {pair: Edge(pair[0], pair[1], v["bennett"], v["bennett_error"]) for pair, v in published.items()}

@@ -132,14 +132,10 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
             raise WorkflowError(f"network.edges names ligands that are not ligands of the run: {', '.join(unknown)}")
         how = "given (network.edges)"
     else:
-        from cufep.rbfe.mapping import MappingSettings, plan_network
+        from cufep.rbfe.mapping import mapping_settings, plan_network
 
         m = rcfg.mapping
-        settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
-                                   map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
-                                   map_exact_ring_matches_only=m.map_exact_ring_matches_only,
-                                   allow_partial_fused_rings=m.allow_partial_fused_rings,
-                                   allow_bond_breaks=m.allow_bond_breaks)
+        settings = mapping_settings(m)
         n = rcfg.network
         edges = plan_network(ligands, settings, n.distance_cutoff, n.max_path_length, n.require_cycle_covering)
         how = "planned by LOMAP"
