@@ -308,7 +308,7 @@ def test_a_leg_keeps_the_ghosts_of_its_samples_and_one_configuration_has_one_sph
     (leg_one / "equil_ghosts.json").write_text(json.dumps({"ghosts": single.ghosts.tolist()}))
     with monkeypatch.context() as patch:                  # a ghost in the sphere of the new centre alone
         patch.setattr(gcmc_module, "start_ghosts_in_sphere",
-                      lambda spec, x, box, ghosts, centre: centre is midway_positions)
+                      lambda spec, x, box, ghosts, centre, heavy=None: centre is midway_positions)
         assert list(start_moves(one, hybrid, top, box, both, midway_positions, leg_one, False).ghosts) == list(
             single.ghosts)
         (leg_one / "equil_ghosts.json").write_text(json.dumps({"ghosts": single.ghosts.tolist(),

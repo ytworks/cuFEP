@@ -1855,3 +1855,49 @@ def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is
         result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "plan.yaml")])
         assert (result.exit_code != 0) == refused, result.output
         assert ("unique to A are bonded to the mapped atoms [0, 1]" in result.output) == refused, result.output
+    # (thirteenth review, P2) without constraints the oxygen stays mapped onto the hydrogen of ethane: the heavy atoms
+    # of the hybrid ligand were those of the elements of A (C, C, O one way, C, C the other), and one configuration had
+    # two spheres. They are the atoms heavy in either end: one centre, one sphere both ways
+    import openmm as mm
+
+    from cufep.rbfe.hybrid import make_hybrid_system
+    from cufep.rbfe.leg import (
+        centre_positions_of,
+        end_states_heavy,
+        hybrid_heavy_atoms,
+        hybrid_topology,
+        start_moves,
+    )
+    from cufep.rbfe.prep import load_end_states
+    from cufep.sampling.gcmc import GcmcMover
+
+    free = rcfg.model_validate({**rcfg.model_dump(mode="json"),
+                                "dynamics": {**rcfg.model_dump(mode="json")["dynamics"], "constraints": "none"}})
+    prepare_edge(free, oxirane, ethane, _protein(), edge_dir, "cube", print)
+    end = load_end_states(edge_dir, "complex")
+    a, b, core = end["a"], end["b"], end["core_map"]
+    assert ethane.offmol.atoms[{int(i): j for i, j in end["info"]["legs"]["complex"]["mapping"].items()}[2]
+                               ].atomic_number == 1                     # O of A onto H of B, mapped
+    ways = []
+    for first, second, mapping in ((a, b, core), (b, a, {j: i for i, j in core.items()})):
+        hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(first["system_xml"]), first["positions"],
+                                    first["ligand"], mm.XmlSerializer.deserialize(second["system_xml"]),
+                                    second["positions"], second["ligand"], mapping)
+        unique = sorted(j for j in second["ligand"] if j not in set(mapping.values()))
+        top = hybrid_topology(first["topology"], second["topology"], unique)
+        box = np.asarray(first["box"], dtype=float)
+        moves = start_moves(free, hybrid, top, box, end_states_heavy(first, second),
+                            centre_positions_of(hybrid, first, second),
+                            heavy_atoms=hybrid_heavy_atoms(hybrid, first, second))
+        ways.append((hybrid, moves, box))
+    (forward, f_moves, box), (backward, b_moves, _box) = ways
+    x_f = np.asarray(forward.positions, dtype=float)
+    x_b = np.array(backward.positions, dtype=float)
+    for i, h in forward.a_to_hybrid.items():
+        x_b[backward.b_to_hybrid[i]] = x_f[h]
+    for j, h in forward.b_to_hybrid.items():
+        x_b[backward.a_to_hybrid[j]] = x_f[h]
+    f_mover, b_mover = GcmcMover(f_moves, None, 1), GcmcMover(b_moves, None, 1)
+    assert np.allclose(f_mover.centre(x_f, box), b_mover.centre(x_b, box), rtol=0.0, atol=1e-9)
+    on = np.ones(len(f_moves.waters), dtype=bool)
+    assert list(f_mover.in_sphere(x_f, box, on)) == list(b_mover.in_sphere(x_b, box, on))

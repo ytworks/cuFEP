@@ -214,7 +214,8 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
               batch_size: int, radius_margin_nm: float, excess_chemical_potential_kcal_per_mol: float,
               standard_volume_nm3: float, ghost_waters: int | None,
               radius_from_nm: np.ndarray | None = None, radius_from_bonds=None, bonds=None,
-              centre_positions: np.ndarray | None = None, check_start: bool = True) -> GcmcSpec:
+              centre_positions: np.ndarray | None = None, check_start: bool = True,
+              heavy_atoms=None) -> GcmcSpec:
     """What a mover needs, from the ``system`` of a leg with every water interacting, its
     ``topology`` and the pose that was prepared. The waters and the sphere are found as for the
     water relocation moves (:func:`cufep.sampling.relocation_mc.relocation_spec`, with its
@@ -228,7 +229,9 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
     whose centre the ghosts of the start are counted from and kept out of the sphere around, where they are not those
     of ``positions`` (of a hybrid: its mapped atoms between their positions in the two end states). Raises GcmcError
     where the moves cannot be made. ``check_start`` False: the ghosts of the start are not checked against the sphere
-    here, for a caller that chooses the ghosts of a leg first (:func:`start_ghosts_in_sphere`)."""
+    here, for a caller that chooses the ghosts of a leg first (:func:`start_ghosts_in_sphere`). ``heavy_atoms``: the
+    heavy atoms of the ligand whose centre is the centre of the sphere, where they are not those of the elements of
+    ``topology`` (of a hybrid: the atoms heavy in either end state, the same both ways)."""
     try:
         base = relocation_spec(system, topology, positions, box, ligand, cutoff_nm, softcore_alpha, softcore_b,
                                temperature_K, 1, None, interval_ps, radius_margin_nm, bonds)
@@ -236,9 +239,14 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
         raise
     except RelocationError as exc:
         raise GcmcError(str(exc)) from exc
-    if radius_from_nm is not None:
-        import dataclasses
+    import dataclasses
 
+    if heavy_atoms is not None:
+        from cufep.sampling.relocation_mc import heavy_bonds
+
+        heavy = np.array(sorted(int(i) for i in heavy_atoms), dtype=np.int64)
+        base = dataclasses.replace(base, ligand_heavy=heavy, ligand_heavy_bonds=heavy_bonds(topology, heavy, bonds))
+    if radius_from_nm is not None:
         from cufep.sampling.relocation_mc import sphere_radius, whole_pose
 
         pose = whole_pose(np.asarray(radius_from_nm, dtype=float), radius_from_bonds, np.asarray(box, dtype=float))
@@ -266,12 +274,14 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
                     ligand_heavy_bonds=base.ligand_heavy_bonds)
 
 
-def start_ghosts_in_sphere(spec, positions: np.ndarray, box: np.ndarray, ghosts, centre_positions=None) -> bool:
+def start_ghosts_in_sphere(spec, positions: np.ndarray, box: np.ndarray, ghosts, centre_positions=None,
+                           heavy=None) -> bool:
     """Whether a ghost of the start (``ghosts``, rows of ``spec.waters``) is in the sphere of radius ``spec.radius_nm``
-    around the centre of the heavy atoms of the ligand (of ``centre_positions`` where given, else of ``positions``)."""
+    around the centre of the heavy atoms of the ligand (of ``centre_positions`` where given, else of ``positions``;
+    ``heavy``: (atoms, their bonds) where they are not those of ``spec``)."""
     x, box = np.asarray(positions, dtype=float), np.asarray(box, dtype=float)
-    centre = _centre(x if centre_positions is None else np.asarray(centre_positions, dtype=float), box,
-                     spec.ligand_heavy, spec.ligand_heavy_bonds)
+    atoms, bonds = heavy if heavy is not None else (spec.ligand_heavy, spec.ligand_heavy_bonds)
+    centre = _centre(x if centre_positions is None else np.asarray(centre_positions, dtype=float), box, atoms, bonds)
     rows = np.asarray(ghosts, dtype=np.int64)
     return bool((np.linalg.norm(nearest_image(x[np.asarray(spec.waters)[rows, 0]] - centre, box), axis=1)
                  < float(spec.radius_nm)).any())

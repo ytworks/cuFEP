@@ -135,7 +135,7 @@ class HybridLeg:
 
 
 def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=None, centre_positions=None,
-                check_start: bool = True):
+                check_start: bool = True, heavy_atoms=None):
     """The grand canonical moves of water of a hybrid System (all its waters interacting): their specification
     (:func:`cufep.sampling.gcmc.gcmc_spec`), with the ligand of the stand-in energy at fixed lambdas, its atoms with
     the parameters of A and those unique to B with the parameters of B (the module's docstring; the alchemical water
@@ -145,7 +145,10 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
     holds the mapped atoms where A has them), each molecule whole along its bonds (``end_heavy_bonds``). The ghosts
     of the start are the waters farthest from the centre of the ligand of ``centre_positions``
     (:func:`centre_positions_of`), one for both directions too (eleventh review of PR #19). ``check_start`` False:
-    they are not checked against the sphere here (:func:`build_leg` checks the ghosts it chooses for the leg)."""
+    they are not checked against the sphere here (:func:`build_leg` checks the ghosts it chooses for the leg).
+    ``heavy_atoms``: the heavy atoms of the hybrid ligand whose centre the sphere is around, those heavy in either end
+    state (:func:`hybrid_heavy_atoms`; thirteenth review of PR #19: from the elements of A alone, an oxygen of A mapped
+    onto a hydrogen of B was in the centre one way and not the other)."""
     import dataclasses
 
     from cufep.sampling.gcmc import GcmcError, gcmc_spec
@@ -159,7 +162,7 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
                          rcfg.thermodynamics.temperature_K, g.interval_ps, g.attempts, g.batch_size,
                          g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters),
                          radius_from_nm=end_heavy_nm, radius_from_bonds=end_heavy_bonds, bonds=hybrid.bonds,
-                         centre_positions=centre_positions, check_start=check_start)
+                         centre_positions=centre_positions, check_start=check_start, heavy_atoms=heavy_atoms)
     except GcmcError as exc:
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {exc}") from exc
     charge, sigma, epsilon = (np.array(v, dtype=float) for v in (spec.charge, spec.sigma, spec.epsilon))
@@ -219,7 +222,7 @@ def _digests_with_ghosts(system, waters, ghosts, cell) -> set[str]:
     return out
 
 
-def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, system=None):
+def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, system=None, earlier_heavy=None):
     """The moves of a leg (``gcmc``, its ghosts of the start counted from the centre midway between the end states,
     ``start_centre`` "midway") with the ghosts its samples or its pre-equilibration were made with, and the centres
     they may have been counted from: ``(moves, centres)``. Earlier versions counted them from the centre of the hybrid
@@ -234,7 +237,9 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
     else those of ``gcmc``. The centres: the one the record names where it has these ghosts; else every centre whose
     rule gives them (thirteenth review of PR #19: where both rules give the same ghosts, the leg of an earlier version
     was checked around the new centre and refused); both for ghosts of neither rule. A record is a set of numbers of
-    waters of the leg (:func:`cufep.engine.leg.ghost_record`), compared as such."""
+    waters of the leg (:func:`cufep.engine.leg.ghost_record`), compared as such. ``earlier_heavy``: (atoms, bonds)
+    of the heavy atoms earlier versions took the centre of (those of the elements of A), where they are not those of
+    ``gcmc``."""
     import dataclasses
 
     from cufep.engine.leg import EQUIL_GHOSTS, ghost_record, starts_anew
@@ -243,8 +248,8 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
     leg_dir = Path(leg_dir)
     record = leg_dir / EQUIL_GHOSTS
     data = ghost_record(record, len(gcmc.waters)) if record.exists() else None
-    earlier = farthest_waters(gcmc.waters, positions, box, gcmc.ligand_heavy, len(gcmc.ghosts),
-                              gcmc.ligand_heavy_bonds)
+    heavy, bonds = earlier_heavy if earlier_heavy is not None else (gcmc.ligand_heavy, gcmc.ligand_heavy_bonds)
+    earlier = farthest_waters(gcmc.waters, positions, box, heavy, len(gcmc.ghosts), bonds)
     rules = {"midway": sorted(int(i) for i in gcmc.ghosts), "ligand": sorted(int(i) for i in earlier)}
 
     def chosen(ghosts):
@@ -276,21 +281,29 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
 
 
 def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | None = None,
-                reschedule: bool = False):
+                reschedule: bool = False, heavy_atoms=None):
     """The grand canonical moves of water of a leg (:func:`hybrid_gcmc`, the sphere from both end states
     ``end_heavy``) with the ghosts of the start it has (:func:`ghosts_of_the_leg`; with ``leg_dir``), checked against
     the sphere around the centre they were counted from: ``midway`` (:func:`centre_positions_of`) or, for those of an
     earlier version, the hybrid (twelfth review of PR #19: they were checked around the new centre before they were
     taken up, and a leg with valid ghosts and samples was refused). WorkflowError where a ghost is in the sphere."""
     from cufep.sampling.gcmc import start_ghosts_in_sphere
+    from cufep.sampling.relocation_mc import heavy_bonds
 
-    gcmc = hybrid_gcmc(rcfg, hybrid, topology, box, *end_heavy, centre_positions=midway, check_start=False)
+    gcmc = hybrid_gcmc(rcfg, hybrid, topology, box, *end_heavy, centre_positions=midway, check_start=False,
+                       heavy_atoms=heavy_atoms)
+    # the heavy atoms of earlier versions: of the elements of the topology (those of A for its atoms)
+    atoms = list(topology.atoms())
+    of_a = np.array([i for i in sorted(hybrid.ligand_atoms)
+                     if atoms[i].element is not None and atoms[i].element.symbol != "H"], dtype=np.int64)
+    earlier_heavy = (of_a, heavy_bonds(topology, of_a, hybrid.bonds))
     centres = ("midway",)
     if leg_dir is not None:
-        gcmc, centres = ghosts_of_the_leg(gcmc, hybrid.positions, box, leg_dir, reschedule, hybrid.system)
-    of = {"midway": midway, "ligand": hybrid.positions}
+        gcmc, centres = ghosts_of_the_leg(gcmc, hybrid.positions, box, leg_dir, reschedule, hybrid.system,
+                                          earlier_heavy)
+    of = {"midway": (midway, None), "ligand": (hybrid.positions, earlier_heavy)}
     # the ghosts pass where the sphere around one of the centres they may have been counted from holds none of them
-    if all(start_ghosts_in_sphere(gcmc, hybrid.positions, box, gcmc.ghosts, of[name]) for name in centres):
+    if all(start_ghosts_in_sphere(gcmc, hybrid.positions, box, gcmc.ghosts, *of[name]) for name in centres):
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {len(gcmc.ghosts)} ghost waters would "
                             "take waters of the sphere itself")
     return gcmc
@@ -370,6 +383,17 @@ def hot_region_rule_of(rcfg, edge_dir: Path, leg: str) -> dict:
     now = perturbed_region(edge_dir, a, b, end["core_map"], unique_b)
     before = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, rule=1)
     return {} if now == before else {"hot_region_rule": HOT_REGION_RULE}
+
+
+def hybrid_heavy_atoms(hybrid, a: dict, b: dict) -> list[int]:
+    """The atoms of the hybrid ligand (hybrid indices) that are heavy in either end state, by the elements of the
+    topologies of A and B: the same atoms whichever end is A."""
+    out = set()
+    for end, to_hybrid in ((a, hybrid.a_to_hybrid), (b, hybrid.b_to_hybrid)):
+        atoms = list(end["topology"].atoms())
+        out |= {to_hybrid[int(i)] for i in end["ligand"]
+                if atoms[int(i)].element is not None and atoms[int(i)].element.symbol != "H"}
+    return sorted(out)
 
 
 def centre_positions_of(hybrid, a: dict, b: dict) -> np.ndarray:
@@ -502,7 +526,7 @@ def build_leg(rcfg, edge_dir: Path, leg: str, leg_dir: Path | None = None, resch
         from cufep.sampling.gcmc import ghosts_off
 
         gcmc = start_moves(rcfg, hybrid, topology, np.asarray(a["box"], dtype=float), end_states_heavy(a, b),
-                           centre_positions_of(hybrid, a, b), leg_dir, reschedule)
+                           centre_positions_of(hybrid, a, b), leg_dir, reschedule, hybrid_heavy_atoms(hybrid, a, b))
         # every MD of the leg is of the System with the ghosts of the start switched off
         ghosts_off(hybrid.system, gcmc.waters[gcmc.ghosts].reshape(-1))
     xml = mm.XmlSerializer.serialize(hybrid.system)
