@@ -108,6 +108,7 @@ def test_no_gpu_is_ever_given_more_than_it_takes(seed):
                 if rng.random() < 0.5:
                     d.phase = "sampling"
                     d.max_workers = rng.randint(2, 40)
+                    d.pinning = rng.random() < 0.3       # a request for workers it cannot move afterwards
                 elif d.phase == "sampling":
                     d.phase, d.max_workers, d.devices = "serial", 1, d.devices[:1]
                 d.work = rng.uniform(0.001, 5.0)
@@ -331,6 +332,25 @@ def test_the_clients_of_cufeps_mps_daemon_do_not_carry_the_device_mask(monkeypat
 
 
 # ---- review of PR 1 on 64751ca: the GPUs and processes of the precalculation, and of the CPU ---------------
+
+def test_a_request_for_workers_that_cannot_move_gets_one_for_every_window_first():
+    """The owner, 2026-11-26 (the A2A relative run): precalculations of adaptive lambda scheduling that asked for
+    their workers while four replica exchanges filled the eight GPUs got one worker, by their share of the work (nine
+    windows of 500 ps against the nanoseconds of the replica exchanges), kept it as they cannot move their workers, and
+    ran their nine windows one after another for an hour. Such a request gets a worker for every window first, the
+    replica exchanges the rest (they move their workers at their next iteration); no GPU takes more than it can."""
+    gpus = list(range(8))
+    exchanges = [Demand(job=j, phase="sampling", factor=4, max_workers=10, work=50.0, devices=[j, j + 4])
+                 for j in range(4)]
+    precalculation = Demand(job=4, phase="sampling", factor=4, max_workers=9, work=4.5, devices=[4], pinning=True)
+    plan = allocate(gpus, exchanges + [precalculation])
+    assert len(plan[4]) == 9
+    assert all(len(plan[j]) >= 1 for j in range(4))
+    assert max(_loads(plan, exchanges + [precalculation], gpus).values()) <= 1.0 + 1e-9
+    # once it has them it is pinned, and keeps them while the others share what is left
+    precalculation.phase, precalculation.pinning, precalculation.devices = "pinned", False, plan[4]
+    assert allocate(gpus, exchanges + [precalculation])[4] == plan[4]
+
 
 def test_the_precalculation_keeps_the_gpus_it_runs_on():
     """P2: the precalculation keeps its workers where they started, but the scheduler moved them on paper when a

@@ -174,6 +174,9 @@ class Demand:
     max_workers: int = 1                 # sampling: the number of replicas
     work: float = 1.0                    # remaining work in arbitrary units; only ratios matter
     devices: list[int] = field(default_factory=list)     # GPU of each current worker
+    #: sampling: a request for workers the job cannot move once it has them (it becomes pinned): the
+    #: precalculation of adaptive lambda scheduling, the start of the windows, the trajectories of a restraint
+    pinning: bool = False
 
 
 def allocate(gpus: list[int], demands: list[Demand], strict: bool = False) -> dict[int, list[int]] | None:
@@ -183,7 +186,12 @@ def allocate(gpus: list[int], demands: list[Demand], strict: bool = False) -> di
     worker first: a job in a part that cannot be spread out (plain MD, analysis) keeps the GPU it
     runs on, a sampling job keeps one of its GPUs if there is room. What is left is shared among
     the sampling jobs in proportion to their remaining work, at most one worker per replica, and
-    a worker is placed only where it fits. With ``strict`` the result is None if the first
+    a worker is placed only where it fits. A request for workers the job cannot move afterwards
+    (``pinning``) gets one for every replica first, as far as the capacity goes, and is placed first:
+    it keeps what it gets until it is done, and the leg waits for it, while the replica exchanges move
+    their workers at their next iteration (the owner, 2026-11-26: precalculations of A2A that asked
+    while the GPUs were full got one worker by their share of the work and ran their nine windows one
+    after another for an hour). With ``strict`` the result is None if the first
     workers do not fit; the scheduler starts a job only when they do, so that no GPU ever holds
     more than it can take (without MPS: one worker per GPU; review of PR 1). Without
     ``strict`` a first worker that does not fit goes to the emptiest GPU, which only a state the
@@ -233,7 +241,11 @@ def allocate(gpus: list[int], demands: list[Demand], strict: bool = False) -> di
     # 2. the rest of the capacity in proportion to the remaining work, at most one worker per replica
     sampling = [x for x in demands if x.phase == "sampling"]
     share = {d.job: 0.0 for d in sampling}
-    open_jobs, capacity = list(sampling), max(0.0, sum(max(0.0, v) for v in free.values()))
+    capacity = max(0.0, sum(max(0.0, v) for v in free.values()))
+    for d in sorted((x for x in sampling if x.pinning), key=lambda x: x.job):
+        share[d.job] = min((d.max_workers - 1) / d.factor, capacity)
+        capacity -= share[d.job]
+    open_jobs = [x for x in sampling if not x.pinning]
     while open_jobs:
         total = sum(max(d.work, 1e-12) for d in open_jobs)
         capped = [d for d in open_jobs
@@ -249,7 +261,7 @@ def allocate(gpus: list[int], demands: list[Demand], strict: bool = False) -> di
     count = {d.job: int(min(d.max_workers, 1 + int(share[d.job] * d.factor + 1e-9))) for d in sampling}
 
     # 3. place them: keep workers where they are if there is room, then the emptiest GPU that has room
-    for d in sorted(sampling, key=lambda x: -count[x.job] / x.factor):
+    for d in sorted(sampling, key=lambda x: (not x.pinning, -count[x.job] / x.factor)):
         cost, placed = 1.0 / d.factor, list(out[d.job])
         spread = -(-count[d.job] // len(gpus))
         rest = list(d.devices)
@@ -460,7 +472,8 @@ def _run_started_jobs(jobs: list[Job], gpus: list, log, oversubscription, mps: b
 
     def demands() -> list[Demand]:
         return [Demand(job=i, phase=r["phase"], factor=jobs[i].oversubscription, max_workers=r["max_workers"],
-                       work=r["work"], devices=list(r["devices"])) for i, r in running.items()]
+                       work=r["work"], devices=list(r["devices"]), pinning=bool(r.get("pinning")))
+                for i, r in running.items()]
 
     def rebalance(reason: str) -> None:
         plan = allocate(gpus, demands())
@@ -528,9 +541,10 @@ def _run_started_jobs(jobs: list[Job], gpus: list, log, oversubscription, mps: b
                         msg = r["conn"].recv()
                         if msg.get("event") == "sampling":
                             r.update(phase="sampling", max_workers=int(msg["replicas"]), work=float(msg["work"]),
-                                     waiting_for_devices=True)
+                                     waiting_for_devices=True, pinning=bool(msg.get("pinned")))
                             rebalance(f"{jobs[i].tag} starts "
                                       + (msg.get("what") or f"sampling {msg['replicas']} lambda windows"))
+                            r["pinning"] = False
                             if msg.get("pinned"):
                                 # it cannot move them: they stay its own until it asks again (review of PR 1)
                                 r["phase"] = "pinned"
