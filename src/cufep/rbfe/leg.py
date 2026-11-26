@@ -266,7 +266,8 @@ def recorded_form_of_the_system(leg_dir: Path, xml: str, system, cell) -> str:
     The two differ in that default alone, which is not the cell a Context of the leg runs in (each is given its cell)
     but sets its PME grid (stock OpenMM chooses the grid from the default cell): a leg goes on with the form it was
     made with, so that its samples, its checkpoint and the checksum they record are of one System (sixth and seventh
-    reviews of PR #19). The cell of the samples is checked itself (:func:`cufep.engine.leg.checkpoint_cell_problem`)."""
+    reviews of PR #19), and ``system`` is left in that form, for the Contexts the leg makes of it (eighth review).
+    The cell of the samples is checked itself (:func:`cufep.engine.leg.checkpoint_cell_problem`)."""
     import hashlib
 
     import openmm as mm
@@ -282,8 +283,12 @@ def recorded_form_of_the_system(leg_dir: Path, xml: str, system, cell) -> str:
     before = system.getDefaultPeriodicBoxVectors()
     system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(cell, dtype=float)])
     other = mm.XmlSerializer.serialize(system)                  # as eb36e30 and 08d58d5 made it
+    if hashlib.sha256(other.encode()).hexdigest() == digest:
+        # ``system`` stays in that form: the Contexts the leg makes of it itself (start configurations on one
+        # device) have the PME grid of the samples too (eighth review of PR #19)
+        return other
     system.setDefaultPeriodicBoxVectors(*before)
-    return other if hashlib.sha256(other.encode()).hexdigest() == digest else xml
+    return xml
 
 
 def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:

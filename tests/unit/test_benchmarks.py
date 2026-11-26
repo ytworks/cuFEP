@@ -939,3 +939,31 @@ def test_a_summary_of_states_alone_is_reported_as_the_run_with_its_network(tmp_p
     report("a2a", tmp_path / "alone")
     assert (tmp_path / "with" / "rbfe_report_ligands.csv").read_text() == (
         tmp_path / "alone" / "rbfe_report_ligands.csv").read_text()
+
+
+def test_a_partial_summary_of_states_of_an_earlier_version_gives_no_experiment_within_a_compound(tmp_path):
+    """Eighth review of PR #19 (P2): a summary of a6c4dda whose edges did not yet connect the states (no compounds, no
+    experiment_of_compound) was taken for a run without states: the edge between 4jS and 4jR of 4j got an experimental
+    ddG of 0.00 from the experiment of their compound. The states come from the edges whose experiment is that of the
+    compounds (exp_compounds) and from the states of the benchmark; a state whose compound is still not known is
+    compared with nothing."""
+    from cufep.benchmarks.rbfe import read_states, report
+
+    states = read_states("a2a")
+    exp = {s: float(r["exp_dg_kcal_mol"]) for s, r in states.items()}
+    summary = {"ligands": list(states) + ["unknown"], "cycle_closures": [], "dg": None,
+               "notes": ["the edges with a ddG do not connect all ligands: no dG"],
+               "experiment_kcal_mol": {**exp, "unknown": -9.0},
+               "edges": [{"edge": "4h~4jS", "ligand_a": "4h", "ligand_b": "4jS", "ddg": -0.5, "se": 0.3,
+                          "exp_ddg": exp["4jS"] - exp["4h"], "exp_ddg_of": "the compounds",
+                          "exp_compounds": ["4h", "4j"], "not_reliable": []},
+                         {"edge": "4jS~4jR", "ligand_a": "4jS", "ligand_b": "4jR", "ddg": 0.4, "se": 0.3,
+                          "not_reliable": []},
+                         {"edge": "4jS~unknown", "ligand_a": "4jS", "ligand_b": "unknown", "ddg": 0.2, "se": 0.3,
+                          "not_reliable": []}]}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    text = report("a2a", tmp_path)
+    rows = {r["edge"]: r for r in csv.DictReader((tmp_path / "rbfe_report_edges.csv").open())}
+    assert rows["4jS~4jR"]["exp_ddg"] == "" and rows["4jS~unknown"]["exp_ddg"] == ""
+    assert float(rows["4h~4jS"]["exp_ddg"]) == pytest.approx(exp["4jS"] - exp["4h"])
+    assert "States whose compound the summary does not record (unknown)" in text

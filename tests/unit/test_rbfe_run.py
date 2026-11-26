@@ -1397,14 +1397,39 @@ def test_a_checkpoint_of_08d58d5_without_samples_goes_on_with_start_configuratio
     with np.load(leg_dir / "equil.npz") as eq:
         built.hybrid.system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in alchemical_box(eq, True)])
     digest = hashlib.sha256(mm.XmlSerializer.serialize(built.hybrid.system).encode()).hexdigest()
+    # (eighth review, P2) the checkpoint is held to the conditions it was made under, start configurations or not: under
+    # other ones (exchange: none), or with a System of neither form, it is refused and its record kept
+    import shutil
+
+    from cufep.rbfe.leg import recorded_form_of_the_system
+    from cufep.sampling.storage import stored_conditions
+
+    other = rcfg.model_validate({**rcfg.model_dump(mode="json"),
+                                 "sampling": {**rcfg.model_dump(mode="json")["sampling"], "exchange": "none"}})
+    for name, cfg, conditions in (("exchange", other, attrs["conditions"]),
+                                  ("neither", rcfg, {**attrs["conditions"], "system_sha256": "0" * 64})):
+        root = tmp_path / name
+        shutil.copytree(edge_dir.parent, root / "edges")
+        dir_of_leg = root / "edges" / "toluene~phenol" / "repeat_0" / "complex"
+        edit_attributes(dir_of_leg / "hrex", set={"conditions": conditions})
+        refused = run_hybrid_leg_safe(EdgeLegJob(
+            edge="toluene~phenol", leg="complex", repeat=0, edge_dir=str(root / "edges" / "toluene~phenol"),
+            devices=[None], config=cfg.model_dump(mode="json"), production_ns=cfg.sampling.production_ns,
+            inline=True))
+        assert "made under other conditions" in refused.get("error", ""), name
+        assert stored_layout(dir_of_leg / "hrex")[1]["conditions"] == conditions, name
     edit_attributes(leg_dir / "hrex", set={"conditions": {**attrs["conditions"], "system_sha256": digest}})
+    # (eighth review, P3) the System is left in the form it was found in, for the Contexts the leg makes of it on one
+    # device (start configurations made again)
+    with np.load(leg_dir / "equil.npz") as eq:
+        fixed = alchemical_box(eq, True)
+    fresh = build_leg(rcfg, edge_dir, "complex")
+    chosen = recorded_form_of_the_system(leg_dir, fresh.xml, fresh.hybrid.system, fixed)
+    assert hashlib.sha256(chosen.encode()).hexdigest() == digest
+    assert hashlib.sha256(mm.XmlSerializer.serialize(fresh.hybrid.system).encode()).hexdigest() == digest
     # (seventh review, the reply) with its start configurations too: the samples would take the conditions of the
     # run as new and the hybrid of the preparation, another PME grid where the default cell sets it. Both go on with
     # the System of the checkpoint, and the samples record its checksum
-    import shutil
-
-    from cufep.sampling.storage import stored_conditions
-
     kept = tmp_path / "kept"
     shutil.copytree(edge_dir.parent, kept / "edges")
     (leg_dir / "start_configs.npz").unlink()
@@ -1450,3 +1475,13 @@ def test_an_archive_that_adds_the_pre_equilibration_records_it_before_it_moves_a
     assert (stage / "equil.npz").exists() and (leg_dir / EQUIL_GHOSTS).exists()
     done = archive_leg(leg_dir)                                       # the next call: equil.npz is no longer there
     assert (done / EQUIL_GHOSTS).exists() and (done / "equil.npz").exists() and not (leg_dir / EQUIL_GHOSTS).exists()
+    # (eighth review, P3) the state 9d48578 could leave: recorded without the pre-equilibration, which that version
+    # moved all the same; equil.npz in the archive alone, the record of its ghosts in the leg
+    for name in ("schedule.yaml", EQUIL_GHOSTS):
+        (leg_dir / name).write_text("{}")
+    stage = leg_dir / ".previous_2.partial"
+    stage.mkdir()
+    (stage / ARCHIVE_RECORD).write_text(json.dumps({"pre_equilibration": False}))
+    (stage / "equil.npz").write_text("the pre-equilibration moved")
+    done = archive_leg(leg_dir)
+    assert done.name == "previous_2" and (done / EQUIL_GHOSTS).exists() and not (leg_dir / EQUIL_GHOSTS).exists()

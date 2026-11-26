@@ -553,6 +553,15 @@ class LegStorage:
         samples are read and analysed; they are not continued (:meth:`refuse_unrecorded`).
         """
         if self.n_iterations == 0:
+            # the checkpoint of the start, written before the first sample, is continued from (restore): it is held
+            # to the conditions it was made under, as samples are; without it the conditions are those of this run
+            # (eighth review of PR #19: other conditions were written over those of the checkpoint and it was
+            # restored under them)
+            stored = self.attributes().get("conditions")
+            if self.ckpt_path.exists() and isinstance(stored, dict):
+                differing = conditions_differences(stored, conditions)
+                if differing:
+                    raise other_conditions(0, self.dir, differing)
             self._set_attrs({"conditions": conditions})
             return "new"
         stored = self.attributes().get("conditions")

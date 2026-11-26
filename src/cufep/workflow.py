@@ -2334,13 +2334,13 @@ def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
     staging = sorted(leg_dir.glob(".previous_*.partial"))
     if staging:
         record = staging[0] / ARCHIVE_RECORD
-        recorded = (_read_json(record) or {}).get("pre_equilibration") if record.exists() else None
-        if recorded is None:
-            # begun by a version that wrote no record (eb36e30 to 08d58d5): a pre-equilibration in the archive and not
-            # in the leg was moved, not copied, and the record of its ghost waters goes with it (sixth review of
-            # PR #19)
-            recorded = (staging[0] / "equil.npz").exists() and not (leg_dir / "equil.npz").exists()
-        pre_equilibration = bool(pre_equilibration or recorded)
+        recorded = bool((_read_json(record) or {}).get("pre_equilibration")) if record.exists() else False
+        # a pre-equilibration in the archive and not in the leg was moved, not copied, and the record of its ghost
+        # waters goes with it: whatever the record says (sixth and eighth reviews of PR #19: begun by a version that
+        # wrote no record, or by 9d48578, which added the pre-equilibration to an archive recorded without it and did
+        # not record that)
+        moved = (staging[0] / "equil.npz").exists() and not (leg_dir / "equil.npz").exists()
+        pre_equilibration = bool(pre_equilibration or recorded or moved)
         if bool(recorded) != pre_equilibration or not record.exists():
             # what this call sets aside, recorded before it moves anything: a call that adds the pre-equilibration and
             # stops after it moved equil.npz is completed with it (seventh review of PR #19)

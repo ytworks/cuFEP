@@ -175,18 +175,36 @@ def edge_errors(pred, exp) -> dict[str, float | None]:
     return {"n": len(err), "rmse": float(np.sqrt(np.mean(err ** 2))), "mue": float(np.mean(np.abs(err)))}
 
 
-def states_of_a_summary(summary: dict) -> dict | None:
+def states_of_a_summary(summary: dict, name: str | None = None) -> dict | None:
     """The states of the compounds (``{"compound": state -> compound}``) as a summary of a relative run records them,
     for a directory that keeps the summary without its network (seventh review of PR #19: the report of an A2A
     summary alone compared the experiment of compounds with the dG of their 29 states, and an edge between two states
     of one compound with an experimental ddG of 0): the compound of each state whose experimental value it has
-    (``experiment_of_compound``), else the states the dG of each compound combines (``compounds``). None for a run
-    without states."""
+    (``experiment_of_compound``), the states the dG of each compound combines (``compounds``), and the compounds of
+    the two ends of an edge whose experiment is that of the compounds (``exp_compounds``; a summary of an earlier
+    version of a network that did not yet connect its states has neither of the others, eighth review). A state still
+    without a compound is taken from the states of the benchmark ``name`` where it is one of them. None for a run
+    without states; a state whose compound is not known is not in the mapping, and the report leaves it out of what
+    it compares with experiment."""
     compound_of = dict(summary.get("experiment_of_compound") or {})
     for compound, value in ((summary.get("compounds") or {}).get("values") or {}).items():
         for state in (value or {}).get("weights") or {}:
             compound_of.setdefault(state, compound)
-    return {"compound": compound_of} if compound_of else None
+    of_states = False
+    for edge in summary.get("edges") or []:
+        if edge.get("exp_ddg_of") == "the compounds":
+            of_states = True
+            ends = edge.get("exp_compounds") or []
+            if len(ends) == 2:
+                compound_of.setdefault(edge["ligand_a"], ends[0])
+                compound_of.setdefault(edge["ligand_b"], ends[1])
+    if not compound_of and not of_states:
+        return None
+    if name is not None and _entry(name).get("rbfe_states"):
+        for state, row in read_states(name).items():
+            if state in (summary.get("ligands") or []):
+                compound_of.setdefault(state, row["compound"])
+    return {"compound": compound_of}
 
 
 def analysed_summary(run_dir: Path) -> dict:
@@ -219,14 +237,16 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     record = json.loads(network.read_text()) if network.exists() else {}
     # the states of the compounds as the run recorded them, whether its network gave dG or not (review of PR #19: an
     # incomplete network lost them, and an edge between two states of one compound got an experimental ddG of 0)
-    states = record.get("states") or states_of_a_summary(summary)
+    states = record.get("states") or states_of_a_summary(summary, name)
     compound_of = dict((states or {}).get("compound") or {})
     compounds = summary.get("compounds")
     published = published_edges(name, by_state=bool(states))
     experiment = {k: float(v) for k, v in (summary.get("experiment_kcal_mol") or {}).items()}
+    unmapped = [s for s in summary["ligands"] if states and s not in compound_of]
     if states:
-        # the dG are those of the compounds, each from its states (system.states)
-        names_of = list(dict.fromkeys(compound_of[s] for s in summary["ligands"]))
+        # the dG are those of the compounds, each from its states (system.states); a state whose compound is not
+        # known is compared with nothing (eighth review of PR #19)
+        names_of = list(dict.fromkeys(compound_of[s] for s in summary["ligands"] if s in compound_of))
         values = (compounds or {}).get("values") or {}
         experiment_of = {compound_of[s]: v for s, v in experiment.items() if s in compound_of}
     else:
@@ -246,8 +266,9 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         exp_ddg = e.get("exp_ddg")
         if exp_ddg is None and experiment.get(a) is not None and experiment.get(b) is not None:
             exp_ddg = experiment[b] - experiment[a]
-        if compound_of and compound_of.get(a) == compound_of.get(b):
-            # two states of one compound: experiment has no ddG between them (review of PR #19: 0 in the figure)
+        if states and (a not in compound_of or b not in compound_of or compound_of[a] == compound_of[b]):
+            # two states of one compound: experiment has no ddG between them (review of PR #19: 0 in the figure);
+            # a state whose compound is not known: not compared (eighth review)
             exp_ddg = None
         overlap = e.get("lowest_overlap") or {}
         edges.append({"edge": e["edge"], "ligand_a": a, "ligand_b": b, "exp_ddg": exp_ddg,
@@ -280,7 +301,10 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
              "RMSE, R^2 and Kendall tau do not depend on a shift.", ""]
     for note in summary.get("notes") or []:
         lines.append(f"Note of the run: {note}")
-    if summary.get("notes"):
+    if unmapped:
+        lines.append(f"States whose compound the summary does not record ({', '.join(unmapped)}) are compared with "
+                     "nothing (the experiment measures compounds).")
+    if summary.get("notes") or unmapped:
         lines.append("")
 
     lines += ["## Per ligand (kcal/mol)", "",
@@ -347,7 +371,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         # experiment against the ddG of the pairs of compounds that the edges join (review of PR #19: a state edge
         # and the experiment of its compounds are not one quantity, e.g. kT ln 2 for two equal binding modes)
         pairs = list(dict.fromkeys(tuple(sorted((compound_of[r["ligand_a"]], compound_of[r["ligand_b"]])))
-                                   for r in edges if compound_of[r["ligand_a"]] != compound_of[r["ligand_b"]]))
+                                   for r in edges if r["ligand_a"] in compound_of and r["ligand_b"] in compound_of
+                                   and compound_of[r["ligand_a"]] != compound_of[r["ligand_b"]]))
         # the experimental value of the table of compounds (that of the run, else of the benchmark; second review)
         dg_of = {r["ligand"]: r for r in ligands}
         for ca, cb in pairs:
