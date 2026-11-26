@@ -604,3 +604,33 @@ def test_the_experiment_of_a_state_in_ligands_csv_is_said_to_be_that_of_its_comp
     write_results(plain, combine_network(plain, ["a", "b"], [("a", "b")], 1, {"a": -9.0}))
     rows = {r["ligand"]: r for r in csv.DictReader((plain / "ligands.csv").open())}
     assert (rows["a"]["exp_dg_of"], rows["b"]["exp_dg_of"]) == ("the ligand", "")
+
+
+def test_a_mapping_whose_dummy_atoms_join_two_mapped_atoms_is_refused(tmp_path):
+    """Eleventh review of PR #19 (P1): propane and 2,2-difluoropropane with the custom core [CH3] map the two methyl
+    carbons alone; the central carbon of each end, unique to it, stays bonded to both in the hybrid, and its bonds and
+    angle hold them at both ends of the transformation. Such a mapping is refused (and left out of the networks LOMAP
+    plans); a mapping whose unique atoms hang from one mapped atom is taken."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem, rdMolAlign
+    from rdkit.Geometry import Point3D
+
+    from cufep.prep.ligand import load_ligands
+    from cufep.rbfe.mapping import MappingError, MappingSettings, bridging_dummies, kartograf_mapping
+
+    a = Chem.AddHs(Chem.MolFromSmiles("CCC"))
+    AllChem.EmbedMolecule(a, randomSeed=3)
+    b = Chem.AddHs(Chem.MolFromSmiles("CC(F)(F)C"))
+    xyz = a.GetConformer().GetPositions()
+    AllChem.EmbedMolecule(b, randomSeed=3, coordMap={0: Point3D(*xyz[0]), 1: Point3D(*xyz[1]), 4: Point3D(*xyz[2])})
+    rdMolAlign.AlignMol(b, a, atomMap=[(0, 0), (1, 1), (4, 2)])
+    writer = Chem.SDWriter(str(tmp_path / "l.sdf"))
+    for name, mol in (("propane", a), ("difluoropropane", b)):
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    propane, difluoro = load_ligands(tmp_path / "l.sdf")
+    with pytest.raises(MappingError, match="unique to A are bonded to the mapped atoms"):
+        kartograf_mapping(propane, difluoro, MappingSettings(core_smarts="[CH3]"))
+    whole = kartograf_mapping(propane, difluoro, MappingSettings())
+    assert bridging_dummies(propane.to_rdkit(), difluoro.to_rdkit(), whole) == []

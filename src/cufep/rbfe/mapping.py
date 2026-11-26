@@ -61,6 +61,35 @@ def core_atoms(molecule, smarts: str) -> set[int]:
     return {int(i) for match in matches for i in match}
 
 
+def bridging_dummies(molecule_a, molecule_b, mapping: dict[int, int]) -> list[str]:
+    """The groups of atoms unique to one ligand (connected, of an RDKit molecule with its hydrogens) bonded to two or
+    more mapped atoms of it. The hybrid keeps the bonds and angles of such a group with the mapped atoms at every
+    lambda, so that at the end state without it it still holds the mapped atoms at its distances (eleventh review of
+    PR #19: propane and 2,2-difluoropropane with the custom core ``[CH3]`` mapped the two methyl carbons, and the
+    central carbon of each end tied them at both ends of the transformation). Empty where there is none."""
+    out = []
+    for name, molecule, mapped in (("A", molecule_a, set(mapping)), ("B", molecule_b, set(mapping.values()))):
+        unique = {atom.GetIdx() for atom in molecule.GetAtoms()} - mapped
+        seen: set[int] = set()
+        for start in sorted(unique):
+            if start in seen:
+                continue
+            group, todo = {start}, [start]
+            while todo:
+                for neighbour in molecule.GetAtomWithIdx(todo.pop()).GetNeighbors():
+                    j = neighbour.GetIdx()
+                    if j in unique and j not in group:
+                        group.add(j)
+                        todo.append(j)
+            seen |= group
+            anchors = sorted({nb.GetIdx() for i in group for nb in molecule.GetAtomWithIdx(i).GetNeighbors()
+                              if nb.GetIdx() in mapped})
+            if len(anchors) > 1:
+                out.append(f"the atoms {sorted(group)} unique to {name} are bonded to the mapped atoms {anchors} of "
+                           f"{name}")
+    return out
+
+
 def within_core(mapping: dict[int, int], core_a: set[int], core_b: set[int]) -> dict[int, int]:
     """The pairs of ``mapping`` whose two atoms are in the custom core of their ligand."""
     return {i: j for i, j in mapping.items() if i in core_a and j in core_b}
@@ -81,6 +110,19 @@ class CoreMapper:
             kept = within_core(dict(m.componentA_to_componentB), core_a, core_b)
             if kept:
                 yield LigandAtomMapping(a, b, componentA_to_componentB=kept)
+
+
+class WithoutBridges:
+    """A mapper whose mappings in which atoms unique to one ligand join two mapped atoms (:func:`bridging_dummies`)
+    are left out, for the network of LOMAP: an edge is planned only with a mapping the preparation takes."""
+
+    def __init__(self, mapper) -> None:
+        self.mapper = mapper
+
+    def suggest_mappings(self, a, b):
+        for m in self.mapper.suggest_mappings(a, b):
+            if not bridging_dummies(a.to_rdkit(), b.to_rdkit(), dict(m.componentA_to_componentB)):
+                yield m
 
 
 def _component(ligand):
@@ -114,6 +156,10 @@ def kartograf_mapping(ligand_a, ligand_b, settings: MappingSettings | None = Non
         if not mapping:
             raise MappingError(f"no atom of {ligand_a.name} and {ligand_b.name} that Kartograf maps is in the custom "
                                f"core {settings.core_smarts!r}")
+    bridges = bridging_dummies(ligand_a.to_rdkit(), ligand_b.to_rdkit(), mapping)
+    if bridges:
+        raise MappingError(f"the mapping of {ligand_a.name} onto {ligand_b.name} cannot be used: {'; '.join(bridges)} "
+                           "(the hybrid would keep their bonds and angles at both ends)")
     return mapping
 
 
@@ -182,7 +228,8 @@ def plan_network(ligands, settings: MappingSettings | None = None, distance_cuto
 
     settings = settings or MappingSettings()
     components = [_component(lig) for lig in ligands]
-    mapper = _mapper(settings) if not settings.core_smarts else CoreMapper(_mapper(settings), settings.core_smarts)
+    mapper = WithoutBridges(_mapper(settings) if not settings.core_smarts
+                            else CoreMapper(_mapper(settings), settings.core_smarts))
     network = generate_lomap_network(components, mappers=[mapper], scorer=default_lomap_score,
                                      distance_cutoff=distance_cutoff, max_path_length=max_path_length,
                                      require_cycle_covering=require_cycle_covering)

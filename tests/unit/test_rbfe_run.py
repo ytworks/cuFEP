@@ -1546,3 +1546,38 @@ def test_an_archive_that_adds_the_pre_equilibration_records_it_before_it_moves_a
     (stage / "equil.npz").write_text("the pre-equilibration moved")
     done = archive_leg(leg_dir)
     assert done.name == "previous_2" and (done / EQUIL_GHOSTS).exists() and not (leg_dir / EQUIL_GHOSTS).exists()
+
+
+def test_both_legs_of_an_edge_that_changes_the_charge_turn_their_water_into_one_ion(tmp_path, monkeypatch):
+    """Eleventh review of PR #19 (P1): each leg chose the ion of its own system for the alchemical water, a K+ that the
+    complex holds and the Na+ of the force field in the solvent, whose ddG then held the difference of their
+    hydration. The ion of the edge is chosen in the complex leg and taken by the solvent leg; a prepared edge whose
+    legs have other ions is refused by the run and left out by the analysis."""
+    from cufep.rbfe import charge
+    from cufep.rbfe.prep import earlier_rules_of, prepare_edge, prepared_edge
+    from cufep.workflow import WorkflowError
+
+    real = charge.ion_parameters
+
+    def of_the_system(system, topology, sign, forcefield):
+        """K+ where the system holds the protein (as a crystal K+ would be), Na+ of the force field elsewhere."""
+        ion = real(system, topology, sign, forcefield)
+        if any(r.name == "ALA" for r in topology.residues()):
+            return {**ion, "name": "K", "sigma_nm": 0.4, "epsilon_kj_mol": 0.5}
+        return ion
+
+    monkeypatch.setattr(charge, "ion_parameters", of_the_system)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir, "[O-]c1ccccc1", "phenolate", 7)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    edge_dir = out_dir / "edges" / "toluene~phenolate"
+    info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    ions = {leg: info["legs"][leg]["alchemical_water"]["ion"] for leg in ("complex", "solvent")}
+    assert ions["complex"]["name"] == "K" and ions["solvent"] == ions["complex"]
+    assert earlier_rules_of(info) == []
+    # a record of an earlier version, each leg with its own ion
+    info["legs"]["solvent"]["alchemical_water"]["ion"] = {**ions["solvent"], "name": "NA", "sigma_nm": 0.2439}
+    (edge_dir / "prep" / "prep.json").write_text(json.dumps(info))
+    assert any("other ions" in why for why in earlier_rules_of(info))
+    with pytest.raises(WorkflowError, match="other ions"):
+        prepared_edge(rcfg, ligands[0], ligands[1], edge_dir, "cube")

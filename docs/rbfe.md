@@ -65,7 +65,9 @@ obtained), with the rule of OpenFE's relative protocol (`explicit_charge_correct
 one water of end state A, the one of the lowest residue index among those with no atom within
 `alchemy.alchemical_water_cutoff_nm` (0.8 nm) of the solutes (the protein, the ligand, lipids), is in end state B an
 ion of the sign of dq: its oxygen takes the charge, sigma and epsilon of the most abundant monovalent ion of that
-sign in the system (Na+ or Cl- of the force field if there is none), its hydrogens charge 0. Both ends then have
+sign in the system of the complex leg (Na+ or Cl- of the force field if there is none), the same ion in both legs
+so that its hydration cancels in the ddG (an edge whose legs have other ions is refused), its hydrogens charge 0.
+Both ends then have
 one total charge. In the hybrid the water's parameters go from A to B as a core atom's do: its charges with
 `lambda_electrostatics_core` (offsets in the NonbondedForce, which the cuPotential plugin carries), the Lennard-Jones
 of each of its pairs interpolated linearly with `lambda_sterics_core` (in the force of the ligand with its
@@ -86,7 +88,9 @@ mapping.
 A custom core (`mapping.core_smarts`, a SMARTS pattern; none by default) restricts the mapping to the atoms in a
 match of the pattern in both ligands: the other atoms are unique to each ligand and change with the soft-core, as a
 group that is "decoupled in the intermediate lambda windows" to sample it better (the custom cores of Ross et al.
-2023, Supplementary section "OX2"). The network of LOMAP is planned from the mappings so restricted.
+2023, Supplementary section "OX2"). The network of LOMAP is planned from the mappings so restricted. A mapping in
+which a group of atoms unique to one ligand is bonded to two or more mapped atoms is refused (its bonds and angles
+would hold the mapped atoms at both ends of the transformation), and LOMAP plans no edge with one.
 
 ### Hybrid topology
 

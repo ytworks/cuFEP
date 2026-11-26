@@ -118,7 +118,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
                        ligand_b.positions_nm()[ligand_b.heavy_atom_indices()]])
     notes: list[str] = []
 
-    def build(with_protein: bool) -> tuple:
+    def build(with_protein: bool, edge_ion: dict | None = None) -> tuple:
         modeller = combine((protein.topology, protein.positions) if with_protein else None, ligand_a)
         membrane_info: dict = {}
         if with_protein:
@@ -161,7 +161,11 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
             env_a = [i for i in range(system_a.getNumParticles()) if i not in in_a]
             env_b = [i for i in range(system_b.getNumParticles()) if i not in in_b]
             to_b = dict(zip(env_a, env_b))
-            ion = ion_parameters(system_a, modeller.topology, int(np.sign(dq)), forcefield)
+            # one ion for the edge, chosen in the complex leg and taken by the solvent leg: the two legs transform
+            # the same particle, so that what it costs in water cancels in the ddG (eleventh review of PR #19: a K+
+            # of the complex against the Na+ of the force field in the solvent left their difference in it)
+            ion = edge_ion if edge_ion is not None else ion_parameters(system_a, modeller.topology, int(np.sign(dq)),
+                                                                       forcefield)
             atoms_b = [to_b[i] for i in atoms_a]
             water_into_ion(system_b, atoms_b, ion)
             water = {"atoms_a": atoms_a, "atoms_b": atoms_b, "ion": ion, "charge_change": dq,
@@ -173,7 +177,8 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
             "box_built_for_backend": cfg.backend.name, "input_chains": dict(protein.input_chains)}
     legs = {}
     for leg, with_protein in (("complex", True), ("solvent", False)):
-        modeller_a, system_a, modeller_b, system_b, membrane_info, water = build(with_protein)
+        edge_ion = (legs.get("complex") or {}).get("alchemical_water", {}).get("ion")
+        modeller_a, system_a, modeller_b, system_b, membrane_info, water = build(with_protein, edge_ion)
         atoms_a, atoms_b = ligand_atom_indices(modeller_a.topology), ligand_atom_indices(modeller_b.topology)
         hydrogens_a = {i for i, a in enumerate(ligand_a.offmol.atoms) if a.atomic_number == 1}
         hydrogens_b = {i for i, a in enumerate(ligand_b.offmol.atoms) if a.atomic_number == 1}
@@ -233,6 +238,12 @@ def earlier_rules_of(info: dict) -> list[str]:
     if ((made_from.get("mapping") or {}).get("core_smarts") is not None
             and made_from.get("custom_core_rule") != PREPARATION_RULES["custom_core"]):
         out.append("its custom core was mapped without the chirality of its atoms")
+    ions = {leg: record["alchemical_water"].get("ion") for leg, record in (info.get("legs") or {}).items()
+            if isinstance(record, dict) and record.get("alchemical_water")}
+    if len({json.dumps(ion, sort_keys=True) for ion in ions.values()}) > 1:
+        # eleventh review of PR #19: each leg chose the ion of its own system
+        out.append("its legs turn the alchemical water into other ions ("
+                   + ", ".join(f"{leg} {(ion or {}).get('name')}" for leg, ion in sorted(ions.items())) + ")")
     return out
 
 
@@ -255,6 +266,10 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
         raise WorkflowError(f"the record of the prepared systems {done} is not a record; remove the directory of the "
                             "edge to prepare it again")
     stored, current = info.get("made_from"), edge_made_from(cfg, ligand_a, ligand_b, box_shape)
+    other_ions = [why for why in earlier_rules_of(info) if why.startswith("its legs turn")]
+    if other_ions:
+        raise WorkflowError(f"the prepared systems in {prep_dir} cannot be used: {other_ions[0]}; remove the "
+                            "directory of the edge to prepare it again")
     if stored != current:
         differing = sorted(k for k in set(stored or {}) | set(current) if (stored or {}).get(k) != current.get(k))
         rules = [k for k in differing if k.endswith("_rule")]
