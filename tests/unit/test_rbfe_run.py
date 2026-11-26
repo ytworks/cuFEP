@@ -380,6 +380,92 @@ def _same_graph_ligands(tmp_path, out_dir):
     return ligands, charges
 
 
+def test_every_hydrogen_of_the_hybrid_is_one_the_plugin_constrains(tmp_path):
+    """The owner, 2026-11-26: six edges of TYK2 and A2A ran on stock OpenMM, as the integrator of the cuPotential
+    plugin constrains three hydrogens of one length on an atom at most (SHAKE) and their hybrids put more on one atom:
+    a methyl group turned between the poses (Kartograf maps atoms within 0.95 A only), and atoms of other elements
+    mapped onto each other with their hydrogens (CH3 and NH2, CH2 and NH). Their hydrogens are mapped onto each other
+    as LOMAP does; such a pair is not mapped, as Kartograf's filter_element_changes leaves it, and Kartograf keeps
+    the largest connected part (the methyl beyond the CH2 too). Kartograf's mapping of them has hydrogens the plugin
+    cannot constrain, the mapping the preparation keeps has none; an edge that needs neither keeps Kartograf's."""
+    import openmm as mm
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    from scipy.spatial.transform import Rotation
+
+    from cufep.prep.ligand import load_ligands
+    from cufep.rbfe.mapping import hydrogens_the_plugin_cannot_constrain
+    from cufep.rbfe.prep import load_end_states, prepare_edge
+
+    out_dir = tmp_path / "run"
+    (out_dir / "cache").mkdir(parents=True)
+
+    def write(directory, molecules) -> list:
+        directory.mkdir(parents=True, exist_ok=True)
+        writer = Chem.SDWriter(str(directory / "ligands.sdf"))
+        for name, mol in molecules:
+            mol.SetProp("_Name", name)
+            writer.write(mol)
+        writer.close()
+        ligands = load_ligands(directory / "ligands.sdf")
+        for lig in ligands:
+            lig.offmol.assign_partial_charges("gasteiger")
+            q = np.array([float(x) for x in lig.offmol.partial_charges.m_as("elementary_charge")])
+            (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
+                json.dumps({"charges": (q - q.mean()).tolist()}))
+        return ligands
+
+    def placed(smiles: str, seed: int):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        AllChem.EmbedMolecule(mol, randomSeed=seed)
+        conf = mol.GetConformer()
+        for k in range(mol.GetNumAtoms()):
+            conf.SetAtomPosition(k, (np.array(conf.GetAtomPosition(k)) + [16.0, 14.0, 16.0]).tolist())
+        return mol
+
+    toluene = placed("Cc1ccccc1", 11)            # 0 the methyl carbon, 1 the ring carbon, 7-9 its hydrogens
+    turned, shifted = Chem.Mol(toluene), Chem.Mol(toluene)
+    xyz = toluene.GetConformer().GetPositions()
+    axis = (xyz[0] - xyz[1]) / np.linalg.norm(xyz[0] - xyz[1])
+    for k, row in enumerate(Rotation.from_rotvec(np.radians(60.0) * axis).apply(xyz[7:10] - xyz[0]) + xyz[0]):
+        turned.GetConformer().SetAtomPosition(7 + k, row.tolist())
+    for k, row in enumerate(xyz + 0.05):
+        shifted.GetConformer().SetAtomPosition(k, row.tolist())
+    ethyl = placed("CCc1ccccc1", 7)              # 0 the methyl, 1 the CH2, 2-7 the ring
+    amine = Chem.RWMol(ethyl)                    # the CH2 turned into an NH, in the same place
+    amine.RemoveAtom(max(nb.GetIdx() for nb in amine.GetAtomWithIdx(1).GetNeighbors() if nb.GetAtomicNum() == 1))
+    amine.GetAtomWithIdx(1).SetAtomicNum(7)
+    amine = amine.GetMol()
+    Chem.SanitizeMol(amine)
+    tol, tol_turned, tol_shifted = write(tmp_path / "toluene", [("toluene", toluene), ("toluene_turned", turned),
+                                                                ("toluene_shifted", shifted)])
+    ethylbenzene, methylaniline = write(tmp_path / "chain", [("ethylbenzene", ethyl), ("methylaniline", amine)])
+    (tmp_path / "aniline").mkdir()
+    _tol, aniline = _ligands(tmp_path / "aniline", out_dir, "Nc1ccccc1", "aniline", 9)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    protein = _protein()
+    for lig_a, lig_b, left_out, changed in ((tol, tol_turned, set(), True), (tol, aniline, {0}, True),
+                                            (ethylbenzene, methylaniline, {0, 1}, True),
+                                            (tol, tol_shifted, set(), False)):
+        edge_dir = out_dir / "edges" / f"{lig_a.name}~{lig_b.name}"
+        info = prepare_edge(rcfg, lig_a, lig_b, protein, edge_dir, "cube", print)
+        kartograf = {int(i): j for i, j in info["mapping_kartograf"].items()}
+        for leg in ("complex", "solvent"):
+            end = load_end_states(edge_dir, leg)
+            systems = [mm.XmlSerializer.deserialize(end[x]["system_xml"]) for x in ("a", "b")]
+            check = [systems[0], systems[1], dict(enumerate(end["a"]["ligand"])), dict(enumerate(end["b"]["ligand"])),
+                     lig_a.to_rdkit(), lig_b.to_rdkit()]
+            kept = {int(i): j for i, j in info["legs"][leg]["mapping"].items()}
+            assert hydrogens_the_plugin_cannot_constrain(kept, *check) == [], (lig_b.name, leg)
+            assert bool(hydrogens_the_plugin_cannot_constrain(kartograf, *check)) == changed, (lig_b.name, leg)
+            assert left_out <= set(kartograf) and left_out.isdisjoint(kept)
+        if lig_b is tol_turned:
+            assert all(info["legs"][leg]["core_atoms"] == 15 > len(kartograf) for leg in ("complex", "solvent"))
+        if not changed:
+            assert info["legs"]["solvent"]["mapping"] == info["mapping_kartograf"]
+            assert not any("Kartograf mapped again" in n or "the closest first" in n for n in info["notes"])
+
+
 def test_each_end_state_has_the_charges_of_its_own_ligand(tmp_path):
     """Review of PR #17: both ligands were registered in one force field, and OpenMM matched B (the same bonded
     graph, as E/Z isomers have) to the template of A: System B had the charges of A, and the ddG was of other end

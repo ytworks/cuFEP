@@ -81,8 +81,10 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     from cufep.rbfe.mapping import (
         bridging_dummies,
         constrained_bond_rule,
+        hydrogens_the_plugin_cannot_constrain,
         kartograf_mapping,
         lomap_score,
+        mapping_for_the_plugin,
         mapping_settings,
     )
     from cufep.workflow import WorkflowError, _check_box, _remove_clashing_waters
@@ -106,6 +108,10 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     settings = mapping_settings(m)
     mapping = kartograf_mapping(ligand_a, ligand_b, settings)
     score = lomap_score(ligand_a, ligand_b, mapping)
+    kartograf = dict(mapping)
+    # the hydrogens of a mapped atom as the integrator of the plugin constrains them (the owner, 2026-11-26: six edges
+    # of TYK2 and A2A ran on stock OpenMM): Kartograf's mapping changed where it would not (mapping_for_the_plugin)
+    mapping, mapping_notes = mapping_for_the_plugin(ligand_a, ligand_b, mapping, settings)
     ffspec = ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water, lipid=cfg.forcefield.lipid,
                             ligand=cfg.forcefield.ligand)
     membrane = bool(cfg.membrane.enabled)
@@ -122,7 +128,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     ionic = cfg.thermodynamics.ionic_strength_M
     heavy = np.vstack([ligand_a.positions_nm()[ligand_a.heavy_atom_indices()],
                        ligand_b.positions_nm()[ligand_b.heavy_atom_indices()]])
-    notes: list[str] = []
+    notes: list[str] = list(mapping_notes)
 
     def build(with_protein: bool, edge_ion: dict | None = None) -> tuple:
         modeller = combine((protein.topology, protein.positions) if with_protein else None, ligand_a)
@@ -200,6 +206,16 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
                                 f"after the atoms of constrained bonds that change left it: {'; '.join(bridges)} (the "
                                 "hybrid would keep their bonds and angles at both ends); map hydrogens on hydrogens "
                                 "only (mapping.map_hydrogens_on_hydrogens_only) or give a custom core")
+        if plugin:
+            # every hydrogen as the integrator of the plugin constrains it, before anything of the edge is written
+            unconstrained = hydrogens_the_plugin_cannot_constrain(
+                kept, system_a, system_b, dict(enumerate(atoms_a)), dict(enumerate(atoms_b)), ligand_a.to_rdkit(),
+                ligand_b.to_rdkit())
+            if unconstrained:
+                raise WorkflowError(f"{ligand_a.name} -> {ligand_b.name}: in the {leg} leg {'; '.join(unconstrained)}: "
+                                    "the integrator of the cuPotential plugin constrains three hydrogens of one length "
+                                    "on an atom at most (SHAKE). Give a custom core (mapping.core_smarts) that leaves "
+                                    "the atom out")
         built[leg] = built[leg] + (atoms_a, atoms_b, kept)
     prep_dir.mkdir(parents=True, exist_ok=True)
     for leg, with_protein in (("complex", True), ("solvent", False)):
@@ -219,7 +235,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
             notes.append(f"{leg} leg: {len(removed)} hydrogen(s) left the mapping because a constrained bond changes "
                          "(OpenFE's rule)")
     info["legs"] = legs
-    info["mapping_kartograf"] = {str(i): j for i, j in sorted(mapping.items())}
+    info["mapping_kartograf"] = {str(i): j for i, j in sorted(kartograf.items())}
     info["notes"] = notes
     publish_text(prep_dir / "ligand_a.json", ligand_a.offmol.to_json())
     publish_text(prep_dir / "ligand_b.json", ligand_b.offmol.to_json())

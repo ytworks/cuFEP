@@ -19,6 +19,8 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
+import numpy as np
+
 
 class MappingError(ValueError):
     """Two ligands cannot be mapped as asked."""
@@ -183,21 +185,28 @@ def _component(ligand):
     return SmallMoleculeComponent.from_rdkit(ligand.to_rdkit(), name=ligand.name)
 
 
-def _mapper(settings: MappingSettings):
+def _mapper(settings: MappingSettings, exclude=frozenset()):
     from kartograf import KartografAtomMapper
+
+    def without_excluded(mol_a, mol_b, mapping: dict[int, int]) -> dict[int, int]:
+        return {i: j for i, j in mapping.items() if (i, j) not in exclude}
 
     return KartografAtomMapper(atom_max_distance=settings.atom_max_distance, atom_map_hydrogens=True,
                                map_hydrogens_on_hydrogens_only=settings.map_hydrogens_on_hydrogens_only,
                                map_exact_ring_matches_only=settings.map_exact_ring_matches_only,
                                allow_partial_fused_rings=settings.allow_partial_fused_rings,
-                               allow_bond_breaks=settings.allow_bond_breaks)
+                               allow_bond_breaks=settings.allow_bond_breaks,
+                               additional_mapping_filter_functions=[without_excluded] if exclude else None)
 
 
-def kartograf_mapping(ligand_a, ligand_b, settings: MappingSettings | None = None) -> dict[int, int]:
-    """Atoms of ligand A -> atoms of ligand B (indices of the molecules), from their poses."""
+def kartograf_mapping(ligand_a, ligand_b, settings: MappingSettings | None = None,
+                      exclude: frozenset = frozenset()) -> dict[int, int]:
+    """Atoms of ligand A -> atoms of ligand B (indices of the molecules), from their poses. ``exclude``: pairs of
+    atoms (A, B) that Kartograf does not map, passed to it as a filter of its own kind
+    (``additional_mapping_filter_functions``); it then keeps, as with its own filters, the largest connected part."""
     settings = settings or MappingSettings()
     a, b = _component(ligand_a), _component(ligand_b)
-    mappings = list(_mapper(settings).suggest_mappings(a, b))
+    mappings = list(_mapper(settings, frozenset(exclude)).suggest_mappings(a, b))
     if not mappings or not mappings[0].componentA_to_componentB:
         raise MappingError(f"Kartograf maps no atom of {ligand_a.name} onto {ligand_b.name}: are the poses "
                            "placed on each other?")
@@ -213,6 +222,103 @@ def kartograf_mapping(ligand_a, ligand_b, settings: MappingSettings | None = Non
         raise MappingError(f"the mapping of {ligand_a.name} onto {ligand_b.name} cannot be used: {'; '.join(bridges)} "
                            "(the hybrid would keep their bonds and angles at both ends)")
     return mapping
+
+
+def _hydrogens(atom) -> list[int]:
+    return [nb.GetIdx() for nb in atom.GetNeighbors() if nb.GetAtomicNum() == 1]
+
+
+def mapping_for_the_plugin(ligand_a, ligand_b, mapping: dict[int, int], settings: MappingSettings | None = None
+                           ) -> tuple[dict[int, int], list[str]]:
+    """The mapping of Kartograf changed where the hybrid would put on one atom hydrogens that the integrator of the
+    cuPotential plugin cannot constrain: it constrains three hydrogens of one length on an atom at most (SHAKE; the
+    plugin: "only SETTLE and SHAKE constraints are implemented"), and the unmapped hydrogens of both ligands stay on
+    a mapped atom of the hybrid. Returns the mapping and what was changed; a mapping that needs neither is returned
+    as it is.
+
+    1. A mapped pair of heavy atoms of other elements that both carry hydrogens (the O of an OH onto the C of a CH3,
+       the C of a CH2 onto the N of an NH): their hydrogens are constrained to other lengths and cannot be mapped
+       onto each other. Kartograf maps again without that pair, as its own ``filter_element_changes`` ("Forces a
+       mapping to exclude any alchemical element changes in the core") does for every pair, and keeps the largest
+       connected part as it does after its filters.
+    2. A mapped heavy atom on which the hybrid would carry more than three hydrogens (a methyl group turned between
+       the two poses, whose hydrogens are farther apart than Kartograf's ``atom_max_distance``): its unmapped
+       hydrogens of A and of B are mapped onto each other, the closest pair first, as LOMAP maps the hydrogens of
+       its mapped heavy atoms (lomap2, ``MCS.all_atom_match_list``: "In 3D mode, ensure that maps happen to the
+       closest atom in 3D coordinates - this gets mappings to prochiral hydrogens correct")."""
+    mol_a, mol_b = ligand_a.to_rdkit(), ligand_b.to_rdkit()
+    notes = []
+    exclude = frozenset(
+        (i, j) for i, j in mapping.items()
+        if mol_a.GetAtomWithIdx(i).GetAtomicNum() > 1 and mol_b.GetAtomWithIdx(j).GetAtomicNum() > 1
+        and mol_a.GetAtomWithIdx(i).GetAtomicNum() != mol_b.GetAtomWithIdx(j).GetAtomicNum()
+        and _hydrogens(mol_a.GetAtomWithIdx(i)) and _hydrogens(mol_b.GetAtomWithIdx(j)))
+    if exclude:
+        before = len(mapping)
+        mapping = kartograf_mapping(ligand_a, ligand_b, settings, exclude)
+        for i, j in sorted(exclude):
+            notes.append(f"atom {i} ({mol_a.GetAtomWithIdx(i).GetSymbol()}) of {ligand_a.name} is not mapped onto atom "
+                         f"{j} ({mol_b.GetAtomWithIdx(j).GetSymbol()}) of {ligand_b.name}: both carry hydrogens, which "
+                         "the plugin cannot constrain on one atom")
+        notes.append(f"Kartograf mapped again without them: {before} -> {len(mapping)} mapped atoms")
+    pos_a, pos_b = np.asarray(ligand_a.positions_nm()), np.asarray(ligand_b.positions_nm())
+    mapping = dict(mapping)
+    for i, j in sorted(mapping.items()):
+        if mol_a.GetAtomWithIdx(i).GetAtomicNum() == 1:
+            continue
+        inverse = {v: k for k, v in mapping.items()}
+        on_a, on_b = _hydrogens(mol_a.GetAtomWithIdx(i)), _hydrogens(mol_b.GetAtomWithIdx(j))
+        free_a = [h for h in on_a if h not in mapping]
+        free_b = [h for h in on_b if h not in inverse]
+        if len([h for h in on_a if mapping.get(h) in on_b]) + len(free_a) + len(free_b) <= 3:
+            continue
+        added = 0
+        while free_a and free_b:
+            x, y = min(((x, y) for x in free_a for y in free_b),
+                       key=lambda pair: float(np.linalg.norm(pos_a[pair[0]] - pos_b[pair[1]])))
+            mapping[x] = y
+            free_a.remove(x)
+            free_b.remove(y)
+            added += 1
+        notes.append(f"{added} hydrogen(s) of atom {i} of {ligand_a.name} mapped onto those of atom {j} of "
+                     f"{ligand_b.name}, the closest first (the hybrid would carry more than three on the atom)")
+    return mapping, notes
+
+
+def hydrogens_the_plugin_cannot_constrain(mapping: dict[int, int], system_a, system_b, to_system_a: dict[int, int],
+                                          to_system_b: dict[int, int], molecule_a, molecule_b) -> list[str]:
+    """The mapped heavy atoms on which the hybrid of ``mapping`` (ligand indices, as the preparation leaves it) would
+    carry hydrogens that the integrator of the cuPotential plugin cannot constrain: more than three, or constrained
+    to lengths that differ (OpenMM's SHAKE clusters, ``ShakeCluster::addAtom`` in
+    ``platforms/common/src/IntegrationUtilities.cpp`` 8.4: three at most, of one length within 1e-8)."""
+    import openmm.unit as unit
+
+    def lengths(system, to_system, molecule) -> dict[tuple[int, int], float]:
+        back = {v: k for k, v in to_system.items()}
+        out = {}
+        for k in range(system.getNumConstraints()):
+            x, y, d = system.getConstraintParameters(k)
+            if x in back and y in back:
+                out[(back[x], back[y])] = out[(back[y], back[x])] = d.value_in_unit(unit.nanometer)
+        return out
+
+    len_a, len_b = lengths(system_a, to_system_a, molecule_a), lengths(system_b, to_system_b, molecule_b)
+    inverse = {v: k for k, v in mapping.items()}
+    problems = []
+    for i, j in sorted(mapping.items()):
+        if molecule_a.GetAtomWithIdx(i).GetAtomicNum() == 1:
+            continue
+        on_a, on_b = _hydrogens(molecule_a.GetAtomWithIdx(i)), _hydrogens(molecule_b.GetAtomWithIdx(j))
+        # each hydrogen once, with its length in A and, mapped, in B (the hybrid keeps one constraint of a mapped
+        # hydrogen only where the two are one length: constrained_bond_rule)
+        carried = ([len_a.get((i, h)) for h in on_a]
+                   + [len_b.get((j, h)) for h in on_b])
+        count = len(on_a) + len([h for h in on_b if inverse.get(h) not in on_a])
+        carried = [d for d in carried if d is not None]
+        if count > 3 or any(abs(d - carried[0]) > 1e-8 * carried[0] for d in carried):
+            problems.append(f"atom {i} of A ({j} of B) would carry {count} constrained hydrogen(s) of lengths "
+                            + ", ".join(f"{d:.4f}" for d in sorted(set(carried))) + " nm")
+    return problems
 
 
 def lomap_score(ligand_a, ligand_b, mapping: dict[int, int]) -> float:
