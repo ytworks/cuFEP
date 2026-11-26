@@ -205,6 +205,19 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     return info
 
 
+#: rules of the preparation that changed after relative calculations had been prepared with them: the version of each
+#: rule is recorded for the edges it acts on (only there, so that the records of the other edges are those of earlier
+#: versions), and an edge prepared by an earlier rule is not taken up (second review of PR #19)
+PREPARATION_RULES = {
+    # 2: the alchemical water of an edge that changes the net charge is chosen by the distances across the periodic
+    #    cell (version 1 took the distances in the cell alone: a water 0.2 nm from the solutes across its boundary
+    #    could be taken)
+    "alchemical_water": 2,
+    # 2: a custom core maps its atoms with their chirality (version 1 could map an atom of the other configuration)
+    "custom_core": 2,
+}
+
+
 def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> dict | None:
     """The record of the prepared systems of an edge if they exist and this run can take them, None if there are
     none yet; WorkflowError if they were made from other inputs or settings. Writes nothing: a run checks every edge
@@ -216,9 +229,14 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
     if not done.exists():
         return None
     info = json.loads(done.read_text())
-    if info.get("made_from") != edge_made_from(cfg, ligand_a, ligand_b, box_shape):
-        raise WorkflowError(f"the prepared systems in {prep_dir} were made from other inputs or settings; "
-                            "remove the directory of the edge to prepare it again")
+    stored, current = info.get("made_from"), edge_made_from(cfg, ligand_a, ligand_b, box_shape)
+    if stored != current:
+        differing = sorted(k for k in set(stored or {}) | set(current) if (stored or {}).get(k) != current.get(k))
+        rules = [k for k in differing if k.endswith("_rule")]
+        raise WorkflowError(f"the prepared systems in {prep_dir} were made from other inputs or settings ("
+                            + ", ".join(differing) + ")"
+                            + (f"; {', '.join(rules)}: they were prepared by an earlier rule of cuFEP" if rules else "")
+                            + "; remove the directory of the edge to prepare it again")
     return info
 
 
@@ -237,10 +255,12 @@ def edge_made_from(cfg, ligand_a, ligand_b, box_shape: str) -> dict:
             # the pH sets the protonation states of a protein given without hydrogens (review of PR #17)
             "thermodynamics": {"ionic_strength_M": cfg.thermodynamics.ionic_strength_M, "ph": cfg.thermodynamics.ph},
             "dynamics": {k: getattr(cfg.dynamics, k) for k in ("cutoff_nm", "hmr_mass_amu", "constraints")},
-            # an edge that changes the net charge: the rule of its alchemical water (only there, so that the records
-            # of the other edges are those of earlier versions)
-            **({"alchemical_water_cutoff_nm": float(cfg.alchemy.alchemical_water_cutoff_nm)}
-               if ligand_a.formal_charge != ligand_b.formal_charge else {})}
+            # an edge that changes the net charge: the rule of its alchemical water, and a custom core: the version
+            # of its rule (only there, so that the records of the other edges are those of earlier versions)
+            **({"alchemical_water_cutoff_nm": float(cfg.alchemy.alchemical_water_cutoff_nm),
+                "alchemical_water_rule": PREPARATION_RULES["alchemical_water"]}
+               if ligand_a.formal_charge != ligand_b.formal_charge else {}),
+            **({"custom_core_rule": PREPARATION_RULES["custom_core"]} if cfg.mapping.core_smarts is not None else {})}
 
 
 def load_end_states(edge_dir: Path, leg: str) -> dict:

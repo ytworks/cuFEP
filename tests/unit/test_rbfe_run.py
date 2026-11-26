@@ -373,6 +373,39 @@ def test_a_prepared_edge_of_another_ph_is_not_taken(tmp_path):
         prepare_edge(other, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
 
 
+def test_an_edge_prepared_by_an_earlier_rule_is_not_taken(tmp_path):
+    """Second review of PR #19 (P2): an edge that changes the net charge, prepared by the version that chose its
+    alchemical water by the distances in the cell alone (a water 0.2 nm from the solutes across the boundary), and an
+    edge of a custom core mapped without chirality, were taken up again when the cutoff or the SMARTS was the same.
+    Their records hold the version of the rule; one without it (or of another) is refused before anything is written.
+    The records of the other edges are those of earlier versions."""
+    from cufep.rbfe.prep import PREPARATION_RULES, edge_made_from, prepared_edge
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    toluene, phenolate = _ligands(tmp_path, out_dir, "[O-]c1ccccc1", "phenolate", 7)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    custom = rcfg.model_copy(update={"mapping": rcfg.mapping.model_copy(update={"core_smarts": "c1ccccc1"})})
+    (tmp_path / "n").mkdir()
+    neutral = _ligands(tmp_path / "n", out_dir)
+    plain = edge_made_from(rcfg, *neutral, "cube")
+    assert not {"alchemical_water_rule", "custom_core_rule"} & set(plain)
+    for cfg, ligands, key in ((rcfg, (toluene, phenolate), "alchemical_water_rule"),
+                              (custom, neutral, "custom_core_rule")):
+        record = edge_made_from(cfg, *ligands, "cube")
+        assert record[key] == PREPARATION_RULES[key.removesuffix("_rule")]
+        earlier = {k: v for k, v in record.items() if k != key}
+        edge_dir = tmp_path / key
+        (edge_dir / "prep").mkdir(parents=True)
+        (edge_dir / "prep" / "prep.json").write_text(json.dumps({"made_from": earlier, "legs": {}}))
+        before = (edge_dir / "prep" / "prep.json").read_text()
+        with pytest.raises(WorkflowError, match=f"{key}.*an earlier rule"):
+            prepared_edge(cfg, *ligands, edge_dir, "cube")
+        assert (edge_dir / "prep" / "prep.json").read_text() == before
+        (edge_dir / "prep" / "prep.json").write_text(json.dumps({"made_from": record, "legs": {}}))
+        assert prepared_edge(cfg, *ligands, edge_dir, "cube") is not None
+
+
 def test_a_bilayer_with_a_water_of_four_sites_gets_its_force_field_for_the_lipid_patch(tmp_path, monkeypatch):
     """Review of PR #17: with membrane.enabled and forcefield.water amber14/tip4pew.xml the bilayer is built with
     the 3-site water of the lipid patch (add_membrane asks forcefield_with_water for it), and the relative
