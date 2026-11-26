@@ -1115,3 +1115,5 @@ def test_the_report_of_a_summary_alone_gives_the_errors_of_the_values_it_shows(t
     (alone / "summary.json").write_text(json.dumps(summary))
     text = report("a2a", alone)
     assert "The network of the run gave no dG" in text and "no experimental value" not in text
+    # (fourteenth review, P3) no edge of it joins two compounds with experimental values: nothing is said to be compared
+    assert "no edge joins two compounds with experimental values" in text and "are compared with them" not in text

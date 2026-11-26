@@ -369,6 +369,9 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                       "lowest_overlap_solvent": overlap.get("solvent"),
                       "not_reliable": "; ".join(e.get("not_reliable") or [])})
 
+    # the edges compared with experiment: those whose two ends have experimental values (fourteenth review of PR #19:
+    # a network of one edge between two states of one compound was said to compare its edges)
+    compared = sum(1 for r in edges if r["ddg"] is not None and r["exp_ddg"] is not None)
     title = load_registry()[name]["title"]
     with_dg = [r for r in ligands if r["cufep_rbfe"] is not None]
     with_ddg = [r for r in edges if r["ddg"] is not None]
@@ -384,7 +387,11 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                  "are those of the pairs of compounds the edges join, from the dG of the compounds; an edge between "
                  "states is compared with the published prediction of the same edge only.", ""]),
              ("The network of the run gave no dG (the notes of the run below say why), and no dG of cuFEP is "
-              "compared with experiment; the ddG of the edges are"
+              "compared with experiment; "
+              + (f"the ddG of the {compared} edge(s) whose two ends have experimental values are compared with them"
+                 if compared else
+                 "no edge joins two " + what.lower() + " with experimental values, and no ddG is compared with "
+                 "experiment either (an edge between states of one compound has no experimental ddG)")
               if not origin else
               f"The dG of cuFEP come from the edges alone, their mean over the {what.lower()} with an experimental "
               "value set to the mean of those values (`docs/rbfe.md`, \"The network\")"

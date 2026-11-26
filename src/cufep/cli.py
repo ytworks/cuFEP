@@ -402,15 +402,23 @@ def rbfe_plan(config: str) -> None:
         # the mapping as the preparation leaves it after the rule of the constrained bonds: what `cufep rbfe run`
         # refuses, the plan refuses (thirteenth review of PR #19: an edge of network.edges whose oxygen leaves the
         # mapping and joins two mapped carbons was shown as possible)
-        bridges = bridging_dummies(by_name[a].to_rdkit(), by_name[b].to_rdkit(),
-                                   as_prepared(by_name[a].to_rdkit(), by_name[b].to_rdkit(), mapping, constrained))
+        prepared = as_prepared(by_name[a].to_rdkit(), by_name[b].to_rdkit(), mapping, constrained)
+        bridges = bridging_dummies(by_name[a].to_rdkit(), by_name[b].to_rdkit(), prepared)
         if bridges:
             raise click.ClickException(f"edge {a} -> {b}: the mapping cannot be used after the atoms of constrained "
                                        f"bonds that change leave it: {'; '.join(bridges)}")
         dq = by_name[b].formal_charge - by_name[a].formal_charge
-        click.echo(f"edge {a} -> {b}: {len(mapping)} atoms mapped, {by_name[a].n_atoms - len(mapping)} unique to {a}, "
-                   f"{by_name[b].n_atoms - len(mapping)} unique to {b}; LOMAP score "
-                   f"{lomap_score(by_name[a], by_name[b], mapping):.2f}"
+        # the mapping of Kartograf and, apart, the one the preparation leaves after the rule of the constrained bonds
+        # (fourteenth review of PR #19: the plan counted the oxygen of methanol mapped onto a hydrogen of methane,
+        # which leaves it); the preparation can leave out hydrogens of constrained bonds of other lengths too, which
+        # only its systems show: at most so many
+        after = (f"; at most {len(prepared)} after the rule of the constrained bonds, "
+                 f"{by_name[a].n_atoms - len(prepared)} or more unique to {a}, "
+                 f"{by_name[b].n_atoms - len(prepared)} or more unique to {b}" if constrained else "")
+        click.echo(f"edge {a} -> {b}: {len(mapping)} atoms mapped by Kartograf, {by_name[a].n_atoms - len(mapping)} "
+                   f"unique to {a}, {by_name[b].n_atoms - len(mapping)} unique to {b}{after}; LOMAP score "
+                   f"{lomap_score(by_name[a], by_name[b], mapping):.2f} (of the mapping of Kartograf, as the "
+                   "preparation scores it)"
                    + (f"; the net charge changes by {dq:+d} (an alchemical water)" if dq else ""))
     ls = rcfg.lambda_schedule
     click.echo(f"lambda windows: {ls.mode}" + (f" from {ls.adaptive.initial_windows}, overlap threshold "

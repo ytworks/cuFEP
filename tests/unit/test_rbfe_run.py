@@ -2030,3 +2030,47 @@ def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is
                                  if Path(d) == hrex else ([], {})))
         with pytest.raises(WorkflowError, match="sphere_atoms"):
             check_samples_of_the_run(free, out_dir, [("ethane", "oxirane")], [0], ["complex"], False)
+
+
+def test_the_plan_gives_the_mapping_of_kartograf_and_the_one_the_preparation_leaves(tmp_path):
+    """Fourteenth review of PR #19 (P3): methanol -> methane, the carbon and three hydrogens on each other and the
+    oxygen on the fourth hydrogen of methane: Kartograf maps 5 atoms, and the rule of the constrained bonds takes the
+    oxygen out (its dummy joins the carbon alone: no bridge). The plan gave 5 mapped and 1/0 unique; it gives the
+    mapping of Kartograf and, apart, the most the preparation leaves."""
+    import yaml
+    from click.testing import CliRunner
+    from rdkit import Chem
+    from rdkit.Geometry import Point3D
+
+    from cufep import cli
+
+    centre = np.array([16.0, 14.0, 16.0])
+    tetra = [(1.03, 0.0, -0.36), (-0.51, 0.89, -0.36), (-0.51, -0.89, -0.36)]
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, smiles, rest in (("methanol", "CO", [(0, 0, 1.43), (0.0, 0.9, 1.75)]),
+                               ("methane", "C", [(0, 0, 1.09)])):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        heavy = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
+        hydrogens_of_c = [n.GetIdx() for n in mol.GetAtomWithIdx(0).GetNeighbors() if n.GetAtomicNum() == 1]
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        conf.SetAtomPosition(0, Point3D(*centre))
+        for i, xyz in zip(hydrogens_of_c, tetra + ([rest[0]] if name == "methane" else [])):
+            conf.SetAtomPosition(i, Point3D(*(np.array(xyz) + centre)))
+        if name == "methanol":
+            conf.SetAtomPosition(heavy[1], Point3D(*(np.array(rest[0]) + centre)))
+            h_of_o = next(n.GetIdx() for n in mol.GetAtomWithIdx(heavy[1]).GetNeighbors() if n.GetAtomicNum() == 1)
+            conf.SetAtomPosition(h_of_o, Point3D(*(np.array(rest[1]) + centre)))
+        mol.AddConformer(conf, assignId=True)
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    (tmp_path / "protein.pdb").write_text("REMARK built in the test\n")
+    config = {"system": {"protein": "protein.pdb", "ligands": "ligands.sdf"},
+              "network": {"edges": [["methanol", "methane"]]},
+              "mapping": {"map_hydrogens_on_hydrogens_only": False}}
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config))
+    result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
+    assert result.exit_code == 0, result.output
+    assert ("edge methanol -> methane: 5 atoms mapped by Kartograf, 1 unique to methanol, 0 unique to methane; at most "
+            "4 after the rule of the constrained bonds, 2 or more unique to methanol, 1 or more unique to methane"
+            in result.output), result.output
