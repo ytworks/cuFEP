@@ -555,7 +555,10 @@ def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_p
         raise AssertionError("an edge was prepared")
 
     monkeypatch.setattr(prep_module, "prepare_edge", not_to_be_reached)
-    with pytest.raises(WorkflowError, match="toluene~phenol"):
+    # refused for its receptor, not for anything else (sixteenth review of PR #19: the edge name alone also matched a
+    # refusal for missing files)
+    with pytest.raises(WorkflowError, match=r"toluene~phenol/prep were made from other inputs or settings \("
+                                            r"protein_sha256\)"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     assert all((out_dir / name).read_bytes() == data for name, data in before.items())
 
