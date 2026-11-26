@@ -1216,8 +1216,18 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
                 check_windows_settings(made, windows_settings(cfg), start_file, quiet)
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
-        samples_have_their_windows()                 # a checkpoint of the start without samples
-        return
+        if not (leg_dir / "hrex" / "checkpoint.npz").exists():
+            samples_have_their_windows()
+            return
+        # the checkpoint of the start without samples is continued as samples are, under the conditions it was made
+        # under (LegStorage.check_conditions): checked here, before the run writes its record (ninth review of PR #19)
+        from cufep.sampling.storage import checkpoint_without_conditions, stored_layout
+
+        recorded = stored_layout(leg_dir / "hrex")[1].get("conditions")
+        if not isinstance(recorded, dict):
+            raise ConditionsError(f"the {leg} leg of repeat {repeat}: "
+                                  + checkpoint_without_conditions(leg_dir / "hrex"))
+        conditions = recorded
     # a leg that is to be continued from a checkpoint of an earlier version (run_leg analyses a leg
     # that has all its iterations as it is, without its checkpoint)
     used_timestep = (
@@ -1248,6 +1258,9 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
                "friction_per_ps": float(cfg.dynamics.friction_per_ps)}
     differing = [f"{key}: {conditions[key]} -> {value}" for key, value in current.items()
                  if key in conditions and not _same(conditions[key], value)]
+    # the exchange between the replicas (samples of a version that did not record it were of hrex)
+    differing += conditions_differences({"exchange": conditions["exchange"]} if "exchange" in conditions else {},
+                                        {"exchange": str(cfg.sampling.exchange)})
     if isinstance(conditions.get("settings"), dict):
         differing += settings_differences(conditions["settings"], samples_settings(cfg, leg))
     elif not differing:

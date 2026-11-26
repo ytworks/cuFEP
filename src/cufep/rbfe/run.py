@@ -246,6 +246,54 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
 
 
+def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
+    """Before a run moves or writes anything: the samples of every leg it runs, and the checkpoint of their start
+    without samples, are continued only under the conditions they were made under, which the replica exchange
+    compares when it opens them (:meth:`cufep.sampling.storage.LegStorage.check_conditions`); what of them the
+    configuration gives (temperature, pressure, friction, the exchange, the settings of the leg) is compared here,
+    with the same comparison, so that a refused run leaves the directory as it was (ninth review of PR #19, the class
+    of the ABFE's ``check_leg_reuse``). A checkpoint without the record of its conditions is refused; samples of an
+    earlier version without one are left to the leg (analysed, not continued). The System is compared in the leg."""
+    from cufep.rbfe.leg import hybrid_settings
+    from cufep.sampling.storage import checkpoint_without_conditions, conditions_differences, stored_layout
+    from cufep.workflow import gcmc_in
+
+    if reschedule:
+        return                                   # what the legs have is set aside; they start anew
+    problems, commands = [], []
+    for a, b in edges:
+        edge = edge_name(a, b)
+        for r in repeats:
+            for leg in ("solvent", "complex"):
+                if only_legs and leg not in only_legs:
+                    continue
+                hrex = out_dir / "edges" / edge / f"repeat_{r}" / leg / "hrex"
+                parts, attrs = stored_layout(hrex)
+                rows = sum(part[1] for part in parts)
+                if not rows and not (hrex / "checkpoint.npz").exists():
+                    continue
+                stored = attrs.get("conditions")
+                if not isinstance(stored, dict):
+                    if not rows:
+                        problems.append(f"the {leg} leg of {edge}, repeat {r}: {checkpoint_without_conditions(hrex)}")
+                        commands.append(rerun_command(edge, r, [leg], out_dir))
+                    continue
+                current = {"temperature_K": float(rcfg.thermodynamics.temperature_K),
+                           "pressure_bar": None if gcmc_in(rcfg, leg) else float(rcfg.thermodynamics.pressure_bar),
+                           "friction_per_ps": float(rcfg.dynamics.friction_per_ps),
+                           "exchange": str(rcfg.sampling.exchange), "settings": hybrid_settings(rcfg, leg)}
+                differing = conditions_differences({key: stored[key] for key in current if key in stored}, current)
+                if differing:
+                    problems.append(f"the {leg} leg of {edge}, repeat {r}: its samples ({rows} iterations"
+                                    + ("" if rows else ", the checkpoint of their start") + ") were made under other "
+                                    f"conditions ({'; '.join(differing)})")
+                    commands.append(rerun_command(edge, r, [leg], out_dir))
+    if problems:
+        raise WorkflowError("; ".join(problems) + ". Nothing was changed. Use the settings they were made with, or "
+                            "start these legs anew with --reschedule (what they have is kept in previous_<n>/): "
+                            + "; ".join(commands) + "; or run the calculation in a new output.dir")
+
+
 def check_legs_have_their_windows(out_dir: Path, edges, repeats, only_legs) -> None:
     """Before a run moves or writes anything: every leg it runs that has samples (or the checkpoint of their start)
     has the schedule of their windows (:func:`cufep.engine.leg.check_samples_have_their_windows`), so that a leg is
@@ -337,6 +385,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
     check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
+    check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     experiment = experiment_of(rcfg, ligands)
     states = states_of(rcfg, ligands)
     if states is not None:

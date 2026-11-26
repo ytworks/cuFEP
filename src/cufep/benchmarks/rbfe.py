@@ -183,7 +183,8 @@ def states_of_a_summary(summary: dict, name: str | None = None) -> dict | None:
     (``experiment_of_compound``), the states the dG of each compound combines (``compounds``), and the compounds of
     the two ends of an edge whose experiment is that of the compounds (``exp_compounds``; a summary of an earlier
     version of a network that did not yet connect its states has neither of the others, eighth review). A state still
-    without a compound is taken from the states of the benchmark ``name`` where it is one of them. None for a run
+    without a compound is taken from the states of the benchmark ``name`` where it is one of them, and a summary with
+    a name that only a state of the benchmark has is of a run of states whatever else it records. None for a run
     without states; a state whose compound is not known is not in the mapping, and the report leaves it out of what
     it compares with experiment."""
     compound_of = dict(summary.get("experiment_of_compound") or {})
@@ -198,12 +199,19 @@ def states_of_a_summary(summary: dict, name: str | None = None) -> dict | None:
             if len(ends) == 2:
                 compound_of.setdefault(edge["ligand_a"], ends[0])
                 compound_of.setdefault(edge["ligand_b"], ends[1])
+    ligands = list(summary.get("ligands") or [])
+    of_benchmark = read_states(name) if name is not None and _entry(name).get("rbfe_states") else {}
+    # a name that only a state of the benchmark has (4jS, not a compound): a run of states, whatever the summary
+    # records of it (ninth review of PR #19: a summary of 2ecbcd2 has neither experiment_of_compound, compounds nor
+    # notes on its edges, and an edge within 4j was compared with an experimental ddG of 0)
+    compounds_of_benchmark = set(read_reference(name)) if of_benchmark else set()
+    if any(s in of_benchmark and s not in compounds_of_benchmark for s in ligands):
+        of_states = True
     if not compound_of and not of_states:
         return None
-    if name is not None and _entry(name).get("rbfe_states"):
-        for state, row in read_states(name).items():
-            if state in (summary.get("ligands") or []):
-                compound_of.setdefault(state, row["compound"])
+    for state, row in of_benchmark.items():
+        if state in ligands:
+            compound_of.setdefault(state, row["compound"])
     return {"compound": compound_of}
 
 

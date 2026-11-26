@@ -1397,10 +1397,52 @@ def test_a_checkpoint_of_08d58d5_without_samples_goes_on_with_start_configuratio
     with np.load(leg_dir / "equil.npz") as eq:
         built.hybrid.system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in alchemical_box(eq, True)])
     digest = hashlib.sha256(mm.XmlSerializer.serialize(built.hybrid.system).encode()).hexdigest()
-    # (eighth review, P2) the checkpoint is held to the conditions it was made under, start configurations or not: under
-    # other ones (exchange: none), or with a System of neither form, it is refused and its record kept
+    # (ninth review, P2) the checkpoint is continued on the backend it was made with (a leg that fell back to stock
+    # OpenMM and stopped there chose the plugin again and was refused): its backend is that of the samples
     import shutil
 
+    from cufep.rbfe.run import check_samples_of_the_run, write_run_files
+    from cufep.sampling.storage import stored_backend
+
+    assert stored_backend(leg_dir / "hrex") == "openmm"
+    # (ninth review, P2) checked before a run writes anything, as the ABFE checks it; a checkpoint without the record
+    # of its conditions is refused, before the run and in the leg (P3)
+    from cufep.workflow import WorkflowError
+
+    other_exchange = rcfg.model_validate({**rcfg.model_dump(mode="json"),
+                                          "sampling": {**rcfg.model_dump(mode="json")["sampling"], "exchange": "none"}})
+    check_samples_of_the_run(rcfg, edge_dir.parent.parent, [("toluene", "phenol")], [0], None, False)
+    with pytest.raises(WorkflowError, match="exchange: hrex -> none"):
+        check_samples_of_the_run(other_exchange, edge_dir.parent.parent, [("toluene", "phenol")], [0], None, False)
+    check_samples_of_the_run(other_exchange, edge_dir.parent.parent, [("toluene", "phenol")], [0], None, True)
+    bare = tmp_path / "bare"
+    shutil.copytree(edge_dir.parent, bare / "edges")
+    (bare / "edges" / "toluene~phenol" / "repeat_0" / "complex" / "hrex" / "manifest.json").unlink()
+    with pytest.raises(WorkflowError, match="no record of the conditions"):
+        check_samples_of_the_run(rcfg, bare, [("toluene", "phenol")], [0], None, False)
+    in_leg = run_hybrid_leg_safe(EdgeLegJob(
+        edge="toluene~phenol", leg="complex", repeat=0, edge_dir=str(bare / "edges" / "toluene~phenol"),
+        devices=[None], config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True))
+    assert "no record of the conditions" in in_leg["error"]
+    # the whole run: refused before it writes its record
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe.run import run_rbfe
+
+    write_run_files(edge_dir.parent.parent, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
+    record = (edge_dir.parent.parent / "resolved_config.yaml").read_bytes()
+    protein = _protein()
+    with monkeypatch.context() as patch:
+        patch.setattr(run_module, "prepare_protein_and_settings",
+                      lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+        patch.setattr(run_module, "execute_jobs", lambda *args, **kwargs: pytest.fail("a job was started"))
+        given = other_exchange.model_validate({**other_exchange.model_dump(mode="json"),
+                                               "network": {"edges": [["toluene", "phenol"]]}})
+        with pytest.raises(WorkflowError, match="exchange: hrex -> none"):
+            run_rbfe(given, log=lambda line: None, only_legs=["complex"])
+    assert (edge_dir.parent.parent / "resolved_config.yaml").read_bytes() == record
+    # (eighth review, P2) the checkpoint is held to the conditions it was made under, start configurations or not: under
+    # other ones (exchange: none), or with a System of neither form, it is refused and its record kept
     from cufep.rbfe.leg import recorded_form_of_the_system
     from cufep.sampling.storage import stored_conditions
 

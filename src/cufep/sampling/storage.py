@@ -179,6 +179,15 @@ def conditions_differences(stored: dict, current: dict) -> list[str]:
     return differing
 
 
+def checkpoint_without_conditions(directory) -> str:
+    """The refusal of the checkpoint of the start of a replica exchange, without samples, whose record of the
+    conditions it was made under is missing (a copy without its manifest)."""
+    return (f"{Path(directory) / 'checkpoint.npz'} is the checkpoint of the start of a replica exchange without "
+            f"samples, and {directory} has no record of the conditions it was made under: it is not continued. "
+            "Nothing was changed; restore that record, or start the leg anew with --reschedule (what it has is kept "
+            "in previous_<n>/)")
+
+
 def other_conditions(n_iterations: int, directory, differing: list[str]) -> "ConditionsError":
     """The refusal to continue samples under other conditions than they were made under."""
     return ConditionsError(
@@ -369,11 +378,15 @@ def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
 
 
 def stored_backend(directory: str | Path) -> str | None:
-    """Backend with which the samples in ``directory`` were made, or None if there are none."""
+    """Backend with which the samples in ``directory`` were made, or the checkpoint of their start without samples
+    (it is continued as samples are: ninth review of PR #19, a leg that fell back to stock OpenMM and stopped after
+    that checkpoint chose the plugin again and was refused); None if there are neither."""
     parts, attrs = stored_layout(directory)
-    if not sum(rows for _path, rows, _tail, _frames in parts) or "backend" not in attrs:
+    if not sum(rows for _path, rows, _tail, _frames in parts) and not (Path(directory) / "checkpoint.npz").exists():
         return None
-    return str(attrs["backend"])
+    backend = attrs.get("backend") or ((attrs.get("conditions") or {}).get("backend")
+                                       if isinstance(attrs.get("conditions"), dict) else None)
+    return None if backend is None else str(backend)
 
 
 def stored_attributes(directory: str | Path) -> tuple[int, dict]:
@@ -558,7 +571,10 @@ class LegStorage:
             # (eighth review of PR #19: other conditions were written over those of the checkpoint and it was
             # restored under them)
             stored = self.attributes().get("conditions")
-            if self.ckpt_path.exists() and isinstance(stored, dict):
+            if self.ckpt_path.exists() and not isinstance(stored, dict):
+                # what it was made under is not known: it is not taken for this run's (ninth review of PR #19)
+                raise ConditionsError(checkpoint_without_conditions(self.dir))
+            if self.ckpt_path.exists():
                 differing = conditions_differences(stored, conditions)
                 if differing:
                     raise other_conditions(0, self.dir, differing)

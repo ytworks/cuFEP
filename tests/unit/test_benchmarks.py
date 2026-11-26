@@ -967,3 +967,34 @@ def test_a_partial_summary_of_states_of_an_earlier_version_gives_no_experiment_w
     assert rows["4jS~4jR"]["exp_ddg"] == "" and rows["4jS~unknown"]["exp_ddg"] == ""
     assert float(rows["4h~4jS"]["exp_ddg"]) == pytest.approx(exp["4jS"] - exp["4h"])
     assert "States whose compound the summary does not record (unknown)" in text
+
+
+def test_a_summary_of_2ecbcd2_with_states_alone_is_taken_for_a_run_of_states(tmp_path):
+    """Ninth review of PR #19 (P2): a summary of 2ecbcd2 (no experiment_of_compound, no compounds, no notes of the
+    compounds on its edges) of the network of the 29 states of A2A in which only 4jS -> 4jR had a ddG was taken for a
+    run without states: the edge within 4j was compared with an experimental ddG of 0 (+0.4 of error). A name that
+    only a state of the benchmark has makes it a run of states; a summary of compounds stays one."""
+    from cufep.benchmarks.rbfe import read_states, report
+
+    states = read_states("a2a")
+    exp = {s: float(r["exp_dg_kcal_mol"]) for s, r in states.items()}
+    old = {"ligands": list(states), "cycle_closures": [], "dg": None, "experiment_kcal_mol": exp,
+           "notes": ["the edges with a ddG do not connect all ligands: no dG"],
+           "edges": [{"edge": "4jS~4jR", "ligand_a": "4jS", "ligand_b": "4jR", "ddg": 0.4, "se": 0.3,
+                      "not_reliable": []}]}
+    (tmp_path / "old").mkdir()
+    (tmp_path / "old" / "summary.json").write_text(json.dumps(old))
+    report("a2a", tmp_path / "old")
+    row = next(csv.DictReader((tmp_path / "old" / "rbfe_report_edges.csv").open()))
+    assert row["exp_ddg"] == "" and row["exp_ddg_of"] == "the compounds"
+    ref = read_reference("a2a")
+    compounds = {"ligands": list(ref), "cycle_closures": [], "dg": None, "notes": [],
+                 "experiment_kcal_mol": {c: v["exp"] for c, v in ref.items()},
+                 "edges": [{"edge": "4b~4e", "ligand_a": "4b", "ligand_b": "4e", "ddg": 0.4, "se": 0.3,
+                            "not_reliable": []}]}
+    (tmp_path / "compounds").mkdir()
+    (tmp_path / "compounds" / "summary.json").write_text(json.dumps(compounds))
+    report("a2a", tmp_path / "compounds")
+    row = next(csv.DictReader((tmp_path / "compounds" / "rbfe_report_edges.csv").open()))
+    assert float(row["exp_ddg"]) == pytest.approx(ref["4e"]["exp"] - ref["4b"]["exp"])
+    assert row["exp_ddg_of"] == "the ligands"

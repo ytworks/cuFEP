@@ -2550,3 +2550,66 @@ def test_alchemy_settings_added_later_leave_the_record_of_earlier_samples_as_it_
     assert settings_differences(changed, default)[0] == "alchemy.annihilate_electrostatics: True -> not given"
     assert not electrostatics_annihilated({"settings": default}) and electrostatics_annihilated({"settings": changed})
     assert not electrostatics_annihilated({}) and not electrostatics_annihilated(None)
+
+
+def test_a_checkpoint_of_the_start_is_checked_before_an_absolute_run_writes(tmp_path, monkeypatch, ligands):
+    """Ninth review of PR #19 (P2, P3): the checkpoint of the start of a replica exchange without samples is held to
+    the conditions it was made under (eighth review); the check before the run let it through and the run wrote its
+    record (resolved_config.yaml) before the leg refused it. It is checked there: other settings (the length of an
+    iteration, the exchange) and a checkpoint without the record of its conditions are refused before anything is
+    written; the same settings pass."""
+    from pathlib import Path
+
+    import cufep.run as driver
+    from cufep.config.auto import AutoReport
+    from cufep.config.schema import Config
+    from cufep.sampling.storage import ConditionsError, LegStorage
+    from cufep.workflow import prep_made_from, samples_settings
+
+    lig = ligands[0]
+    out = tmp_path / "out"
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": str(tmp_path / "p.pdb"), "ligand": "l.sdf"},
+                                      "output": {"dir": str(out)}, "resources": {"gpus": []},
+                                      "solvation": {"box_shape": "dodecahedron"}, **sections})
+
+    class Protein:
+        def write_pdb(self, path):
+            Path(path).write_text("ATOM")
+
+    monkeypatch.setattr(
+        driver, "plan", lambda cfg, log, ligands=None: (cfg.model_copy(deep=True), AutoReport(), Protein(), [lig])
+    )
+    started = []
+    monkeypatch.setattr(driver, "run_jobs", lambda jobs, *args, **kwargs: started.extend(jobs) or [])
+    monkeypatch.setattr(driver, "write_timing", lambda *args, **kwargs: None)
+    monkeypatch.setattr(driver, "refresh_leg_result", lambda *args, **kwargs: "current")
+    monkeypatch.setattr(driver, "plot_repeat", lambda *args, **kwargs: None)
+    first = config()
+    lig_dir = out / lig.name
+    (lig_dir / "prep").mkdir(parents=True)
+    (lig_dir / "prep" / "prep.json").write_text(json.dumps({
+        "ligand": lig.name, "complex_barostat": "isotropic", "membrane": False, "box_shape": "dodecahedron",
+        "made_from": prep_made_from(first, lig, False, "dodecahedron")}))
+    hrex = lig_dir / "repeat_0" / "solvent" / "hrex"
+    storage = LegStorage(hrex, 2, 2)                                    # the conditions, no sample
+    storage.check_conditions({"temperature_K": 298.15, "pressure_bar": 1.0, "friction_per_ps": 1.0,
+                              "exchange": "hrex", "settings": samples_settings(first)})
+    storage.close()
+    np.savez(hrex / "checkpoint.npz", positions=np.zeros((2, 3, 3)), velocities=np.zeros((2, 3, 3)),
+             boxes=np.stack([np.eye(3) * 3.0] * 2), state_of_replica=np.arange(2), iteration=0,
+             extra=json.dumps({"rows": 0}))                             # the checkpoint of its start
+    _schedule_of_the_samples(hrex.parent, first.sampling.rest2.scale)
+    driver._run(first, out, False, lambda line: None)
+    record = (out / "resolved_config.yaml").read_bytes()
+    for other, said in ((config(sampling={"time_per_iteration_ps": 0.5}), "time_per_iteration_ps"),
+                        (config(sampling={"exchange": "none"}), "exchange: hrex -> none")):
+        started.clear()
+        with pytest.raises(ConditionsError, match=said):
+            driver._run(other, out, False, lambda line: None)
+        assert (out / "resolved_config.yaml").read_bytes() == record and not started
+    (hrex / "manifest.json").unlink()                                   # a copy without its record
+    with pytest.raises(ConditionsError, match="no record of the conditions"):
+        driver._run(first, out, False, lambda line: None)
+    assert (out / "resolved_config.yaml").read_bytes() == record
