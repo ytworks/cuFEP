@@ -80,9 +80,9 @@ def equil_ghosts_problem(equil_file: Path, gcmc, earlier_ghosts=None) -> str | N
     if gcmc is None or not equil_file.exists():
         return None
     record = equil_file.parent / EQUIL_GHOSTS
-    current = [int(i) for i in gcmc.ghosts]
+    current = sorted(int(i) for i in gcmc.ghosts)
     if record.exists():
-        stored = recorded_ghosts(record)
+        stored = recorded_ghosts(record, len(gcmc.waters))
         if stored is None:
             # what it was made with is not known: a pre-equilibration that cannot be used, set aside by --reschedule
             # (eleventh review of PR #19: an empty record stopped the leg with an error of JSON, also with --reschedule)
@@ -91,16 +91,18 @@ def equil_ghosts_problem(equil_file: Path, gcmc, earlier_ghosts=None) -> str | N
             return None
         return (f"it was made with {len(stored)} ghost waters and this run has {len(current)}"
                 + ("" if len(stored) != len(current) else " others"))
-    if earlier_ghosts is not None and [int(i) for i in earlier_ghosts] == current:
+    if earlier_ghosts is not None and sorted(int(i) for i in earlier_ghosts) == current:
         return None
     return NO_GHOST_RECORD
 
 
-def ghost_record(record: Path) -> dict | None:
-    """A record of the ghost waters of a pre-equilibration (:data:`EQUIL_GHOSTS`) as it is written: its ghosts, a list
-    of numbers of waters (integers, not negative), and ``start_centre`` (a name) where it gives one. None where it
-    is not that (empty, not JSON, without its list of ghosts, a number that is not an integer: twelfth review of
-    PR #19, 1.9 was taken as 1 and 1e999 stopped the leg)."""
+def ghost_record(record: Path, n_waters: int | None = None) -> dict | None:
+    """A record of the ghost waters of a pre-equilibration (:data:`EQUIL_GHOSTS`) as it is written: its ghosts, a set
+    of numbers of waters (integers, not negative, each once, below ``n_waters`` where it is given), in ascending order,
+    and ``start_centre`` (a name) where it gives one. None where it is not that (empty, not JSON, without its list of
+    ghosts, a number that is not an integer: twelfth review of PR #19, 1.9 was taken as 1 and 1e999 stopped the leg;
+    a number twice or of no water: thirteenth review, [1, 1] passed for [1], and [426] of 426 waters stopped the
+    leg)."""
     try:
         data = json.loads(Path(record).read_text())
     except (OSError, ValueError):
@@ -110,14 +112,17 @@ def ghost_record(record: Path) -> dict | None:
     ghosts = data["ghosts"]
     if not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in ghosts):
         return None
+    if len(set(ghosts)) != len(ghosts) or (n_waters is not None and any(i >= int(n_waters) for i in ghosts)):
+        return None
     if "start_centre" in data and not isinstance(data["start_centre"], str):
         return None
-    return {"ghosts": list(ghosts), **({"start_centre": data["start_centre"]} if "start_centre" in data else {})}
+    return {"ghosts": sorted(ghosts), **({"start_centre": data["start_centre"]} if "start_centre" in data else {})}
 
 
-def recorded_ghosts(record: Path) -> list[int] | None:
-    """The ghost waters of a record of a pre-equilibration (:data:`EQUIL_GHOSTS`); None where it cannot be read."""
-    data = ghost_record(record)
+def recorded_ghosts(record: Path, n_waters: int | None = None) -> list[int] | None:
+    """The ghost waters of a record of a pre-equilibration (:data:`EQUIL_GHOSTS`), in ascending order; None where it
+    cannot be read (:func:`ghost_record`)."""
+    data = ghost_record(record, n_waters)
     return None if data is None else data["ghosts"]
 
 

@@ -221,18 +221,20 @@ def _digests_with_ghosts(system, waters, ghosts, cell) -> set[str]:
 
 def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, system=None):
     """The moves of a leg (``gcmc``, its ghosts of the start counted from the centre midway between the end states,
-    ``start_centre`` "midway") with the ghosts its samples or its pre-equilibration were made with. Earlier versions
-    counted them from the centre of the hybrid (``positions``, which holds the mapped atoms where A has them;
-    ``start_centre`` "ligand"), as many (eleventh review of PR #19: 5 of the 22 complex legs of the full TYK2 run of
-    08d58d5 have one other ghost by the new centre).
+    ``start_centre`` "midway") with the ghosts its samples or its pre-equilibration were made with, and the centres
+    they may have been counted from: ``(moves, centres)``. Earlier versions counted them from the centre of the hybrid
+    (``positions``, which holds the mapped atoms where A has them; "ligand"), as many (eleventh review of PR #19: 5 of
+    the 22 complex legs of the full TYK2 run of 08d58d5 have one other ghost by the new centre).
 
     A leg that goes on from its samples has the ghosts of the System its samples recorded: those of its record, of
     the new and of the earlier centre are each put into ``system`` (the hybrid System before its ghosts are switched
     off) and compared with the checksum of the samples (twelfth review of PR #19: a record that was lost or could not
-    be read chose the other System, and the leg was refused). Elsewhere, and where none matches: the earlier ghosts
-    where the record of the pre-equilibration names no centre and has them, or, without a record, where the leg goes
-    on from its samples; else those of ``gcmc``. The ghosts of a record that are those of neither centre have
-    ``start_centre`` "recorded"."""
+    be read chose the other System). Elsewhere, and where none matches: the earlier ghosts where the record of the
+    pre-equilibration names no centre and has them, or, without a record, where the leg goes on from its samples;
+    else those of ``gcmc``. The centres: the one the record names where it has these ghosts; else every centre whose
+    rule gives them (thirteenth review of PR #19: where both rules give the same ghosts, the leg of an earlier version
+    was checked around the new centre and refused); both for ghosts of neither rule. A record is a set of numbers of
+    waters of the leg (:func:`cufep.engine.leg.ghost_record`), compared as such."""
     import dataclasses
 
     from cufep.engine.leg import EQUIL_GHOSTS, ghost_record, starts_anew
@@ -240,35 +242,37 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
 
     leg_dir = Path(leg_dir)
     record = leg_dir / EQUIL_GHOSTS
-    data = ghost_record(record) if record.exists() else None
+    data = ghost_record(record, len(gcmc.waters)) if record.exists() else None
     earlier = farthest_waters(gcmc.waters, positions, box, gcmc.ligand_heavy, len(gcmc.ghosts),
                               gcmc.ligand_heavy_bonds)
-    rules = {"midway": [int(i) for i in gcmc.ghosts], "ligand": [int(i) for i in earlier]}
+    rules = {"midway": sorted(int(i) for i in gcmc.ghosts), "ligand": sorted(int(i) for i in earlier)}
 
-    def chosen(ghosts, centre: str):
-        return dataclasses.replace(gcmc, ghosts=np.asarray(ghosts, dtype=np.int64), start_centre=centre)
+    def chosen(ghosts):
+        named = [name for name, of_rule in rules.items() if of_rule == ghosts]
+        if data is not None and data.get("start_centre") in named and data["ghosts"] == ghosts:
+            named = [data["start_centre"]]
+        centres = tuple(named) if named else tuple(rules)
+        return (dataclasses.replace(gcmc, ghosts=np.asarray(ghosts, dtype=np.int64),
+                                    start_centre=named[0] if named else "recorded"), centres)
 
     goes_on = not starts_anew(leg_dir, reschedule)
     digest = _samples_system_digest(leg_dir) if goes_on and system is not None else None
     if digest is not None:
-        candidates = [(ghosts, name) for name, ghosts in rules.items()]
-        if data is not None:
-            named = [name for name, ghosts in rules.items() if ghosts == data["ghosts"]]
-            candidates.insert(0, (data["ghosts"], named[0] if named else "recorded"))
+        candidates = ([data["ghosts"]] if data is not None else []) + list(rules.values())
         cell, tried = _fixed_cell_of(leg_dir), []
-        for ghosts, name in candidates:
+        for ghosts in candidates:
             if ghosts in tried:
                 continue
             tried.append(ghosts)
             if digest in _digests_with_ghosts(system, gcmc.waters, ghosts, cell):
-                return chosen(ghosts, name)
+                return chosen(ghosts)
     if data is not None:
         if "start_centre" not in data and (leg_dir / "equil.npz").exists() and data["ghosts"] == rules["ligand"]:
-            return chosen(rules["ligand"], "ligand")
-        return gcmc
+            return chosen(rules["ligand"])
+        return chosen(rules["midway"])
     if not record.exists() and goes_on:
-        return chosen(rules["ligand"], "ligand")              # samples of a version that recorded no ghosts
-    return gcmc
+        return chosen(rules["ligand"])                        # samples of a version that recorded no ghosts
+    return gcmc, ("midway",)
 
 
 def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | None = None,
@@ -281,10 +285,12 @@ def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | 
     from cufep.sampling.gcmc import start_ghosts_in_sphere
 
     gcmc = hybrid_gcmc(rcfg, hybrid, topology, box, *end_heavy, centre_positions=midway, check_start=False)
+    centres = ("midway",)
     if leg_dir is not None:
-        gcmc = ghosts_of_the_leg(gcmc, hybrid.positions, box, leg_dir, reschedule, hybrid.system)
-    centre = {"midway": midway, "ligand": hybrid.positions}.get(gcmc.start_centre)
-    if centre is not None and start_ghosts_in_sphere(gcmc, hybrid.positions, box, gcmc.ghosts, centre):
+        gcmc, centres = ghosts_of_the_leg(gcmc, hybrid.positions, box, leg_dir, reschedule, hybrid.system)
+    of = {"midway": midway, "ligand": hybrid.positions}
+    # the ghosts pass where the sphere around one of the centres they may have been counted from holds none of them
+    if all(start_ghosts_in_sphere(gcmc, hybrid.positions, box, gcmc.ghosts, of[name]) for name in centres):
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {len(gcmc.ghosts)} ghost waters would "
                             "take waters of the sphere itself")
     return gcmc
