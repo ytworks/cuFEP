@@ -256,9 +256,10 @@ def _ligand_of_record(prep_dir: Path, end: str, name, digest):
         from openff.toolkit import Molecule
 
         found = Ligand(name=str(name), offmol=Molecule.from_json((Path(prep_dir) / f"ligand_{end}.json").read_text()))
-    except Exception:  # noqa: BLE001 - a record that is missing or cannot be read
+        same = digest is not None and found.digest() == digest
+    except Exception:  # noqa: BLE001 - a record that is missing, cannot be read or has no pose (fifteenth review)
         return None
-    return found if digest is not None and found.digest() == digest else None
+    return found if same else None
 
 
 def prepared_ligands(prep_dir: Path, info: dict, inputs=None):
@@ -382,15 +383,20 @@ def record_problems(info, ligands=None) -> list[str]:
             out.append(f"its {leg} leg records an alchemical water, and the net charge does not change")
             continue
         ion = water.get("ion") if isinstance(water, dict) else None
-        if not isinstance(ion, dict) or not all(
+        if not isinstance(ion, dict) or not isinstance(ion.get("name"), str) or not all(
                 isinstance(ion.get(k), (int, float)) and not isinstance(ion.get(k), bool)
                 for k in ("charge", "sigma_nm", "epsilon_kj_mol")):
             out.append(f"the alchemical water of its {leg} leg is not recorded with its ion")
             continue
+        # its atoms, each once and of the end states (fifteenth review of PR #19: atoms repeated or past the end
+        # states passed, and an ion without its name stopped the leg when it was run again)
         atoms_a, atoms_b = water.get("atoms_a"), water.get("atoms_b")
         if (not isinstance(atoms_a, list) or not atoms_a or not all(_is_index(i) for i in atoms_a)
                 or not isinstance(atoms_b, list) or len(atoms_b) != len(atoms_a)
-                or not all(_is_index(i) for i in atoms_b)):
+                or not all(_is_index(i) for i in atoms_b)
+                or len(set(atoms_a)) != len(atoms_a) or len(set(atoms_b)) != len(atoms_b)
+                or (_is_index(record.get("n_atoms_a")) and max(atoms_a) >= record["n_atoms_a"])
+                or (_is_index(record.get("n_atoms_b")) and max(atoms_b) >= record["n_atoms_b"])):
             out.append(f"the alchemical water of its {leg} leg is not recorded with its atoms")
     return out
 

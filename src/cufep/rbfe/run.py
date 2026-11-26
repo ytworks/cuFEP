@@ -718,21 +718,41 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int, inputs=None) -> di
     from cufep.workflow import record_digest
 
     of_the_record = record_digest(info.get("made_from")) if info else None
+    edge = edge_name(a, b)
     complete, counted = [], {}
     for r in range(repeats):
-        legs = {}
+        # the result of each leg, taken only where it can be read, is of this edge, leg and repeat (it records them),
+        # and of the prepared systems of the record of the edge (the digest it records); else the leg of this repeat
+        # is left out and computed again, the other repeats go on (fourteenth and fifteenth reviews of PR #19: a
+        # result of another leg or repeat put in its place reversed or doubled the ddG, a record of another receptor
+        # beside the legs was taken, one result that could not be read stopped the analysis of every edge, and a
+        # left-out repeat took the ddG of the complete ones with it)
+        legs, left_out = {}, []
         for leg in ("complex", "solvent"):
             f = Path(edge_dir) / f"repeat_{r}" / leg / "result.json"
-            legs[leg] = json.loads(f.read_text()) if f.exists() else None
-        # the legs of the prepared systems of this record (fourteenth review of PR #19: legs of a receptor X were taken
-        # with the record of a receptor Y restored beside them; each leg records the digest of what it was made from)
-        other = [leg for leg in legs if legs[leg] and of_the_record is not None
-                 and legs[leg].get("prepared_systems_sha256") != of_the_record]
-        if other:
-            out["earlier_preparation"] = [f"the {' and '.join(other)} leg(s) of repeat {r} were computed from "
-                                          "other prepared systems than its record of the preparation "
-                                          "(prepared_systems_sha256)"]
-            return out
+            legs[leg] = None
+            if not f.exists():
+                continue
+            try:
+                data = json.loads(f.read_text())
+            except (OSError, ValueError):
+                data = None
+            if not isinstance(data, dict):
+                why = f"its result ({f}) cannot be read"
+            elif (data.get("edge"), data.get("leg"), data.get("repeat")) != (edge, leg, r):
+                why = (f"its result ({f}) is that of edge {data.get('edge')}, leg {data.get('leg')}, repeat "
+                       f"{data.get('repeat')}")
+            elif data.get("prepared_systems_sha256") is None:
+                why = "its result does not record the prepared systems it was computed from (an earlier version)"
+            elif of_the_record is not None and data["prepared_systems_sha256"] != of_the_record:
+                why = "its result was computed from other prepared systems than the record of the edge"
+            else:
+                legs[leg] = data
+                continue
+            left_out.append({"repeat": r, "leg": leg, "why": f"the {leg} leg of repeat {r}: {why}"})
+        if left_out:
+            out["repeats"].append({"repeat": r, "left_out": left_out})
+            continue
         if not all(legs.values()) or any(legs[leg].get("delta_g") is None for leg in legs):
             out["repeats"].append({"repeat": r, "missing": [leg for leg in legs if not legs[leg]
                                                              or legs[leg].get("delta_g") is None]})
@@ -785,6 +805,9 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int, inputs=None) -> di
     earlier = [item for r in out["repeats"] for item in r.get("earlier_version", [])]
     if earlier:
         out["earlier_version"] = earlier
+    left = [item for r in out["repeats"] for item in r.get("left_out", [])]
+    if left:
+        out["left_out"] = left
     done = [r for r in out["repeats"] if "ddg" in r] if not inconsistent else []
     if done:
         values = [r["ddg"] for r in done]
@@ -936,9 +959,9 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
                 r["exp_compounds"] = [compound_of[r["ligand_a"]], compound_of[r["ligand_b"]]]
     differing = network_differences(out_dir, results)
     # legs of an earlier version that are left out (legs_of_version_1), in the notes of every entry point
-    left_out = [r["edge"] for r in results if r.get("earlier_version")]
-    left_note = ([f"legs of an earlier version are left out of {len(left_out)} edge(s) ({', '.join(left_out)}); "
-                  "their RESULT lines say why and how to compute them again"] if left_out else [])
+    left_out = [r["edge"] for r in results if r.get("earlier_version") or r.get("left_out")]
+    left_note = ([f"legs are left out of {len(left_out)} edge(s) ({', '.join(left_out)}); their RESULT lines say why "
+                  "and how to compute them again"] if left_out else [])
     prepared_before = [r["edge"] for r in results if r.get("earlier_preparation")]
     if prepared_before:
         left_note.append(f"{len(prepared_before)} edge(s) whose prepared systems this version does not take (an "
@@ -1074,8 +1097,8 @@ def result_lines(summary: dict) -> list[str]:
                          + prepare_again_command([x["edge"] for x in summary["edges"] if x.get("earlier_preparation")],
                                                  summary.get("run_directory")))
             continue
-        if e.get("earlier_version"):
-            left = e["earlier_version"]
+        if e.get("earlier_version") or e.get("left_out"):
+            left = list(e.get("earlier_version") or []) + list(e.get("left_out") or [])
             by_repeat: dict[int, list[str]] = {}
             for item in left:
                 by_repeat.setdefault(int(item["repeat"]), []).append(item["leg"])

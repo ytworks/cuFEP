@@ -147,7 +147,8 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
         (leg_dir / "result.json").write_text(json.dumps({
             "delta_g": dg, "delta_g_error": 0.3 * 4.184, "n_states": 9, "backend": "openmm", "notes": [],
             "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}},
-            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "run": {"hybrid_version": 2}}))
+            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "run": {"hybrid_version": 2},
+            "edge": "a~b", "leg": leg, "repeat": 0}))
     summary = analyse_directory(tmp_path)
     edge = summary["edges"][0]
     assert edge["ddg"] == pytest.approx(-1.5) and edge["se"] == pytest.approx(0.3 * math.sqrt(2))
@@ -217,7 +218,8 @@ def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
     for leg, result in (("complex", complex_), ("solvent", solvent)):
         leg_dir = out_dir / "edges" / edge / f"repeat_{repeat}" / leg
         leg_dir.mkdir(parents=True)
-        (leg_dir / "result.json").write_text(json.dumps(result))
+        # the result of this edge, leg and repeat, as a leg records them (fifteenth review of PR #19)
+        (leg_dir / "result.json").write_text(json.dumps({"edge": edge, "leg": leg, "repeat": repeat, **result}))
 
 
 def test_legs_of_other_conditions_or_without_a_standard_error_give_no_ddg_and_the_network_goes_on(tmp_path):
@@ -789,10 +791,9 @@ def test_a_state_takes_the_experiment_of_its_compound_and_the_states_are_combine
     # and the record of the run (310 K) was taken
     import json
 
-    leg = tmp_path / "edges" / "A1~A2" / "repeat_0" / "complex" / "result.json"
-    leg.write_text(json.dumps(_leg_result(-8.0, temperature=298.15000001)))
-    (tmp_path / "edges" / "A1~A2" / "repeat_0" / "solvent" / "result.json").write_text(
-        json.dumps(_leg_result(-8.0, temperature=298.15000001)))
+    for name in ("complex", "solvent"):
+        (tmp_path / "edges" / "A1~A2" / "repeat_0" / name / "result.json").write_text(json.dumps(
+            {"edge": "A1~A2", "leg": name, "repeat": 0, **_leg_result(-8.0, temperature=298.15000001)}))
     nearly = combine_network(tmp_path, ["A1", "A2", "B1"], [("A2", "B1"), ("A1", "A2")], 1,
                              {"A1": -10.0, "B1": -9.0}, states, 310.0)
     assert nearly["compounds"]["temperature_K"] == pytest.approx(298.15, abs=1e-6)
@@ -848,10 +849,10 @@ def test_the_ions_of_the_legs_are_compared_by_their_parameters_and_a_record_is_c
     charged = (methane, SimpleNamespace(name="m", n_atoms=5, formal_charge=-1, to_rdkit=methane.to_rdkit))
     na = {"name": "NA", "charge": 1.0, "sigma_nm": 0.2439, "epsilon_kj_mol": 0.3658}
     info = _prepared_record(alchemical_water_rule=2)
-    info["legs"]["complex"]["alchemical_water"] = {"ion": {**na, "from": "the system"}, "atoms_a": [7, 8, 9],
-                                                   "atoms_b": [7, 8, 9]}
-    info["legs"]["solvent"]["alchemical_water"] = {"ion": {**na, "from": "the force field"}, "atoms_a": [5, 6, 7],
-                                                   "atoms_b": [5, 6, 7]}
+    info["legs"]["complex"]["alchemical_water"] = {"ion": {**na, "from": "the system"}, "atoms_a": [2, 3, 4],
+                                                   "atoms_b": [2, 3, 4]}
+    info["legs"]["solvent"]["alchemical_water"] = {"ion": {**na, "from": "the force field"}, "atoms_a": [1, 2, 3],
+                                                   "atoms_b": [1, 2, 3]}
     assert earlier_rules_of(info, charged) == []
     info["legs"]["solvent"]["alchemical_water"]["ion"] = {**na, "sigma_nm": 0.3, "from": "the force field"}
     assert any("other ions" in why for why in earlier_rules_of(info, charged))
@@ -863,6 +864,13 @@ def test_the_ions_of_the_legs_are_compared_by_their_parameters_and_a_record_is_c
     no_atoms = json.loads(json.dumps(info))
     del no_atoms["legs"]["solvent"]["alchemical_water"]["atoms_a"]
     assert any("not recorded with its atoms" in why for why in earlier_rules_of(no_atoms, charged))
+    # (fifteenth review) atoms repeated or past the end states, and an ion without its name (which stopped the leg
+    # when it was run again)
+    nameless = {k: v for k, v in na.items() if k != "name"}
+    for water in ({"atoms_a": [2, 2, 3]}, {"atoms_a": [2, 3, 5]}, {"ion": nameless}):
+        broken = json.loads(json.dumps(info))
+        broken["legs"]["solvent"]["alchemical_water"].update(water)
+        assert any("not recorded with its" in why for why in earlier_rules_of(broken, charged)), water
     assert any("the net charge does not change" in why for why in earlier_rules_of(info, both))
     whole = {str(i): i for i in range(5)}
     made = _prepared_record()["made_from"]
@@ -924,5 +932,67 @@ def test_a_broken_record_of_one_edge_leaves_that_edge_out_and_the_analysis_goes_
     (tmp_path / "edges" / "b~c" / "prep" / "prep.json").write_text(json.dumps(other))
     edges = {e["edge"]: e for e in combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1,
                                                    {})["edges"]}
-    assert "ddg" not in edges["b~c"] and "other prepared systems" in edges["b~c"]["earlier_preparation"][0]
+    assert "ddg" not in edges["b~c"] and "other prepared systems" in edges["b~c"]["left_out"][0]["why"]
     assert edges["a~b"]["ddg"] == pytest.approx(-1.5)
+
+
+def test_each_result_is_taken_where_it_is_of_its_edge_leg_repeat_and_preparation(tmp_path):
+    """Fifteenth review of PR #19: (P2) the results of the two legs exchanged reversed the ddG (-1.5 -> +1.5), and those
+    of repeat 0 put in repeat 1 counted one calculation twice: a result is taken only in the place of the edge, leg and
+    repeat it records. (P2) a repeat with a leg of other prepared systems took the ddG of the complete repeat with it:
+    the leg of that repeat is left out, the other repeats go on. (P3) a result that records no prepared systems is said
+    to be so, not of other ones. (P2) a result that cannot be read, or is not a record, leaves its leg out and the
+    analysis of every other edge goes on. (P2) a record of a ligand without a pose falls back on the input."""
+    import json
+
+    from openff.toolkit import Molecule
+
+    from cufep.prep.ligand import Ligand
+    from cufep.rbfe.prep import prepared_ligands
+    from cufep.rbfe.run import combine_network, result_lines
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "a~b", 1, _leg_result(-12.2), _leg_result(-10.6))
+    _write_legs(tmp_path, "b~c", 0, _leg_result(-8.0), _leg_result(-9.0))
+
+    def ab():
+        return {e["edge"]: e for e in combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 2,
+                                                      {})["edges"]}
+
+    assert ab()["a~b"]["ddg"] == pytest.approx(-1.55)
+    legs = tmp_path / "edges" / "a~b" / "repeat_1"
+    complex_, solvent = (legs / "complex" / "result.json").read_text(), (legs / "solvent" / "result.json").read_text()
+    (legs / "complex" / "result.json").write_text(solvent)                  # exchanged
+    (legs / "solvent" / "result.json").write_text(complex_)
+    edges = ab()
+    assert edges["a~b"]["ddg"] == pytest.approx(-1.5) and {item["leg"] for item in edges["a~b"]["left_out"]} == {
+        "complex", "solvent"}
+    assert "is that of edge a~b, leg solvent, repeat 1" in edges["a~b"]["left_out"][0]["why"]
+    for leg in ("complex", "solvent"):                                     # repeat 0 put in repeat 1
+        (legs / leg / "result.json").write_text((tmp_path / "edges" / "a~b" / "repeat_0" / leg / "result.json")
+                                                .read_text())
+    assert ab()["a~b"]["ddg"] == pytest.approx(-1.5)
+    (legs / "complex" / "result.json").unlink()                            # repeat 1: a solvent leg of another prep
+    (legs / "solvent" / "result.json").write_text(json.dumps({"edge": "a~b", "leg": "solvent", "repeat": 1,
+                                                              **_leg_result(-10.6), "prepared_systems_sha256": "x"}))
+    edges = ab()
+    assert edges["a~b"]["ddg"] == pytest.approx(-1.5) and "other prepared systems" in edges["a~b"]["left_out"][0]["why"]
+    (legs / "solvent" / "result.json").write_text(json.dumps({"edge": "a~b", "leg": "solvent", "repeat": 1,
+                                                              **{k: v for k, v in _leg_result(-10.6).items()
+                                                                 if k != "prepared_systems_sha256"}}))
+    assert "does not record the prepared systems" in ab()["a~b"]["left_out"][0]["why"]
+    for text in ("", "[1]"):                                               # cannot be read, not a record
+        (legs / "solvent" / "result.json").write_text(text)
+        edges = ab()
+        assert edges["a~b"]["ddg"] == pytest.approx(-1.5) and edges["b~c"]["ddg"] == pytest.approx(1.0)
+        assert "cannot be read" in edges["a~b"]["left_out"][0]["why"]
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 2, {})
+    assert any("--repeat 1 --leg solvent --reschedule" in line for line in result_lines(summary))
+    # a record of a ligand without a pose: the ligand of the input of the run is taken
+    no_pose = Molecule.from_smiles("C")
+    prep = tmp_path / "edges" / "a~b" / "prep"
+    (prep / "ligand_a.json").write_text(no_pose.to_json())
+    methane = Ligand(name="a", offmol=Molecule.from_json(_METHANE))
+    info = {**json.loads((prep / "prep.json").read_text()), "ligand_a": "a", "ligand_b": "b"}
+    assert prepared_ligands(prep, info) is None
+    assert prepared_ligands(prep, info, [methane])[0] is methane

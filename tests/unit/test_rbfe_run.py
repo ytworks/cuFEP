@@ -966,7 +966,7 @@ def test_the_report_takes_the_edges_that_the_analysis_takes(tmp_path, edges_of_v
     assert "ddg" not in analyse_directory(root)["edges"][0]
     text = report("tyk2", root)
     row = next(csv.DictReader((root / "rbfe_report_edges.csv").open()))
-    assert row["ddg"] == "" and "+0.91" not in text and "legs of an earlier version are left out" in text
+    assert row["ddg"] == "" and "+0.91" not in text and "legs are left out of" in text
     # (fourth review, P2) every leg being run again and none finished yet: the earlier summary.json is not reported
     for path in (root / "edges" / "toluene~phenol").glob("repeat_*"):
         shutil.rmtree(path)
