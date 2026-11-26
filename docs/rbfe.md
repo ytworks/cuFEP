@@ -264,9 +264,10 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   that leg alone), and a note of the run names the edges. A run that continues a leg from its samples whose result
   is of version 1, or that has no result yet, first builds the System of this version and compares it with the
   checksum the samples recorded: the same (a leg without REST2) goes on, another is refused before the run writes,
-  with that command. A leg whose result was computed from other prepared systems than the record of its edge is
-  refused with or without `--reschedule`, which would keep the pre-equilibration made from them: the preparation they
-  were made from is restored, or the edge is computed in a new `output.dir`. `cufep benchmark report` takes the legs of a run directory
+  with that command. A leg computed from other prepared systems than the record of its edge (by its result or, stopped
+  before its result, by the marker of its start or its error, which name them from this version on) is refused with
+  or without `--reschedule`, which would keep the pre-equilibration made from them: the preparation they were made
+  from is restored, or the edge is computed in a new `output.dir`. `cufep benchmark report` takes the legs of a run directory
   as `cufep rbfe analyze` takes them, whatever results they have at the moment, not an earlier `summary.json`.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
