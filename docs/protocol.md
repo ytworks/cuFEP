@@ -732,11 +732,14 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   ghost, a molecule without nonbonded interactions, and an insertion puts a ghost at a place in
   the sphere and gives it its interactions. The ghosts of the start are waters of the prepared
   system, those whose oxygen is farthest from the ligand (`ghost_waters`); they are switched off
-  from the pre-equilibration on, which records them (`equil_ghosts.json`). A pre-equilibration of
-  other ghosts, and start configurations of the windows in another cell than the pre-equilibration
-  fixes, are not used again (the refusal says what to remove before `--reschedule`); one of an
-  earlier version without the record is used where its ghosts are those of this run (the images
-  nearest to the first heavy atom keep the ligand whole). Switching is done in the Context while it
+  from the pre-equilibration on, which records them (`equil_ghosts.json`). A leg that would start its
+  replica exchange from a pre-equilibration of other ghosts is refused before the run writes
+  anything (its restraint and the MD for it were made from it: the calculation goes to a new output
+  directory), and so are start configurations of the windows in another cell than the
+  pre-equilibration fixes (`--reschedule` starts the leg anew); a leg that goes on from its samples
+  does not start from its pre-equilibration. One of an earlier version without the record is used
+  where its ghosts are those of this run (the images nearest to the first heavy atom keep the ligand
+  whole). Switching is done in the Context while it
   runs (charge and epsilon of every site of the water in the nonbonded force and in the soft-core force of the
   ligand); a Context switched so gives the energies and forces of a System built so, on both
   backends (`spikes/m33_ghost_waters_on_the_backends.py`, the tests). With no ghost left an

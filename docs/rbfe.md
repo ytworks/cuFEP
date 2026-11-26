@@ -23,10 +23,12 @@ cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
 samples do not connect), 0 otherwise (also when some edges have no
-ddG yet because only some legs were run, `--leg`). A run in a directory that holds results is refused before it
-writes anything if a prepared edge of the network (one it runs, or one whose results it combines) was made
-from other inputs or settings (protein, ligands, force
-field, solvation, bilayer, cutoff, ionic strength, pH ...).
+ddG yet because only some legs were run, `--leg`). `--edge`, `--leg` and `--repeat` restrict a run to those legs;
+`--reschedule` starts the legs that run anew (their windows, samples and result are set aside in `previous_<n>/`).
+A run in a directory that holds results is refused before it writes anything if a prepared edge of the network (one
+it runs, or one whose results it combines) was made from other inputs or settings (protein, ligands, force
+field, solvation, bilayer, cutoff, ionic strength, pH ...) or by an earlier rule of the preparation (the analysis
+then leaves that edge out, and its RESULT line says to remove the directory of the edge and run it again).
 
 ## Inputs
 
@@ -164,9 +166,13 @@ its last cell). For a hybrid (cuFEP's own): the sphere is around the heavy atoms
 and B -> A have one sphere, each molecule taken whole along its bonds (those of the hybrid System, which its topology
 does not all hold) and the two end states put together by their centres, so that a ligand longer than half the cell
 has the sphere of the molecule whatever atom comes first; the ghost waters a pre-equilibration was made with are
-recorded beside it (`equil_ghosts.json`), and a pre-equilibration of other ghosts, or start configurations of the
-windows in another cell than the pre-equilibration fixes, are refused before anything is set aside (the refusal says
-what to remove before `--reschedule`); a water switched off has no charge and no Lennard-Jones in the NonbondedForce
+recorded beside it (`equil_ghosts.json`); a leg that would start its replica exchange from a pre-equilibration of other
+ghosts or without that record (a relative leg does not take one on trust), or from start configurations in another
+cell than the pre-equilibration fixes, is refused before the run writes anything, with the command for that leg:
+`--reschedule` sets such a pre-equilibration aside with the windows and samples and computes the leg anew; a leg that
+goes on from its samples, or is analysed again from complete ones, does not start from its pre-equilibration and is
+not refused for it; the fixed cell is part of the System of the samples, so that they are not continued in another
+cell; a water switched off has no charge and no Lennard-Jones in the NonbondedForce
 and no Lennard-Jones with the ligand at either end state; in the stand-in energy with which the trials are screened the
 ligand interacts with the parameters of both ends at full strength in every window, and the test with the full
 potential of the window that every trial that passes is given corrects it (what the stand-in is changes how many
@@ -206,9 +212,9 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   REST2 factor: a leg of it in which REST2 heated a window (`run.rest2.scale_of_window`), on an edge whose ligand B
   has terms in those torsions, is left out of the ddG as a missing leg; so is one for which this cannot be told (its
   hot region was `perturbed`, which version 1 chose by an earlier rule, or the prepared systems of its edge cannot
-  be read). Its RESULT line says why and how to compute it again (the pre-equilibration of a complex leg to remove
-  first, then `--edge ... --leg ... --reschedule`), and a note of the run names the edges. `cufep benchmark report`
-  takes the legs of a run directory as `cufep rbfe analyze` takes them, not an earlier `summary.json`.
+  be read). Its RESULT line says why and how to compute it again (`--edge ... --repeat ... --leg ... --reschedule`,
+  that leg alone), and a note of the run names the edges. `cufep benchmark report` takes the legs of a run directory
+  as `cufep rbfe analyze` takes them, whatever results they have at the moment, not an earlier `summary.json`.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
   of their variance. The edges fix the differences between the ligands; the one constant they leave is set

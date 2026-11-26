@@ -275,3 +275,20 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - P2 前処理のファイル欠落で `rbfe analyze` 全体が止まる → その leg だけを判定できないとして外す。
 - P3 `ligands.csv` の状態の実験値 → `exp_dg_of`(the compound 4j)。
 - GPU テスト d512824: 75 passed。全体のユニットテスト e90e819: 851 passed。
+
+### 2026-11-26 オーナーの 4 回目のレビュー(review 6069119877、7 件)と独立レビュー(2 件の追加)
+修正前のコード(d5c1ebb)で各件を再現し(独立レビューの 1 件と R2 は単独でも確認)、再現をテストにした。
+- 設計を 1 か所で直した: 平衡化のゴースト水の照合は、その平衡化からレプリカ交換を始める leg だけに行う(終わった leg や
+  標本から続ける leg は使わない。独立レビュー: 2ecbcd2 の終わった leg が再開で拒否され結果を失った)。run は書き込む前に
+  全 leg を判定し、leg ごとのコマンドを示す。`--reschedule` は使えない平衡化を窓・標本と一緒に `previous_<n>/` へ退避して
+  leg を作り直す(RBFE)。ABFE は拘束と拘束用 MD が平衡化から作られているので新しい出力先を案内する(R4)。
+- R3 / 独立 3: `cufep rbfe run --repeat` を追加し、除外した leg の RESULT 行はその repeat だけを再計算し、何も削除しない
+  (R6: GCMC なしで再利用できる平衡化を捨てない)。
+- R2: GCMC の complex leg の固定セルを試料の System に入れた(ABFE と同じ)。修正前は旧セルのチェックポイントから続行、
+  修正後は ConditionsError。
+- R1: レポートは、完了した leg が 0 件でも run のディレクトリなら `analyse_directory` で集計する。
+- 独立 2: 旧規則で前処理したエッジは、run が拒否するのと同じく analyze とレポートでも除外する。
+- R5: 空や途中までの NPZ でもその leg だけを外す。R7: GPU テストを PCI bus ID で比較(`CUDA_VISIBLE_DEVICES=1,0` で
+  修正前は失敗、修正後は通過)。
+- 確認: 59af960 の全体テスト 860 passed、ABFE の fingerprint は main と同一。eb36e30 の変更したテストファイル
+  130 passed。eb36e30 の全体テストと GPU テストは実行中。
