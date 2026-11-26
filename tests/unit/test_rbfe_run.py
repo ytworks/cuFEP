@@ -84,7 +84,8 @@ def _ligands(tmp_path, out_dir, smiles_b: str = "Oc1ccccc1", name_b: str = "phen
 def _usable(made_from: dict) -> dict:
     """A record of a prepared edge of toluene or phenol(ate) that the checks of a record pass: both legs, each mapping
     the first ring carbon (thirteenth review of PR #19: a record without legs was taken)."""
-    return {"made_from": made_from, "legs": {leg: {"mapping": {"1": 1}} for leg in ("complex", "solvent")}}
+    return {"made_from": made_from, "legs": {leg: {"mapping": {"1": 1}, "n_atoms_a": 15, "n_atoms_b": 13}
+                                             for leg in ("complex", "solvent")}}
 
 
 def _config(tmp_path, out_dir, mode: str, legs: str = "each"):
@@ -914,9 +915,13 @@ def _run_dir(root: Path, legs: dict) -> Path:
     import yaml
     from test_rbfe_network import _write_legs
 
+    from cufep.workflow import record_digest
+
     for edge, (prepared, c, s) in legs.items():
         shutil.copytree(prepared, root / "edges" / edge / "prep")
-        _write_legs(root, edge, 0, c, s)
+        # legs of this preparation: the digest of what its record was made from (fourteenth review of PR #19)
+        made = record_digest(json.loads((Path(prepared) / "prep.json").read_text()).get("made_from"))
+        _write_legs(root, edge, 0, {**c, "prepared_systems_sha256": made}, {**s, "prepared_systems_sha256": made})
     pairs = [edge.split("~") for edge in legs]
     names = sorted({x for pair in pairs for x in pair})
     (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 1}}))
@@ -1738,8 +1743,30 @@ def test_a_prepared_edge_whose_mapping_joins_mapped_atoms_or_whose_record_is_los
     assert "ddg" in analyse_directory(root)["edges"][0]
     (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 1}}))
     assert "are known neither" in analyse_directory(root)["edges"][0]["earlier_preparation"][0]
-    prepare_edge(rcfg, *ligands, _protein(), kept, "cube", print)
-    assert (kept / "prep" / "ligand_a.json").exists()
+    # (fourteenth review, P2) the record of A alone is written again, with the partial charges of the preparation; the
+    # record of B, sound, is left as it is (it was written again without its charges)
+    from openff.toolkit import Molecule
+
+    of_b = (kept / "prep" / "ligand_b.json").read_text()
+    assert Molecule.from_json(of_b).partial_charges is not None
+    from cufep.prep.ligand import load_ligands
+
+    read_again = load_ligands(tmp_path / "ligands.sdf")              # as a run reads its SDF: without charges
+    assert read_again[1].offmol.partial_charges is None
+    prepare_edge(rcfg, *read_again, _protein(), kept, "cube", print)
+    assert (kept / "prep" / "ligand_b.json").read_text() == of_b
+    assert Molecule.from_json((kept / "prep" / "ligand_a.json").read_text()).partial_charges is not None
+    # (fourteenth review, P2) REST2 on the perturbed region reads the ligands of the edge where its record of A is
+    # missing: those of the input of the run, before anything is written (the check before a run stopped with
+    # FileNotFoundError)
+    from cufep.rbfe.leg import hybrid_settings
+
+    (kept / "prep" / "ligand_a.json").unlink()
+    perturbed = rcfg.model_validate({**rcfg.model_dump(mode="json"), "sampling": {
+        **rcfg.model_dump(mode="json")["sampling"], "rest2": {"scale": 1.5, "region": "perturbed"}}})
+    with pytest.raises(WorkflowError, match="known neither from the records of its preparation"):
+        hybrid_settings(perturbed, "solvent", kept)
+    assert hybrid_settings(perturbed, "solvent", kept, ligands) == hybrid_settings(perturbed, "solvent")
 
 
 def test_a_leg_whose_hot_atoms_the_earlier_rule_chose_otherwise_is_refused_before_anything_is_written(

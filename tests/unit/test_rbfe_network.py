@@ -147,20 +147,11 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
         (leg_dir / "result.json").write_text(json.dumps({
             "delta_g": dg, "delta_g_error": 0.3 * 4.184, "n_states": 9, "backend": "openmm", "notes": [],
             "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}},
-            "run": {"hybrid_version": 2}}))
+            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "run": {"hybrid_version": 2}}))
     summary = analyse_directory(tmp_path)
     edge = summary["edges"][0]
     assert edge["ddg"] == pytest.approx(-1.5) and edge["se"] == pytest.approx(0.3 * math.sqrt(2))
     assert summary["dg"]["values"]["b"]["dg"] - summary["dg"]["values"]["a"]["dg"] == pytest.approx(-1.5)
-
-
-def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float = 298.15, pressure: float = 1.0,
-                overlap: float = 0.1):
-    return {"delta_g": dg_kcal * 4.184, "delta_g_error": None if se_kcal is None else se_kcal * 4.184,
-            "temperature_K": temperature, "pressure_bar": pressure, "lrc_method": "none",
-            "prepared_systems_sha256": "abc", "n_states": 9, "backend": "openmm", "notes": [],
-            "quality": {"overlap": {"lowest": overlap, "ok": overlap >= 0.03}, "samples": {"counted": 100.0}},
-            "run": {"hybrid_version": 2}}
 
 
 def _methane_json() -> str:
@@ -174,11 +165,42 @@ def _methane_json() -> str:
 _METHANE = _methane_json()
 
 
+def _methane_digest() -> str:
+    from openff.toolkit import Molecule
+
+    from cufep.prep.ligand import Ligand
+
+    return Ligand(name="m", offmol=Molecule.from_json(_METHANE)).digest()
+
+
+_METHANE_DIGEST = _methane_digest()
+
+
 def _prepared_record(**made_from) -> dict:
     """A record of the preparation of an edge of two methane ligands (written beside it), each leg mapping all their
-    atoms: what the analysis checks of a prepared edge passes."""
+    atoms, with what every preparation records of its inputs: what the analysis checks of a prepared edge passes."""
     mapping = {str(i): i for i in range(5)}
-    return {"made_from": dict(made_from), "legs": {"complex": {"mapping": mapping}, "solvent": {"mapping": mapping}}}
+    inputs = {"protein_sha256": "protein", "ligand_a": _METHANE_DIGEST, "ligand_b": _METHANE_DIGEST, "forcefield": {},
+              "membrane": {}, "solvation": {}, "box_shape": "cube", "mapping": {}, "backend": "openmm",
+              "thermodynamics": {}, "dynamics": {}}
+    leg = {"mapping": mapping, "n_atoms_a": 5, "n_atoms_b": 5}
+    return {"made_from": {**inputs, **made_from}, "legs": {"complex": dict(leg), "solvent": dict(leg)}}
+
+
+def _digest_of_the_record(record: dict) -> str:
+    from cufep.workflow import record_digest
+
+    return record_digest(record["made_from"])
+
+
+def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float = 298.15, pressure: float = 1.0,
+                overlap: float = 0.1):
+    return {"delta_g": dg_kcal * 4.184, "delta_g_error": None if se_kcal is None else se_kcal * 4.184,
+            "temperature_K": temperature, "pressure_bar": pressure, "lrc_method": "none",
+            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "n_states": 9, "backend": "openmm",
+            "notes": [],
+            "quality": {"overlap": {"lowest": overlap, "ok": overlap >= 0.03}, "samples": {"counted": 100.0}},
+            "run": {"hybrid_version": 2}}
 
 
 def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
@@ -348,7 +370,11 @@ def _prepared(out_dir, edge: str, ligand_a: str, ligand_b: str) -> None:
         molecule._conformers = [molecule.conformers[0] + sum(map(ord, key)) * 0.01 * unit.angstrom]
         (d / f"ligand_{end}.json").write_text(molecule.to_json())
         digests[f"ligand_{end}"] = Ligand(name=key, offmol=molecule).digest()
-    (d / "prep.json").write_text(json.dumps(_prepared_record(**digests)))
+    record = _prepared_record(**digests)
+    (d / "prep.json").write_text(json.dumps(record))
+    for result in (out_dir / "edges" / edge).glob("repeat_*/*/result.json"):   # the legs of this preparation
+        result.write_text(json.dumps({**json.loads(result.read_text()),
+                                      "prepared_systems_sha256": _digest_of_the_record(record)}))
 
 
 def test_a_ligand_of_one_name_in_two_edges_must_be_one_molecule_for_a_network(tmp_path):
@@ -808,6 +834,9 @@ def test_the_ions_of_the_legs_are_compared_by_their_parameters_and_a_record_is_c
     legs, each a mapping that is not empty, one to one, of whole atom numbers of the ligands, and an alchemical water
     with its ion; another form is a reason to leave the edge out, never an error (a leg recorded as a list stopped the
     analysis of every edge; `{}`, `mapping: {}` and 1.9 were taken)."""
+    import json
+    from types import SimpleNamespace
+
     from openff.toolkit import Molecule
 
     from cufep.prep.ligand import Ligand
@@ -815,28 +844,53 @@ def test_the_ions_of_the_legs_are_compared_by_their_parameters_and_a_record_is_c
 
     methane = Ligand(name="m", offmol=Molecule.from_json(_METHANE))
     both = (methane, methane)
+    # an edge whose net charge changes by one (the molecules of methane, the charge of B said -1)
+    charged = (methane, SimpleNamespace(name="m", n_atoms=5, formal_charge=-1, to_rdkit=methane.to_rdkit))
     na = {"name": "NA", "charge": 1.0, "sigma_nm": 0.2439, "epsilon_kj_mol": 0.3658}
     info = _prepared_record(alchemical_water_rule=2)
-    info["legs"]["complex"]["alchemical_water"] = {"ion": {**na, "from": "the system"}}
-    info["legs"]["solvent"]["alchemical_water"] = {"ion": {**na, "from": "the force field"}}
-    assert earlier_rules_of(info, both) == []
+    info["legs"]["complex"]["alchemical_water"] = {"ion": {**na, "from": "the system"}, "atoms_a": [7, 8, 9],
+                                                   "atoms_b": [7, 8, 9]}
+    info["legs"]["solvent"]["alchemical_water"] = {"ion": {**na, "from": "the force field"}, "atoms_a": [5, 6, 7],
+                                                   "atoms_b": [5, 6, 7]}
+    assert earlier_rules_of(info, charged) == []
     info["legs"]["solvent"]["alchemical_water"]["ion"] = {**na, "sigma_nm": 0.3, "from": "the force field"}
-    assert any("other ions" in why for why in earlier_rules_of(info, both))
+    assert any("other ions" in why for why in earlier_rules_of(info, charged))
+    # (fourteenth review) the water of one leg only, or without its atoms, is not taken; nor a water of an edge of one
+    # charge
+    one_leg = json.loads(json.dumps(info))
+    del one_leg["legs"]["solvent"]["alchemical_water"]
+    assert any("records no alchemical water" in why for why in earlier_rules_of(one_leg, charged))
+    no_atoms = json.loads(json.dumps(info))
+    del no_atoms["legs"]["solvent"]["alchemical_water"]["atoms_a"]
+    assert any("not recorded with its atoms" in why for why in earlier_rules_of(no_atoms, charged))
+    assert any("the net charge does not change" in why for why in earlier_rules_of(info, both))
     whole = {str(i): i for i in range(5)}
-    for record, why in (({}, "does not say what it was made from"), ({"made_from": {}}, "does not have both legs"),
-                        ({"made_from": {}, "legs": []}, "does not have both legs"),
-                        ({"made_from": {}, "legs": {"complex": {"mapping": whole}}}, "does not have both legs"),
-                        ({"made_from": {}, "legs": {"complex": [1], "solvent": {"mapping": whole}}}, "has no mapping"),
-                        ({"made_from": {}, "legs": {"complex": {"mapping": {}}, "solvent": {"mapping": whole}}},
+    made = _prepared_record()["made_from"]
+    leg = {"n_atoms_a": 5, "n_atoms_b": 5}
+    for record, why in (({}, "does not say what it was made from"), ({"made_from": {}, "legs": {}},
+                                                                     "does not say what it was made from"),
+                        ({"made_from": made}, "does not have both legs"),
+                        ({"made_from": made, "legs": []}, "does not have both legs"),
+                        ({"made_from": made, "legs": {"complex": {"mapping": whole, **leg}}},
+                         "does not have both legs"),
+                        ({"made_from": made, "legs": {"complex": [1], "solvent": {"mapping": whole, **leg}}},
                          "has no mapping"),
-                        ({"made_from": {}, "legs": {"complex": {"mapping": {"0": 1.9}}, "solvent": {"mapping": whole}}},
-                         "is not of atom numbers"),
-                        ({"made_from": {}, "legs": {"complex": {"mapping": {"0": 0, "1": 0}},
-                                                    "solvent": {"mapping": whole}}}, "is not one to one"),
-                        ({"made_from": {}, "legs": {"complex": {"mapping": {"5": 0}}, "solvent": {"mapping": whole}}},
+                        ({"made_from": made, "legs": {"complex": {"mapping": {}, **leg},
+                                                      "solvent": {"mapping": whole, **leg}}}, "has no mapping"),
+                        ({"made_from": made, "legs": {"complex": {"mapping": {"0": 1.9}, **leg},
+                                                      "solvent": {"mapping": whole, **leg}}}, "is not of atom numbers"),
+                        ({"made_from": made, "legs": {"complex": {"mapping": {"\u00b2": 0}, **leg},
+                                                      "solvent": {"mapping": whole, **leg}}}, "is not of atom numbers"),
+                        ({"made_from": made, "legs": {"complex": {"mapping": {"0": 0, "1": 0}, **leg},
+                                                      "solvent": {"mapping": whole, **leg}}}, "is not one to one"),
+                        ({"made_from": made, "legs": {"complex": {"mapping": {"5": 0}, **leg},
+                                                      "solvent": {"mapping": whole, **leg}}},
                          "names atoms the ligands do not have"),
-                        ({"made_from": {}, "legs": {"complex": {"mapping": whole, "alchemical_water": [1]},
-                                                    "solvent": {"mapping": whole}}}, "not recorded with its ion"),
+                        ({"made_from": made, "legs": {"complex": {"mapping": whole},
+                                                      "solvent": {"mapping": whole, **leg}}},
+                         "does not give the numbers of atoms"),
+                        ({"made_from": made, "legs": {"complex": {"mapping": whole, "alchemical_water": [1], **leg},
+                                                      "solvent": {"mapping": whole, **leg}}}, "net charge does not"),
                         ([1], "is not a record")):
         assert any(why in found for found in earlier_rules_of(record, both)), (record, earlier_rules_of(record, both))
     assert any("are known neither" in why for why in earlier_rules_of(_prepared_record(), None))
@@ -864,3 +918,11 @@ def test_a_broken_record_of_one_edge_leaves_that_edge_out_and_the_analysis_goes_
         edges = {e["edge"]: e for e in combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1,
                                                        {})["edges"]}
         assert "ddg" not in edges["b~c"] and edges["b~c"]["earlier_preparation"]
+    # (fourteenth review, P1) legs of other prepared systems than the record beside them (a prep/ of another receptor
+    # restored): each leg records the digest of what it was made from; they are not taken
+    other = _prepared_record(protein_sha256="another receptor")
+    (tmp_path / "edges" / "b~c" / "prep" / "prep.json").write_text(json.dumps(other))
+    edges = {e["edge"]: e for e in combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1,
+                                                   {})["edges"]}
+    assert "ddg" not in edges["b~c"] and "other prepared systems" in edges["b~c"]["earlier_preparation"][0]
+    assert edges["a~b"]["ddg"] == pytest.approx(-1.5)

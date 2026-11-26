@@ -342,16 +342,20 @@ def molecules_of(system, topology, bonds) -> list[list[int]]:
 
 
 def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int], unique_b: list[int],
-                     rule: int | None = None) -> list[int]:
+                     rule: int | None = None, inputs=None) -> list[int]:
     """The hot atoms of the hybrid ligand by the rule of :mod:`cufep.rbfe.hot_region`, from the two prepared ligands
     (their bonds and bond orders; atom i of a ligand is atom ``ligand[i]`` of its System); ``rule``: a version of the
     rule (:data:`cufep.rbfe.hot_region.HOT_REGION_RULE`, the present one where None)."""
-    from openff.toolkit import Molecule
-
     from cufep.rbfe.hot_region import perturbed_hot_atoms
+    from cufep.rbfe.prep import ligands_of_the_edge
 
-    prep = Path(edge_dir) / "prep"
-    molecules = [Molecule.from_json((prep / f"ligand_{end}.json").read_text()).to_rdkit() for end in ("a", "b")]
+    # the ligands of its records, else those of the input of the run that the edge was made from (``inputs``; fourteenth
+    # review of PR #19: a run with REST2 on the perturbed region stopped where ligand_a.json was missing)
+    ligands = ligands_of_the_edge(edge_dir, inputs)
+    if ligands is None:
+        raise WorkflowError(f"the ligands of the edge in {edge_dir} are known neither from the records of its "
+                            "preparation nor from the input of the run")
+    molecules = [lig.to_rdkit() for lig in ligands]
     n_a = len(a["positions"])
     b_to_hybrid = {j: i for i, j in core_map.items()}
     b_to_hybrid.update({j: n_a + k for k, j in enumerate(unique_b)})
@@ -361,7 +365,7 @@ def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int],
                                       **({} if rule is None else {"rule": rule})))
 
 
-def hot_region_rule_of(rcfg, edge_dir: Path, leg: str) -> dict:
+def hot_region_rule_of(rcfg, edge_dir: Path, leg: str, inputs=None) -> dict:
     """``{"hot_region_rule": n}`` for the settings of a leg whose hot atoms (``sampling.rest2.region: perturbed``) the
     present rule chooses otherwise than version 1 did (a bond that closes a ring in B); empty elsewhere, so that the
     records of the other legs are those of earlier versions. The samples of such a leg made by version 1 record no
@@ -382,8 +386,8 @@ def hot_region_rule_of(rcfg, edge_dir: Path, leg: str) -> dict:
         return {}
     a, b = end["a"], end["b"]
     unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
-    now = perturbed_region(edge_dir, a, b, end["core_map"], unique_b)
-    before = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, rule=1)
+    now = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, inputs=inputs)
+    before = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, rule=1, inputs=inputs)
     return {} if now == before else {"hot_region_rule": HOT_REGION_RULE}
 
 
@@ -479,7 +483,7 @@ def end_states_heavy(a: dict, b: dict) -> tuple[list, list]:
     return points, bonds
 
 
-def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> int | None:
+def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str, inputs=None) -> int | None:
     """The terms of B of the proper torsions of the core of the hybrid of a leg of a prepared edge that version 1 of
     the hybrid left unscaled with REST2 (:func:`cufep.rbfe.hybrid.terms_version_1_left_unscaled`), the hot region of
     the ligand by ``region``; None where the prepared systems of the edge cannot be read. They are terms of the two
@@ -497,12 +501,13 @@ def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> i
         end = load_end_states(edge_dir, of)
         a, b = end["a"], end["b"]
         unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
-        hot = perturbed_region(edge_dir, a, b, end["core_map"], unique_b) if region == "perturbed" else None
+        hot = (perturbed_region(edge_dir, a, b, end["core_map"], unique_b, inputs=inputs) if region == "perturbed"
+               else None)
         water = (info["legs"][of].get("alchemical_water") or {}).get("atoms_a", [])
         hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                     mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
                                     end["core_map"], rest2=True, alchemical_water=water, rest2_ligand_atoms=hot)
-    except (OSError, EOFError, zipfile.BadZipFile, KeyError, ValueError, mm.OpenMMException):
+    except (OSError, EOFError, zipfile.BadZipFile, KeyError, ValueError, mm.OpenMMException, WorkflowError):
         # a file of the prepared edge is missing or cannot be read (an XML, an NPZ empty or cut short): not known for
         # this leg alone, and the analysis of the other edges goes on (third and fourth reviews of PR #19:
         # FileNotFoundError, EOFError and BadZipFile stopped `cufep rbfe analyze`)
@@ -542,7 +547,8 @@ def recorded_form_of_the_system(leg_dir: Path, xml: str, system, cell) -> str:
     return xml
 
 
-def build_leg(rcfg, edge_dir: Path, leg: str, leg_dir: Path | None = None, reschedule: bool = False) -> HybridLeg:
+def build_leg(rcfg, edge_dir: Path, leg: str, leg_dir: Path | None = None, reschedule: bool = False,
+              inputs=None) -> HybridLeg:
     """The hybrid System of a leg from its prepared end states, and a prepared system of it. With the directory of the
     leg (``leg_dir``) and whether it is run with --reschedule: the ghost waters of the start that its pre-equilibration
     and samples were made with where an earlier version made them (:func:`ghosts_of_the_leg`)."""
@@ -562,7 +568,7 @@ def build_leg(rcfg, edge_dir: Path, leg: str, leg_dir: Path | None = None, resch
                                                info.get("input_chains"))
     water = (info["legs"][leg].get("alchemical_water") or {}).get("atoms_a", [])
     unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
-    hot_ligand = perturbed_region(edge_dir, a, b, end["core_map"], unique_b) \
+    hot_ligand = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, inputs=inputs) \
         if rest2_on and rest2.region == "perturbed" else None
     hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                 mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
@@ -614,7 +620,7 @@ def water_moves_record(gcmc: dict | None) -> dict:
             "standard_volume_nm3": float(gcmc["standard_volume_nm3"])}
 
 
-def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None) -> dict:
+def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None, inputs=None) -> dict:
     """The settings of a relative run that the samples of a leg depend on beyond its System; the grand canonical
     moves of water for the leg that makes them (written only there, so that the solvent leg and the legs of
     earlier versions keep the record they had); with the directory of the edge, the version of the rule of the hot
@@ -622,7 +628,8 @@ def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None) 
     settings = {"rbfe": {"alchemy": settings_as_recorded(rcfg.alchemy),
                          "mapping": settings_as_recorded(rcfg.mapping)},
                 "sampling.rest2": {**rcfg.sampling.rest2.model_dump(mode="json"),
-                                   **(hot_region_rule_of(rcfg, edge_dir, leg) if edge_dir is not None and leg else {})}}
+                                   **(hot_region_rule_of(rcfg, edge_dir, leg, inputs) if edge_dir is not None and leg
+                                      else {})}}
     if gcmc_in(rcfg, leg):
         from cufep.workflow import gcmc_record
 

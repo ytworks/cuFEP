@@ -264,7 +264,7 @@ def prepare_again_command(edges, out_dir=None) -> str:
 
 
 def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs,
-                                        reschedule: bool) -> None:
+                                        reschedule: bool, inputs=None) -> None:
     """Before a run moves or writes anything, for every leg it runs with grand canonical moves of water: a
     pre-equilibration that cannot start its replica exchange (:func:`cufep.engine.leg.equil_ghosts_problem`; a
     relative leg does not take one without a record of its ghost waters), where the leg starts from it, and start
@@ -307,7 +307,8 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                 if gcmc_in(rcfg, leg) and starts_anew(leg_dir, reschedule):
                     why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
                            else equil_ghosts_problem(leg_dir / "equil.npz",
-                                                     build_leg(rcfg, edge_dir, leg, leg_dir, reschedule).gcmc))
+                                                     build_leg(rcfg, edge_dir, leg, leg_dir, reschedule,
+                                                               inputs).gcmc))
                     if why is not None and reschedule:
                         set_aside = True                 # --reschedule sets it aside; a new one is made
                     elif why is not None:
@@ -352,7 +353,8 @@ def equil_settings_problem(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: i
     return None
 
 
-def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
+def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool,
+                             inputs=None) -> None:
     """Before a run moves or writes anything: the samples of every leg it runs, and the checkpoint of their start
     without samples, are continued only under the conditions they were made under, which the replica exchange
     compares when it opens them (:meth:`cufep.sampling.storage.LegStorage.check_conditions`); what of them the
@@ -385,14 +387,14 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                         commands.append(rerun_command(edge, r, [leg], out_dir))
                     continue
                 leg_dir = out_dir / "edges" / edge / f"repeat_{r}" / leg
-                settings = hybrid_settings(rcfg, leg, out_dir / "edges" / edge)
+                settings = hybrid_settings(rcfg, leg, out_dir / "edges" / edge, inputs)
                 recorded = settings_of_the_samples(leg_dir, settings)
                 if recorded is not settings:
                     # samples that record no version of the rule of the hot atoms where the two versions choose other
                     # atoms: they are continued only where their System is that of the hot atoms of this rule
                     # (thirteenth review of PR #19: those of 48eea8c to e0f9743 are; those of version 1 are not)
                     same = system_of_the_samples(leg_dir, build_leg(rcfg, out_dir / "edges" / edge, leg, leg_dir,
-                                                                    False).xml)
+                                                                    False, inputs).xml)
                     if not same:
                         problems.append(f"the {leg} leg of {edge}, repeat {r}: its samples were made with the hot "
                                         "atoms of version 1 of the rule of sampling.rest2.region: perturbed (a bond "
@@ -539,8 +541,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
                             + prepare_again_command([edge for edge, _message in refused], out_dir))
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
-    check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
-    check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
+    check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
+    check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
     states = states_of(rcfg, ligands)
     experiment = experiment_of(rcfg, ligands, states)
     if states is not None:
@@ -593,7 +595,8 @@ def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, 
     publish_text(out_dir / "network.json", json.dumps(record, indent=1))
 
 
-def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | None = None) -> list[dict]:
+def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | None = None,
+                      inputs=None) -> list[dict]:
     """The legs of a repeat whose hybrid System was of version 1 (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`) and may
     differ from that of this version: REST2 heated a window, and ligand B has terms in the proper torsions of the
     core, which version 1 left unscaled, so that the energies of its states were not those of its Hamiltonian (second
@@ -633,7 +636,7 @@ def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | N
                    "unscaled, is not known")
         else:
             if (leg, region) not in counted:
-                counted[(leg, region)] = terms_left_unscaled_by_version_1(edge_dir, leg, region)
+                counted[(leg, region)] = terms_left_unscaled_by_version_1(edge_dir, leg, region, inputs)
             n = counted[(leg, region)]
             if n == 0:
                 continue
@@ -685,17 +688,29 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int, inputs=None) -> di
     if earlier_rules:
         out["earlier_preparation"] = earlier_rules
         return out
+    from cufep.workflow import record_digest
+
+    of_the_record = record_digest(info.get("made_from")) if info else None
     complete, counted = [], {}
     for r in range(repeats):
         legs = {}
         for leg in ("complex", "solvent"):
             f = Path(edge_dir) / f"repeat_{r}" / leg / "result.json"
             legs[leg] = json.loads(f.read_text()) if f.exists() else None
+        # the legs of the prepared systems of this record (fourteenth review of PR #19: legs of a receptor X were taken
+        # with the record of a receptor Y restored beside them; each leg records the digest of what it was made from)
+        other = [leg for leg in legs if legs[leg] and of_the_record is not None
+                 and legs[leg].get("prepared_systems_sha256") != of_the_record]
+        if other:
+            out["earlier_preparation"] = [f"the {' and '.join(other)} leg(s) of repeat {r} were computed from "
+                                          "other prepared systems than its record of the preparation "
+                                          "(prepared_systems_sha256)"]
+            return out
         if not all(legs.values()) or any(legs[leg].get("delta_g") is None for leg in legs):
             out["repeats"].append({"repeat": r, "missing": [leg for leg in legs if not legs[leg]
                                                              or legs[leg].get("delta_g") is None]})
             continue
-        earlier = legs_of_version_1(Path(edge_dir), r, legs, counted)
+        earlier = legs_of_version_1(Path(edge_dir), r, legs, counted, inputs)
         if earlier:
             # left out, as a leg that is missing: it is computed again (result_lines says how)
             out["repeats"].append({"repeat": r, "earlier_version": earlier})

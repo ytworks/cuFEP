@@ -92,7 +92,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     made_from = edge_made_from(cfg, ligand_a, ligand_b, box_shape)
     info = prepared_edge(cfg, ligand_a, ligand_b, edge_dir, box_shape)
     if info is not None:
-        restore_ligand_records(prep_dir, info, ligand_a, ligand_b)
+        restore_ligand_records(prep_dir, info, ligand_a, ligand_b, cfg)
         return info
     problems = charge_change_problems([ligand_a, ligand_b], [(ligand_a.name, ligand_b.name)])
     if problems:
@@ -267,28 +267,32 @@ def custom_core_rule_holds(info: dict, ligands) -> bool:
         return False
 
 
-def prepared_ligands(prep_dir: Path, info: dict, inputs=None):
-    """The two ligands of a prepared edge (:class:`cufep.prep.ligand.Ligand`, A then B): those of the records of the
-    preparation (``ligand_a.json``, ``ligand_b.json``), else the ligands of ``inputs`` (the ligands of the run, or of
-    its SDF) of the names of the edge; each the molecule its record was made from (the digest of ``made_from``).
-    None where they are not known (thirteenth review of PR #19: a record of the preparation without ligand_a.json was
-    taken by the run, which checks its own ligands, and left out by the analysis right after)."""
+def _ligand_of_record(prep_dir: Path, end: str, name, digest):
+    """The ligand of one end of a prepared edge from its record (``ligand_<end>.json``) where it is there, can be read
+    and is the molecule the record of the edge was made from (``digest``); else None."""
     from cufep.prep.ligand import Ligand
 
+    try:
+        from openff.toolkit import Molecule
+
+        found = Ligand(name=str(name), offmol=Molecule.from_json((Path(prep_dir) / f"ligand_{end}.json").read_text()))
+    except Exception:  # noqa: BLE001 - a record that is missing or cannot be read
+        return None
+    return found if digest is not None and found.digest() == digest else None
+
+
+def prepared_ligands(prep_dir: Path, info: dict, inputs=None):
+    """The two ligands of a prepared edge (:class:`cufep.prep.ligand.Ligand`, A then B): those of the records of the
+    preparation (``ligand_a.json``, ``ligand_b.json``), else the ligands of ``inputs`` (the ligands of the run, or a
+    function that reads those of its SDF) of the names of the edge; each the molecule its record was made from (the
+    digest of ``made_from``). None where they are not known (thirteenth review of PR #19: a record of the preparation
+    without ligand_a.json was taken by the run, which checks its own ligands, and left out by the analysis right
+    after; fourteenth review: every reader of the ligands of an edge takes them so)."""
     made_from = info.get("made_from") if isinstance(info, dict) and isinstance(info.get("made_from"), dict) else {}
     out = []
     for end in ("a", "b"):
         name, digest = (info or {}).get(f"ligand_{end}"), made_from.get(f"ligand_{end}")
-        found = None
-        try:
-            from openff.toolkit import Molecule
-
-            record = (Path(prep_dir) / f"ligand_{end}.json").read_text()
-            found = Ligand(name=str(name), offmol=Molecule.from_json(record))
-            if digest is not None and found.digest() != digest:
-                found = None
-        except Exception:  # noqa: BLE001 - a record that is missing or cannot be read: the inputs are tried
-            found = None
+        found = _ligand_of_record(prep_dir, end, name, digest)
         if found is None:
             candidates = (inputs() if callable(inputs) else inputs) or []
             found = next((lig for lig in candidates if lig.name == name and digest is not None
@@ -299,18 +303,47 @@ def prepared_ligands(prep_dir: Path, info: dict, inputs=None):
     return tuple(out)
 
 
-def restore_ligand_records(prep_dir: Path, info: dict, ligand_a, ligand_b) -> None:
-    """Write the records of the ligands of a prepared edge that are missing or cannot be read, from the ligands of the
-    run, which are those its record was made from (its digests): so that the analysis checks what the run checked."""
-    if prepared_ligands(prep_dir, info) is not None:
-        return
+def ligands_of_the_edge(edge_dir: Path, inputs=None):
+    """The two ligands of a prepared edge (:func:`prepared_ligands`) from its record; None where they are not known."""
+    import json as _json
+
+    try:
+        info = _json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return prepared_ligands(Path(edge_dir) / "prep", info, inputs) if isinstance(info, dict) else None
+
+
+def restore_ligand_records(prep_dir: Path, info: dict, ligand_a, ligand_b, cfg) -> None:
+    """Write the record of each ligand of a prepared edge that is missing, cannot be read or is not the molecule the
+    edge was made from, from the ligand of the run that is (its digest), with its partial charges as the preparation
+    gives them: so that the analysis checks what the run checked. A record that is sound is left as it is (fourteenth
+    review of PR #19: the record of B, with its charges, was written again without them when that of A was
+    missing)."""
+    from cufep.prep.ligand import assign_partial_charges
+
+    made_from = info.get("made_from") or {}
     for end, lig in (("a", ligand_a), ("b", ligand_b)):
-        if lig.digest() == (info.get("made_from") or {}).get(f"ligand_{end}"):
-            publish_text(Path(prep_dir) / f"ligand_{end}.json", lig.offmol.to_json())
+        digest = made_from.get(f"ligand_{end}")
+        if _ligand_of_record(prep_dir, end, info.get(f"ligand_{end}"), digest) is not None or lig.digest() != digest:
+            continue
+        assign_partial_charges(lig, cfg.forcefield.ligand_charges, cache_dir=Path(cfg.output.dir) / "cache")
+        publish_text(Path(prep_dir) / f"ligand_{end}.json", lig.offmol.to_json())
 
 
 def _is_index(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_atom_number(text) -> bool:
+    """A key of a mapping as the preparation writes it: an atom number in ASCII decimal digits (fourteenth review of
+    PR #19: "²" passed ``str.isdigit`` and stopped the analysis at ``int``)."""
+    return isinstance(text, str) and text.isascii() and text.isdigit()
+
+
+#: what every preparation records of what an edge was made from (all records since the relative calculations exist)
+MADE_FROM_KEYS = ("protein_sha256", "ligand_a", "ligand_b", "forcefield", "membrane", "solvation", "box_shape",
+                  "mapping", "backend", "thermodynamics", "dynamics")
 
 
 def record_problems(info, ligands=None) -> list[str]:
@@ -322,21 +355,37 @@ def record_problems(info, ligands=None) -> list[str]:
     analysis of every edge)."""
     if not isinstance(info, dict):
         return ["its record is not a record"]
-    if not isinstance(info.get("made_from"), dict):
+    made_from = info.get("made_from")
+    if not isinstance(made_from, dict):
         return ["its record does not say what it was made from"]
+    # what every preparation records of its inputs and settings (fourteenth review of PR #19: `made_from: {}` was
+    # taken by the analysis, which the run refuses)
+    missing = [k for k in MADE_FROM_KEYS if k not in made_from]
+    if missing or not all(isinstance(made_from[k], str) and made_from[k] for k in ("ligand_a", "ligand_b")):
+        return [f"its record does not say what it was made from ({', '.join(missing) or 'its ligands'})"]
     legs = info.get("legs")
     if not isinstance(legs, dict) or any(leg not in legs for leg in ("complex", "solvent")):
         return ["its record does not have both legs"]
     sizes = None if ligands is None else (ligands[0].n_atoms, ligands[1].n_atoms)
+    # an edge that changes the net charge has an alchemical water in both legs, of one charge none (fourteenth review
+    # of PR #19: a record with the water of one leg, or without its atoms, was taken)
+    dq = None if ligands is None else int(ligands[0].formal_charge) - int(ligands[1].formal_charge)
     out = []
     for leg in ("complex", "solvent"):
         record = legs[leg]
-        mapping = record.get("mapping") if isinstance(record, dict) else None
+        if not isinstance(record, dict):
+            out.append(f"the record of its {leg} leg has no mapping")
+            continue
+        # the numbers of atoms of the two end states, which the jobs of a run are made with (fourteenth review: a
+        # record without them stopped the run after it had written its record)
+        if not all(_is_index(record.get(k)) and record.get(k) > 0 for k in ("n_atoms_a", "n_atoms_b")):
+            out.append(f"the record of its {leg} leg does not give the numbers of atoms of its end states")
+        mapping = record.get("mapping")
         if not isinstance(mapping, dict) or not mapping:
             out.append(f"the record of its {leg} leg has no mapping")
             continue
         pairs = list(mapping.items())
-        if not all(isinstance(k, str) and k.isdigit() and _is_index(v) for k, v in pairs):
+        if not all(_is_atom_number(k) and _is_index(v) for k, v in pairs):
             out.append(f"the mapping of its {leg} leg is not of atom numbers")
             continue
         a_atoms, b_atoms = [int(k) for k, _v in pairs], [v for _k, v in pairs]
@@ -345,12 +394,24 @@ def record_problems(info, ligands=None) -> list[str]:
         elif sizes is not None and (max(a_atoms) >= sizes[0] or max(b_atoms) >= sizes[1]):
             out.append(f"the mapping of its {leg} leg names atoms the ligands do not have")
         water = record.get("alchemical_water")
-        if water is not None:
-            ion = water.get("ion") if isinstance(water, dict) else None
-            if not isinstance(ion, dict) or not all(
-                    isinstance(ion.get(k), (int, float)) and not isinstance(ion.get(k), bool)
-                    for k in ("charge", "sigma_nm", "epsilon_kj_mol")):
-                out.append(f"the alchemical water of its {leg} leg is not recorded with its ion")
+        if water is None:
+            if dq:
+                out.append(f"its {leg} leg records no alchemical water, and the net charge changes by {-dq:+d}")
+            continue
+        if dq == 0:
+            out.append(f"its {leg} leg records an alchemical water, and the net charge does not change")
+            continue
+        ion = water.get("ion") if isinstance(water, dict) else None
+        if not isinstance(ion, dict) or not all(
+                isinstance(ion.get(k), (int, float)) and not isinstance(ion.get(k), bool)
+                for k in ("charge", "sigma_nm", "epsilon_kj_mol")):
+            out.append(f"the alchemical water of its {leg} leg is not recorded with its ion")
+            continue
+        atoms_a, atoms_b = water.get("atoms_a"), water.get("atoms_b")
+        if (not isinstance(atoms_a, list) or not atoms_a or not all(_is_index(i) for i in atoms_a)
+                or not isinstance(atoms_b, list) or len(atoms_b) != len(atoms_a)
+                or not all(_is_index(i) for i in atoms_b)):
+            out.append(f"the alchemical water of its {leg} leg is not recorded with its atoms")
     return out
 
 
