@@ -535,3 +535,13 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   続き、途中の予備計算と平衡化はやり直し)。数値はスケジューリングに依らない(どの GPU のどのワーカーがどの
   レプリカを進めるかだけが違う)。
 
+### 2026-11-27 全脚を cuPotential で動かす(オーナーの要件)
+- 5 辺の TYK2(ejm_31~ejm_45、ejm_42~ejm_54、ejm_43~ejm_42、ejm_50~ejm_42、ejm_50~ejm_55)と A2A の 4d~4f は、hybrid の
+  1 原子に SHAKE で拘束できない水素(4〜5 本、または長さの違うもの)が付き、プラグインの積分器(SETTLE と SHAKE のみ)
+  で動かず標準 OpenMM で計算されていた。
+- 対応づけを直す(b53f969): 水素を持つ元素の違う重原子の組(O–H/CH₃、CH₂/NH)は Kartograf をその組なしでやり直す
+  (Kartograf の `filter_element_changes` と同じ扱いを当該の組に)。3 本を超える水素を持つ炭素の未対応の水素は近い順に
+  組む(LOMAP の `all_atom_match_list`)。組み合わせは cuFEP 独自で、OpenFE と perses は CCMA があるので要らない。
+- 6 辺を準備し直し、水素はすべて SHAKE に入った。対応する原子 30→31、32→34、32→31、30→29、32→28、34→36。
+- 未: TYK2 の 5 辺を新しい対応・cuPotential で計算し、記録済みの値(08d58d5)と比べる。A2A は止めてある。
+

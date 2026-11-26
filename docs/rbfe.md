@@ -86,6 +86,29 @@ which are those of OpenFE's relative protocol. Then OpenFE's rule from perses: w
 between two mapped atoms changes its length, or is constrained at one end only, its hydrogen leaves the
 mapping (with `map_hydrogens_on_hydrogens_only: false`, the atom mapped onto a hydrogen).
 
+The hybrid keeps the unmapped hydrogens of both ligands on a mapped atom, and the integrator of the cuPotential plugin
+constrains three hydrogens of one length on an atom at most (SHAKE: "only SETTLE and SHAKE constraints are
+implemented"; OpenMM's own integrators take the rest with CCMA). Where Kartograf's mapping would put more on one
+atom, it is changed before the systems are built (cuFEP's own choice, made of the two published steps below; OpenFE
+and perses, whose integrators have CCMA, need neither):
+
+- a mapped pair of heavy atoms of other elements that both carry hydrogens (the O of a hydroxyl onto the C of a
+  methyl in TYK2, a CH2 onto an NH): their hydrogens are constrained to other lengths and cannot be mapped onto each
+  other. Kartograf maps again without that pair, as its own `filter_element_changes` ("Forces a mapping to exclude
+  any alchemical element changes in the core") does for every pair, and keeps the largest connected part as after
+  its filters (the ethyl beyond that CH2 leaves the mapping too);
+- a mapped heavy atom on which the hybrid would carry more than three hydrogens (a methyl group turned between the
+  poses, its hydrogens farther apart than 0.95 A): its unmapped hydrogens of A and B are mapped onto each other, the
+  closest pair first, as LOMAP maps the hydrogens of its mapped heavy atoms (lomap2, `MCS.all_atom_match_list`: "In
+  3D mode, ensure that maps happen to the closest atom in 3D coordinates").
+
+The other edges keep Kartograf's mapping, which `prep.json` records as `mapping_kartograf` beside the mapping of
+each leg. A mapping only chooses the path between the two end states: the end states and the treatment of the
+atoms unique to one ligand are those of every edge, and what changes is which atoms are unique (fewer in the first
+case, more in the second). An edge whose hybrid would still have such hydrogens on the plugin is refused before
+anything of it is written. In TYK2 these were 5 of the 22 edges, in A2A 1 of 37; before, their legs ran on stock
+OpenMM.
+
 A custom core (`mapping.core_smarts`, a SMARTS pattern; none by default) restricts the mapping to the atoms in a
 match of the pattern in both ligands: the other atoms are unique to each ligand and change with the soft-core, as a
 group that is "decoupled in the intermediate lambda windows" to sample it better (the custom cores of Ross et al.
