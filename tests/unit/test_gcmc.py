@@ -799,7 +799,13 @@ def test_an_absolute_leg_with_the_moves_is_told_a_way_that_keeps_its_restraint(t
             refused.value) and "remove" not in str(refused.value)
     (leg_dir / EQUIL_GHOSTS).write_text(json.dumps({"ghosts": list(range(5))}))
     workflow.check_pre_equilibration_of_a_leg_with_moves(cfg, tmp_path / "lig", "complex", leg_dir, False)
-    np.savez(leg_dir / "start_configs.npz", boxes=np.stack([box * 1.01, box * 1.01]))
+    from cufep.alchemy.schedule import fixed_schedule
+
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 1})
+    states = [state.to_dict() for state in schedule.states]
+    schedule.save(leg_dir / "schedule.yaml")                         # windows that have these start configurations
+    np.savez(leg_dir / "start_configs.npz", boxes=np.stack([box * 1.01] * len(states)),
+             made_with=json.dumps({"states": states}))
     with pytest.raises(workflow.WorkflowError, match="in another cell than its pre-equilibration fixes"):
         workflow.check_pre_equilibration_of_a_leg_with_moves(cfg, tmp_path / "lig", "complex", leg_dir, False)
     workflow.check_pre_equilibration_of_a_leg_with_moves(cfg, tmp_path / "lig", "complex", leg_dir, True)
