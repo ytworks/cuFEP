@@ -268,7 +268,10 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   with that command. A leg computed from other prepared systems than the record of its edge (by its result or, stopped
   before its result, by the marker of its start or its error, which name them from this version on) is refused with
   or without `--reschedule`, which would keep the pre-equilibration made from them: the preparation they were made
-  from is restored, or the edge is computed in a new `output.dir`. `cufep benchmark report` takes the legs of a run directory
+  from is restored, or the edge is computed in a new `output.dir`. So is a leg that would start from a
+  pre-equilibration whose positions are not of as many atoms as the System of the leg (a leg of main, which names no
+  prepared systems, beside the preparation of another receptor), and `--reschedule` is told only where the
+  pre-equilibration it keeps fits that System. `cufep benchmark report` takes the legs of a run directory
   as `cufep rbfe analyze` takes them, whatever results they have at the moment, not an earlier `summary.json`.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
