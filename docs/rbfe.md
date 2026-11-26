@@ -147,7 +147,8 @@ scheduling"). Each leg has its own (`lambda_schedule.adaptive.legs: each`): 50 p
 solvent leg (the paper's), 500 ps after 500 ps in the complex leg (the values of the ABFE), the windows of an
 iteration at the same time on the GPUs of the leg. The paper decides the windows of both legs from the ligand
 in solution (`legs: solvent`); in the TYK2 example that left a pair of windows of a complex leg at an overlap of
-0.013. `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
+0.013. A schedule is used only with the REST2 scale it was made with: a run compares the scale of every schedule its
+legs would use, those a complex leg takes from the solvent leg included, before it writes anything. `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
 number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, minimised
 in their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all at the same time on
 the GPUs of the leg; the equilibration of the replica exchange then relaxes them further. (At lambda 0 the atoms
@@ -257,7 +258,12 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   has terms in those torsions, is left out of the ddG as a missing leg; so is one for which this cannot be told (its
   hot region was `perturbed`, which version 1 chose by an earlier rule, or the prepared systems of its edge cannot
   be read). Its RESULT line says why and how to compute it again (`--edge ... --repeat ... --leg ... --reschedule`,
-  that leg alone), and a note of the run names the edges. `cufep benchmark report` takes the legs of a run directory
+  that leg alone), and a note of the run names the edges. A run that continues a leg from its samples whose result
+  is of version 1, or that has no result yet, first builds the System of this version and compares it with the
+  checksum the samples recorded: the same (a leg without REST2) goes on, another is refused before the run writes,
+  with that command. A leg whose result was computed from other prepared systems than the record of its edge is
+  refused with or without `--reschedule`, which would keep the pre-equilibration made from them: the preparation they
+  were made from is restored, or the edge is computed in a new `output.dir`. `cufep benchmark report` takes the legs of a run directory
   as `cufep rbfe analyze` takes them, whatever results they have at the moment, not an earlier `summary.json`.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
