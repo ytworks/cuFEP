@@ -369,9 +369,16 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                       "lowest_overlap_solvent": overlap.get("solvent"),
                       "not_reliable": "; ".join(e.get("not_reliable") or [])})
 
-    # the edges compared with experiment: those whose two ends have experimental values (fourteenth review of PR #19:
-    # a network of one edge between two states of one compound was said to compare its edges)
-    compared = sum(1 for r in edges if r["ddg"] is not None and r["exp_ddg"] is not None)
+    # what of the edges the tables compare with experiment (fourteenth and fifteenth reviews of PR #19: a network of one
+    # edge between states was said to compare it): with states the pairs of compounds, from the dG of the compounds,
+    # which a network without dG does not give; else the edges with a ddG whose two ends have experimental values
+    compared = 0 if states else sum(1 for r in edges if r["ddg"] is not None and r["exp_ddg"] is not None)
+    planned = sum(1 for r in edges if r["ddg"] is None and r["exp_ddg"] is not None)
+    # the reference of the dG of the run, and the experimental values of this table the run was not given (fifteenth
+    # review of PR #19: the report did not say which ligands the dG were set on)
+    reference_names = list((summary.get("dg") or {}).get("reference_ligands")
+                           or (summary.get("dg") or {}).get("reference_compounds") or [])
+    supplemented = [n for n in names_of if n not in experiment_of and reference.get(n, {}).get("exp") is not None]
     title = load_registry()[name]["title"]
     with_dg = [r for r in ligands if r["cufep_rbfe"] is not None]
     with_ddg = [r for r in edges if r["ddg"] is not None]
@@ -388,13 +395,18 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                  "states is compared with the published prediction of the same edge only.", ""]),
              ("The network of the run gave no dG (the notes of the run below say why), and no dG of cuFEP is "
               "compared with experiment; "
-              + (f"the ddG of the {compared} edge(s) whose two ends have experimental values are compared with them"
+              + ("no pair of compounds either (their ddG come from the dG of the compounds); the edges between "
+                 "states are compared with the published predictions of the same edges only" if states else
+                 f"the ddG of the {compared} edge(s) whose two ends have experimental values are compared with them"
                  if compared else
-                 "no edge joins two " + what.lower() + " with experimental values, and no ddG is compared with "
-                 "experiment either (an edge between states of one compound has no experimental ddG)")
+                 f"no edge whose two ends have experimental values has a ddG yet ({planned} planned)" if planned else
+                 "no edge joins two ligands with experimental values, and no ddG is compared with experiment either")
               if not origin else
               f"The dG of cuFEP come from the edges alone, their mean over the {what.lower()} with an experimental "
               "value set to the mean of those values (`docs/rbfe.md`, \"The network\")"
+              + (f": the values the run was given, of {', '.join(reference_names)}; the table also has the "
+                 f"benchmark's values of {', '.join(supplemented)}, which the run was not given, compared on that "
+                 "scale" if supplemented else "")
               if how == "run" and origin == "mean of the experimental values" else
               "The dG of cuFEP come from the edges alone; the run was given no experimental values and set their mean "
               "over the network to 0 (`docs/rbfe.md`, \"The network\"): here the dG and their standard errors are "

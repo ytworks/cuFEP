@@ -408,13 +408,13 @@ def rbfe_plan(config: str) -> None:
             raise click.ClickException(f"edge {a} -> {b}: the mapping cannot be used after the atoms of constrained "
                                        f"bonds that change leave it: {'; '.join(bridges)}")
         dq = by_name[b].formal_charge - by_name[a].formal_charge
-        # the mapping of Kartograf and, apart, the one the preparation leaves after the rule of the constrained bonds
-        # (fourteenth review of PR #19: the plan counted the oxygen of methanol mapped onto a hydrogen of methane,
-        # which leaves it); the preparation can leave out hydrogens of constrained bonds of other lengths too, which
-        # only its systems show: at most so many
-        after = (f"; at most {len(prepared)} after the rule of the constrained bonds, "
-                 f"{by_name[a].n_atoms - len(prepared)} or more unique to {a}, "
-                 f"{by_name[b].n_atoms - len(prepared)} or more unique to {b}" if constrained else "")
+        # the mapping of Kartograf, and the pairs of a hydrogen and a heavy atom in it that the rule of the constrained
+        # bonds can take out when the systems are built (fourteenth review of PR #19: the plan counted the oxygen of
+        # methanol mapped onto a hydrogen of methane; fifteenth: the systems decide, which the plan does not build, so
+        # that no count of the preparation is given)
+        mixed = len(mapping) - len(prepared)
+        after = (f"; the rule of the constrained bonds can take pairs of it out when the systems are built ({mixed} "
+                 "pair(s) of a hydrogen and a heavy atom)" if constrained and mixed else "")
         click.echo(f"edge {a} -> {b}: {len(mapping)} atoms mapped by Kartograf, {by_name[a].n_atoms - len(mapping)} "
                    f"unique to {a}, {by_name[b].n_atoms - len(mapping)} unique to {b}{after}; LOMAP score "
                    f"{lomap_score(by_name[a], by_name[b], mapping):.2f} (of the mapping of Kartograf, as the "

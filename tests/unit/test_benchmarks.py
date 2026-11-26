@@ -1115,5 +1115,29 @@ def test_the_report_of_a_summary_alone_gives_the_errors_of_the_values_it_shows(t
     (alone / "summary.json").write_text(json.dumps(summary))
     text = report("a2a", alone)
     assert "The network of the run gave no dG" in text and "no experimental value" not in text
-    # (fourteenth review, P3) no edge of it joins two compounds with experimental values: nothing is said to be compared
-    assert "no edge joins two compounds with experimental values" in text and "are compared with them" not in text
+    # (fourteenth and fifteenth reviews) a run of states without dG compares no pair of compounds: said so
+    assert "no pair of compounds either" in text and "are compared with them" not in text
+
+
+
+def test_the_report_names_the_reference_of_the_dg_and_counts_what_it_compares(tmp_path):
+    """Fifteenth review of PR #19: (P2) a run given the experimental value of ejm_31 alone set its dG on it, and the
+    report, which adds the benchmark's value of ejm_46, did not say which ligand the dG were set on; (P2) a network
+    without dG said that no edge joins two ligands with experimental values where such an edge has no ddG yet."""
+    from cufep.benchmarks.rbfe import report
+
+    ref = read_reference("tyk2")
+    summary = {"ligands": ["ejm_31", "ejm_46"], "cycle_closures": [], "notes": [],
+               "experiment_kcal_mol": {"ejm_31": ref["ejm_31"]["exp"]},
+               "dg": {"reference": "mean of the experimental values", "reference_ligands": ["ejm_31"],
+                      "values": {"ejm_31": {"dg": ref["ejm_31"]["exp"], "se": 0.0},
+                                 "ejm_46": {"dg": ref["ejm_31"]["exp"] - 1.0, "se": 0.2}}},
+               "edges": [{"edge": "ejm_31~ejm_46", "ligand_a": "ejm_31", "ligand_b": "ejm_46", "ddg": -1.0, "se": 0.2,
+                          "network_ddg": -1.0, "network_se": 0.2, "not_reliable": []}]}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    text = report("tyk2", tmp_path)
+    assert ("the values the run was given, of ejm_31; the table also has the benchmark's values of ejm_46, which the "
+            "run was not given" in text)
+    summary["dg"], summary["edges"][0]["ddg"], summary["edges"][0]["se"] = None, None, None
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    assert "no edge whose two ends have experimental values has a ddG yet (1 planned)" in report("tyk2", tmp_path)

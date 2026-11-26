@@ -1999,9 +1999,11 @@ def test_the_plan_gives_the_mapping_of_kartograf_and_the_one_the_preparation_lea
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(config))
     result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
     assert result.exit_code == 0, result.output
-    assert ("edge methanol -> methane: 5 atoms mapped by Kartograf, 1 unique to methanol, 0 unique to methane; at most "
-            "4 after the rule of the constrained bonds, 2 or more unique to methanol, 1 or more unique to methane"
-            in result.output), result.output
+    # (fifteenth review, P3) no count of the preparation, which its systems decide: the pairs the rule can take out
+    assert ("edge methanol -> methane: 5 atoms mapped by Kartograf, 1 unique to methanol, 0 unique to methane; "
+            "the rule of the constrained bonds can take pairs of it out when the systems are built (1 pair(s) of a "
+            "hydrogen and a heavy atom)" in result.output), result.output
+    assert "at most" not in result.output
 
 
 def test_a_leg_this_version_cannot_continue_is_refused_before_the_run_writes(tmp_path, edges_of_version_1):
