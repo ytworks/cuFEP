@@ -1845,8 +1845,17 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
     borrowing = other.model_validate({**other.model_dump(mode="json"), "lambda_schedule": {
         **other.model_dump(mode="json")["lambda_schedule"], "mode": "adaptive",
         "adaptive": {**other.model_dump(mode="json")["lambda_schedule"]["adaptive"], "legs": "solvent"}}})
-    with pytest.raises(WorkflowError, match="the complex leg of toluene~phenol, repeat 0: its lambda schedule"):
-        check_windows_of_the_run(borrowing, out_dir, [("toluene", "phenol")], [0], ["complex"], False)
+    # (sixteenth review, P2) also with --reschedule of the complex leg alone, which takes the same windows again: the
+    # refusal names what makes them usable (the scale they were made with, or the windows of the solvent leg anew);
+    # a --reschedule of both legs chooses the windows of the solvent leg anew and passes
+    for reschedule in (False, True):
+        with pytest.raises(WorkflowError, match="the complex leg of toluene~phenol, repeat 0, takes the lambda "
+                                                "windows of its solvent leg") as refused:
+            check_windows_of_the_run(borrowing, out_dir, [("toluene", "phenol")], [0], ["complex"], reschedule)
+        assert "Set sampling.rest2.scale to 1 if so they were meant" in str(refused.value)
+        assert "--repeat 0 --leg solvent --reschedule); the complex leg then takes those" in str(refused.value)
+        assert "--leg complex" not in str(refused.value)
+    check_windows_of_the_run(borrowing, out_dir, [("toluene", "phenol")], [0], None, True)
     schedule.save(leg_dir / "schedule.yaml")
     # (fifteenth review, P2) with samples too: the leg reads its windows whatever it goes on from
     (leg_dir / "hrex").mkdir()

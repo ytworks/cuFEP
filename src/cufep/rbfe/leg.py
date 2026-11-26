@@ -745,8 +745,15 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         return starts_from(run, spec_of(ends, "openmm", seed=seed + 29), schedule, start, hybrid.system, n_atoms,
                            MINIMIZE_STEPS, START_MD_PS)
 
-    def check_scale(schedule) -> None:
+    def check_scale(schedule, of_the_solvent_leg: bool = False) -> None:
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
+            if of_the_solvent_leg:
+                raise WorkflowError(
+                    "the lambda windows of the solvent leg, which this leg takes (lambda_schedule.adaptive.legs: "
+                    f"solvent), were made with a REST2 scale of {schedule.rest2_scale:g} but sampling.rest2.scale is "
+                    f"{rest2.scale:g}. Set sampling.rest2.scale to {schedule.rest2_scale:g}, or choose the windows of "
+                    "the solvent leg anew with this scale first (its --edge, --repeat, --leg solvent and "
+                    "--reschedule); this leg then takes those")
             raise WorkflowError("the lambda schedule of this leg was made with a REST2 scale of "
                                 f"{schedule.rest2_scale:g} but sampling.rest2.scale is {rest2.scale:g}")
 
@@ -820,7 +827,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                        "windows": "chosen by this precalculation"}
             else:
                 schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
-                check_scale(schedule)              # before its windows are written (sixteenth review of PR #19)
+                check_scale(schedule, True)        # before its windows are written (sixteenth review of PR #19)
                 cfgs = from_pre_equilibration(schedule)
                 how = {**starting, "windows": "those of the solvent leg"}
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}

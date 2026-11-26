@@ -475,7 +475,9 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
     cells and velocities), the settings of the start configurations of these windows
     (:func:`cufep.workflow.check_windows_settings`), or, without them, the REST2 scale of the schedule. A leg that
     fails one is refused, with the command that starts it anew (fourteenth and fifteenth reviews of PR #19: such legs
-    stopped in the worker after the run had written its record)."""
+    stopped in the worker after the run had written its record). The windows a complex leg takes from its solvent
+    leg (``lambda_schedule.adaptive.legs: solvent``) are those of the solvent leg, checked whenever this run does not
+    choose them anew, also with --reschedule; a refusal for them names what makes them usable (sixteenth review)."""
     import zipfile
 
     import numpy as np
@@ -483,11 +485,12 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
     from cufep.rbfe.leg import STAGES, hybrid_settings
     from cufep.workflow import _schedule_of_this_leg, check_windows_settings, start_record_of, starts_are_of
 
-    if reschedule:
-        return                                   # the windows are set aside and chosen anew
     rest2 = rcfg.sampling.rest2
     scale = rest2.scale if rest2.scale > 1.0 else 1.0
-    problems, commands = [], []
+    takes_solvent = rcfg.lambda_schedule.mode == "adaptive" and rcfg.lambda_schedule.adaptive.legs == "solvent"
+    # the solvent legs whose windows this run chooses anew (--reschedule sets theirs aside)
+    solvent_anew = reschedule and (not only_legs or "solvent" in only_legs)
+    problems, commands, borrowed_problems = [], [], []
     for a, b in edges:
         edge = edge_name(a, b)
         for r in repeats:
@@ -496,16 +499,20 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                     continue
                 leg_dir = out_dir / "edges" / edge / f"repeat_{r}" / leg
                 sched, start = leg_dir / "schedule.yaml", leg_dir / "start_configs.npz"
-                borrowed = (leg == "complex" and not sched.exists() and rcfg.lambda_schedule.mode == "adaptive"
-                            and rcfg.lambda_schedule.adaptive.legs == "solvent")
+                # a complex leg without windows of its own (none yet, or set aside by --reschedule) takes those of the
+                # solvent leg, kept unless this run chooses them anew (sixteenth review of PR #19: a complex leg of
+                # another REST2 scale wrote them and its start configurations before it stopped on them, and the
+                # --reschedule of that leg alone it was told to run kept them)
+                borrowed = (leg == "complex" and takes_solvent and (reschedule or not sched.exists())
+                            and not solvent_anew)
                 if borrowed:
-                    # the windows of the solvent leg, which this leg takes (sixteenth review of PR #19: a complex leg
-                    # of another REST2 scale wrote them and its start configurations before it stopped on them)
                     sched = out_dir / "edges" / edge / f"repeat_{r}" / "solvent" / "schedule.yaml"
                     start = sched.parent / "no start configurations of this leg"
+                elif reschedule:
+                    continue                     # the windows are set aside and chosen anew
                 if not sched.exists():
                     continue
-                why = None
+                why, schedule = None, None
                 try:
                     schedule = _schedule_of_this_leg(sched, "solvent" if borrowed else leg, STAGES)
                     made, n_configs = None, 0
@@ -525,13 +532,25 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                     why = str(exc).split(". Nothing was changed")[0]
                 except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
                     why = f"its start configurations ({start}) cannot be read ({type(exc).__name__})"
-                if why:
+                if why and borrowed:
+                    # what makes them usable is the scale of the run or windows of the solvent leg made with it: the
+                    # --reschedule of the complex leg takes the same windows again (sixteenth review of PR #19)
+                    other_scale = schedule is not None and abs(schedule.rest2_scale - scale) > 1e-9
+                    borrowed_problems.append(
+                        f"the complex leg of {edge}, repeat {r}, takes the lambda windows of its solvent leg "
+                        f"(lambda_schedule.adaptive.legs: solvent): {why}. "
+                        + (f"Set sampling.rest2.scale to {schedule.rest2_scale:g} if so they were meant, or choose "
+                           "the windows of the solvent leg anew with this scale first" if other_scale else
+                           "Choose the windows of the solvent leg anew first")
+                        + f" ({rerun_command(edge, r, ['solvent'], out_dir)}); the complex leg then takes those")
+                elif why:
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: {why}")
                     commands.append(rerun_command(edge, r, [leg], out_dir))
-    if problems:
-        raise WorkflowError("; ".join(problems) + ". Nothing was changed. Start these legs anew with --reschedule "
-                            "(what they have is kept in previous_<n>/): " + "; ".join(commands)
-                            + "; or run the calculation in a new output.dir")
+    if problems or borrowed_problems:
+        raise WorkflowError("; ".join(problems + borrowed_problems) + ". Nothing was changed"
+                            + (". Start the legs of their own windows anew with --reschedule (what they have is kept "
+                               "in previous_<n>/): " + "; ".join(commands) + "; or run the calculation in a new "
+                               "output.dir" if problems else ""))
 
 
 def iteration_of_the_leg(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: int,
