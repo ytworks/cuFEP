@@ -97,12 +97,16 @@ ends of the transformation): the mapping of each leg as the hybrid is made of it
 bonds, before anything of the edge is written; LOMAP plans no edge with one, and `cufep rbfe plan` shows none (with
 the pairs of a hydrogen and a heavy atom taken out as that rule takes them where the bonds of hydrogens are
 constrained); an edge prepared before this check is checked when it is taken again and in the analysis, which leaves
-it out. The record of a prepared edge (`prep/prep.json`) is checked before it is read: what it was made from, both
-legs, each a mapping that is not empty, one to one, of atom numbers of the two ligands, and the ion of an alchemical
-water; a record of another form leaves its edge out, with the reason, and the analysis of the other edges goes on. The
-ligands of the edge are those of its records (`ligand_a.json`, `ligand_b.json`), else those of the input of the run
-that the record was made from (its digests): the run writes their records again, the analysis reads the SDF of the
-run. A custom core of version 2 of its rule (whose search could stop before a match) is taken where Kartograf, run
+it out. The record of a prepared edge (`prep/prep.json`) is checked before it is read: what it was made from (the
+inputs and settings every preparation records), both legs, each with the numbers of atoms of its end states and a
+mapping that is not empty, one to one, of ASCII atom numbers of the two ligands, and, where the net charge changes,
+the alchemical water of both legs with its atoms and its ion (none where it does not); a record of another form
+leaves its edge out, with the reason, and the analysis of the other edges goes on. The legs of an edge are taken only
+with the record they were made from (the digest each leg records, `prepared_systems_sha256`). The ligands of the
+edge are those of its records (`ligand_a.json`, `ligand_b.json`), else those of the input of the run that the record
+was made from (its digests), for every reader (the analysis, the checks before a run, the hot atoms of REST2): the
+run writes the record of a ligand that is missing again, that one alone, with its partial charges; the analysis
+reads the SDF of the run. A custom core of version 2 of its rule (whose search could stop before a match) is taken where Kartograf, run
 again with the settings of its record, gives the mapping it recorded. An edge whose record of its preparation is lost
 while its legs hold results is refused: it is prepared anew only when its directory is moved away.
 
@@ -200,7 +204,12 @@ pre-equilibration or samples they made keeps those ghosts: where the record of t
 centre and has them, or without a record where the leg goes on from its samples; a leg that goes on from its
 samples has the ghosts whose System has the checksum its samples recorded, whatever its record), checked against the
 sphere around the centre they were counted from (the one the record names, else every centre whose rule gives
-them, of which one suffices; the earlier centre with the heavy atoms of A, as earlier versions took them); the ghost
+them, of which one suffices: the centre of the hybrid and the heavy atoms of A, up to e7af433; the midway positions
+and the heavy atoms of A, e0f9743 to 1124b1e, whose records name "midway"; the midway positions and the atoms heavy
+in either end, this version); ghosts chosen anew, where the leg has none of these, are checked around the centre of
+this version alone. Where the edge maps a hydrogen of A onto a heavy atom of B, the atoms of the sphere of the moves
+differ from those of earlier versions: the complex leg records them with its settings (`sphere_atoms`), and samples
+of such a leg that record nothing are not continued (refused before a run writes anything); the ghost
 waters a pre-equilibration was made with are recorded beside it (`equil_ghosts.json`, with the centre: a set of
 numbers of the waters of the leg, each once); a record that is not that is a
 pre-equilibration whose ghosts are not known, and it is read only by a leg that would start from it; a
