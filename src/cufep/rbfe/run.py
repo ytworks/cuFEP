@@ -449,19 +449,24 @@ def check_results_of_the_run(out_dir: Path, edges, repeats, only_legs, reschedul
 
 
 def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
-    """Before a run writes anything: the lambda windows and start configurations of every leg it runs that would start
-    its replica exchange from them (no samples, no checkpoint of their start) are compared with the settings of this
-    run as the leg compares them (:func:`cufep.workflow.check_windows_settings`), and refused with the command that
-    starts the leg anew (fourteenth review of PR #19: a leg of e0f9743 with REST2 on the perturbed region, stopped
-    before its replica exchange, was refused for the version of the rule of the hot atoms after the run had written
-    its record; the System its windows were made with is not recorded, so that their origin cannot be proven)."""
-    from cufep.alchemy.schedule import Schedule
-    from cufep.engine.leg import goes_on_from_its_samples
-    from cufep.rbfe.leg import hybrid_settings
-    from cufep.workflow import check_windows_settings, start_record_of, starts_are_of
+    """Before a run writes anything: the lambda windows of every leg it runs, read and checked as the leg reads and
+    checks them, with or without samples (the leg reads them in either case): a schedule of this leg
+    (:func:`cufep.workflow._schedule_of_this_leg`), start configurations that can be read (their record, positions,
+    cells and velocities), the settings of the start configurations of these windows
+    (:func:`cufep.workflow.check_windows_settings`), or, without them, the REST2 scale of the schedule. A leg that
+    fails one is refused, with the command that starts it anew (fourteenth and fifteenth reviews of PR #19: such legs
+    stopped in the worker after the run had written its record)."""
+    import zipfile
+
+    import numpy as np
+
+    from cufep.rbfe.leg import STAGES, hybrid_settings
+    from cufep.workflow import _schedule_of_this_leg, check_windows_settings, start_record_of, starts_are_of
 
     if reschedule:
         return                                   # the windows are set aside and chosen anew
+    rest2 = rcfg.sampling.rest2
+    scale = rest2.scale if rest2.scale > 1.0 else 1.0
     problems, commands = [], []
     for a, b in edges:
         edge = edge_name(a, b)
@@ -471,18 +476,27 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                     continue
                 leg_dir = out_dir / "edges" / edge / f"repeat_{r}" / leg
                 sched, start = leg_dir / "schedule.yaml", leg_dir / "start_configs.npz"
-                if not (sched.exists() and start.exists()) or goes_on_from_its_samples(leg_dir):
+                if not sched.exists():
                     continue
+                why = None
                 try:
-                    made, schedule = start_record_of(start), Schedule.load(sched)
-                except (OSError, ValueError, KeyError):
-                    continue                     # files the leg does not take: it makes its windows again
-                if not starts_are_of(made, schedule):
-                    continue                     # start configurations of other windows: made again
-                try:
-                    check_windows_settings(made, hybrid_settings(rcfg, leg), start, lambda *args: None)
+                    schedule = _schedule_of_this_leg(sched, leg, STAGES)
+                    made, n_configs = None, 0
+                    if start.exists():
+                        made = start_record_of(start)
+                        with np.load(start) as data:
+                            n_configs = len(data["positions"])
+                            _arrays = (data["boxes"], data["velocities"])       # what the leg reads of the file
+                    if made is not None and starts_are_of(made, schedule) and n_configs == len(schedule.states):
+                        check_windows_settings(made, hybrid_settings(rcfg, leg), start, lambda *args: None)
+                    elif abs(schedule.rest2_scale - scale) > 1e-9:
+                        why = (f"its lambda schedule was made with a REST2 scale of {schedule.rest2_scale:g} and "
+                               f"sampling.rest2.scale is {rest2.scale:g}")
                 except WorkflowError as exc:
                     why = str(exc).split(". Nothing was changed")[0]
+                except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
+                    why = f"its start configurations ({start}) cannot be read ({type(exc).__name__})"
+                if why:
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: {why}")
                     commands.append(rerun_command(edge, r, [leg], out_dir))
     if problems:

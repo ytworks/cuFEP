@@ -1807,6 +1807,7 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
     schedule = fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES})
     schedule.save(leg_dir / "schedule.yaml")
     np.savez(leg_dir / "start_configs.npz", positions=np.zeros((len(schedule.states), 1, 3)),
+             boxes=np.zeros((len(schedule.states), 3, 3)), velocities=np.zeros((len(schedule.states), 1, 3)),
              made_with=json.dumps({"states": [state.to_dict() for state in schedule.states],
                                    "settings": hybrid_settings(other, "solvent")}))
     with pytest.raises(WorkflowError, match="were made with other settings") as refused:
@@ -1814,6 +1815,27 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
     assert "--leg solvent --reschedule" in str(refused.value)
     check_windows_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], True)
     check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    # (fifteenth review, P2) with samples too: the leg reads its windows whatever it goes on from
+    (leg_dir / "hrex").mkdir()
+    (leg_dir / "hrex" / "checkpoint.npz").write_bytes(b"")
+    with pytest.raises(WorkflowError, match="were made with other settings"):
+        check_windows_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    # start configurations that cannot be read: a record cut short, or no velocities
+    for broken in ({"made_with": "{\"states\": "}, {"velocities": None}):
+        arrays = {"positions": np.zeros((len(schedule.states), 1, 3)), "boxes": np.zeros((len(schedule.states), 3, 3)),
+                  "velocities": np.zeros((len(schedule.states), 1, 3)),
+                  "made_with": json.dumps({"states": [state.to_dict() for state in schedule.states],
+                                           "settings": hybrid_settings(other, "solvent")}), **broken}
+        np.savez(leg_dir / "start_configs.npz", **{k: v for k, v in arrays.items() if v is not None})
+        with pytest.raises(WorkflowError, match="cannot be read"):
+            check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    # a schedule without start configurations of another REST2 scale, and a schedule of the other leg
+    (leg_dir / "start_configs.npz").unlink()
+    with pytest.raises(WorkflowError, match="made with a REST2 scale of 1 and sampling.rest2.scale is 2"):
+        check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}, 2.0).save(leg_dir / "schedule.yaml", leg="complex")
+    with pytest.raises(WorkflowError, match="written for the complex leg"):
+        check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
 
 def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is_refused_before_writing(tmp_path):
     """Twelfth review of PR #19 (P1): oxirane -> ethane with hydrogens mapped onto heavy atoms (Kartograf's settings
