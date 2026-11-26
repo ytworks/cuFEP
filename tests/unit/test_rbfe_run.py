@@ -180,12 +180,19 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     edge_dir = out_dir / "edges" / "toluene~phenol"
     info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     assert info["legs"]["complex"]["core_atoms"] == info["legs"]["solvent"]["core_atoms"] >= 11
+    # (seventeenth review) the windows of the solvent leg are those of this run where the complex leg takes them
+    token = "this run" if (mode, legs) == ("adaptive", "solvent") else None
     jobs = [EdgeLegJob(edge="toluene~phenol", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
-                         config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True)
+                         config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True,
+                         windows_token=token)
             for leg in ("solvent", "complex")]
     results = [run_hybrid_leg_safe(job) for job in jobs]
     assert all("error" not in r for r in results), results
     solvent, complex_ = results
+    if token is not None:
+        from cufep.rbfe.leg import WINDOWS_OF_THE_RUN
+
+        assert json.loads((edge_dir / "repeat_0" / "solvent" / WINDOWS_OF_THE_RUN).read_text()) == {"run": token}
     # the windows of the complex leg: its own precalculation (each), those that the precalculation of the solvent
     # leg chose (solvent), or the given ones (fixed)
     if mode == "fixed" or legs == "solvent":
@@ -1238,9 +1245,10 @@ def test_a_run_of_one_repeat_runs_that_repeat_alone(tmp_path, monkeypatch):
     def no_jobs(jobs, gpus, factor, log):
         seen.extend((job.edge, job.repeat, job.leg) for job in jobs)
         identities.extend(job.identity() for job in jobs)
+        tokens.extend((job.leg, job.windows_token) for job in jobs)
         return [], None, False
 
-    identities = []
+    identities, tokens = [], []
 
     protein = _protein()
     monkeypatch.setattr(run_module, "execute_jobs", no_jobs)
@@ -1257,6 +1265,19 @@ def test_a_run_of_one_repeat_runs_that_repeat_alone(tmp_path, monkeypatch):
     made_from = json.loads((out_dir / "edges" / "toluene~phenol" / "prep" / "prep.json").read_text())["made_from"]
     assert identities == [{"edge": "toluene~phenol", "leg": "complex", "repeat": 1,
                            "prepared_systems_sha256": record_digest(made_from)}]
+    # (seventeenth review) the windows of the solvent legs chosen anew beside the complex legs that take them: both
+    # jobs of a run carry its token; a run that keeps the windows of the solvent legs gives none
+    data = rcfg.model_dump(mode="json")
+    taking = rcfg.model_validate({**data, "lambda_schedule": {**data["lambda_schedule"], "mode": "adaptive",
+                                                              "adaptive": {**data["lambda_schedule"]["adaptive"],
+                                                                           "legs": "solvent"}}})
+    tokens.clear()
+    run_rbfe(taking, reschedule=True, log=lambda line: None, only_repeats=[1])
+    assert [leg for leg, _token in tokens] == ["solvent", "complex"]
+    assert tokens[0][1] is not None and tokens[0][1] == tokens[1][1]
+    tokens.clear()
+    run_rbfe(taking, log=lambda line: None, only_repeats=[1])
+    assert tokens == [("solvent", None), ("complex", None)]
 
 
 def test_an_edge_prepared_by_an_earlier_rule_is_left_out_by_every_entry_point(tmp_path, edges_of_version_1):
@@ -1865,6 +1886,18 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
         assert "--repeat 0 --leg solvent --reschedule); the complex leg then takes those" in str(refused.value)
         assert "--leg complex" not in str(refused.value)
     check_windows_of_the_run(borrowing, out_dir, [("toluene", "phenol")], [0], None, True)
+    # (seventeenth review, P3) the scale the refusal tells is the one the windows were made with: 4/3 told as 1.33333
+    # was refused again; the value of the refusal, set as it is, passes
+    import re
+
+    fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}, 4 / 3).save(leg_dir / "schedule.yaml")
+    with pytest.raises(WorkflowError, match="takes the lambda windows of its solvent leg") as refused:
+        check_windows_of_the_run(borrowing, out_dir, [("toluene", "phenol")], [0], ["complex"], False)
+    told = re.search(r"Set sampling\.rest2\.scale to (\S+) if so they were meant", str(refused.value)).group(1)
+    assert told == "1.3333333333333333"
+    as_told = borrowing.model_validate({**borrowing.model_dump(mode="json"), "sampling": {
+        **borrowing.model_dump(mode="json")["sampling"], "rest2": {"scale": float(told)}}})
+    check_windows_of_the_run(as_told, out_dir, [("toluene", "phenol")], [0], ["complex"], False)
     schedule.save(leg_dir / "schedule.yaml")
     # (fifteenth review, P2) with samples too: the leg reads its windows whatever it goes on from
     (leg_dir / "hrex").mkdir()
@@ -1888,6 +1921,43 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
     fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}, 2.0).save(leg_dir / "schedule.yaml", leg="complex")
     with pytest.raises(WorkflowError, match="written for the complex leg"):
         check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+
+
+def test_a_complex_leg_run_beside_its_solvent_leg_chosen_anew_takes_the_windows_of_this_run(tmp_path, monkeypatch):
+    """Seventeenth review of PR #19 (P2): with lambda_schedule.adaptive.legs: solvent and --reschedule of both legs
+    run side by side, the complex leg read the windows the solvent leg had (REST2 scale 1) before the solvent leg set
+    them aside, and stopped after the run had written its record (with the same scale it would have taken the windows
+    of before). The complex leg takes only the windows the solvent leg publishes in this run."""
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import STAGES, WINDOWS_OF_THE_RUN, _schedule_from_solvent
+    from cufep.workflow import archive_leg
+
+    edge_dir = tmp_path / "edge"
+    solvent = edge_dir / "repeat_0" / "solvent"
+    solvent.mkdir(parents=True)
+
+    def windows(scale: float, run: str | None = None) -> None:
+        fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}, scale).save(solvent / "schedule.yaml")
+        np.savez(solvent / "start_configs.npz", positions=np.zeros((1, 1, 3)))
+        if run is not None:
+            (solvent / WINDOWS_OF_THE_RUN).write_text(json.dumps({"run": run}))
+
+    windows(1.0, "an earlier run")
+    waited = []
+
+    def the_solvent_leg_of_this_run(seconds):        # sets its windows aside and publishes new ones meanwhile
+        waited.append(seconds)
+        archive_leg(solvent)
+        windows(2.0, "this run")
+
+    monkeypatch.setattr(leg_module.time, "sleep", the_solvent_leg_of_this_run)
+    assert _schedule_from_solvent(None, edge_dir, 0, lambda line: None, None, "this run").rest2_scale == 2.0
+    assert len(waited) == 1 and (solvent / "previous_1" / "schedule.yaml").exists()
+    # a run that keeps the windows of the solvent leg (the complex leg alone) takes those it has
+    windows(1.0)
+    assert _schedule_from_solvent(None, edge_dir, 0, lambda line: None).rest2_scale == 1.0
+    assert len(waited) == 1
 
 
 def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is_refused_before_writing(tmp_path):

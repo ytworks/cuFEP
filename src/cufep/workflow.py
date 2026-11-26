@@ -689,6 +689,13 @@ SETTINGS_ADDED = {"alchemy": ALCHEMY_SETTINGS_ADDED, "analysis": ANALYSIS_SETTIN
                                         "standard_volume_nm3": "auto"}}}
 
 
+def exact_number(x: float) -> str:
+    """``x`` as a configuration has to give it to be the same number: its short form where that is exact, else every
+    digit (seventeenth review of PR #19: a REST2 scale of 4/3 was told as 1.33333, which a run then refused again)."""
+    short = f"{x:g}"
+    return short if float(short) == float(x) else repr(float(x))
+
+
 def gcmc_in(cfg: Config, leg: str | None) -> bool:
     """Whether the leg makes grand canonical moves of water (``sampling.gcmc``): the complex leg, if
     they are enabled. Such a leg has ghost waters from its pre-equilibration on and no barostat in
@@ -1230,8 +1237,9 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         schedule = Schedule.load(sched_file)
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
             raise WorkflowError(
-                f"the lambda schedule in {sched_file} was made with a REST2 scale of {schedule.rest2_scale:g} but "
-                f"sampling.rest2.scale is {rest2_scale:g}. Nothing was changed. Use the same value, or start the "
+                f"the lambda schedule in {sched_file} was made with a REST2 scale of "
+                f"{exact_number(schedule.rest2_scale)} but sampling.rest2.scale is {exact_number(rest2_scale)}. "
+                "Nothing was changed. Use the same value, or start the "
                 "leg anew with --reschedule.")
         start_file = leg_dir / "start_configs.npz"
         if start_file.exists():
@@ -3003,8 +3011,9 @@ def run_leg(job: LegJob) -> dict:
         def check_scale(schedule) -> None:
             if abs(schedule.rest2_scale - (rest2.scale if rest2_on else 1.0)) > 1e-9:
                 raise WorkflowError(
-                    f"the lambda schedule of this leg was made with a REST2 scale of {schedule.rest2_scale:g} but "
-                    f"sampling.rest2.scale is {rest2.scale:g}; use the same value, or remove {sched_file} to make a "
+                    f"the lambda schedule of this leg was made with a REST2 scale of "
+                    f"{exact_number(schedule.rest2_scale)} but sampling.rest2.scale is {exact_number(rest2.scale)}; "
+                    f"use the same value, or remove {sched_file} to make a "
                     "new one")
 
         # ---- 4. lambda schedule ----------------------------------------------------------------
@@ -3319,8 +3328,9 @@ def check_given_schedule_scale(src: Path, rest2_scale: float) -> None:
         raise WorkflowError(f"the lambda schedule {src} cannot be read: {exc}") from exc
     if abs(given - rest2_scale) > 1e-9:
         raise WorkflowError(
-            f"the lambda schedule {src} (lambda_schedule.file) was made with a REST2 scale of {given:g} but this "
-            f"leg runs with {rest2_scale:g} (sampling.rest2.scale). Nothing of the windows of the leg was written. "
+            f"the lambda schedule {src} (lambda_schedule.file) was made with a REST2 scale of {exact_number(given)} "
+            f"but this leg runs with {exact_number(rest2_scale)} (sampling.rest2.scale). Nothing of the windows of "
+            "the leg was written. "
             "Use the same value, or a schedule made with it.")
 
 

@@ -13,6 +13,7 @@ import json
 import math
 import shlex
 import time
+import uuid
 from pathlib import Path
 
 import yaml
@@ -498,7 +499,13 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
     import numpy as np
 
     from cufep.rbfe.leg import STAGES, hybrid_settings
-    from cufep.workflow import _schedule_of_this_leg, check_windows_settings, start_record_of, starts_are_of
+    from cufep.workflow import (
+        _schedule_of_this_leg,
+        check_windows_settings,
+        exact_number,
+        start_record_of,
+        starts_are_of,
+    )
 
     rest2 = rcfg.sampling.rest2
     scale = rest2.scale if rest2.scale > 1.0 else 1.0
@@ -541,8 +548,9 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                     # the scale of the schedule, as the leg checks it whatever start configurations it has (sixteenth
                     # review of PR #19)
                     if abs(schedule.rest2_scale - scale) > 1e-9:
-                        why = (f"its lambda schedule ({sched}) was made with a REST2 scale of {schedule.rest2_scale:g} "
-                               f"and sampling.rest2.scale is {rest2.scale:g}")
+                        why = (f"its lambda schedule ({sched}) was made with a REST2 scale of "
+                               f"{exact_number(schedule.rest2_scale)} and sampling.rest2.scale is "
+                               f"{exact_number(rest2.scale)}")
                 except WorkflowError as exc:
                     why = str(exc).split(". Nothing was changed")[0]
                 except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
@@ -554,7 +562,8 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                     borrowed_problems.append(
                         f"the complex leg of {edge}, repeat {r}, takes the lambda windows of its solvent leg "
                         f"(lambda_schedule.adaptive.legs: solvent): {why}. "
-                        + (f"Set sampling.rest2.scale to {schedule.rest2_scale:g} if so they were meant, or choose "
+                        + (f"Set sampling.rest2.scale to {exact_number(schedule.rest2_scale)} if so they were meant, "
+                           "or choose "
                            "the windows of the solvent leg anew with this scale first" if other_scale else
                            "Choose the windows of the solvent leg anew first")
                         + f" ({rerun_command(edge, r, ['solvent'], out_dir)}); the complex leg then takes those")
@@ -709,10 +718,16 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     protein.write_pdb(out_dir / "protein_prepared.pdb")
     cfg_dict = rcfg.model_dump(mode="json")
     repeats = rcfg.sampling.repeats
+    # a run that chooses the windows of the solvent legs anew while the complex legs that take them run beside them:
+    # the complex legs take only the windows of this run (seventeenth review of PR #19)
+    both_anew = (reschedule and (not only_legs or set(only_legs) >= {"solvent", "complex"})
+                 and rcfg.lambda_schedule.mode == "adaptive" and rcfg.lambda_schedule.adaptive.legs == "solvent")
+    token = uuid.uuid4().hex if both_anew else None
     jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
                          devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
                          reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]),
-                         prepared_systems_sha256=record_digest(infos[edge_name(a, b)].get("made_from")))
+                         prepared_systems_sha256=record_digest(infos[edge_name(a, b)].get("made_from")),
+                         windows_token=token)
             for a, b in selected for r in repeats_run for leg in ("solvent", "complex")
             if not only_legs or leg in only_legs]
     t_prepared = time.time()

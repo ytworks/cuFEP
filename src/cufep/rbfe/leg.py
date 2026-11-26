@@ -40,6 +40,8 @@ from cufep.workflow import KCAL, WorkflowError, gcmc_in
 STAGES = ["morph"]
 #: how long the complex leg waits between two looks for the windows of the solvent leg
 WAIT_SECONDS = 20.0
+#: beside the windows of a solvent leg: the run that published them (:attr:`EdgeLegJob.windows_token`)
+WINDOWS_OF_THE_RUN = "windows_of_the_run.json"
 #: how the windows that a leg does not choose itself get the configurations of their replicas: from the end of the
 #: pre-equilibration, minimised in their own state (OpenFE's 5000 steps of minimisation) and a short MD in it
 PRE_EQUILIBRATION_START = "the end of the pre-equilibration, minimised in each window"
@@ -60,6 +62,12 @@ class EdgeLegJob(Job):
     #: edge), written into the marker of a leg that has started and into its error: a leg stopped before its result
     #: says what its pre-equilibration and samples were made from, as its result does (sixteenth review of PR #19)
     prepared_systems_sha256: str | None = None
+    #: a run that chooses the windows of the solvent leg anew with the complex leg that takes them
+    #: (``lambda_schedule.adaptive.legs: solvent``, --reschedule of both): the solvent leg writes it beside the windows
+    #: it publishes (:data:`WINDOWS_OF_THE_RUN`), and the complex leg takes only windows that carry it (seventeenth
+    #: review of PR #19: run side by side, the complex leg read the windows the solvent leg had before it set them
+    #: aside)
+    windows_token: str | None = None
 
     unit_key: ClassVar[str] = "edge"
 
@@ -591,14 +599,17 @@ def hybrid_settings(rcfg, leg: str | None = None) -> dict:
     return settings
 
 
-def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None):
-    """The windows of the solvent leg of the edge, when it has them; waits for them."""
+def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None, token: str | None = None):
+    """The windows of the solvent leg of the edge, when it has them; waits for them. With ``token`` (both legs chosen
+    anew in this run, :attr:`EdgeLegJob.windows_token`) only the windows the solvent leg publishes in this run: those
+    it had are set aside by its own job, which may not have done so yet."""
     from cufep.alchemy.schedule import Schedule
 
     solvent = Path(edge_dir) / f"repeat_{repeat}" / "solvent"
     told = False
     while True:
-        if (solvent / "schedule.yaml").exists() and (solvent / "start_configs.npz").exists():
+        if ((solvent / "schedule.yaml").exists() and (solvent / "start_configs.npz").exists()
+                and (token is None or _run_of_the_windows(solvent) == token)):
             schedule = Schedule.load(solvent / "schedule.yaml")
             schedule.notes.append("the windows of the solvent leg (lambda_schedule.adaptive.legs: solvent)")
             return schedule
@@ -606,11 +617,21 @@ def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None)
             raise WorkflowError("the solvent leg of this edge failed before it had its windows "
                                 f"({solvent / 'error.json'})")
         if not told:
-            log("waiting for the lambda windows of the solvent leg (lambda_schedule.adaptive.legs: solvent)")
+            log("waiting for the lambda windows of the solvent leg (lambda_schedule.adaptive.legs: solvent)"
+                + (" of this run" if token is not None else ""))
             told = True
             if control is not None:
                 control.serial()
         time.sleep(WAIT_SECONDS)
+
+
+def _run_of_the_windows(leg_dir: Path) -> str | None:
+    """The run that published the windows of a solvent leg (:data:`WINDOWS_OF_THE_RUN`), if one is recorded."""
+    try:
+        record = json.loads((Path(leg_dir) / WINDOWS_OF_THE_RUN).read_text())
+    except (OSError, ValueError):
+        return None
+    return record.get("run") if isinstance(record, dict) else None
 
 
 def run_hybrid_leg(job: EdgeLegJob) -> dict:
@@ -754,16 +775,18 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                            MINIMIZE_STEPS, START_MD_PS)
 
     def check_scale(schedule, of_the_solvent_leg: bool = False) -> None:
+        from cufep.workflow import exact_number
+
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
+            made, given = exact_number(schedule.rest2_scale), exact_number(rest2.scale)
             if of_the_solvent_leg:
                 raise WorkflowError(
                     "the lambda windows of the solvent leg, which this leg takes (lambda_schedule.adaptive.legs: "
-                    f"solvent), were made with a REST2 scale of {schedule.rest2_scale:g} but sampling.rest2.scale is "
-                    f"{rest2.scale:g}. Set sampling.rest2.scale to {schedule.rest2_scale:g}, or choose the windows of "
-                    "the solvent leg anew with this scale first (its --edge, --repeat, --leg solvent and "
-                    "--reschedule); this leg then takes those")
-            raise WorkflowError("the lambda schedule of this leg was made with a REST2 scale of "
-                                f"{schedule.rest2_scale:g} but sampling.rest2.scale is {rest2.scale:g}")
+                    f"solvent), were made with a REST2 scale of {made} but sampling.rest2.scale is {given}. Set "
+                    f"sampling.rest2.scale to {made}, or choose the windows of the solvent leg anew with this scale "
+                    "first (its --edge, --repeat, --leg solvent and --reschedule); this leg then takes those")
+            raise WorkflowError(f"the lambda schedule of this leg was made with a REST2 scale of {made} but "
+                                f"sampling.rest2.scale is {given}")
 
     def run_with(backend: str):
         ls = rcfg.lambda_schedule
@@ -834,13 +857,18 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                        **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {}),
                        "windows": "chosen by this precalculation"}
             else:
-                schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
+                schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control, job.windows_token)
                 check_scale(schedule, True)        # before its windows are written (sixteenth review of PR #19)
                 cfgs = from_pre_equilibration(schedule)
                 how = {**starting, "windows": "those of the solvent leg"}
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}
             configs = publish_windows(leg_dir, schedule, cfgs, record, leg=job.leg, edge=job.edge,
                                       repeat=job.repeat, seed=seed, backend=backend)
+            if job.leg == "solvent" and job.windows_token is not None:
+                # the complex leg of this run takes these windows, not those this leg had (seventeenth review)
+                from cufep.files import publish_text
+
+                publish_text(leg_dir / WINDOWS_OF_THE_RUN, json.dumps({"run": job.windows_token}))
             run.timed("lambda_schedule", t0)
             log(f"lambda schedule ({schedule.mode}): {len(schedule.states)} windows in {time.perf_counter() - t0:.0f} s"
                 f" ({how['windows']})")
