@@ -208,7 +208,7 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
               softcore_alpha: float, softcore_b: int, temperature_K: float, interval_ps: float, attempts: int,
               batch_size: int, radius_margin_nm: float, excess_chemical_potential_kcal_per_mol: float,
               standard_volume_nm3: float, ghost_waters: int | None,
-              radius_from_nm: np.ndarray | None = None, radius_from_bonds=None) -> GcmcSpec:
+              radius_from_nm: np.ndarray | None = None, radius_from_bonds=None, bonds=None) -> GcmcSpec:
     """What a mover needs, from the ``system`` of a leg with every water interacting, its
     ``topology`` and the pose that was prepared. The waters and the sphere are found as for the
     water relocation moves (:func:`cufep.sampling.relocation_mc.relocation_spec`, with its
@@ -216,11 +216,12 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
     (its volume by the standard volume, rounded up; cuFEP's own: the sources give examples of 10 to
     50 and no rule). ``radius_from_nm``: the heavy atoms whose largest distance gives the radius, where they are not
     those of the ligand in ``positions`` (the two end states of a relative leg), with ``radius_from_bonds`` the bonds
-    between them (pairs of positions in them), each molecule taken whole (:func:`whole_pose`). Raises GcmcError where
-    the moves cannot be made."""
+    between them (pairs of positions in them), each molecule taken whole (:func:`whole_pose`). ``bonds``: pairs of
+    atoms of the System bonded that the topology does not hold (of a hybrid: the bonds of both end states), for the
+    ligand taken whole in the check of the cell and in the moves. Raises GcmcError where the moves cannot be made."""
     try:
         base = relocation_spec(system, topology, positions, box, ligand, cutoff_nm, softcore_alpha, softcore_b,
-                               temperature_K, 1, None, interval_ps, radius_margin_nm)
+                               temperature_K, 1, None, interval_ps, radius_margin_nm, bonds)
     except GcmcError:
         raise
     except RelocationError as exc:

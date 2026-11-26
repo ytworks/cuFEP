@@ -286,12 +286,17 @@ def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, 
     publish_text(out_dir / "network.json", json.dumps(record, indent=1))
 
 
-def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | None = None) -> list[str]:
-    """The legs of a repeat whose hybrid System was of version 1 (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`) and differs
-    from that of this version: with REST2 and terms of B in the proper torsions of the core, which it left unscaled,
-    so that the energies of its states were not those of its Hamiltonian (second review of PR #19: such a leg was
-    combined with a leg of this version). A leg records its version; one without the record is of version 1 unless
-    it records ``grand_canonical``, which came with the fix. ``counted`` keeps the counts of an edge between calls."""
+def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | None = None) -> list[dict]:
+    """The legs of a repeat whose hybrid System was of version 1 (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`) and may
+    differ from that of this version: REST2 heated a window, and ligand B has terms in the proper torsions of the
+    core, which version 1 left unscaled, so that the energies of its states were not those of its Hamiltonian (second
+    review of PR #19: such a leg was combined with a leg of this version). A leg records its version; one without the
+    record is of version 1 unless it records ``grand_canonical``, which came with the fix. Where whether it had such
+    terms cannot be told (its prepared systems cannot be read, or its hot region was ``perturbed``, which version 1
+    chose by an earlier rule), the leg is left out too (third review of PR #19). Each is ``{"leg", "repeat", "why",
+    "remove"}``: ``remove``, the files of the run directory to remove before the leg is computed again with
+    ``--reschedule`` (the pre-equilibration of a complex leg without a record of its ghost waters, which a leg with
+    the moves does not use again). ``counted`` keeps the counts of an edge between calls."""
     from cufep.rbfe.hybrid import HYBRID_VERSION
     from cufep.rbfe.leg import terms_left_unscaled_by_version_1
     from cufep.sampling.storage import stored_conditions
@@ -302,22 +307,39 @@ def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | N
         record = result.get("run") or {}
         if record.get("hybrid_version", HYBRID_VERSION if "grand_canonical" in record else 1) >= HYBRID_VERSION:
             continue
-        _n, conditions = stored_conditions(Path(edge_dir) / f"repeat_{repeat}" / leg / "hrex")
+        leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
+        _n, conditions = stored_conditions(leg_dir / "hrex")
         rest2 = ((conditions or {}).get("settings") or {}).get("sampling.rest2") or {}
-        scale = (record.get("rest2") or {}).get("scale", rest2.get("scale"))
-        if scale is not None and float(scale) <= 1.0:
-            continue
-        key = (leg, rest2.get("region", "pocket"))
-        if key not in counted:
-            counted[key] = terms_left_unscaled_by_version_1(edge_dir, *key)
-        if counted[key] is None:
-            out.append(f"the {leg} leg of repeat {repeat} is of an earlier version with REST2, whose hybrid left the "
-                       "terms of ligand B in the proper torsions of the core unscaled, and its edge has no prepared "
-                       "systems to tell whether it had such terms")
-        elif counted[key]:
-            out.append(f"the {leg} leg of repeat {repeat} is of an earlier version whose REST2 left {counted[key]} "
-                       "terms of ligand B in the proper torsions of the core unscaled (the energies of its states were "
-                       "not those of its Hamiltonian)")
+        rest2_record = record.get("rest2") or {}
+        windows = rest2_record.get("scale_of_window")
+        # the scale of every window: where none is heated, version 1 is this version (third review of PR #19)
+        if windows:
+            if all(float(s) <= 1.0 for s in windows):
+                continue
+        else:
+            scale = rest2_record.get("scale", rest2.get("scale"))
+            if scale is not None and float(scale) <= 1.0:
+                continue
+        region = rest2.get("region", "pocket")
+        if region == "perturbed":
+            why = ("its hot region (sampling.rest2.region: perturbed) was chosen by the rule of an earlier version, "
+                   "so whether ligand B had terms in its hot proper torsions of the core, which that version left "
+                   "unscaled, is not known")
+        else:
+            if (leg, region) not in counted:
+                counted[(leg, region)] = terms_left_unscaled_by_version_1(edge_dir, leg, region)
+            n = counted[(leg, region)]
+            if n == 0:
+                continue
+            why = ("the prepared systems of its edge cannot be read to tell whether ligand B had terms in the proper "
+                   "torsions of the core, which that version left unscaled with REST2" if n is None else
+                   f"its REST2 left {n} terms of ligand B in the proper torsions of the core unscaled (the energies of "
+                   "its states were not those of its Hamiltonian)")
+        remove = []
+        if leg == "complex" and (leg_dir / "equil.npz").exists() and not (leg_dir / "equil_ghosts.json").exists():
+            remove.append(f"edges/{Path(edge_dir).name}/repeat_{repeat}/{leg}/equil.npz")
+        out.append({"leg": leg, "repeat": repeat, "why": f"the {leg} leg of repeat {repeat} is of an earlier version: "
+                    + why, "remove": remove})
     return out
 
 
@@ -536,16 +558,23 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
             if compound_of:
                 r["exp_compounds"] = [compound_of[r["ligand_a"]], compound_of[r["ligand_b"]]]
     differing = network_differences(out_dir, results)
+    # legs of an earlier version that are left out (legs_of_version_1), in the notes of every entry point
+    left_out = [r["edge"] for r in results if r.get("earlier_version")]
+    left_note = ([f"legs of an earlier version are left out of {len(left_out)} edge(s) ({', '.join(left_out)}); "
+                  "their RESULT lines say why and how to compute them again"] if left_out else [])
+    # the experimental value of a state is that of its compound (third review of PR #19: ligands.csv gave it as if it
+    # were measured for the state)
+    of_compound = {"experiment_of_compound": dict(compound_of)} if compound_of else {}
     if differing:
         # each edge gives its ddG; no dG and no cycle closure is made from edges of other conditions
-        return {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, "cycle_closures": [],
-                "dg": None, "inconsistent_edges": differing,
+        return {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, **of_compound,
+                "cycle_closures": [], "dg": None, "inconsistent_edges": differing,
                 "notes": ["NO NETWORK: the edges with a ddG were not made under the same conditions ("
                           + "; ".join(differing) + "); their ddG are given one by one, without cycle closures "
-                          "and without dG"]}
+                          "and without dG"] + left_note}
     measured = [Edge(r["ligand_a"], r["ligand_b"], r["ddg"], r["se"]) for r in results if "ddg" in r]
-    summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment,
-               "cycle_closures": cycle_closures(measured), "dg": None, "notes": []}
+    summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment, **of_compound,
+               "cycle_closures": cycle_closures(measured), "dg": None, "notes": list(left_note)}
     import networkx as nx
 
     graph = nx.Graph([(e.ligand_a, e.ligand_b) for e in measured])
@@ -609,12 +638,15 @@ def write_results(out_dir: Path, summary: dict) -> None:
 
     def ligands_table(fh) -> None:
         w = csv.writer(fh)
-        w.writerow(["ligand", "dg_kcal_mol", "standard_error", "exp_dg_kcal_mol", "reference"])
+        w.writerow(["ligand", "dg_kcal_mol", "standard_error", "exp_dg_kcal_mol", "exp_dg_of", "reference"])
         dg = summary.get("dg") or {"values": {}, "reference": ""}
+        compound_of = summary.get("experiment_of_compound") or {}
         for name in summary["ligands"]:
             v = dg["values"].get(name, {})
-            w.writerow([name, fmt(v.get("dg")), fmt(v.get("se")), fmt(summary["experiment_kcal_mol"].get(name)),
-                        dg["reference"]])
+            exp = summary["experiment_kcal_mol"].get(name)
+            # a state has the experimental value of its compound, which is measured, not the state
+            of = "" if exp is None else f"the compound {compound_of[name]}" if name in compound_of else "the ligand"
+            w.writerow([name, fmt(v.get("dg")), fmt(v.get("se")), fmt(exp), of, dg["reference"]])
 
     def compounds_table(fh) -> None:
         w = csv.writer(fh)
@@ -637,9 +669,13 @@ def result_lines(summary: dict) -> list[str]:
     lines = []
     for e in summary["edges"]:
         if e.get("earlier_version"):
-            legs = sorted({item.split(" leg of")[0].removeprefix("the ") for item in e["earlier_version"]})
-            lines.append(f"RESULT {e['edge']}: legs left out: {'; '.join(e['earlier_version'])}; run them again: "
-                         f"cufep rbfe run CONFIG --edge {e['edge']} " + " ".join(f"--leg {leg}" for leg in legs)
+            left = e["earlier_version"]
+            legs = sorted({item["leg"] for item in left})
+            remove = [path for item in left for path in item["remove"]]
+            lines.append(f"RESULT {e['edge']}: left out: {'; '.join(item['why'] for item in left)}. To compute "
+                         + ("it" if len(left) == 1 else "them") + " again: "
+                         + (f"remove {', '.join(remove)} of the run directory, then " if remove else "")
+                         + f"cufep rbfe run CONFIG --edge {e['edge']} " + " ".join(f"--leg {leg}" for leg in legs)
                          + " --reschedule")
         if "ddg" in e:
             exp = ""

@@ -581,3 +581,26 @@ def test_a_first_repeat_of_an_earlier_version_does_not_let_others_of_other_ensem
         "excess_chemical_potential_kcal_per_mol": -6.0, "standard_volume_nm3": 0.0303}}}))
     assert water_moves_of(old, tmp_path) == {"enabled": True, "excess_chemical_potential_kcal_per_mol": -6.0,
                                              "standard_volume_nm3": 0.0303}
+
+
+def test_the_experiment_of_a_state_in_ligands_csv_is_said_to_be_that_of_its_compound(tmp_path):
+    """Third review of PR #19 (P3): ligands.csv gave the two states 4jS and 4jR the experimental dG of their compound
+    4j (-10.887 kcal/mol) each, as if each had been measured; a statistic over the states counted one measurement
+    twice. The column exp_dg_of names the compound; the ligands of a run without states keep "the ligand"."""
+    import csv
+
+    from cufep.rbfe.run import combine_network, write_results
+
+    _write_legs(tmp_path, "4jS~4jR", 0, _leg_result(-12.0), _leg_result(-11.5))
+    states = {"compound": {"4jS": "4j", "4jR": "4j"}, "form": {"4jS": "", "4jR": ""},
+              "fraction": {"4jS": 1.0, "4jR": 1.0}, "symmetry": {"4j": 1}}
+    experiment = {"4jS": -10.887, "4jR": -10.887}
+    write_results(tmp_path, combine_network(tmp_path, ["4jS", "4jR"], [("4jS", "4jR")], 1, experiment, states))
+    rows = {r["ligand"]: r for r in csv.DictReader((tmp_path / "ligands.csv").open())}
+    assert {name: (r["exp_dg_kcal_mol"], r["exp_dg_of"]) for name, r in rows.items()} == {
+        "4jS": ("-10.887", "the compound 4j"), "4jR": ("-10.887", "the compound 4j")}
+    plain = tmp_path / "plain"
+    _write_legs(plain, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    write_results(plain, combine_network(plain, ["a", "b"], [("a", "b")], 1, {"a": -9.0}))
+    rows = {r["ligand"]: r for r in csv.DictReader((plain / "ligands.csv").open())}
+    assert (rows["a"]["exp_dg_of"], rows["b"]["exp_dg_of"]) == ("the ligand", "")

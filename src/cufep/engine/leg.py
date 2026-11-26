@@ -67,9 +67,14 @@ def check_equil_ghosts(equil_file: Path, gcmc, earlier_ghosts=None) -> None:
     """Refuse a pre-equilibration of a leg with grand canonical moves of water whose ghost waters are not those of
     this run (second review of PR #19: a change of the radius of the sphere changed the number of ghosts of ``auto``
     from 139 to 160, and the leg was fixed in the cell equilibrated with 139). Its record (:data:`EQUIL_GHOSTS`), else
-    ``earlier_ghosts``, the ghosts that the versions which wrote no record chose for it (None: not known)."""
+    ``earlier_ghosts``, the ghosts that the versions which wrote no record chose for it (None: not known). Nothing to
+    check for a leg without the moves or without a pre-equilibration. A leg calls it before ``--reschedule`` sets
+    anything aside (:func:`open_leg`), so that a refused leg keeps what it had."""
     from cufep.workflow import WorkflowError
 
+    equil_file = Path(equil_file)
+    if gcmc is None or not equil_file.exists():
+        return
     record = equil_file.parent / EQUIL_GHOSTS
     current = [int(i) for i in gcmc.ghosts]
     if record.exists():
@@ -83,8 +88,9 @@ def check_equil_ghosts(equil_file: Path, gcmc, earlier_ghosts=None) -> None:
         why = "it records no ghost waters (an earlier version wrote it) and they are not known to be those of this run"
     if why is not None:
         raise WorkflowError(f"the pre-equilibration of this leg in {equil_file} cannot be used again: {why}. Nothing "
-                            f"was changed; remove {equil_file.name} of this leg to pre-equilibrate it again, or run "
-                            "the calculation in a new output.dir")
+                            f"was changed. To compute the leg again, remove {equil_file.name} and {EQUIL_GHOSTS} of "
+                            "this leg and run it with --reschedule (its windows, samples and result are set aside in "
+                            "previous_<n>/); or run the calculation in a new output.dir")
 
 
 def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_info: dict, gcmc=None,
@@ -98,8 +104,7 @@ def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_in
 
     equil_file = run.leg_dir / "equil.npz"
     leg = run.job.leg
-    if equil_file.exists() and gcmc is not None:
-        check_equil_ghosts(equil_file, gcmc, earlier_ghosts)
+    check_equil_ghosts(equil_file, gcmc, earlier_ghosts)
     if not equil_file.exists():
         if gcmc is not None:
             publish_text(run.leg_dir / EQUIL_GHOSTS, json.dumps({"ghosts": [int(i) for i in gcmc.ghosts],

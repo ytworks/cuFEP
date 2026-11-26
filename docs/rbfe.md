@@ -161,8 +161,13 @@ water"; `src/cufep/sampling/gcmc.py`), with their settings: insertions and delet
 ligand, the waters farthest from the ligand ghosts from the pre-equilibration on (which has its barostat), and the
 replica exchange without a barostat in the mean cell of the pre-equilibration (in a complex leg without free MD
 its last cell). For a hybrid (cuFEP's own): the sphere is around the heavy atoms of both end states, so that A -> B
-and B -> A have one sphere; a water switched off has no charge and no Lennard-Jones in the NonbondedForce and no
-Lennard-Jones with the ligand at either end state; in the stand-in energy with which the trials are screened the
+and B -> A have one sphere, each molecule taken whole along its bonds (those of the hybrid System, which its topology
+does not all hold) and the two end states put together by their centres, so that a ligand longer than half the cell
+has the sphere of the molecule whatever atom comes first; the ghost waters a pre-equilibration was made with are
+recorded beside it (`equil_ghosts.json`), and a pre-equilibration of other ghosts, or start configurations of the
+windows in another cell than the pre-equilibration fixes, are refused before anything is set aside (the refusal says
+what to remove before `--reschedule`); a water switched off has no charge and no Lennard-Jones in the NonbondedForce
+and no Lennard-Jones with the ligand at either end state; in the stand-in energy with which the trials are screened the
 ligand interacts with the parameters of both ends at full strength in every window, and the test with the full
 potential of the window that every trial that passes is given corrects it (what the stand-in is changes how many
 trials pass, not what is sampled). The solvent leg runs at constant pressure. With a water model for which cuFEP
@@ -198,8 +203,12 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   of all iterations and that among the samples of the estimate, the two checks behind NOT RELIABLE.
 - A leg records the version of its hybrid System (`run.hybrid_version`). Version 1, every leg whose record has
   neither this key nor `grand_canonical`, multiplied the term of A alone of the proper torsions of the core by the
-  REST2 factor: a leg of it with REST2, on an edge whose ligand B has terms in those torsions, is left out of the
-  ddG as a missing leg, and its RESULT line names the legs to run again (`--edge ... --leg ... --reschedule`).
+  REST2 factor: a leg of it in which REST2 heated a window (`run.rest2.scale_of_window`), on an edge whose ligand B
+  has terms in those torsions, is left out of the ddG as a missing leg; so is one for which this cannot be told (its
+  hot region was `perturbed`, which version 1 chose by an earlier rule, or the prepared systems of its edge cannot
+  be read). Its RESULT line says why and how to compute it again (the pre-equilibration of a complex leg to remove
+  first, then `--edge ... --leg ... --reschedule`), and a note of the run names the edges. `cufep benchmark report`
+  takes the legs of a run directory as `cufep rbfe analyze` takes them, not an earlier `summary.json`.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
   of their variance. The edges fix the differences between the ligands; the one constant they leave is set
@@ -240,8 +249,10 @@ the same constant. Standard errors from the covariance of the estimate, the stat
 sum. `compounds.csv` gives every compound with its states and their weights. An edge between states of two compounds
 has the experimental ddG of those compounds, named so (`exp_ddg_of` in `summary.json` and `edges.csv`, "experiment of
 the compounds" in its RESULT line): it is not what the edge computes; an edge between states of one compound has
-none. A run that takes only some states of a compound of the file combines those, and says so. Which states a compound has, their populations and its symmetry
-number are inputs: cuFEP does not find them. The relative benchmark of A2A takes them from the published map
+none. In `ligands.csv` a state has the experimental dG of its compound, named so (`exp_dg_of`: "the compound 4j"),
+one measurement for all its states. A run that takes only some states of a compound of the file combines those, and
+says so. Which states a compound has, their populations and its symmetry number are inputs: cuFEP does not find
+them. The relative benchmark of A2A takes them from the published map
 (`benchmarks/a2a/rbfe_states.csv`, made by `cufep.benchmarks.curate` from the unmodified inputs: the 29 records, the
 solvent pKa of Supplementary Table 17 at the pH of the assay, 7.5, and the symmetry numbers of Supplementary Table 16).
 

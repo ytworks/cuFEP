@@ -668,9 +668,10 @@ def test_the_windows_started_in_this_process_make_the_moves_a_worker_makes(water
     assert all(len(c) == 4 and c[3].dtype == bool and len(c[3]) == len(moves.waters) for c in configs)
 
 
-def _chain_in_a_cell(xs, edge: float = 4.0):
-    """A chain of carbon atoms at ``xs`` (nm, in this order of atoms, bonded along x) through the middle of a cubic
-    cell of ``edge`` nm, and four waters far from it: (system, topology, positions, box, ligand)."""
+def _chain_in_a_cell(xs, edge: float = 4.0, missing_bonds=()):
+    """A chain of carbon atoms at ``xs`` (nm, in this order of atoms, bonded along x, but for the pairs of atoms
+    ``missing_bonds``, which the topology does not hold) through the middle of a cubic cell of ``edge`` nm, and four
+    waters far from it: (system, topology, positions, box, ligand)."""
     system, top = mm.System(), app.Topology()
     nb = mm.NonbondedForce()
     nb.setNonbondedMethod(mm.NonbondedForce.CutoffPeriodic)
@@ -685,7 +686,8 @@ def _chain_in_a_cell(xs, edge: float = 4.0):
         positions.append([x, 0.5 * edge, 0.5 * edge])
     order = np.argsort(xs)
     for i, j in zip(order[:-1], order[1:]):
-        top.addBond(atoms[i], atoms[j])
+        if tuple(sorted((int(i), int(j)))) not in {tuple(sorted(pair)) for pair in missing_bonds}:
+            top.addBond(atoms[i], atoms[j])
     for k in range(4):
         water = top.addResidue("HOH", chain)
         o = [3.05, 0.1 + 0.3 * k, 0.1]
@@ -735,3 +737,34 @@ def test_the_sphere_of_a_long_ligand_is_that_of_the_molecule_whole_whatever_its_
     compact = positions[:5]
     assert np.array_equal(whole_pose(compact, [(i, i + 1) for i in range(4)], box),
                           compact[0] + nearest_image(compact - compact[0], box))
+
+
+def test_the_sphere_takes_the_bonds_the_topology_does_not_hold_and_puts_the_two_end_states_together():
+    """Third review of PR #19 (P2, twice), cells of 4 nm, margin 0.30 nm:
+    the core of a hybrid along x from 0 to 1.95 nm and an atom unique to B at 2.10 nm, whose bond to the core the
+    topology does not hold: that atom was put at -1.90 nm, the radius was 2.225 nm and the cell refused; with the bonds
+    of the System (``bonds``) it is 1.35 nm, in the check of the cell and in the moves;
+    end states A (x = 0 to 1.95 nm) and B (two atoms at 2.04 and 2.19 nm), each whole: with A first B was put at the
+    images nearest to the first atom of A (-1.96 and -1.81 nm), 2.255 nm; with B first 1.395 nm. The end states are
+    put together by their centres: 1.395 nm both ways."""
+    from cufep.rbfe.leg import end_states_heavy
+    from cufep.sampling.gcmc import _centre
+    from cufep.sampling.relocation_mc import relocation_spec
+
+    xs = 0.15 * np.arange(15)
+    system, top, positions, box, ligand = _chain_in_a_cell(xs, missing_bonds=[(13, 14)])
+    assert relocation_spec(system, top, positions, box, ligand, 0.9, 0.5, 1, 298.15, 4, None, 4.0, 0.3,
+                           bonds=[(13, 14)]).radius_nm == pytest.approx(1.35)
+    spec = spec_of(system, top, positions, box, ligand, 2, bonds=[(13, 14)])
+    assert spec.radius_nm == pytest.approx(1.35) and [13, 14] in spec.ligand_heavy_bonds.tolist()
+    assert _centre(positions, box, spec.ligand_heavy, spec.ligand_heavy_bonds) == pytest.approx([1.05, 2.0, 2.0])
+    a_xs = 0.15 * np.arange(14)
+    system, top, positions, box, ligand = _chain_in_a_cell(a_xs)
+    a = dict(zip(("topology", "positions", "ligand"), _chain_in_a_cell(a_xs)[1:3] + (list(range(14)),)))
+    b = dict(zip(("topology", "positions", "ligand"), _chain_in_a_cell([2.04, 2.19])[1:3] + ([0, 1],)))
+    radii = []
+    for first, second in ((a, b), (b, a)):
+        points, bonds = end_states_heavy(first, second)
+        radii.append(spec_of(system, top, positions, box, ligand, 2, radius_from_nm=np.asarray(points),
+                             radius_from_bonds=bonds).radius_nm)
+    assert radii == pytest.approx([1.395, 1.395], abs=1e-9)

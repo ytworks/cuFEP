@@ -166,12 +166,28 @@ def edge_errors(pred, exp) -> dict[str, float | None]:
     return {"n": len(err), "rmse": float(np.sqrt(np.mean(err ** 2))), "mue": float(np.mean(np.abs(err)))}
 
 
+def analysed_summary(run_dir: Path) -> dict:
+    """The summary of a relative run as its directory gives it now: from the results of its legs where it has them and
+    what combining them needs (``resolved_config.yaml``, ``network.json``), else its ``summary.json``."""
+    from cufep.rbfe.run import analyse_directory
+
+    run_dir = Path(run_dir)
+    has_legs = any((run_dir / "edges").glob("*/repeat_*/*/result.json")) if (run_dir / "edges").is_dir() else False
+    if has_legs and (run_dir / "resolved_config.yaml").exists() and (run_dir / "network.json").exists():
+        return analyse_directory(run_dir)
+    return json.loads((run_dir / "summary.json").read_text())
+
+
 def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     """Compare a relative run with experiment, with FEP+ and with the absolute calculation; returns Markdown.
 
-    The files are those of the run as it is now (the figures of an earlier state are removed)."""
+    The files are those of the run as it is now (the figures of an earlier state are removed). A directory with the
+    results of its legs is analysed from them as `cufep rbfe analyze` analyses it
+    (:func:`cufep.rbfe.run.analyse_directory`), so that both take the same edges (third review of PR #19: legs that
+    the analysis leaves out came back from an earlier summary.json); one without them is reported from its
+    summary.json."""
     run_dir = Path(run_dir)
-    summary = json.loads((run_dir / "summary.json").read_text())
+    summary = analysed_summary(run_dir)
     reference = read_reference(name)
     abfe = stored_abfe(name)
     network = run_dir / "network.json"

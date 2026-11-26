@@ -675,7 +675,9 @@ their exchange and MBAR are what they are without the moves. The default is off.
 
 The sphere is centred on the geometric centre of the heavy atoms of the ligand and has the radius
 of the paper: half the largest distance between two heavy atoms of the ligand in the prepared
-pose, plus 0.3 nm (`radius_margin_nm`). One move, with x the configuration and beta = 1 / kT:
+pose, plus 0.3 nm (`radius_margin_nm`). The ligand is taken whole along its bonds in the periodic
+cell (a ligand longer than half the cell was broken by the images nearest to its first atom). One
+move, with x the configuration and beta = 1 / kT:
 
 1. A direction is chosen: out of the sphere or into it. The source region S is where the water
    is taken, the target region T the other one.
@@ -730,8 +732,12 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   ghost, a molecule without nonbonded interactions, and an insertion puts a ghost at a place in
   the sphere and gives it its interactions. The ghosts of the start are waters of the prepared
   system, those whose oxygen is farthest from the ligand (`ghost_waters`); they are switched off
-  from the pre-equilibration on. Switching is done in the Context while it runs (charge and
-  epsilon of every site of the water in the nonbonded force and in the soft-core force of the
+  from the pre-equilibration on, which records them (`equil_ghosts.json`). A pre-equilibration of
+  other ghosts, and start configurations of the windows in another cell than the pre-equilibration
+  fixes, are not used again (the refusal says what to remove before `--reschedule`); one of an
+  earlier version without the record is used where its ghosts are those of this run (the images
+  nearest to the first heavy atom keep the ligand whole). Switching is done in the Context while it
+  runs (charge and epsilon of every site of the water in the nonbonded force and in the soft-core force of the
   ligand); a Context switched so gives the energies and forces of a System built so, on both
   backends (`spikes/m33_ghost_waters_on_the_backends.py`, the tests). With no ghost left an
   insertion cannot be tried, and the leg stops with that reason (as grand does); it is not taken

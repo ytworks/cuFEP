@@ -2683,6 +2683,7 @@ def run_leg(job: LegJob) -> dict:
     from cufep.alchemy.schedule import Schedule, schedule_from_windows
     from cufep.engine.leg import (
         adaptive_windows,
+        check_equil_ghosts,
         check_kept_windows,
         chosen_backend,
         finish_leg,
@@ -2699,8 +2700,6 @@ def run_leg(job: LegJob) -> dict:
     from cufep.sampling.worker import LegSpec
 
     cfg = Config.model_validate(job.config)
-    run = open_leg(job, cfg)
-    leg_dir, log, seed, notes, timing, timed = run.leg_dir, run.log, run.seed, run.notes, run.timing, run.timed
     is_complex = job.leg == "complex"
     lig_dir = Path(job.lig_dir)
     prep_info = json.loads((lig_dir / "prep" / "prep.json").read_text())
@@ -2708,6 +2707,20 @@ def run_leg(job: LegJob) -> dict:
     if is_complex:
         check_manual_anchors(cfg, lig_dir)
     system, gcmc = leg_system(cfg, prep, job.leg)
+    earlier_ghosts = None
+    if gcmc is not None:
+        from cufep.sampling.relocation_mc import nearest_first_is_whole
+
+        # every earlier version took the sphere from the images nearest to the first heavy atom of the ligand: where
+        # they keep the molecule whole, its ghosts were those of this run
+        heavy = np.asarray(prep["positions"], dtype=float)[gcmc.ligand_heavy]
+        if nearest_first_is_whole(heavy, gcmc.ligand_heavy_bonds, np.asarray(prep["box"], dtype=float)):
+            earlier_ghosts = gcmc.ghosts
+    # a pre-equilibration this leg cannot use is refused before --reschedule sets anything aside (third review of
+    # PR #19)
+    check_equil_ghosts(job.leg_dir / "equil.npz", gcmc, earlier_ghosts)
+    run = open_leg(job, cfg)
+    leg_dir, log, seed, notes, timing, timed = run.leg_dir, run.log, run.seed, run.notes, run.timing, run.timed
     if gcmc is not None:
         # every MD of this leg is of the system with the ghosts of the start switched off
         prep = {**prep, "system_xml": mm.XmlSerializer.serialize(system)}
@@ -2723,15 +2736,6 @@ def run_leg(job: LegJob) -> dict:
     # ---- 1. pre-equilibration: plain MD of the fully interacting system -------------------
     equil_file = leg_dir / "equil.npz"
     in_membrane = is_complex and barostat == "membrane"
-    earlier_ghosts = None
-    if gcmc is not None:
-        from cufep.sampling.relocation_mc import nearest_first_keeps_bonds
-
-        # every earlier version took the sphere from the images nearest to the first heavy atom of the ligand: where
-        # they keep the molecule whole, its ghosts were those of this run
-        heavy = np.asarray(prep["positions"], dtype=float)[gcmc.ligand_heavy]
-        if nearest_first_keeps_bonds(heavy, gcmc.ligand_heavy_bonds, np.asarray(prep["box"], dtype=float)):
-            earlier_ghosts = gcmc.ghosts
     eq, equil_recorded = pre_equilibrated(run, prep, system, barostat, prep_info.get("membrane_info", {}), gcmc,
                                           earlier_ghosts)
     # files of this leg that an earlier version wrote without a record of what they were made from
@@ -2904,7 +2908,8 @@ def run_leg(job: LegJob) -> dict:
             if not src.exists():
                 raise WorkflowError(f"lambda_schedule.file is set but there is no schedule at {src}")
             given = given_schedule(src, job.leg, stages, rest2.scale if rest2_on else 1.0)
-        stored = stored_windows(leg_dir, job.leg, stages, windows_settings(cfg), log)
+        stored = stored_windows(leg_dir, job.leg, stages, windows_settings(cfg), log,
+                                alchemical_box(eq, gcmc) if gcmc is not None else None)
         if stored is not None:
             schedule, configs, made = stored
             # windows without a record of their settings and without samples are sampled by this run
@@ -3331,14 +3336,17 @@ def adopt_windows(leg_dir: Path, schedule, configs: tuple, cfg: Config, made: di
     return record
 
 
-def stored_windows(leg_dir: Path, leg: str, stages: list[str], settings: dict, log=print):
+def stored_windows(leg_dir: Path, leg: str, stages: list[str], settings: dict, log=print, cell=None):
     """The lambda windows a leg has with the start configurations of their replicas, if this run
     can go on from them: ``(schedule, (positions, boxes, velocities), the record written with the
     start configurations)``, the record empty for files of a version that wrote none. None if the
     leg does not have both files, or has start configurations that are not those of its windows
     (other states, or another number of them): they are made again for the windows the leg has.
     Raises WorkflowError if the files were made with another System
-    (:func:`check_windows_settings`)."""
+    (:func:`check_windows_settings`), or, for a leg with grand canonical moves of water (``cell``:
+    the cell its pre-equilibration fixes, :func:`alchemical_box`), in another cell: they were made
+    from another pre-equilibration (third review of PR #19: a pre-equilibration made again left the
+    run in the cell of the one before)."""
     sched_file, start_file = Path(leg_dir) / "schedule.yaml", Path(leg_dir) / "start_configs.npz"
     if not (sched_file.exists() and start_file.exists()):
         return None
@@ -3353,6 +3361,13 @@ def stored_windows(leg_dir: Path, leg: str, stages: list[str], settings: dict, l
             "windows")
         return None
     check_windows_settings(made, settings, start_file, log)
+    if cell is not None and not np.allclose(np.asarray(configs[1], dtype=float),
+                                            np.asarray(cell, dtype=float)[None], rtol=0.0, atol=1e-9):
+        raise WorkflowError(
+            f"the start configurations of the lambda windows in {start_file} are in another cell than the "
+            f"pre-equilibration of this leg fixes ({Path(leg_dir) / 'equil.npz'}): they were made from another "
+            "pre-equilibration. Nothing was changed; run the leg again with --reschedule (its windows, samples and "
+            "result are set aside in previous_<n>/), or run the calculation in a new output.dir")
     return schedule, configs, made
 
 

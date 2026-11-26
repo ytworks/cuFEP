@@ -201,3 +201,25 @@ def test_a_pre_equilibration_of_other_ghost_waters_is_not_used_again(tmp_path, m
         pre_equilibrated(run, {}, None, "isotropic", {}, moves)
     pre_equilibrated(run, {}, None, "isotropic", {}, moves, earlier_ghosts=np.arange(139))
     assert made == [1] and not (tmp_path / EQUIL_GHOSTS).exists()
+
+
+def test_the_sphere_of_a_relative_leg_takes_the_bonds_of_the_atoms_unique_to_b(edge):
+    """Third review of PR #19 (P2): the topology of a hybrid holds no bond between an atom unique to B and the core
+    (they are terms of the System), so the oxygen of phenol was a molecule of its own in the sphere of the moves (with
+    the chain of the review, the core along x to 1.95 nm and an atom of B at 2.10 nm in a cell of 4 nm, the cell was
+    refused). The moves take the bonds of the hybrid: its heavy atoms are one molecule, in the check of the cell and
+    in the moves. (The test topology holds no bond of the ligand at all.)"""
+    import networkx as nx
+
+    from cufep.rbfe.hybrid import make_hybrid_system
+    from cufep.rbfe.leg import hybrid_gcmc
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = edge
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
+    top = hybrid_edge_topology(hybrid.system.getNumParticles(), list(hybrid.ligand_atoms), hybrid.system, box)
+    moves = hybrid_gcmc(_rbfe_config(gcmc={"ghost_waters": 6}), hybrid, top, box)
+    heavy = moves.ligand_heavy.tolist()
+    assert set(hybrid.unique_new) & set(heavy)                              # the oxygen of phenol
+    graph = nx.Graph([tuple(pair) for pair in moves.ligand_heavy_bonds.tolist()])
+    graph.add_nodes_from(range(len(heavy)))
+    assert nx.number_connected_components(graph) == 1

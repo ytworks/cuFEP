@@ -154,7 +154,7 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
                          list(hybrid.ligand_atoms), rcfg.dynamics.cutoff_nm, rcfg.alchemy.softcore_alpha, 1,
                          rcfg.thermodynamics.temperature_K, g.interval_ps, g.attempts, g.batch_size,
                          g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters),
-                         radius_from_nm=end_heavy_nm, radius_from_bonds=end_heavy_bonds)
+                         radius_from_nm=end_heavy_nm, radius_from_bonds=end_heavy_bonds, bonds=hybrid.bonds)
     except GcmcError as exc:
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {exc}") from exc
     charge, sigma, epsilon = (np.array(v, dtype=float) for v in (spec.charge, spec.sigma, spec.epsilon))
@@ -231,26 +231,28 @@ def end_states_heavy(a: dict, b: dict) -> tuple[list, list]:
 def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> int | None:
     """The terms of B of the proper torsions of the core of the hybrid of a leg of a prepared edge that version 1 of
     the hybrid left unscaled with REST2 (:func:`cufep.rbfe.hybrid.terms_version_1_left_unscaled`), the hot region of
-    the ligand by ``region``; None for an edge without its prepared systems. They are terms of the two ligands and
-    their mapping: counted on the end states of the solvent leg where the leg has its mapping."""
+    the ligand by ``region``; None where the prepared systems of the edge cannot be read. They are terms of the two
+    ligands and their mapping: counted on the end states of the solvent leg where the leg has its mapping."""
     import openmm as mm
 
     from cufep.rbfe.hybrid import make_hybrid_system, terms_version_1_left_unscaled
     from cufep.rbfe.prep import load_end_states
 
-    done = Path(edge_dir) / "prep" / "prep.json"
-    if not done.exists():
+    try:
+        info = json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
+        of = "solvent" if info["legs"]["solvent"]["mapping"] == info["legs"][leg]["mapping"] else leg
+        end = load_end_states(edge_dir, of)
+        a, b = end["a"], end["b"]
+        unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
+        hot = perturbed_region(edge_dir, a, b, end["core_map"], unique_b) if region == "perturbed" else None
+        water = (info["legs"][of].get("alchemical_water") or {}).get("atoms_a", [])
+        hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
+                                    mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
+                                    end["core_map"], rest2=True, alchemical_water=water, rest2_ligand_atoms=hot)
+    except (OSError, KeyError, ValueError):
+        # a file of the prepared edge is missing or cannot be read: not known for this leg alone, and the analysis of
+        # the other edges goes on (third review of PR #19: FileNotFoundError stopped `cufep rbfe analyze`)
         return None
-    info = json.loads(done.read_text())
-    of = "solvent" if info["legs"]["solvent"]["mapping"] == info["legs"][leg]["mapping"] else leg
-    end = load_end_states(edge_dir, of)
-    a, b = end["a"], end["b"]
-    unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
-    hot = perturbed_region(edge_dir, a, b, end["core_map"], unique_b) if region == "perturbed" else None
-    water = (info["legs"][of].get("alchemical_water") or {}).get("atoms_a", [])
-    hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
-                                mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
-                                end["core_map"], rest2=True, alchemical_water=water, rest2_ligand_atoms=hot)
     return terms_version_1_left_unscaled(hybrid.system)
 
 
@@ -364,6 +366,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     from cufep.alchemy.schedule import AlsSettings, schedule_from_windows
     from cufep.engine.leg import (
         adaptive_windows,
+        check_equil_ghosts,
         check_kept_windows,
         chosen_backend,
         finish_leg,
@@ -391,10 +394,13 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     )
 
     rcfg = RbfeConfig.model_validate(job.config)
-    run = open_leg(job, rcfg)
-    leg_dir, log, seed = run.leg_dir, run.log, run.seed
     edge_dir = Path(job.edge_dir)
     built = build_leg(rcfg, edge_dir, job.leg)
+    # a pre-equilibration this leg cannot use is refused before --reschedule sets anything aside (third review of
+    # PR #19: the leg was refused after its result had been moved, and the command it was told to run could not go on)
+    check_equil_ghosts(job.leg_dir / "equil.npz", built.gcmc)
+    run = open_leg(job, rcfg)
+    leg_dir, log, seed = run.leg_dir, run.log, run.seed
     hybrid, prep, barostat = built.hybrid, built.prep, built.barostat
     n_atoms = hybrid.system.getNumParticles()
     is_complex = job.leg == "complex"
@@ -425,6 +431,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info, gcmc)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
+    cell = None
     if gcmc is not None:
         # the cell is fixed from here on (cufep.workflow.alchemical_box), the configuration moved into it as a
         # barostat moves it
@@ -481,7 +488,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     def run_with(backend: str):
         ls = rcfg.lambda_schedule
         # ---- 3. lambda windows ---------------------------------------------------------------
-        stored = stored_windows(leg_dir, job.leg, STAGES, settings, log)
+        stored = stored_windows(leg_dir, job.leg, STAGES, settings, log, cell)
         if stored is not None:
             schedule, configs, _made = stored
             log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg already has")

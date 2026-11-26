@@ -103,35 +103,80 @@ def sphere_radius(ligand_heavy_positions: np.ndarray, margin_nm: float) -> float
     return 0.5 * float(np.max(np.linalg.norm(x[:, None, :] - x[None, :, :], axis=2))) + float(margin_nm)
 
 
+def _bond_pairs(bonds) -> np.ndarray:
+    return np.asarray(list(bonds) if bonds is not None else [], dtype=np.int64).reshape(-1, 2)
+
+
+def _molecules(n: int, pairs: np.ndarray) -> list[list[int]]:
+    """The connected parts of ``n`` points joined by ``pairs``, each in the order of its points, in the order of their
+    first points."""
+    neighbours: dict[int, list[int]] = {i: [] for i in range(n)}
+    for i, j in pairs:
+        neighbours[int(i)].append(int(j))
+        neighbours[int(j)].append(int(i))
+    seen, out = set(), []
+    for start in range(n):
+        if start in seen:
+            continue
+        group, todo = {start}, [start]
+        while todo:
+            i = todo.pop()
+            for j in neighbours[i]:
+                if j not in group:
+                    group.add(j)
+                    todo.append(j)
+        seen |= group
+        out.append(sorted(group))
+    return out
+
+
+def nearest_first_is_whole(points: np.ndarray, bonds, box: np.ndarray) -> bool:
+    """Whether the images of the points nearest to the first point are the pose of :func:`whole_pose`: they keep every
+    bond whole, and the geometric centre of every molecule after the first is at the image nearest to that of the
+    first. It is then the pose of every version before :func:`whole_pose` (the images nearest to the first atom)."""
+    x, box = np.asarray(points, dtype=float), np.asarray(box, dtype=float)
+    pairs = _bond_pairs(bonds)
+    simple = x[0] + nearest_image(x - x[0], box)
+    if len(pairs):
+        d = simple[pairs[:, 1]] - simple[pairs[:, 0]]
+        if not np.allclose(d, nearest_image(d, box), rtol=0.0, atol=1e-9):
+            return False
+    molecules = _molecules(len(x), pairs)
+    first = simple[molecules[0]].mean(axis=0)
+    for members in molecules[1:]:
+        d = (simple[members].mean(axis=0) - first)[None]
+        if not np.allclose(d, nearest_image(d, box), rtol=0.0, atol=1e-9):
+            return False
+    return True
+
+
 def whole_pose(points: np.ndarray, bonds, box: np.ndarray) -> np.ndarray:
     """The points (n x 3, nm) of molecules in a periodic cell with every molecule whole: each along its ``bonds``
-    (pairs of indices of the points), every molecule after the first at the image of its geometric centre nearest to
-    that of the first. Where the image of every point nearest to the first point keeps every bond whole, that pose
-    (the pose of a molecule shorter than half the cell, the same numbers as before; second review of PR #19: a ligand
-    of 2.1 nm in a cell of 4 nm was broken by the images nearest to its first atom, and its sphere took 2.225 nm
-    instead of 1.35)."""
+    (pairs of indices of the points), every molecule after the first with its geometric centre at the image nearest to
+    that of the first. Where the images nearest to the first point are that pose (:func:`nearest_first_is_whole`),
+    those images, the numbers of before. (Second review of PR #19: a ligand of 2.1 nm in a cell of 4 nm was broken by
+    the images nearest to its first atom, and its sphere took 2.225 nm instead of 1.35; third review: the second end
+    state of an edge, whole, was put at the image nearest to the first atom of the first, 2.255 nm instead of
+    1.395.)"""
     x, box = np.asarray(points, dtype=float), np.asarray(box, dtype=float)
-    simple = x[0] + nearest_image(x - x[0], box)
-    pairs = np.asarray(list(bonds) if bonds is not None else [], dtype=np.int64).reshape(-1, 2)
-    if nearest_first_keeps_bonds(points, bonds, box):
-        return simple
+    if nearest_first_is_whole(x, bonds, box):
+        return x[0] + nearest_image(x - x[0], box)
+    pairs = _bond_pairs(bonds)
     neighbours: dict[int, list[int]] = {i: [] for i in range(len(x))}
     for i, j in pairs:
         neighbours[int(i)].append(int(j))
         neighbours[int(j)].append(int(i))
     out = np.full_like(x, np.nan)
     first_centre = None
-    for start in range(len(x)):
-        if not np.isnan(out[start, 0]):
-            continue
+    for members in _molecules(len(x), pairs):
+        start = members[0]
         out[start] = x[start]
-        members, todo = [start], [start]
+        todo = [start]
         while todo:
             i = todo.pop()
             for j in sorted(neighbours[i]):
                 if np.isnan(out[j, 0]):
                     out[j] = out[i] + nearest_image((x[j] - x[i])[None], box)[0]
-                    members.append(j)
                     todo.append(j)
         centre = out[members].mean(axis=0)
         if first_centre is None:
@@ -141,23 +186,16 @@ def whole_pose(points: np.ndarray, bonds, box: np.ndarray) -> np.ndarray:
     return out
 
 
-def nearest_first_keeps_bonds(points: np.ndarray, bonds, box: np.ndarray) -> bool:
-    """Whether the image of every point nearest to the first point keeps every bond whole: the pose of
-    :func:`whole_pose` is then the one of every version before it (the images nearest to the first atom)."""
-    x, box = np.asarray(points, dtype=float), np.asarray(box, dtype=float)
-    pairs = np.asarray(list(bonds) if bonds is not None else [], dtype=np.int64).reshape(-1, 2)
-    if not len(pairs):
-        return True
-    simple = x[0] + nearest_image(x - x[0], box)
-    d = simple[pairs[:, 1]] - simple[pairs[:, 0]]
-    return bool(np.allclose(d, nearest_image(d, box), rtol=0.0, atol=1e-9))
-
-
-def heavy_bonds(topology, heavy) -> np.ndarray:
-    """The bonds of the topology between the atoms ``heavy`` (pairs of positions in ``heavy``)."""
+def heavy_bonds(topology, heavy, bonds=None) -> np.ndarray:
+    """The bonds between the atoms ``heavy`` (pairs of positions in ``heavy``): those of the topology and ``bonds``
+    (pairs of atoms of the System, those a topology does not hold: of a hybrid, the bonds of an atom unique to B with
+    the core; third review of PR #19)."""
     where = {int(a): k for k, a in enumerate(heavy)}
-    return np.array(sorted((where[a.index], where[b.index]) for a, b in topology.bonds()
-                           if a.index in where and b.index in where), dtype=np.int64).reshape(-1, 2)
+    pairs = {tuple(sorted((where[a.index], where[b.index]))) for a, b in topology.bonds()
+             if a.index in where and b.index in where}
+    pairs |= {tuple(sorted((where[int(i)], where[int(j)]))) for i, j in (bonds or ())
+              if int(i) in where and int(j) in where}
+    return np.array(sorted(pairs), dtype=np.int64).reshape(-1, 2)
 
 
 @dataclass
@@ -873,7 +911,8 @@ def check_cell(box: np.ndarray, radius_nm: float, cutoff_nm: float) -> None:
 
 def relocation_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, cutoff_nm: float,
                     softcore_alpha: float, softcore_b: int, temperature_K: float, trial_poses: int,
-                    inner_fraction: float | None, interval_ps: float, radius_margin_nm: float) -> RelocationSpec:
+                    inner_fraction: float | None, interval_ps: float, radius_margin_nm: float,
+                    bonds=None) -> RelocationSpec:
     """What a mover needs, from the fully interacting ``system`` of a leg (the one the alchemical
     System is made from), its ``topology`` and the pose that was prepared (``positions``, ``box``).
 
@@ -882,7 +921,8 @@ def relocation_spec(system, topology, positions: np.ndarray, box: np.ndarray, li
     interact within themselves (every nonbonded exception inside one is zero), so that the energy
     of a water with everything else is the energy of its sites with all other atoms. The sphere
     must fit into the cell: twice its radius, and twice the cutoff, less than its smallest height.
-    Raises RelocationError otherwise."""
+    The ligand is taken whole along the bonds of the topology and ``bonds`` (pairs of atoms of the System that the
+    topology does not hold). Raises RelocationError otherwise."""
     import openmm as mm
     import openmm.unit as u
 
@@ -924,7 +964,7 @@ def relocation_spec(system, topology, positions: np.ndarray, box: np.ndarray, li
     if not len(heavy):
         raise RelocationError("the ligand has no heavy atom")
     box = np.asarray(box, dtype=float)
-    bonds = heavy_bonds(topology, heavy)
+    bonds = heavy_bonds(topology, heavy, bonds)
     radius = sphere_radius(whole_pose(np.asarray(positions, dtype=float)[heavy], bonds, box), radius_margin_nm)
     check_cell(box, radius, float(cutoff_nm))
     if float(cutoff_nm) < SCORE_RADIUS_NM:
