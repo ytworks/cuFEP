@@ -138,7 +138,9 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
     (tmp_path / "network.json").write_text(json.dumps({"ligands": ["a", "b"], "edges": [["a", "b"]],
                                                        "experiment_kcal_mol": {"a": -9.0, "b": -10.0}}))
     (tmp_path / "edges" / "a~b" / "prep").mkdir(parents=True)
-    (tmp_path / "edges" / "a~b" / "prep" / "prep.json").write_text(json.dumps({"made_from": {}, "legs": {}}))
+    (tmp_path / "edges" / "a~b" / "prep" / "prep.json").write_text(json.dumps(_prepared_record()))
+    for end in ("a", "b"):
+        (tmp_path / "edges" / "a~b" / "prep" / f"ligand_{end}.json").write_text(_METHANE)
     for leg, dg in (("complex", -12.0 * 4.184), ("solvent", -10.5 * 4.184)):
         leg_dir = tmp_path / "edges" / "a~b" / "repeat_0" / leg
         leg_dir.mkdir(parents=True)
@@ -161,6 +163,24 @@ def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float 
             "run": {"hybrid_version": 2}}
 
 
+def _methane_json() -> str:
+    from openff.toolkit import Molecule
+
+    molecule = Molecule.from_smiles("C")
+    molecule.generate_conformers(n_conformers=1)
+    return molecule.to_json()
+
+
+_METHANE = _methane_json()
+
+
+def _prepared_record(**made_from) -> dict:
+    """A record of the preparation of an edge of two methane ligands (written beside it), each leg mapping all their
+    atoms: what the analysis checks of a prepared edge passes."""
+    mapping = {str(i): i for i in range(5)}
+    return {"made_from": dict(made_from), "legs": {"complex": {"mapping": mapping}, "solvent": {"mapping": mapping}}}
+
+
 def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
     """The results of the two legs of a repeat of an edge, with a record of its prepared systems (an edge with results
     and without one is left out)."""
@@ -169,7 +189,9 @@ def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
     prep = out_dir / "edges" / edge / "prep" / "prep.json"
     if not prep.exists():
         prep.parent.mkdir(parents=True, exist_ok=True)
-        prep.write_text(json.dumps({"made_from": {}, "legs": {}}))
+        prep.write_text(json.dumps(_prepared_record()))
+        for end in ("a", "b"):
+            (prep.parent / f"ligand_{end}.json").write_text(_METHANE)
     for leg, result in (("complex", complex_), ("solvent", solvent)):
         leg_dir = out_dir / "edges" / edge / f"repeat_{repeat}" / leg
         leg_dir.mkdir(parents=True)
@@ -309,11 +331,24 @@ def test_a_leg_of_this_run_without_a_free_energy_is_a_failure_of_the_run():
 
 
 def _prepared(out_dir, edge: str, ligand_a: str, ligand_b: str) -> None:
+    """The record of a prepared edge whose ends are the molecules named ``ligand_a`` and ``ligand_b`` (methane, moved
+    by an amount of each name: one name, one molecule), with their records and digests."""
     import json
+
+    from openff.toolkit import Molecule
+    from openff.units import unit
+
+    from cufep.prep.ligand import Ligand
 
     d = out_dir / "edges" / edge / "prep"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "prep.json").write_text(json.dumps({"made_from": {"ligand_a": ligand_a, "ligand_b": ligand_b}}))
+    digests = {}
+    for end, key in (("a", ligand_a), ("b", ligand_b)):
+        molecule = Molecule.from_json(_METHANE)
+        molecule._conformers = [molecule.conformers[0] + sum(map(ord, key)) * 0.01 * unit.angstrom]
+        (d / f"ligand_{end}.json").write_text(molecule.to_json())
+        digests[f"ligand_{end}"] = Ligand(name=key, offmol=molecule).digest()
+    (d / "prep.json").write_text(json.dumps(_prepared_record(**digests)))
 
 
 def test_a_ligand_of_one_name_in_two_edges_must_be_one_molecule_for_a_network(tmp_path):
@@ -766,27 +801,66 @@ def test_the_experiment_of_a_compound_is_taken_from_its_states_the_run_leaves_ou
     assert compound_experiment(states, experiment_of(rcfg, ligands, states)) == {"A": -10.0, "B": -9.0}
 
 
-def test_the_ions_of_the_legs_are_compared_by_their_parameters_and_a_custom_core_of_rule_2_is_checked():
-    """Twelfth review of PR #19: (P2) a Na+ of the system in the complex leg and the Na+ of the force field in the
+def test_the_ions_of_the_legs_are_compared_by_their_parameters_and_a_record_is_checked_before_it_is_read():
+    """Twelfth review of PR #19 (P2): a Na+ of the system in the complex leg and the Na+ of the force field in the
     solvent leg, of the same charge, sigma and epsilon, were taken as other ions and the edge was left out; where they
-    were taken from is not compared. (P1) an edge whose custom core version 2 of the rule found is taken where both
-    rules give the same core of its ligands, and left out where the search of version 2 stopped before a match."""
-    from rdkit import Chem
+    were taken from is not compared. Thirteenth review (P2): a record of an edge is checked before it is read: both
+    legs, each a mapping that is not empty, one to one, of whole atom numbers of the ligands, and an alchemical water
+    with its ion; another form is a reason to leave the edge out, never an error (a leg recorded as a list stopped the
+    analysis of every edge; `{}`, `mapping: {}` and 1.9 were taken)."""
+    from openff.toolkit import Molecule
 
-    from cufep.rbfe.prep import custom_core_rule_holds, earlier_rules_of
+    from cufep.prep.ligand import Ligand
+    from cufep.rbfe.prep import earlier_rules_of
 
+    methane = Ligand(name="m", offmol=Molecule.from_json(_METHANE))
+    both = (methane, methane)
     na = {"name": "NA", "charge": 1.0, "sigma_nm": 0.2439, "epsilon_kj_mol": 0.3658}
-    info = {"made_from": {"alchemical_water_rule": 2}, "legs": {
-        "complex": {"mapping": {}, "alchemical_water": {"ion": {**na, "from": "the system"}}},
-        "solvent": {"mapping": {}, "alchemical_water": {"ion": {**na, "from": "the force field"}}}}}
-    mol = Chem.AddHs(Chem.MolFromSmiles("C"))
-    assert earlier_rules_of(info, (mol, mol)) == []
+    info = _prepared_record(alchemical_water_rule=2)
+    info["legs"]["complex"]["alchemical_water"] = {"ion": {**na, "from": "the system"}}
+    info["legs"]["solvent"]["alchemical_water"] = {"ion": {**na, "from": "the force field"}}
+    assert earlier_rules_of(info, both) == []
     info["legs"]["solvent"]["alchemical_water"]["ion"] = {**na, "sigma_nm": 0.3, "from": "the force field"}
-    assert any("other ions" in why for why in earlier_rules_of(info, (mol, mol)))
-    toluene = Chem.AddHs(Chem.MolFromSmiles("Cc1ccccc1"))
-    butyls = Chem.AddHs(Chem.MolFromSmiles("CC(C)(C)CCC(C)(C)C"))
-    group = "C([CH3]([H])([H])[H])([CH3]([H])([H])[H])[CH3]([H])([H])[H]"
-    assert custom_core_rule_holds({"custom_core_rule": 2, "mapping": {"core_smarts": "c1ccccc1"}}, (toluene, toluene))
-    assert not custom_core_rule_holds({"custom_core_rule": 2, "mapping": {"core_smarts": group}}, (butyls, butyls))
-    of_rule_2 = {"made_from": {"custom_core_rule": 2, "mapping": {"core_smarts": group}}, "legs": {}}
-    assert any("earlier rule" in why for why in earlier_rules_of(of_rule_2, (butyls, butyls)))
+    assert any("other ions" in why for why in earlier_rules_of(info, both))
+    whole = {str(i): i for i in range(5)}
+    for record, why in (({}, "does not say what it was made from"), ({"made_from": {}}, "does not have both legs"),
+                        ({"made_from": {}, "legs": []}, "does not have both legs"),
+                        ({"made_from": {}, "legs": {"complex": {"mapping": whole}}}, "does not have both legs"),
+                        ({"made_from": {}, "legs": {"complex": [1], "solvent": {"mapping": whole}}}, "has no mapping"),
+                        ({"made_from": {}, "legs": {"complex": {"mapping": {}}, "solvent": {"mapping": whole}}},
+                         "has no mapping"),
+                        ({"made_from": {}, "legs": {"complex": {"mapping": {"0": 1.9}}, "solvent": {"mapping": whole}}},
+                         "is not of atom numbers"),
+                        ({"made_from": {}, "legs": {"complex": {"mapping": {"0": 0, "1": 0}},
+                                                    "solvent": {"mapping": whole}}}, "is not one to one"),
+                        ({"made_from": {}, "legs": {"complex": {"mapping": {"5": 0}}, "solvent": {"mapping": whole}}},
+                         "names atoms the ligands do not have"),
+                        ({"made_from": {}, "legs": {"complex": {"mapping": whole, "alchemical_water": [1]},
+                                                    "solvent": {"mapping": whole}}}, "not recorded with its ion"),
+                        ([1], "is not a record")):
+        assert any(why in found for found in earlier_rules_of(record, both)), (record, earlier_rules_of(record, both))
+    assert any("are known neither" in why for why in earlier_rules_of(_prepared_record(), None))
+
+
+def test_a_broken_record_of_one_edge_leaves_that_edge_out_and_the_analysis_goes_on(tmp_path):
+    """Thirteenth review of PR #19 (P2): a record whose complex leg is the list [1] stopped `cufep rbfe analyze` with
+    an AttributeError, and with it the other edges of the directory; a record of one leg, or of none, gave the ddG of
+    an edge whose other mapping cannot be checked. Such an edge is left out with the reason, the others go on."""
+    import json
+
+    from cufep.rbfe.run import combine_network
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "b~c", 0, _leg_result(-8.0), _leg_result(-9.0))
+    broken = _prepared_record()
+    broken["legs"]["complex"] = [1]
+    (tmp_path / "edges" / "b~c" / "prep" / "prep.json").write_text(json.dumps(broken))
+    edges = {e["edge"]: e for e in combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1,
+                                                   {})["edges"]}
+    assert edges["a~b"]["ddg"] == pytest.approx(-1.5) and "ddg" not in edges["b~c"]
+    assert any("has no mapping" in why for why in edges["b~c"]["earlier_preparation"])
+    for record in ({}, {"made_from": {}, "legs": {"solvent": _prepared_record()["legs"]["solvent"]}}):
+        (tmp_path / "edges" / "b~c" / "prep" / "prep.json").write_text(json.dumps(record))
+        edges = {e["edge"]: e for e in combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1,
+                                                       {})["edges"]}
+        assert "ddg" not in edges["b~c"] and edges["b~c"]["earlier_preparation"]

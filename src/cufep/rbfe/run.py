@@ -557,7 +557,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         log(f"FAILED {line}")
     write_timing(out_dir, jobs, t_run, t_prepared, monitor, mps_used, log)
     summary = combine_network(out_dir, [lig.name for lig in ligands], edges, repeats, experiment, states,
-                              rcfg.thermodynamics.temperature_K)
+                              rcfg.thermodynamics.temperature_K, inputs=ligands)
     # what the exit code of `cufep rbfe run` says: whether a job of this run failed (review of PR #17)
     summary["failed_in_this_run"] = failed_now
     write_results(out_dir, summary)
@@ -631,7 +631,7 @@ def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | N
     return out
 
 
-def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
+def edge_result(edge_dir: Path, a: str, b: str, repeats: int, inputs=None) -> dict:
     """ddG of an edge from the results of its legs (kcal/mol); repeats are averaged, their standard deviation
     given (as the ABFE combines repeats).
 
@@ -640,12 +640,13 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     conditions (:func:`cufep.workflow.cycle_differences`, the check of the ABFE: temperature, pressure, prepared
     systems ...); if they were not, the edge gets no ddG and says what differs (``inconsistent_legs``) (review of
     PR #17: legs at 298 K and 310 K were subtracted). The free energies of the legs are the means over the same
-    repeats as the ddG, which is their difference."""
+    repeats as the ddG, which is their difference. ``inputs``: the ligands of the run (or a function that reads them),
+    for an edge whose records of its ligands are missing (:func:`cufep.rbfe.prep.prepared_ligands`)."""
     from cufep.workflow import cycle_differences
 
     out = {"edge": edge_name(a, b), "ligand_a": a, "ligand_b": b, "repeats": []}
     # an edge prepared by an earlier rule is left out, as the run refuses it (prepared_edge)
-    from cufep.rbfe.prep import earlier_rules_of, prepared_molecules
+    from cufep.rbfe.prep import earlier_rules_of, prepared_ligands
 
     prep_file = Path(edge_dir) / "prep" / "prep.json"
     info = {}
@@ -664,7 +665,8 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             # network_differences read it again and stopped the analysis of every edge)
             out["earlier_preparation"] = [f"its record {prep_file} cannot be read"]
             return out
-    earlier_rules = earlier_rules_of(info, prepared_molecules(Path(edge_dir) / "prep")) if info else []
+    earlier_rules = (earlier_rules_of(info, prepared_ligands(Path(edge_dir) / "prep", info, inputs))
+                     if prep_file.exists() else [])
     if earlier_rules:
         out["earlier_preparation"] = earlier_rules
         return out
@@ -854,11 +856,12 @@ def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
 
 
 def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, str]], repeats: int,
-                    experiment: dict[str, float], states: dict | None = None, temperature_K: float = 298.15) -> dict:
+                    experiment: dict[str, float], states: dict | None = None, temperature_K: float = 298.15,
+                    inputs=None) -> dict:
     """The results of the edges, the cycle closures and the dG of every ligand from the edges alone
     (:func:`cufep.rbfe.network.ligand_dg`); with ``states`` (:func:`states_of`) the dG of every compound from its
     states (:func:`cufep.rbfe.network.compound_dg`), which then set the constant of the dG of the states too."""
-    results = [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats) for a, b in edges]
+    results = [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats, inputs) for a, b in edges]
     compound_of = (states or {}).get("compound") or {}
     if compound_of:
         # the value of a compound is that of each of its states, also of a state the file gives none (eleventh review
@@ -1085,6 +1088,21 @@ def analyse_directory(out_dir: Path) -> dict:
         raise WorkflowError(f"{out_dir / 'resolved_config.yaml'}: sampling.repeats is {repeats!r}, not a number of "
                             "repeats")
     network = json.loads((out_dir / "network.json").read_text())
+    read: list = []
+
+    def inputs():
+        """The ligands of the SDF of the run, read once and only for an edge whose records of its ligands are missing
+        (thirteenth review of PR #19: the analysis left out an edge the run had checked with them)."""
+        if not read:
+            from cufep.prep.ligand import load_ligands
+
+            sdf = (stored.get("system") or {}).get("ligands")
+            try:
+                read.append(load_ligands(sdf) if sdf else [])
+            except Exception:  # noqa: BLE001 - an SDF that is not there or cannot be read: nothing to check with
+                read.append([])
+        return read[0]
+
     return combine_network(out_dir, network["ligands"], [tuple(e) for e in network["edges"]], repeats,
                            {k: float(v) for k, v in network.get("experiment_kcal_mol", {}).items()},
-                           network.get("states"), float(network.get("temperature_K", 298.15)))
+                           network.get("states"), float(network.get("temperature_K", 298.15)), inputs=inputs)

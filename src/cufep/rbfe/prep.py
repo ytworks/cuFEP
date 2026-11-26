@@ -92,6 +92,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     made_from = edge_made_from(cfg, ligand_a, ligand_b, box_shape)
     info = prepared_edge(cfg, ligand_a, ligand_b, edge_dir, box_shape)
     if info is not None:
+        restore_ligand_records(prep_dir, info, ligand_a, ligand_b)
         return info
     problems = charge_change_problems([ligand_a, ligand_b], [(ligand_a.name, ligand_b.name)])
     if problems:
@@ -245,42 +246,112 @@ PREPARATION_RULES = {
 }
 
 
-def _core_of_rule_2(molecule, smarts: str) -> set[int] | None:
-    """The atoms of the custom core of an RDKit molecule as version 2 of the rule found them (every order of the atoms
-    of a match counted, the first 1000 of the search of RDKit); None without a match."""
-    from rdkit import Chem
+def custom_core_rule_holds(info: dict, ligands) -> bool:
+    """Whether an edge whose custom core was mapped by version 2 of its rule has the mapping of the present rule: its
+    two ligands (A then B, with their poses) mapped again with the settings of its record give the Kartograf mapping it
+    recorded (``mapping_kartograf``). Version 2 recorded both the search that could stop before a match and, from
+    48eea8c, the present search (thirteenth review of PR #19: a core of 26 atoms that the present rule gives was
+    refused for the 13 of the first search); the mapping it made tells them apart."""
+    from cufep.rbfe.config import MappingConfig
+    from cufep.rbfe.mapping import MappingError, kartograf_mapping, mapping_settings
 
-    pattern = Chem.MolFromSmarts(smarts)
-    if pattern is None:
-        return None
-    matches = molecule.GetSubstructMatches(pattern, uniquify=False, useChirality=True)
-    return {int(i) for match in matches for i in match} or None
-
-
-def custom_core_rule_holds(made_from: dict, molecules) -> bool:
-    """Whether an edge whose custom core was mapped by version 2 of its rule has the core of the present rule: both
-    ligands (RDKit molecules with their hydrogens, A then B) give the same atoms by both."""
-    from cufep.rbfe.mapping import MappingError, core_atoms
-
-    smarts = (made_from.get("mapping") or {}).get("core_smarts")
-    if made_from.get("custom_core_rule") != 2 or smarts is None or molecules is None:
+    made_from = info.get("made_from") or {}
+    stored = info.get("mapping_kartograf")
+    if made_from.get("custom_core_rule") != 2 or ligands is None or not isinstance(stored, dict):
         return False
     try:
-        return all(_core_of_rule_2(m, smarts) == core_atoms(m, smarts) for m in molecules)
-    except MappingError:
+        settings = mapping_settings(MappingConfig.model_validate(made_from.get("mapping") or {}))
+        again = kartograf_mapping(ligands[0], ligands[1], settings)
+        return again == {int(i): int(j) for i, j in stored.items()}
+    except (MappingError, ValueError, TypeError):
         return False
 
 
-def prepared_molecules(prep_dir: Path):
-    """The two ligands of a prepared edge as RDKit molecules with their hydrogens, A then B, from the records of the
-    preparation (``ligand_a.json``, ``ligand_b.json``); None where they cannot be read."""
-    try:
-        from openff.toolkit import Molecule
+def prepared_ligands(prep_dir: Path, info: dict, inputs=None):
+    """The two ligands of a prepared edge (:class:`cufep.prep.ligand.Ligand`, A then B): those of the records of the
+    preparation (``ligand_a.json``, ``ligand_b.json``), else the ligands of ``inputs`` (the ligands of the run, or of
+    its SDF) of the names of the edge; each the molecule its record was made from (the digest of ``made_from``).
+    None where they are not known (thirteenth review of PR #19: a record of the preparation without ligand_a.json was
+    taken by the run, which checks its own ligands, and left out by the analysis right after)."""
+    from cufep.prep.ligand import Ligand
 
-        return tuple(Molecule.from_json((Path(prep_dir) / f"ligand_{end}.json").read_text()).to_rdkit()
-                     for end in ("a", "b"))
-    except Exception:  # noqa: BLE001 - a record that is missing or cannot be read: the edge cannot be checked
-        return None
+    made_from = info.get("made_from") if isinstance(info, dict) and isinstance(info.get("made_from"), dict) else {}
+    out = []
+    for end in ("a", "b"):
+        name, digest = (info or {}).get(f"ligand_{end}"), made_from.get(f"ligand_{end}")
+        found = None
+        try:
+            from openff.toolkit import Molecule
+
+            record = (Path(prep_dir) / f"ligand_{end}.json").read_text()
+            found = Ligand(name=str(name), offmol=Molecule.from_json(record))
+            if digest is not None and found.digest() != digest:
+                found = None
+        except Exception:  # noqa: BLE001 - a record that is missing or cannot be read: the inputs are tried
+            found = None
+        if found is None:
+            candidates = (inputs() if callable(inputs) else inputs) or []
+            found = next((lig for lig in candidates if lig.name == name and digest is not None
+                          and lig.digest() == digest), None)
+        if found is None:
+            return None
+        out.append(found)
+    return tuple(out)
+
+
+def restore_ligand_records(prep_dir: Path, info: dict, ligand_a, ligand_b) -> None:
+    """Write the records of the ligands of a prepared edge that are missing or cannot be read, from the ligands of the
+    run, which are those its record was made from (its digests): so that the analysis checks what the run checked."""
+    if prepared_ligands(prep_dir, info) is not None:
+        return
+    for end, lig in (("a", ligand_a), ("b", ligand_b)):
+        if lig.digest() == (info.get("made_from") or {}).get(f"ligand_{end}"):
+            publish_text(Path(prep_dir) / f"ligand_{end}.json", lig.offmol.to_json())
+
+
+def _is_index(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def record_problems(info, ligands=None) -> list[str]:
+    """What makes the record of a prepared edge (its prep.json) unusable, before anything is read of it: a record of
+    what it was made from, the two legs, each a mapping of atoms that is not empty, one to one, of whole numbers within
+    the atoms of the two ligands (where they are known), and an alchemical water whose ion has a charge, sigma and
+    epsilon. Empty where it is usable. A record of another form is one of these, never an error (thirteenth review of
+    PR #19: a record without legs passed, `mapping: {}` and 1.9 were taken, and a leg recorded as a list stopped the
+    analysis of every edge)."""
+    if not isinstance(info, dict):
+        return ["its record is not a record"]
+    if not isinstance(info.get("made_from"), dict):
+        return ["its record does not say what it was made from"]
+    legs = info.get("legs")
+    if not isinstance(legs, dict) or any(leg not in legs for leg in ("complex", "solvent")):
+        return ["its record does not have both legs"]
+    sizes = None if ligands is None else (ligands[0].n_atoms, ligands[1].n_atoms)
+    out = []
+    for leg in ("complex", "solvent"):
+        record = legs[leg]
+        mapping = record.get("mapping") if isinstance(record, dict) else None
+        if not isinstance(mapping, dict) or not mapping:
+            out.append(f"the record of its {leg} leg has no mapping")
+            continue
+        pairs = list(mapping.items())
+        if not all(isinstance(k, str) and k.isdigit() and _is_index(v) for k, v in pairs):
+            out.append(f"the mapping of its {leg} leg is not of atom numbers")
+            continue
+        a_atoms, b_atoms = [int(k) for k, _v in pairs], [v for _k, v in pairs]
+        if len(set(a_atoms)) != len(a_atoms) or len(set(b_atoms)) != len(b_atoms):
+            out.append(f"the mapping of its {leg} leg is not one to one")
+        elif sizes is not None and (max(a_atoms) >= sizes[0] or max(b_atoms) >= sizes[1]):
+            out.append(f"the mapping of its {leg} leg names atoms the ligands do not have")
+        water = record.get("alchemical_water")
+        if water is not None:
+            ion = water.get("ion") if isinstance(water, dict) else None
+            if not isinstance(ion, dict) or not all(
+                    isinstance(ion.get(k), (int, float)) and not isinstance(ion.get(k), bool)
+                    for k in ("charge", "sigma_nm", "epsilon_kj_mol")):
+                out.append(f"the alchemical water of its {leg} leg is not recorded with its ion")
+    return out
 
 
 def _same_ion(one, other) -> bool:
@@ -293,47 +364,46 @@ def _same_ion(one, other) -> bool:
         return False
 
 
-def earlier_rules_of(info: dict, molecules=None) -> list[str]:
-    """The rules of :data:`PREPARATION_RULES` by which an edge with the record ``info`` (its prep.json) was prepared
-    in an earlier version: the rule acts on the edge and its record does not hold the present version of it. The
-    analysis leaves such an edge out as the run refuses it (independent review of PR #19: `cufep rbfe analyze` and
-    `cufep benchmark report` took edges that `cufep rbfe run` refuses). ``molecules``: the two ligands (RDKit
-    molecules with their hydrogens, A then B), with which the mapping of each leg, as the hybrid is made of it, is
-    checked for atoms unique to one ligand that join mapped atoms (:func:`cufep.rbfe.mapping.bridging_dummies`; twelfth
-    review of PR #19: an edge prepared before that check was used again); None: they cannot be read, and the edge
-    is not taken."""
+def earlier_rules_of(info, ligands=None) -> list[str]:
+    """Why the record ``info`` (its prep.json) of a prepared edge is not taken: a record that cannot be used
+    (:func:`record_problems`), or one made by an earlier rule of :data:`PREPARATION_RULES` (the rule acts on the edge
+    and its record does not hold the present version of it), or whose mapping, as the hybrid of each leg is made of
+    it, has atoms unique to one ligand that join mapped atoms (:func:`cufep.rbfe.mapping.bridging_dummies`; twelfth
+    review of PR #19: an edge prepared before that check was used again), or whose legs turn the alchemical water
+    into other ions. ``ligands``: the two ligands of the edge (:func:`prepared_ligands`); None: they are not known,
+    and the edge is not taken. The analysis leaves such an edge out as the run refuses it (independent review of PR
+    #19: `cufep rbfe analyze` and `cufep benchmark report` took edges that `cufep rbfe run` refuses)."""
     from cufep.rbfe.mapping import bridging_dummies
 
-    made_from = info.get("made_from") or {}
+    problems = record_problems(info, ligands)
+    if problems:
+        return problems
+    if ligands is None:
+        return ["its ligands are known neither from the records of the preparation nor from the input, and its "
+                "mapping cannot be checked"]
+    made_from, legs = info["made_from"], info["legs"]
     out = []
-    legs = info.get("legs") or {}
-    if legs and molecules is None:
-        out.append("the records of its ligands cannot be read, and its mapping cannot be checked")
-    elif legs:
-        for leg, record in sorted(legs.items()):
-            try:
-                mapping = {int(i): int(j) for i, j in record["mapping"].items()}
-                bridges = bridging_dummies(molecules[0], molecules[1], mapping)
-            except (AttributeError, TypeError, ValueError, KeyError, RuntimeError):
-                out.append(f"the mapping of its {leg} leg cannot be read")
-                continue
-            if bridges:
-                out.append(f"the mapping of its {leg} leg joins mapped atoms by atoms unique to one ligand: "
-                           + "; ".join(bridges))
+    molecules = (ligands[0].to_rdkit(), ligands[1].to_rdkit())
+    for leg in ("complex", "solvent"):
+        mapping = {int(i): j for i, j in legs[leg]["mapping"].items()}
+        bridges = bridging_dummies(molecules[0], molecules[1], mapping)
+        if bridges:
+            out.append(f"the mapping of its {leg} leg joins mapped atoms by atoms unique to one ligand: "
+                       + "; ".join(bridges))
     charge_changes = ("alchemical_water_cutoff_nm" in made_from
-                      or any((leg or {}).get("alchemical_water") for leg in (info.get("legs") or {}).values()))
+                      or any(legs[leg].get("alchemical_water") for leg in ("complex", "solvent")))
     if charge_changes and made_from.get("alchemical_water_rule") != PREPARATION_RULES["alchemical_water"]:
         out.append("its alchemical water was chosen by the distances in the cell alone, which could take a water near "
                    "the solutes across the boundary of the cell")
-    if ((made_from.get("mapping") or {}).get("core_smarts") is not None
+    mapping_made = made_from.get("mapping") if isinstance(made_from.get("mapping"), dict) else {}
+    if (mapping_made.get("core_smarts") is not None
             and made_from.get("custom_core_rule") != PREPARATION_RULES["custom_core"]
-            and not custom_core_rule_holds(made_from, molecules)):
+            and not custom_core_rule_holds(info, ligands)):
         out.append("its custom core was mapped without the chirality of its atoms"
                    if made_from.get("custom_core_rule") is None else
-                   "its custom core was found by an earlier rule (the orders of the atoms of a match counted one by "
-                   "one, a search that could stop before a match), which gives another core for its ligands")
-    ions = {leg: record["alchemical_water"].get("ion") for leg, record in (info.get("legs") or {}).items()
-            if isinstance(record, dict) and record.get("alchemical_water")}
+                   "its custom core was mapped by an earlier rule, and the present rule maps its ligands otherwise")
+    ions = {leg: legs[leg]["alchemical_water"]["ion"] for leg in ("complex", "solvent")
+            if legs[leg].get("alchemical_water")}
     found = list(ions.values())
     if any(not _same_ion(found[0], other) for other in found[1:]):
         # eleventh review of PR #19: each leg chose the ion of its own system
@@ -369,12 +439,14 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
     if not isinstance(info, dict):
         raise WorkflowError(f"the record of the prepared systems {done} is not a record; remove the directory of the "
                             "edge to prepare it again")
+    unusable = record_problems(info, (ligand_a, ligand_b))
+    if unusable:
+        raise WorkflowError(f"the record of the prepared systems {done} cannot be used: {'; '.join(unusable)}; remove "
+                            "the directory of the edge to prepare it again")
     stored, current = info.get("made_from"), edge_made_from(cfg, ligand_a, ligand_b, box_shape)
-    molecules = (ligand_a.to_rdkit(), ligand_b.to_rdkit())
-    if (isinstance(stored, dict) and stored.get("custom_core_rule") == 2
-            and current.get("custom_core_rule") == PREPARATION_RULES["custom_core"]
-            and custom_core_rule_holds(stored, molecules)):
-        stored = {**stored, "custom_core_rule": current["custom_core_rule"]}   # the same core by both rules
+    if (stored.get("custom_core_rule") == 2 and current.get("custom_core_rule") == PREPARATION_RULES["custom_core"]
+            and custom_core_rule_holds(info, (ligand_a, ligand_b))):
+        stored = {**stored, "custom_core_rule": current["custom_core_rule"]}   # the mapping of the present rule
     if stored != current:
         differing = sorted(k for k in set(stored or {}) | set(current) if (stored or {}).get(k) != current.get(k))
         rules = [k for k in differing if k.endswith("_rule")]
@@ -384,7 +456,7 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
                             + "; remove the directory of the edge to prepare it again")
     # the mappings of the legs as the hybrid is made of them, and the ions of their alchemical waters (the inputs are
     # those of the record: their molecules are the run's)
-    problems = [why for why in earlier_rules_of(info, molecules)
+    problems = [why for why in earlier_rules_of(info, (ligand_a, ligand_b))
                 if why.startswith(("its legs turn", "the mapping of its"))]
     if problems:
         raise WorkflowError(f"the prepared systems in {prep_dir} cannot be used: {'; '.join(problems)}; remove the "

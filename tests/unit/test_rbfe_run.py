@@ -81,6 +81,12 @@ def _ligands(tmp_path, out_dir, smiles_b: str = "Oc1ccccc1", name_b: str = "phen
     return ligands
 
 
+def _usable(made_from: dict) -> dict:
+    """A record of a prepared edge of toluene or phenol(ate) that the checks of a record pass: both legs, each mapping
+    the first ring carbon (thirteenth review of PR #19: a record without legs was taken)."""
+    return {"made_from": made_from, "legs": {leg: {"mapping": {"1": 1}} for leg in ("complex", "solvent")}}
+
+
 def _config(tmp_path, out_dir, mode: str, legs: str = "each"):
     from cufep.rbfe.config import RbfeConfig
 
@@ -368,7 +374,7 @@ def test_a_prepared_edge_of_another_ph_is_not_taken(tmp_path):
     edge_dir = out_dir / "edges" / "toluene~phenol"
     (edge_dir / "prep").mkdir(parents=True)
     (edge_dir / "prep" / "prep.json").write_text(json.dumps(
-        {"made_from": edge_made_from(rcfg, ligands[0], ligands[1], "cube"), "legs": {}}))
+        _usable(edge_made_from(rcfg, ligands[0], ligands[1], "cube"))))
     other = rcfg.model_copy(update={"thermodynamics": rcfg.thermodynamics.model_copy(update={"ph": 6.0})})
     with pytest.raises(WorkflowError, match="other inputs or settings"):
         prepare_edge(other, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
@@ -398,12 +404,12 @@ def test_an_edge_prepared_by_an_earlier_rule_is_not_taken(tmp_path):
         earlier = {k: v for k, v in record.items() if k != key}
         edge_dir = tmp_path / key
         (edge_dir / "prep").mkdir(parents=True)
-        (edge_dir / "prep" / "prep.json").write_text(json.dumps({"made_from": earlier, "legs": {}}))
+        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(earlier)))
         before = (edge_dir / "prep" / "prep.json").read_text()
         with pytest.raises(WorkflowError, match=f"{key}.*an earlier rule"):
             prepared_edge(cfg, *ligands, edge_dir, "cube")
         assert (edge_dir / "prep" / "prep.json").read_text() == before
-        (edge_dir / "prep" / "prep.json").write_text(json.dumps({"made_from": record, "legs": {}}))
+        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(record)))
         assert prepared_edge(cfg, *ligands, edge_dir, "cube") is not None
 
 
@@ -466,7 +472,7 @@ def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before
     edge_dir = out_dir / "edges" / "toluene~phenol"
     (edge_dir / "prep").mkdir(parents=True)
     (edge_dir / "prep" / "prep.json").write_text(json.dumps(
-        {"made_from": edge_made_from(rcfg, ligands[0], ligands[1], "cube"), "legs": {}}))
+        _usable(edge_made_from(rcfg, ligands[0], ligands[1], "cube"))))
     before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
     protein = _protein()
     monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
@@ -508,7 +514,7 @@ def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_p
     done = out_dir / "edges" / "toluene~phenol" / "prep"
     done.mkdir(parents=True)
     (done / "prep.json").write_text(json.dumps(
-        {"made_from": edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"), "legs": {}}))
+        _usable(edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"))))
     (tmp_path / "protein.pdb").write_text("REMARK another protein\n")          # the receptor changes
     before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
     protein = _protein()
@@ -1370,8 +1376,7 @@ def test_a_run_names_every_edge_it_does_not_take_and_how_to_prepare_them_again(t
     for a, b in (("toluene", "phenol"), ("phenol", "aniline")):
         done = out_dir / "edges" / f"{a}~{b}" / "prep"
         done.mkdir(parents=True)
-        (done / "prep.json").write_text(json.dumps({"made_from": edge_made_from(rcfg, ligands[a], ligands[b], "cube"),
-                                                    "legs": {}}))
+        (done / "prep.json").write_text(json.dumps(_usable(edge_made_from(rcfg, ligands[a], ligands[b], "cube"))))
     (tmp_path / "protein.pdb").write_text("REMARK another protein\n")          # the receptor changes
     protein = _protein()
     monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
@@ -1696,15 +1701,45 @@ def test_a_prepared_edge_whose_mapping_joins_mapped_atoms_or_whose_record_is_los
         prepared_edge(rcfg, *ligands, lost, "cube")
     assert not (lost / "prep").exists()
     assert prepared_edge(rcfg, *ligands, tmp_path / "new", "cube") is None    # nothing computed: prepared anew
-    # a custom core of version 2 of the rule, the same core by both versions: taken
+    # (thirteenth review, P2) a custom core of version 2 of the rule is taken where the present rule maps its ligands
+    # as it recorded (version 2 searched as now from 48eea8c), and left out where it does not (a search that stopped
+    # before a match); the rule of the search alone said nothing of the mapping
+    from cufep.rbfe.mapping import MappingSettings, kartograf_mapping
+
     custom = rcfg.model_copy(update={"mapping": rcfg.mapping.model_copy(update={"core_smarts": "c1ccccc1"})})
     record = edge_made_from(custom, *ligands, "cube")
     assert record["custom_core_rule"] == PREPARATION_RULES["custom_core"] == 3
+    mapped = kartograf_mapping(*ligands, MappingSettings(core_smarts="c1ccccc1"))
     of_rule_2 = tmp_path / "rule_2"
     (of_rule_2 / "prep").mkdir(parents=True)
-    (of_rule_2 / "prep" / "prep.json").write_text(json.dumps({"made_from": {**record, "custom_core_rule": 2},
-                                                              "legs": {}}))
-    assert prepared_edge(custom, *ligands, of_rule_2, "cube") is not None
+    for stored, taken in ((mapped, True), (dict(list(mapped.items())[:3]), False)):
+        made = {**_usable({**record, "custom_core_rule": 2}),
+                "mapping_kartograf": {str(i): j for i, j in stored.items()}}
+        (of_rule_2 / "prep" / "prep.json").write_text(json.dumps(made))
+        if taken:
+            assert prepared_edge(custom, *ligands, of_rule_2, "cube") is not None
+        else:
+            with pytest.raises(WorkflowError, match="custom_core_rule"):
+                prepared_edge(custom, *ligands, of_rule_2, "cube")
+    # (thirteenth review, P2) the records of the ligands lost (a backup without ligand_a.json): the run takes the
+    # ligands of its input, which the record was made from, and writes their records again; the analysis takes the
+    # ligands of the SDF of the run where its records are missing: both judge the edge alike
+    from cufep.rbfe.prep import prepare_edge
+
+    kept = tmp_path / "kept"
+    shutil.copytree(edges_of_version_1["prep"], kept / "prep")
+    (kept / "prep" / "ligand_a.json").unlink()
+    root = _run_dir(tmp_path / "run_kept", {"toluene~phenol": (kept / "prep", _leg_result(-12.0),
+                                                                _leg_result(-10.5))})
+    import yaml
+
+    (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 1},
+                                                                "system": {"ligands": str(tmp_path / "ligands.sdf")}}))
+    assert "ddg" in analyse_directory(root)["edges"][0]
+    (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 1}}))
+    assert "are known neither" in analyse_directory(root)["edges"][0]["earlier_preparation"][0]
+    prepare_edge(rcfg, *ligands, _protein(), kept, "cube", print)
+    assert (kept / "prep" / "ligand_a.json").exists()
 
 
 def test_a_leg_whose_hot_atoms_the_earlier_rule_chose_otherwise_is_refused_before_anything_is_written(
