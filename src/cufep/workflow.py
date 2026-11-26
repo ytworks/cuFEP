@@ -1104,7 +1104,7 @@ def check_pre_equilibration_of_a_leg_with_moves(cfg: Config, lig_dir: Path, leg:
     that cannot start its replica exchange where the leg starts from it (its restraint and the MD for it were made
     from it: refused, for a new output directory), and, without --reschedule, start configurations in another cell
     than it fixes (third review of PR #19). The same checks are made in the leg."""
-    from cufep.engine.leg import equil_ghosts_problem, start_cell_problem, starts_anew, unusable_pre_equilibration
+    from cufep.engine.leg import equil_ghosts_problem, fixed_cell_problems, starts_anew, unusable_pre_equilibration
 
     equil_file = leg_dir / "equil.npz"
     if starts_anew(leg_dir, reschedule):
@@ -1113,10 +1113,11 @@ def check_pre_equilibration_of_a_leg_with_moves(cfg: Config, lig_dir: Path, leg:
         why = equil_ghosts_problem(equil_file, moves, earlier_ghosts_of(prep, moves))
         if why is not None:
             raise WorkflowError(unusable_pre_equilibration(equil_file, why, reschedule_sets_it_aside=False))
-    why = None if reschedule else start_cell_problem(leg_dir)
-    if why is not None:
-        raise WorkflowError(f"{why}. Nothing was changed; run the leg again with --reschedule (its windows, samples "
-                            "and result are set aside in previous_<n>/), or run the calculation in a new output.dir")
+    found = [] if reschedule else fixed_cell_problems(leg_dir)
+    if found:
+        raise WorkflowError(f"{'; '.join(found)}. Nothing was changed; run the leg again with --reschedule (its "
+                            "windows, samples and result are set aside in previous_<n>/), or run the calculation in "
+                            "a new output.dir")
 
 
 def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info: dict, production_ns: float,
@@ -1145,12 +1146,11 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     # what it had is set aside, the rest is still in place (review of 2861b93: a run without
     # --reschedule made new start configurations and analysed the samples that were left, with the
     # record of the new ones)
-    unfinished = sorted(leg_dir.glob(".previous_*.partial"))
-    if unfinished and not reschedule:
-        raise WorkflowError(
-            f"the {leg} leg of repeat {repeat} was being started anew (--reschedule) when a run stopped: "
-            f"{unfinished[0]} holds a part of what the leg had. Nothing was changed. Run this leg with "
-            "--reschedule again to complete that (--ligand and --leg restrict a run to it).")
+    from cufep.engine.leg import unfinished_archive_problem
+
+    unfinished = unfinished_archive_problem(leg_dir, leg, repeat, reschedule)
+    if unfinished is not None:
+        raise WorkflowError(f"{unfinished} (--ligand and --leg restrict a run to it).")
     # the schedule the leg is to be given, if it will take one (lambda_schedule.file)
     check_given_schedule(cfg, lig_dir, leg, repeat, reschedule)
     equil_file = leg_dir / "equil.npz"
@@ -2313,6 +2313,10 @@ def leg_files(sample_dir: Path) -> dict[str, Path | None]:
     return out
 
 
+#: in an archive being made (``.previous_<n>.partial``): what it sets aside, for a call that completes it
+ARCHIVE_RECORD = "set_aside.json"
+
+
 def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
     """Move the lambda windows, samples and result of a leg into ``previous_<n>/`` in its directory.
 
@@ -2324,12 +2328,17 @@ def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
     """
     from cufep.engine.leg import EQUIL_GHOSTS
 
+    # an archive that an interrupted call began is completed, not begun a second time, with what that call set
+    # aside: the pre-equilibration too if it did (fifth review of PR #19: a call stopped between equil.npz and the
+    # record of its ghosts left the record behind, and the call that completed it no longer knew)
+    staging = sorted(leg_dir.glob(".previous_*.partial"))
+    if staging and (staging[0] / ARCHIVE_RECORD).exists():
+        pre_equilibration = pre_equilibration or bool(
+            (_read_json(staging[0] / ARCHIVE_RECORD) or {}).get("pre_equilibration"))
     present = [leg_dir / name for name in LEG_RUN_FILES if (leg_dir / name).exists()]
     if pre_equilibration:
         present += [leg_dir / name for name in ("equil.npz", EQUIL_GHOSTS) if (leg_dir / name).exists()]
     present += sorted(path for path in leg_dir.glob(f"{FAILED_BACKEND_DIR}_*") if path.is_dir())
-    # an archive that an interrupted call began is completed, not begun a second time
-    staging = sorted(leg_dir.glob(".previous_*.partial"))
     if not present and not staging:
         return None
     if staging:
@@ -2341,6 +2350,7 @@ def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
             n += 1
         stage = leg_dir / f".previous_{n}.partial"
         stage.mkdir()
+        _write_json(stage / ARCHIVE_RECORD, {"pre_equilibration": bool(pre_equilibration)})
     dest = leg_dir / f"previous_{n}"
     # the files these samples were made from stay with the leg, which uses them again; the archive
     # gets copies (leg_files), each written whole under another name first
@@ -2355,6 +2365,7 @@ def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
     # it is the result of those windows and samples again
     if (stage / "result.previous.json").exists() and not (stage / "result.json").exists():
         (stage / "result.previous.json").rename(stage / "result.json")
+    (stage / ARCHIVE_RECORD).unlink(missing_ok=True)
     stage.rename(dest)                                  # the archive appears complete, in one step
     return dest
 
@@ -2897,6 +2908,15 @@ def run_leg(job: LegJob) -> dict:
 
     # ---- 3. alchemical System ------------------------------------------------------------------
     built = alchemical_leg(cfg, system, prep, alchemical_box(eq, gcmc), restraint, is_complex, gcmc)
+    if gcmc is not None:
+        # a checkpoint without samples has its conditions taken as new: its cell is checked itself (fifth review of
+        # PR #19; the run checks it before it writes anything, check_pre_equilibration_of_a_leg_with_moves)
+        from cufep.engine.leg import checkpoint_cell_problem
+
+        why = checkpoint_cell_problem(leg_dir, alchemical_box(eq, gcmc))
+        if why is not None:
+            raise WorkflowError(f"{why}. Run the leg again with --reschedule (its windows, samples and result are set "
+                                "aside in previous_<n>/), or run the calculation in a new output.dir")
     alch, alch_xml = built.alch, built.xml
     rest2 = cfg.sampling.rest2
     rest2_on, hot_atoms, hot_residues = built.rest2_on, built.hot_atoms, built.hot_residues

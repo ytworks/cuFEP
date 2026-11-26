@@ -854,7 +854,7 @@ def test_legs_of_the_hybrid_before_its_torsion_fix_are_left_out_and_named_to_run
     edge, lines = edge_of("both", version_1(-12.0), version_1(-10.5))
     assert "ddg" not in edge and [item["leg"] for item in edge["earlier_version"]] == ["complex", "solvent"]
     assert f"REST2 left {n} terms of ligand B" in edge["earlier_version"][0]["why"]
-    assert any("cufep rbfe run CONFIG --edge toluene~phenol --repeat 0 --leg complex --leg solvent --reschedule" in x
+    assert any("cufep rbfe run CONFIG --edge 'toluene~phenol' --repeat 0 --leg complex --leg solvent --reschedule" in x
                for x in lines)
     current = {**_leg_result(-12.0)}                                       # this version (hybrid_version 2)
     edge, lines = edge_of("solvent", current, version_1(-10.5))
@@ -968,7 +968,7 @@ def test_the_line_of_a_left_out_leg_runs_that_leg_alone_again(tmp_path, edges_of
     (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 2}}))
     (root / "network.json").write_text(json.dumps({"ligands": ["phenol", "toluene"], "edges": [["toluene", "phenol"]]}))
     line = next(x for x in result_lines(analyse_directory(root)) if x.startswith("RESULT toluene~phenol: left out"))
-    assert line.endswith("To compute it again: cufep rbfe run CONFIG --edge toluene~phenol --repeat 0 --leg complex "
+    assert line.endswith("To compute it again: cufep rbfe run CONFIG --edge 'toluene~phenol' --repeat 0 --leg complex "
                          "--reschedule") and "remove" not in line
 
 
@@ -1035,7 +1035,9 @@ def test_a_leg_with_the_moves_is_computed_again_only_from_its_own_pre_equilibrat
     that computes that leg alone, and `--reschedule` sets the pre-equilibration aside with the windows and samples
     (in previous_<n>/) and computes the leg anew;
     a leg whose start configurations were made again in the cell of a new pre-equilibration went on from its
-    checkpoint in the old one: the cell is of the System of its samples, which are not continued;
+    checkpoint in the old one: a checkpoint in another cell is refused before the run writes anything, and the System
+    of the samples is that of the prepared hybrid, as earlier versions recorded it (fifth review: with the cell in it,
+    finished legs of earlier versions could not be analysed again);
     start configurations in another cell than the pre-equilibration fixes are refused before the run writes
     anything."""
     import shutil
@@ -1082,22 +1084,37 @@ def test_a_leg_with_the_moves_is_computed_again_only_from_its_own_pre_equilibrat
     (leg_dir(old) / "result.json").unlink()
     with pytest.raises(WorkflowError, match="records no ghost waters") as refused:
         checked(old)
-    assert "cufep rbfe run CONFIG --edge toluene~phenol --repeat 0 --leg complex --reschedule" in str(refused.value)
+    assert "cufep rbfe run CONFIG --edge 'toluene~phenol' --repeat 0 --leg complex --reschedule" in str(refused.value)
     checked(old, reschedule=True)
     anew = run_hybrid_leg_safe(job(old, reschedule=True))
     assert "error" not in anew and (leg_dir(old) / "equil_ghosts.json").exists()
     assert [p.parent.name for p in leg_dir(old).glob("previous_*/equil.npz")] == ["previous_1"]
     assert not (leg_dir(old) / "previous_1" / "equil_ghosts.json").exists()
-    # a checkpoint in the cell of the pre-equilibration before: not continued in that cell
+    # (fifth review, P1) the samples record the System of the prepared hybrid, as every earlier version did: a
+    # finished leg of an earlier version is analysed again with its result (the cell in the System changed it)
+    import hashlib
+
+    from cufep.rbfe.leg import build_leg
+    from cufep.sampling.storage import stored_conditions
+
+    _n, conditions = stored_conditions(leg_dir(out_dir) / "hrex")
+    built = build_leg(rcfg, out_dir / "edges" / "toluene~phenol", "complex")
+    assert conditions["system_sha256"] == hashlib.sha256(built.xml.encode()).hexdigest()
+    # a checkpoint whose replicas are in another cell than the pre-equilibration fixes (a pre-equilibration made
+    # again; fifth review: also one without samples, whose conditions are taken as new): not continued
     stale = copy("stale")
-    (leg_dir(stale) / "start_configs.npz").unlink()
     (leg_dir(stale) / "result.json").unlink()
-    with np.load(leg_dir(stale) / "equil.npz") as eq:
+    with np.load(leg_dir(stale) / "hrex" / "checkpoint.npz") as ckpt:
+        kept = {key: ckpt[key] for key in ckpt.files}
+    kept["boxes"] = kept["boxes"] * 0.99
+    np.savez(leg_dir(stale) / "hrex" / "checkpoint.npz", **kept)
+    with pytest.raises(WorkflowError, match="the replicas of the checkpoint"):
+        checked(stale)
+    continued = run_hybrid_leg_safe(job(stale))
+    assert "error" in continued and "the replicas of the checkpoint" in continued["error"]
+    with np.load(leg_dir(out_dir) / "equil.npz") as eq:
         arrays = {key: eq[key] for key in eq.files}
     arrays["mean_box"] = arrays["mean_box"] * 1.01
-    np.savez(leg_dir(stale) / "equil.npz", **arrays)
-    continued = run_hybrid_leg_safe(job(stale))
-    assert "error" in continued and "made under other conditions" in continued["error"]
     # start configurations in another cell than the pre-equilibration fixes: refused before anything is written
     cell = copy("cell")
     shutil.rmtree(leg_dir(cell) / "hrex")
@@ -1168,8 +1185,136 @@ def test_an_edge_prepared_by_an_earlier_rule_is_left_out_by_every_entry_point(tm
         root = _run_dir(tmp_path / f"run_{name}", {"toluene~phenol": (prep, _leg_result(-12.0), _leg_result(-10.5))})
         summary = analyse_directory(root)
         assert "ddg" not in summary["edges"][0] and summary["edges"][0]["earlier_preparation"], name
-        assert any("prepared by an earlier rule are left out" in note for note in summary["notes"]), name
+        assert any("whose prepared systems this version does not take" in note for note in summary["notes"]), name
         line = next(x for x in result_lines(summary) if x.startswith("RESULT toluene~phenol"))
-        assert "remove edges/toluene~phenol of the run directory, then cufep rbfe run CONFIG --edge" in line, name
+        assert "remove 'edges/toluene~phenol' of the run directory, then cufep rbfe run CONFIG --edge" in line, name
         report("tyk2", root)
         assert next(csv.DictReader((root / "rbfe_report_edges.csv").open()))["ddg"] == "", name
+
+
+def test_an_archive_of_a_pre_equilibration_that_a_run_stopped_in_is_completed_and_refused_without_reschedule(tmp_path):
+    """Fifth review of PR #19 (P2): --reschedule moved a pre-equilibration that cannot be used into
+    .previous_1.partial/ and stopped before the record of its ghost waters; the call that completed the archive no
+    longer knew, and left the record behind; a run without --reschedule started a relative leg in that state (the ABFE
+    refuses it). The archive records what it sets aside, and a relative run refuses an unfinished archive."""
+    from cufep.engine.leg import EQUIL_GHOSTS
+    from cufep.rbfe.run import check_pre_equilibrations_of_the_run
+    from cufep.workflow import ARCHIVE_RECORD, WorkflowError, archive_leg
+
+    out_dir = tmp_path / "run"
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    leg_dir = out_dir / "edges" / "toluene~phenol" / "repeat_0" / "complex"
+    leg_dir.mkdir(parents=True)
+    for name, text in (("schedule.yaml", "windows"), ("result.json", "{}"), (EQUIL_GHOSTS, "{}")):
+        (leg_dir / name).write_text(text)
+    stage = leg_dir / ".previous_1.partial"                         # as the stopped call left it
+    stage.mkdir()
+    (stage / ARCHIVE_RECORD).write_text(json.dumps({"pre_equilibration": True}))
+    (stage / "equil.npz").write_bytes(b"the pre-equilibration set aside")
+    with pytest.raises(WorkflowError, match="was being started anew"):
+        check_pre_equilibrations_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], None, False)
+    check_pre_equilibrations_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], None, True)
+    done = archive_leg(leg_dir)                                       # the call of --reschedule that completes it
+    assert done == leg_dir / "previous_1"
+    assert sorted(p.name for p in done.iterdir()) == sorted(["schedule.yaml", "result.json", EQUIL_GHOSTS,
+                                                              "equil.npz"])
+    assert not (leg_dir / EQUIL_GHOSTS).exists() and not list(leg_dir.glob(".previous_*"))
+
+
+def test_start_configurations_that_are_made_again_are_not_refused_for_their_cell(tmp_path):
+    """Fifth review of PR #19 (P2): start configurations of another cell were refused although the leg would make them
+    again (no schedule: stopped between the two files; or windows they are not of). Those the leg uses are checked."""
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.engine.leg import fixed_cell_problems
+
+    leg_dir = tmp_path / "leg"
+    leg_dir.mkdir()
+    box = np.eye(3) * 4.0
+    np.savez(leg_dir / "equil.npz", mean_box=box, box=box)
+    schedule = fixed_schedule(["morph"], {"morph": 3})
+    states = [state.to_dict() for state in schedule.states]
+    np.savez(leg_dir / "start_configs.npz", boxes=np.stack([box * 1.01] * len(states)),
+             made_with=json.dumps({"states": states}))
+    assert fixed_cell_problems(leg_dir) == []                        # no schedule: they are made again
+    schedule.save(leg_dir / "schedule.yaml")
+    assert "are in another cell" in fixed_cell_problems(leg_dir)[0]  # the windows have them: they are used
+    np.savez(leg_dir / "start_configs.npz", boxes=np.stack([box * 1.01] * (len(states) - 1)),
+             made_with=json.dumps({"states": states[:-1]}))
+    assert fixed_cell_problems(leg_dir) == []                        # of other windows: made again
+
+
+def test_edges_to_prepare_again_are_named_together_and_their_names_quoted(tmp_path, edges_of_version_1):
+    """Fifth review of PR #19: (P2) with two edges prepared by an earlier rule, the line of each said to remove that
+    edge and run it alone, which the run refused for the other one (a run checks every prepared edge first): the
+    lines and the refusal of the run name all of them; (P2) a prep.json cut short was read again by the comparison of
+    the network and stopped the analysis of every edge: such an edge is left out; (P3) the commands quote the names of
+    edges, whose ligands may have spaces (`4e U`)."""
+    import shlex
+    import shutil
+
+    from test_rbfe_network import _leg_result
+
+    from cufep.rbfe.run import analyse_directory, prepare_again_command, rerun_command, result_lines
+
+    old = tmp_path / "old"
+    shutil.copytree(edges_of_version_1["prep"], old)
+    info = json.loads((old / "prep.json").read_text())
+    info["made_from"]["mapping"]["core_smarts"] = "c1ccccc1"           # a custom core of the earlier rule
+    (old / "prep.json").write_text(json.dumps(info))
+    cut = tmp_path / "cut"
+    shutil.copytree(edges_of_version_1["prep"], cut)
+    (cut / "prep.json").write_text((cut / "prep.json").read_text()[:40])
+    root = _run_dir(tmp_path / "run", {"a~b": (old, _leg_result(-12.0), _leg_result(-10.5)),
+                                       "b~c": (old, _leg_result(-11.0), _leg_result(-10.0)),
+                                       "c~d": (cut, _leg_result(-9.0), _leg_result(-8.0)),
+                                       "d~e": (edges_of_version_1["prep"], _leg_result(-12.0), _leg_result(-10.5))})
+    summary = analyse_directory(root)
+    edges = {e["edge"]: e for e in summary["edges"]}
+    assert "ddg" not in edges["c~d"] and "cannot be read" in edges["c~d"]["earlier_preparation"][0]
+    assert edges["d~e"]["ddg"] == pytest.approx(-1.5)
+    lines = [x for x in result_lines(summary) if x.startswith("RESULT a~b") or x.startswith("RESULT b~c")]
+    assert len(lines) == 2 and all(prepare_again_command(["a~b", "b~c", "c~d"]) in x for x in lines)
+    words = shlex.split(rerun_command("4e U~4b D", 0, ["complex"]))
+    assert words[words.index("--edge") + 1] == "4e U~4b D"
+    words = shlex.split(prepare_again_command(["4e U~4b D"]).split(" then ")[1])
+    assert words[words.index("--edge") + 1] == "4e U~4b D"
+
+
+def test_a_run_names_every_edge_it_does_not_take_and_how_to_prepare_them_again(tmp_path, monkeypatch):
+    """Fifth review of PR #19 (P2): a run refused for the first prepared edge it did not take; removed and run alone as
+    it said, the run was refused for the next. The run names every such edge, and one way that prepares them all."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.prep.ligand import load_ligands
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.prep import edge_made_from
+    from cufep.rbfe.run import prepare_again_command, run_rbfe
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, smiles in (("toluene", "Cc1ccccc1"), ("phenol", "Oc1ccccc1"), ("aniline", "Nc1ccccc1")):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        AllChem.EmbedMolecule(mol, randomSeed=11)
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    ligands = {lig.name: lig for lig in load_ligands(tmp_path / "ligands.sdf")}
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    rcfg = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"], ["phenol", "aniline"]]}})
+    for a, b in (("toluene", "phenol"), ("phenol", "aniline")):
+        done = out_dir / "edges" / f"{a}~{b}" / "prep"
+        done.mkdir(parents=True)
+        (done / "prep.json").write_text(json.dumps({"made_from": edge_made_from(rcfg, ligands[a], ligands[b], "cube"),
+                                                    "legs": {}}))
+    (tmp_path / "protein.pdb").write_text("REMARK another protein\n")          # the receptor changes
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+    with pytest.raises(WorkflowError) as refused:
+        run_rbfe(rcfg, log=lambda line: None)
+    assert "toluene~phenol" in str(refused.value) and "phenol~aniline" in str(refused.value)
+    assert prepare_again_command(["toluene~phenol", "phenol~aniline"]) in str(refused.value)

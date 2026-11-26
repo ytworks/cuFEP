@@ -246,7 +246,14 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
     done = prep_dir / "prep.json"
     if not done.exists():
         return None
-    info = json.loads(done.read_text())
+    try:
+        info = json.loads(done.read_text())
+    except (OSError, ValueError) as exc:
+        raise WorkflowError(f"the record of the prepared systems {done} cannot be read ({exc}); remove the directory "
+                            "of the edge to prepare it again") from exc
+    if not isinstance(info, dict):
+        raise WorkflowError(f"the record of the prepared systems {done} is not a record; remove the directory of the "
+                            "edge to prepare it again")
     stored, current = info.get("made_from"), edge_made_from(cfg, ligand_a, ligand_b, box_shape)
     if stored != current:
         differing = sorted(k for k in set(stored or {}) | set(current) if (stored or {}).get(k) != current.get(k))

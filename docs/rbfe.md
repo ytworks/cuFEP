@@ -27,8 +27,9 @@ ddG yet because only some legs were run, `--leg`). `--edge`, `--leg` and `--repe
 `--reschedule` starts the legs that run anew (their windows, samples and result are set aside in `previous_<n>/`).
 A run in a directory that holds results is refused before it writes anything if a prepared edge of the network (one
 it runs, or one whose results it combines) was made from other inputs or settings (protein, ligands, force
-field, solvation, bilayer, cutoff, ionic strength, pH ...) or by an earlier rule of the preparation (the analysis
-then leaves that edge out, and its RESULT line says to remove the directory of the edge and run it again).
+field, solvation, bilayer, cutoff, ionic strength, pH ...), by an earlier rule of the preparation, or if its record
+cannot be read; the refusal names every such edge and one way to prepare them all again (the analysis leaves them
+out, with the same way). Edge names in these commands are quoted for the shell (names of ligands may hold spaces).
 
 ## Inputs
 
@@ -171,8 +172,10 @@ ghosts or without that record (a relative leg does not take one on trust), or fr
 cell than the pre-equilibration fixes, is refused before the run writes anything, with the command for that leg:
 `--reschedule` sets such a pre-equilibration aside with the windows and samples and computes the leg anew; a leg that
 goes on from its samples, or is analysed again from complete ones, does not start from its pre-equilibration and is
-not refused for it; the fixed cell is part of the System of the samples, so that they are not continued in another
-cell; a water switched off has no charge and no Lennard-Jones in the NonbondedForce
+not refused for it; a checkpoint whose replicas are in another cell than the pre-equilibration fixes is not
+continued, and only start configurations the leg uses are compared (an archive that `--reschedule` began and did not
+complete is completed by the next `--reschedule`, with what it set aside, and refuses a run without it); a water
+switched off has no charge and no Lennard-Jones in the NonbondedForce
 and no Lennard-Jones with the ligand at either end state; in the stand-in energy with which the trials are screened the
 ligand interacts with the parameters of both ends at full strength in every window, and the test with the full
 potential of the window that every trial that passes is given corrects it (what the stand-in is changes how many

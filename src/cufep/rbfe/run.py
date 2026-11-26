@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import shlex
 import time
 from pathlib import Path
 
@@ -167,9 +168,21 @@ def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, onl
 
 
 def rerun_command(edge: str, repeat: int, legs) -> str:
-    """The command that computes the legs ``legs`` of one repeat of an edge anew, and no other leg."""
-    return (f"cufep rbfe run CONFIG --edge {edge} --repeat {repeat} " + " ".join(f"--leg {leg}" for leg in legs)
-            + " --reschedule")
+    """The command that computes the legs ``legs`` of one repeat of an edge anew, and no other leg (the name of the
+    edge quoted for the shell: names of ligands may hold spaces, as `4e U`; fifth review of PR #19)."""
+    return (f"cufep rbfe run CONFIG --edge {shlex.quote(edge)} --repeat {repeat} "
+            + " ".join(f"--leg {leg}" for leg in legs) + " --reschedule")
+
+
+def prepare_again_command(edges) -> str:
+    """How edges whose prepared systems this version does not take (other inputs or settings, an earlier rule, a
+    record that cannot be read) are computed again: all of them removed first, as a run checks every prepared edge of
+    the network before it writes anything (fifth review of PR #19: told one edge at a time, the run of the first was
+    refused for the next)."""
+    edges = list(dict.fromkeys(edges))
+    return ("To compute " + ("it" if len(edges) == 1 else "them") + " again: remove "
+            + ", ".join(shlex.quote(f"edges/{edge}") for edge in edges) + " of the run directory, then cufep rbfe run "
+            "CONFIG " + " ".join(f"--edge {shlex.quote(edge)}" for edge in edges))
 
 
 def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs,
@@ -180,8 +193,16 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
     configurations in another cell than its pre-equilibration fixes (:func:`cufep.engine.leg.start_cell_problem`).
     Both are refused, with the command for each leg, unless the run has --reschedule, under which such a leg sets them
     aside with its windows and samples and starts anew (third review of PR #19: a leg was refused after its result had
-    been set aside, and a finished one on a resume)."""
-    from cufep.engine.leg import EQUIL_GHOSTS, NO_GHOST_RECORD, equil_ghosts_problem, start_cell_problem, starts_anew
+    been set aside, and a finished one on a resume); so are a checkpoint in another cell, and an archive that
+    --reschedule began and did not complete (fifth review)."""
+    from cufep.engine.leg import (
+        EQUIL_GHOSTS,
+        NO_GHOST_RECORD,
+        equil_ghosts_problem,
+        fixed_cell_problems,
+        starts_anew,
+        unfinished_archive_problem,
+    )
     from cufep.rbfe.leg import build_leg
     from cufep.workflow import gcmc_in
 
@@ -196,17 +217,18 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                 leg_dir = edge_dir / f"repeat_{r}" / leg
                 if only_legs and leg not in only_legs:
                     continue
-                if not gcmc_in(rcfg, leg) or not (leg_dir / "equil.npz").exists():
-                    continue
                 found = []
-                if starts_anew(leg_dir, False):
-                    why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
-                           else equil_ghosts_problem(leg_dir / "equil.npz", build_leg(rcfg, edge_dir, leg).gcmc))
-                    if why is not None:
-                        found.append(f"its pre-equilibration cannot start its replica exchange: {why}")
-                why = start_cell_problem(leg_dir)
-                if why is not None:
-                    found.append(why)
+                # an archive that --reschedule began and did not complete (fifth review of PR #19, as the ABFE)
+                unfinished = unfinished_archive_problem(leg_dir, leg, r, False)
+                if unfinished is not None:
+                    found.append(unfinished)
+                if gcmc_in(rcfg, leg) and (leg_dir / "equil.npz").exists():
+                    if starts_anew(leg_dir, False):
+                        why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
+                               else equil_ghosts_problem(leg_dir / "equil.npz", build_leg(rcfg, edge_dir, leg).gcmc))
+                        if why is not None:
+                            found.append(f"its pre-equilibration cannot start its replica exchange: {why}")
+                    found += fixed_cell_problems(leg_dir)
                 if found:
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: {'; '.join(found)}")
                     commands.append(rerun_command(edge, r, [leg]))
@@ -293,8 +315,17 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     # every prepared edge of the network, before the run writes anything: those it runs, and those whose results it
     # combines (second review of PR #17: an edge of another protein was combined); a refused run keeps the record
     # of the run whose results the directory holds (review of PR #17)
+    # (every edge, so that the refusal names all the edges to prepare again: one at a time, the run that prepared the
+    # first was refused for the next; fifth review of PR #19)
+    refused = []
     for a, b in edges:
-        prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
+        try:
+            prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
+        except WorkflowError as exc:
+            refused.append((edge_name(a, b), str(exc)))
+    if refused:
+        raise WorkflowError("; ".join(message for _edge, message in refused) + ". Nothing was changed. "
+                            + prepare_again_command([edge for edge, _message in refused]))
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
     check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
@@ -419,11 +450,19 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     # an edge prepared by an earlier rule is left out, as the run refuses it (prepared_edge)
     from cufep.rbfe.prep import earlier_rules_of
 
-    try:
-        info = json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
-    except (OSError, ValueError):
-        info = {}
-    earlier_rules = earlier_rules_of(info) if isinstance(info, dict) else []
+    prep_file = Path(edge_dir) / "prep" / "prep.json"
+    info = {}
+    if prep_file.exists():
+        try:
+            info = json.loads(prep_file.read_text())
+        except (OSError, ValueError):
+            info = None
+        if not isinstance(info, dict):
+            # what it was prepared by cannot be told, and the network could not compare it (fifth review of PR #19:
+            # network_differences read it again and stopped the analysis of every edge)
+            out["earlier_preparation"] = [f"its record {prep_file} cannot be read"]
+            return out
+    earlier_rules = earlier_rules_of(info)
     if earlier_rules:
         out["earlier_preparation"] = earlier_rules
         return out
@@ -635,8 +674,9 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
                   "their RESULT lines say why and how to compute them again"] if left_out else [])
     prepared_before = [r["edge"] for r in results if r.get("earlier_preparation")]
     if prepared_before:
-        left_note.append(f"{len(prepared_before)} edge(s) prepared by an earlier rule are left out "
-                         f"({', '.join(prepared_before)}); their RESULT lines say why and how to compute them again")
+        left_note.append(f"{len(prepared_before)} edge(s) whose prepared systems this version does not take (an "
+                         f"earlier rule, or a record that cannot be read) are left out ({', '.join(prepared_before)}); "
+                         + prepare_again_command(prepared_before))
     # the experimental value of a state is that of its compound (third review of PR #19: ligands.csv gave it as if it
     # were measured for the state)
     of_compound = {"experiment_of_compound": dict(compound_of)} if compound_of else {}
@@ -744,9 +784,9 @@ def result_lines(summary: dict) -> list[str]:
     lines = []
     for e in summary["edges"]:
         if e.get("earlier_preparation"):
-            lines.append(f"RESULT {e['edge']}: no ddG; the edge was prepared by an earlier rule: "
-                         f"{'; '.join(e['earlier_preparation'])}. To compute it again: remove edges/{e['edge']} of the "
-                         f"run directory, then cufep rbfe run CONFIG --edge {e['edge']}")
+            lines.append(f"RESULT {e['edge']}: no ddG; this version does not take its prepared systems: "
+                         f"{'; '.join(e['earlier_preparation'])}. "
+                         + prepare_again_command([x["edge"] for x in summary["edges"] if x.get("earlier_preparation")]))
             continue
         if e.get("earlier_version"):
             left = e["earlier_version"]

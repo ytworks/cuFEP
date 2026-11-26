@@ -440,7 +440,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info, gcmc)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
-    cell, leg_xml = None, built.xml
+    cell = None
     if gcmc is not None:
         # the cell is fixed from here on (cufep.workflow.alchemical_box), the configuration moved into it as a
         # barostat moves it
@@ -449,13 +449,17 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         cell = alchemical_box(eq, gcmc)
         start = (positions_in_cell(start[0], start[1], cell,
                                    molecules_of(hybrid.system, prep["topology"], hybrid.bonds)), cell, start[2])
-        # the cell is of the System of the samples, as in the ABFE (cufep.workflow.alchemical_leg): samples or a
-        # checkpoint of another cell are not continued (third review of PR #19: a leg that made its start
-        # configurations again in the cell of a new pre-equilibration went on from its checkpoint in the old one)
-        import openmm as mm
+        # a checkpoint of the replica exchange in another cell is not continued (third review of PR #19: a leg that
+        # made its start configurations again in the cell of a new pre-equilibration went on from its checkpoint in
+        # the old one; fifth review: so did a checkpoint without samples, whose conditions are taken as new). The
+        # cell is checked itself, not through the System of the samples, whose checksum finished legs of earlier
+        # versions recorded without it (fifth review: they could not be analysed again)
+        from cufep.engine.leg import checkpoint_cell_problem
 
-        hybrid.system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in cell])
-        leg_xml = mm.XmlSerializer.serialize(hybrid.system)
+        why = checkpoint_cell_problem(leg_dir, cell)
+        if why is not None:
+            raise WorkflowError(f"{why}. Run the leg again with --reschedule (its windows, samples and result are set "
+                                "aside in previous_<n>/), or run the calculation in a new output.dir")
 
     # ---- 2. backend -------------------------------------------------------------------------------
     backend_name = chosen_backend(run, hybrid.system)
@@ -473,7 +477,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more) -> LegSpec:
-        return LegSpec(name=job.tag, system_xml=leg_xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
+        return LegSpec(name=job.tag, system_xml=built.xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
                        backend=backend, precision=_precision(rcfg, backend), platform=rcfg.backend.platform,
                        temperature_K=T, pressure_bar=None if gcmc is not None else rcfg.thermodynamics.pressure_bar,
                        barostat="none" if gcmc is not None else barostat,

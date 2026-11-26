@@ -106,23 +106,73 @@ def starts_anew(leg_dir: Path, reschedule: bool) -> bool:
     return bool(reschedule) or not goes_on_from_its_samples(leg_dir)
 
 
-def start_cell_problem(leg_dir: Path) -> str | None:
-    """Why the start configurations of the windows of a leg with grand canonical moves of water cannot be used: they
-    are in another cell than its pre-equilibration fixes (:func:`cufep.workflow.alchemical_box`; third review of
-    PR #19: a pre-equilibration made again left the run in the cell of the one before). None where the leg has not
-    both files."""
-    from cufep.workflow import alchemical_box
+def _cell_differs(boxes, cell) -> bool:
+    return not np.allclose(np.asarray(boxes, dtype=float), np.asarray(cell, dtype=float)[None], rtol=0.0, atol=1e-9)
 
-    equil_file, start_file = Path(leg_dir) / "equil.npz", Path(leg_dir) / "start_configs.npz"
-    if not (equil_file.exists() and start_file.exists()):
+
+def checkpoint_cell_problem(leg_dir: Path, cell) -> str | None:
+    """Why the checkpoint of the replica exchange of a leg with grand canonical moves of water cannot be continued:
+    its replicas are in another cell than ``cell``, the one the pre-equilibration fixes (third and fifth reviews of
+    PR #19: a checkpoint of the cell of an earlier pre-equilibration was restored, also one without samples, whose
+    conditions are taken as new). None without a checkpoint."""
+    ckpt = Path(leg_dir) / "hrex" / "checkpoint.npz"
+    if not ckpt.exists():
         return None
-    with np.load(equil_file) as eq, np.load(start_file) as start:
-        cell = alchemical_box(eq, True)
+    with np.load(ckpt, allow_pickle=False) as data:
+        if not _cell_differs(data["boxes"], cell):
+            return None
+    return (f"the replicas of the checkpoint {ckpt} are in another cell than the pre-equilibration of the leg fixes: "
+            "they were made from another pre-equilibration")
+
+
+def start_cell_problem(leg_dir: Path, cell) -> str | None:
+    """Why the start configurations of the windows of a leg with grand canonical moves of water cannot be used:
+    they are the ones the leg uses (its windows have them: a schedule, and start configurations of its windows, as
+    :func:`cufep.workflow.stored_windows` takes them; others are made again) and are in another cell than ``cell``,
+    the one the pre-equilibration fixes (third review of PR #19: a pre-equilibration made again left the run in the
+    cell of the one before; fifth review: start configurations that would be made again were refused)."""
+    from cufep.alchemy.schedule import Schedule
+    from cufep.workflow import start_record_of, starts_are_of
+
+    sched_file, start_file = Path(leg_dir) / "schedule.yaml", Path(leg_dir) / "start_configs.npz"
+    if not (sched_file.exists() and start_file.exists()):
+        return None
+    schedule = Schedule.load(sched_file)
+    with np.load(start_file) as start:
         boxes = np.asarray(start["boxes"], dtype=float)
-    if np.allclose(boxes, np.asarray(cell, dtype=float)[None], rtol=0.0, atol=1e-9):
+    if not starts_are_of(start_record_of(start_file), schedule) or len(boxes) != len(schedule.states):
+        return None
+    if not _cell_differs(boxes, cell):
         return None
     return (f"the start configurations of its windows ({start_file}) are in another cell than its pre-equilibration "
-            f"fixes ({equil_file}): they were made from another pre-equilibration")
+            f"fixes ({Path(leg_dir) / 'equil.npz'}): they were made from another pre-equilibration")
+
+
+def fixed_cell_problems(leg_dir: Path) -> list[str]:
+    """What of a leg with grand canonical moves of water is not in the cell its pre-equilibration fixes: the start
+    configurations it uses and the checkpoint it goes on from (:func:`start_cell_problem`,
+    :func:`checkpoint_cell_problem`), for the check of a run before it writes anything. Nothing without a
+    pre-equilibration."""
+    from cufep.workflow import alchemical_box
+
+    equil_file = Path(leg_dir) / "equil.npz"
+    if not equil_file.exists():
+        return []
+    with np.load(equil_file) as eq:
+        cell = alchemical_box(eq, True)
+    return [why for why in (start_cell_problem(leg_dir, cell), checkpoint_cell_problem(leg_dir, cell)) if why]
+
+
+def unfinished_archive_problem(leg_dir: Path, leg: str, repeat: int, reschedule: bool) -> str | None:
+    """A leg whose archive (``--reschedule``) was begun and not completed is not run as it is: part of what it had is
+    set aside, the rest is still in place (review of 2861b93, for the ABFE; fifth review of PR #19, for the relative
+    legs). None with ``--reschedule``, which completes it, or without such an archive."""
+    unfinished = sorted(Path(leg_dir).glob(".previous_*.partial"))
+    if not unfinished or reschedule:
+        return None
+    return (f"the {leg} leg of repeat {repeat} was being started anew (--reschedule) when a run stopped: "
+            f"{unfinished[0]} holds a part of what the leg had. Nothing was changed. Run this leg with --reschedule "
+            "again to complete that")
 
 
 def unusable_pre_equilibration(equil_file: Path, why: str, reschedule_sets_it_aside: bool) -> str:
