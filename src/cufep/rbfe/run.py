@@ -403,23 +403,32 @@ def check_samples_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
 
 
-def check_results_of_the_run(out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
-    """Before a run writes anything: a leg it runs whose result cannot be continued by this version is refused, with
-    the command that computes it anew; its result stays as it is (fifteenth review of PR #19: the run set the result
-    aside, and the leg then stopped on the System of its samples). Such a result: one of other prepared systems than
-    the record of the edge (``prepared_systems_sha256``), or of version 1 of the hybrid (main up to e16c1f1), whose
-    System this version does not make (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`). With --reschedule the leg is
-    computed anew and nothing is refused."""
+def check_results_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool,
+                             inputs=None) -> None:
+    """Before a run writes anything: a leg it runs that this version cannot continue is refused, its result as it
+    is (fifteenth and sixteenth reviews of PR #19: the run set the result aside, and the leg then stopped on the System
+    of its samples).
+
+    A result of other prepared systems than the record of the edge (``prepared_systems_sha256``: a prep/ of another
+    receptor restored) is refused with or without --reschedule, which would keep the pre-equilibration made from them:
+    the way on is the preparation they were made from, or a new output directory. A leg that goes on from its samples
+    and whose result is not of this version of the hybrid (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`; main up to
+    e16c1f1 records none), or that has no result yet (stopped after the checkpoint of its start), is continued where
+    its samples are of the System this version makes of it (the checksum they recorded): a leg of main without REST2
+    is; one with REST2, whose torsions this version scales otherwise, is refused, with the command that computes it
+    anew. Legs of this version with a result are not built again here (their settings are compared by
+    :func:`check_samples_of_the_run`)."""
+    from cufep.engine.leg import goes_on_from_its_samples
     from cufep.rbfe.hybrid import HYBRID_VERSION
+    from cufep.rbfe.leg import build_leg, system_of_the_samples
     from cufep.workflow import record_digest
 
-    if reschedule:
-        return
-    problems, commands = [], []
+    elsewhere, other_system, commands = [], [], []
     for a, b in edges:
         edge = edge_name(a, b)
+        edge_dir = out_dir / "edges" / edge
         try:
-            info = json.loads((out_dir / "edges" / edge / "prep" / "prep.json").read_text())
+            info = json.loads((edge_dir / "prep" / "prep.json").read_text())
         except (OSError, ValueError):
             continue                             # the check of the preparation says what is wrong with it
         made = record_digest(info.get("made_from")) if isinstance(info, dict) else None
@@ -427,25 +436,36 @@ def check_results_of_the_run(out_dir: Path, edges, repeats, only_legs, reschedul
             for leg in ("solvent", "complex"):
                 if only_legs and leg not in only_legs:
                     continue
-                f = out_dir / "edges" / edge / f"repeat_{r}" / leg / "result.json"
+                leg_dir = edge_dir / f"repeat_{r}" / leg
                 try:
-                    result = json.loads(f.read_text()) if f.exists() else None
+                    result = json.loads((leg_dir / "result.json").read_text())
                 except (OSError, ValueError):
                     result = None
-                if not isinstance(result, dict):
+                result = result if isinstance(result, dict) else None
+                if result is not None and result.get("prepared_systems_sha256") not in (None, made):
+                    elsewhere.append(f"the {leg} leg of {edge}, repeat {r}")
                     continue
-                version = int(((result.get("run") or {}).get("hybrid_version")) or 1)
-                why = ("it was computed from other prepared systems than the record of the edge"
-                       if result.get("prepared_systems_sha256") not in (None, made) else
-                       f"it was computed with version {version} of the hybrid System, which this version (version "
-                       f"{HYBRID_VERSION}) does not continue" if version != HYBRID_VERSION else None)
-                if why:
-                    problems.append(f"the {leg} leg of {edge}, repeat {r}: {why}; its result stays as it is")
+                if reschedule or not goes_on_from_its_samples(leg_dir):
+                    continue
+                version = int(((result or {}).get("run") or {}).get("hybrid_version") or 1)
+                if result is not None and version == HYBRID_VERSION:
+                    continue
+                if system_of_the_samples(leg_dir, build_leg(rcfg, edge_dir, leg, leg_dir, False, inputs).xml) is False:
+                    other_system.append(f"the {leg} leg of {edge}, repeat {r}")
                     commands.append(rerun_command(edge, r, [leg], out_dir))
+    problems = []
+    if elsewhere:
+        problems.append(f"{'; '.join(elsewhere)}: computed from other prepared systems than the record of the edge "
+                        "(a preparation of other inputs restored beside them); their results stay as they are. Restore "
+                        "the preparation they were computed from, or compute the edge in a new output.dir "
+                        "(--reschedule would keep the pre-equilibration made from the other preparation)")
+    if other_system:
+        problems.append(f"{'; '.join(other_system)}: their samples were made with another System than this version "
+                        f"makes of them (version {HYBRID_VERSION} of the hybrid); their results stay as they are. "
+                        "Compute them anew with --reschedule (what they have is kept in previous_<n>/): "
+                        + "; ".join(commands) + "; or run the other edges alone (--edge)")
     if problems:
-        raise WorkflowError("; ".join(problems) + ". Nothing was changed. Compute these legs anew with --reschedule "
-                            "(what they have is kept in previous_<n>/): " + "; ".join(commands)
-                            + "; or run the other edges alone (--edge)")
+        raise WorkflowError(". ".join(problems) + ". Nothing was changed")
 
 
 def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs, reschedule: bool) -> None:
@@ -476,11 +496,18 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                     continue
                 leg_dir = out_dir / "edges" / edge / f"repeat_{r}" / leg
                 sched, start = leg_dir / "schedule.yaml", leg_dir / "start_configs.npz"
+                borrowed = (leg == "complex" and not sched.exists() and rcfg.lambda_schedule.mode == "adaptive"
+                            and rcfg.lambda_schedule.adaptive.legs == "solvent")
+                if borrowed:
+                    # the windows of the solvent leg, which this leg takes (sixteenth review of PR #19: a complex leg
+                    # of another REST2 scale wrote them and its start configurations before it stopped on them)
+                    sched = out_dir / "edges" / edge / f"repeat_{r}" / "solvent" / "schedule.yaml"
+                    start = sched.parent / "no start configurations of this leg"
                 if not sched.exists():
                     continue
                 why = None
                 try:
-                    schedule = _schedule_of_this_leg(sched, leg, STAGES)
+                    schedule = _schedule_of_this_leg(sched, "solvent" if borrowed else leg, STAGES)
                     made, n_configs = None, 0
                     if start.exists():
                         made = start_record_of(start)
@@ -489,9 +516,11 @@ def check_windows_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                             _arrays = (data["boxes"], data["velocities"])       # what the leg reads of the file
                     if made is not None and starts_are_of(made, schedule) and n_configs == len(schedule.states):
                         check_windows_settings(made, hybrid_settings(rcfg, leg), start, lambda *args: None)
-                    elif abs(schedule.rest2_scale - scale) > 1e-9:
-                        why = (f"its lambda schedule was made with a REST2 scale of {schedule.rest2_scale:g} and "
-                               f"sampling.rest2.scale is {rest2.scale:g}")
+                    # the scale of the schedule, as the leg checks it whatever start configurations it has (sixteenth
+                    # review of PR #19)
+                    if abs(schedule.rest2_scale - scale) > 1e-9:
+                        why = (f"its lambda schedule ({sched}) was made with a REST2 scale of {schedule.rest2_scale:g} "
+                               f"and sampling.rest2.scale is {rest2.scale:g}")
                 except WorkflowError as exc:
                     why = str(exc).split(". Nothing was changed")[0]
                 except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
@@ -627,7 +656,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
     check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
-    check_results_of_the_run(out_dir, selected, repeats_run, only_legs, reschedule)
+    check_results_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
     check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     check_windows_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     states = states_of(rcfg, ligands)

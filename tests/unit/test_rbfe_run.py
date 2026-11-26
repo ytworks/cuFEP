@@ -81,14 +81,35 @@ def _ligands(tmp_path, out_dir, smiles_b: str = "Oc1ccccc1", name_b: str = "phen
     return ligands
 
 
-def _usable(made_from: dict, water: bool = False) -> dict:
+def _usable(made_from: dict, water: bool = False, sizes=(15, 13)) -> dict:
     """A record of a prepared edge of toluene or phenol(ate) that the checks of a record pass: both legs, each mapping
     the first ring carbon (thirteenth review of PR #19: a record without legs was taken), with the alchemical water of
-    an edge that changes the net charge (``water``; fourteenth review)."""
+    an edge that changes the net charge (``water``; fourteenth review), its atoms within the end states of ``sizes``
+    (the numbers of atoms of A and B)."""
     ion = {"name": "NA", "charge": 1.0, "sigma_nm": 0.2439, "epsilon_kj_mol": 0.3658}
-    leg = {"mapping": {"1": 1}, "n_atoms_a": 15, "n_atoms_b": 13,
-           **({"alchemical_water": {"atoms_a": [20, 21, 22], "atoms_b": [18, 19, 20], "ion": ion}} if water else {})}
+    n_a, n_b = sizes
+    leg = {"mapping": {"1": 1}, "n_atoms_a": n_a, "n_atoms_b": n_b,
+           **({"alchemical_water": {"atoms_a": [n_a - 3, n_a - 2, n_a - 1], "atoms_b": [n_b - 3, n_b - 2, n_b - 1],
+                                    "ion": ion}} if water else {})}
     return {"made_from": made_from, "legs": {name: dict(leg) for name in ("complex", "solvent")}}
+
+
+def _prepared_with_files(prep_dir, made_from: dict, files_from, water: bool = False) -> None:
+    """A preparation of an edge that differs from a valid one (``files_from``: the prep/ of a prepared edge, its end
+    states) only in its record: the prepared systems of that one, and a record (:func:`_usable`) made from
+    ``made_from`` with the numbers of atoms of those systems (sixteenth review of PR #19: records without the files
+    were refused for the missing files before the rule a test checks was reached)."""
+    import shutil
+
+    prep_dir = Path(prep_dir)
+    prep_dir.mkdir(parents=True, exist_ok=True)
+    for leg in ("complex", "solvent"):
+        for end in ("a", "b"):
+            for suffix in ("_system.xml", ".npz", "_topology.json"):
+                shutil.copy(Path(files_from) / f"{leg}_{end}{suffix}", prep_dir / f"{leg}_{end}{suffix}")
+    real = json.loads((Path(files_from) / "prep.json").read_text())["legs"]["complex"]
+    (prep_dir / "prep.json").write_text(json.dumps(_usable(made_from, water,
+                                                           (real["n_atoms_a"], real["n_atoms_b"]))))
 
 
 def _of_the_record(result: dict, prep_dir) -> dict:
@@ -375,7 +396,7 @@ def test_each_end_state_has_the_charges_of_its_own_ligand(tmp_path):
             assert np.allclose(got, charges[name], atol=1e-6), (leg, which)
 
 
-def test_a_prepared_edge_of_another_ph_is_not_taken(tmp_path):
+def test_a_prepared_edge_of_another_ph_is_not_taken(tmp_path, edges_of_version_1):
     """Review of PR #17: the protonation states of a PDB without hydrogens follow thermodynamics.ph, and a prepared
     edge was taken by a run with another pH (the record of the edge did not have it)."""
     from cufep.rbfe.prep import edge_made_from, prepare_edge
@@ -385,15 +406,14 @@ def test_a_prepared_edge_of_another_ph_is_not_taken(tmp_path):
     ligands = _ligands(tmp_path, out_dir)
     rcfg = _config(tmp_path, out_dir, "fixed")
     edge_dir = out_dir / "edges" / "toluene~phenol"
-    (edge_dir / "prep").mkdir(parents=True)
-    (edge_dir / "prep" / "prep.json").write_text(json.dumps(
-        _usable(edge_made_from(rcfg, ligands[0], ligands[1], "cube"))))
+    _prepared_with_files(edge_dir / "prep", edge_made_from(rcfg, ligands[0], ligands[1], "cube"),
+                         edges_of_version_1["prep"])
     other = rcfg.model_copy(update={"thermodynamics": rcfg.thermodynamics.model_copy(update={"ph": 6.0})})
     with pytest.raises(WorkflowError, match="other inputs or settings"):
         prepare_edge(other, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
 
 
-def test_an_edge_prepared_by_an_earlier_rule_is_not_taken(tmp_path):
+def test_an_edge_prepared_by_an_earlier_rule_is_not_taken(tmp_path, edges_of_version_1):
     """Second review of PR #19 (P2): an edge that changes the net charge, prepared by the version that chose its
     alchemical water by the distances in the cell alone (a water 0.2 nm from the solutes across the boundary), and an
     edge of a custom core mapped without chirality, were taken up again when the cutoff or the SMARTS was the same.
@@ -416,13 +436,12 @@ def test_an_edge_prepared_by_an_earlier_rule_is_not_taken(tmp_path):
         assert record[key] == PREPARATION_RULES[key.removesuffix("_rule")]
         earlier = {k: v for k, v in record.items() if k != key}
         edge_dir = tmp_path / key
-        (edge_dir / "prep").mkdir(parents=True)
-        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(earlier, key == "alchemical_water_rule")))
+        _prepared_with_files(edge_dir / "prep", earlier, edges_of_version_1["prep"], key == "alchemical_water_rule")
         before = (edge_dir / "prep" / "prep.json").read_text()
         with pytest.raises(WorkflowError, match=f"{key}.*an earlier rule"):
             prepared_edge(cfg, *ligands, edge_dir, "cube")
         assert (edge_dir / "prep" / "prep.json").read_text() == before
-        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(record, key == "alchemical_water_rule")))
+        _prepared_with_files(edge_dir / "prep", record, edges_of_version_1["prep"], key == "alchemical_water_rule")
         assert prepared_edge(cfg, *ligands, edge_dir, "cube") is not None
 
 
@@ -465,7 +484,8 @@ def test_a_bilayer_with_a_water_of_four_sites_gets_its_force_field_for_the_lipid
     assert asked == ["amber14/tip4pew.xml"]
 
 
-def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before(tmp_path, monkeypatch):
+def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before(tmp_path, monkeypatch,
+                                                                                 edges_of_version_1):
     """Review of PR #17: a run in a finished directory with another cutoff wrote resolved_config.yaml and
     network.json, then prepare_edge refused the prepared edge: the record of the results the directory holds was
     lost, and `cufep rbfe analyze` read the network of the refused run. The prepared edges are checked first."""
@@ -483,9 +503,8 @@ def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before
     rcfg = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"]]}})
     write_run_files(out_dir, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
     edge_dir = out_dir / "edges" / "toluene~phenol"
-    (edge_dir / "prep").mkdir(parents=True)
-    (edge_dir / "prep" / "prep.json").write_text(json.dumps(
-        _usable(edge_made_from(rcfg, ligands[0], ligands[1], "cube"))))
+    _prepared_with_files(edge_dir / "prep", edge_made_from(rcfg, ligands[0], ligands[1], "cube"),
+                         edges_of_version_1["prep"])
     before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
     protein = _protein()
     monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
@@ -495,7 +514,7 @@ def test_a_run_refused_for_its_prepared_edges_keeps_the_record_of_the_run_before
     assert all((out_dir / name).read_bytes() == data for name, data in before.items())
 
 
-def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_path, monkeypatch):
+def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_path, monkeypatch, edges_of_version_1):
     """Second review of PR #17: A~B finished, then the protein changed and only B~C was run (--edge): B~C had no
     prepared systems yet and passed, and the network combined the A~B of the other protein. Every prepared edge of
     the network is checked before the run writes anything."""
@@ -525,9 +544,8 @@ def test_edges_that_the_network_combines_are_checked_before_the_run_writes(tmp_p
     rcfg = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"], ["phenol", "aniline"]]}})
     write_run_files(out_dir, rcfg, list(ligands), [("toluene", "phenol"), ("phenol", "aniline")], "given", {})
     done = out_dir / "edges" / "toluene~phenol" / "prep"
-    done.mkdir(parents=True)
-    (done / "prep.json").write_text(json.dumps(
-        _usable(edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"))))
+    _prepared_with_files(done, edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"),
+                         edges_of_version_1["prep"])
     (tmp_path / "protein.pdb").write_text("REMARK another protein\n")          # the receptor changes
     before = {name: (out_dir / name).read_bytes() for name in ("resolved_config.yaml", "network.json")}
     protein = _protein()
@@ -1372,7 +1390,8 @@ def test_edges_to_prepare_again_are_named_together_and_their_names_quoted(tmp_pa
     assert words[words.index("--edge") + 1] == "4e U~4b D"
 
 
-def test_a_run_names_every_edge_it_does_not_take_and_how_to_prepare_them_again(tmp_path, monkeypatch):
+def test_a_run_names_every_edge_it_does_not_take_and_how_to_prepare_them_again(tmp_path, monkeypatch,
+                                                                               edges_of_version_1):
     """Fifth review of PR #19 (P2): a run refused for the first prepared edge it did not take; removed and run alone as
     it said, the run was refused for the next. The run names every such edge, and one way that prepares them all."""
     from rdkit import Chem
@@ -1400,8 +1419,7 @@ def test_a_run_names_every_edge_it_does_not_take_and_how_to_prepare_them_again(t
     rcfg = RbfeConfig.model_validate({**data, "network": {"edges": [["toluene", "phenol"], ["phenol", "aniline"]]}})
     for a, b in (("toluene", "phenol"), ("phenol", "aniline")):
         done = out_dir / "edges" / f"{a}~{b}" / "prep"
-        done.mkdir(parents=True)
-        (done / "prep.json").write_text(json.dumps(_usable(edge_made_from(rcfg, ligands[a], ligands[b], "cube"))))
+        _prepared_with_files(done, edge_made_from(rcfg, ligands[a], ligands[b], "cube"), edges_of_version_1["prep"])
     (tmp_path / "protein.pdb").write_text("REMARK another protein\n")          # the receptor changes
     protein = _protein()
     monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
@@ -1731,11 +1749,10 @@ def test_a_prepared_edge_whose_mapping_joins_mapped_atoms_or_whose_record_is_los
     record = edge_made_from(custom, *ligands, "cube")
     assert record["custom_core_rule"] == PREPARATION_RULES["custom_core"] == 3
     of_rule_2 = tmp_path / "rule_2"
-    (of_rule_2 / "prep").mkdir(parents=True)
-    (of_rule_2 / "prep" / "prep.json").write_text(json.dumps(_usable({**record, "custom_core_rule": 2})))
+    _prepared_with_files(of_rule_2 / "prep", {**record, "custom_core_rule": 2}, edges_of_version_1["prep"])
     with pytest.raises(WorkflowError, match="custom_core_rule"):
         prepared_edge(custom, *ligands, of_rule_2, "cube")
-    (of_rule_2 / "prep" / "prep.json").write_text(json.dumps(_usable(record)))
+    _prepared_with_files(of_rule_2 / "prep", record, edges_of_version_1["prep"])
     assert prepared_edge(custom, *ligands, of_rule_2, "cube") is not None
     # (thirteenth review, P2) the records of the ligands lost (a backup without ligand_a.json): the run takes the
     # ligands of its input, which the record was made from, and writes their records again; the analysis takes the
@@ -1804,7 +1821,7 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
         **rcfg.model_dump(mode="json")["sampling"], "rest2": {"scale": 2.0}}})
     leg_dir = edge_dir / "repeat_0" / "solvent"
     leg_dir.mkdir(parents=True)
-    schedule = fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES})
+    schedule = fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}, 2.0)
     schedule.save(leg_dir / "schedule.yaml")
     np.savez(leg_dir / "start_configs.npz", positions=np.zeros((len(schedule.states), 1, 3)),
              boxes=np.zeros((len(schedule.states), 3, 3)), velocities=np.zeros((len(schedule.states), 1, 3)),
@@ -1815,6 +1832,19 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
     assert "--leg solvent --reschedule" in str(refused.value)
     check_windows_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], True)
     check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    # (sixteenth review, P2) the REST2 scale of the schedule is compared whatever start configurations it has: start
+    # configurations of these windows and of the settings of the run, a schedule of scale 1 (the leg refuses it)
+    fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}).save(leg_dir / "schedule.yaml")
+    with pytest.raises(WorkflowError, match="made with a REST2 scale of 1 and sampling.rest2.scale is 2"):
+        check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    # (sixteenth review, P2) the windows a complex leg borrows from the solvent leg (adaptive.legs: solvent), of
+    # another scale: refused before the complex leg writes them and its start configurations
+    borrowing = other.model_validate({**other.model_dump(mode="json"), "lambda_schedule": {
+        **other.model_dump(mode="json")["lambda_schedule"], "mode": "adaptive",
+        "adaptive": {**other.model_dump(mode="json")["lambda_schedule"]["adaptive"], "legs": "solvent"}}})
+    with pytest.raises(WorkflowError, match="the complex leg of toluene~phenol, repeat 0: its lambda schedule"):
+        check_windows_of_the_run(borrowing, out_dir, [("toluene", "phenol")], [0], ["complex"], False)
+    schedule.save(leg_dir / "schedule.yaml")
     # (fifteenth review, P2) with samples too: the leg reads its windows whatever it goes on from
     (leg_dir / "hrex").mkdir()
     (leg_dir / "hrex" / "checkpoint.npz").write_bytes(b"")
@@ -1831,11 +1861,13 @@ def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_ru
             check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
     # a schedule without start configurations of another REST2 scale, and a schedule of the other leg
     (leg_dir / "start_configs.npz").unlink()
+    fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}).save(leg_dir / "schedule.yaml")
     with pytest.raises(WorkflowError, match="made with a REST2 scale of 1 and sampling.rest2.scale is 2"):
         check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
     fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES}, 2.0).save(leg_dir / "schedule.yaml", leg="complex")
     with pytest.raises(WorkflowError, match="written for the complex leg"):
         check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+
 
 def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is_refused_before_writing(tmp_path):
     """Twelfth review of PR #19 (P1): oxirane -> ethane with hydrogens mapped onto heavy atoms (Kartograf's settings
@@ -2006,15 +2038,23 @@ def test_the_plan_gives_the_mapping_of_kartograf_and_the_one_the_preparation_lea
     assert "at most" not in result.output
 
 
-def test_a_leg_this_version_cannot_continue_is_refused_before_the_run_writes(tmp_path, edges_of_version_1):
-    """Fifteenth review of PR #19 (P2): a leg whose result is of other prepared systems than the record of its edge (a
-    prep/ of another receptor restored), or of version 1 of the hybrid (a REST2 leg of main), was run again: the run
-    set its result aside, and the leg stopped on the System of its samples. Such a leg is refused before the run
-    writes anything, its result as it is; so is an edge whose prepared systems are incomplete."""
+def test_a_leg_this_version_cannot_continue_is_refused_before_the_run_writes(tmp_path, monkeypatch,
+                                                                            edges_of_version_1):
+    """Fifteenth and sixteenth reviews of PR #19 (P2): a leg whose result is of other prepared systems than the record
+    of its edge (a prep/ of another receptor restored), or of version 1 of the hybrid (a REST2 leg of main), was run
+    again: the run set its result aside, and the leg stopped on the System of its samples. A result of other prepared
+    systems is refused with or without --reschedule (which keeps the pre-equilibration made from them), with the way
+    on that recovers it; a leg that goes on from samples of another version, or without a result yet (stopped after
+    the checkpoint of its start), is continued where its samples are of the System this version makes of it (a leg of
+    main without REST2) and refused, with --reschedule, where they are not; an edge whose prepared systems are
+    incomplete is refused too."""
+    import hashlib
     import shutil
 
     from test_rbfe_network import _leg_result, _write_legs
 
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.leg import build_leg
     from cufep.rbfe.prep import prepared_edge
     from cufep.rbfe.run import check_results_of_the_run
     from cufep.workflow import WorkflowError, record_digest
@@ -2027,17 +2067,37 @@ def test_a_leg_this_version_cannot_continue_is_refused_before_the_run_writes(tmp
     made = record_digest(json.loads((edge_dir / "prep" / "prep.json").read_text())["made_from"])
     current = {**_leg_result(-12.0), "prepared_systems_sha256": made}
     _write_legs(out_dir, "toluene~phenol", 0, current, current)
-    check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], None, False)
-    result = edge_dir / "repeat_0" / "complex" / "result.json"
+
+    def check(reschedule=False):
+        check_results_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], reschedule)
+
+    check()
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    result = leg_dir / "result.json"
     before = result.read_text()
-    for changed, why in (({"prepared_systems_sha256": "another receptor"}, "other prepared systems"),
-                         ({"run": {}}, "version 1 of the hybrid")):
-        result.write_text(json.dumps({**json.loads(before), **changed}))
-        with pytest.raises(WorkflowError, match=why) as refused:
-            check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], None, False)
-        assert "--repeat 0 --leg complex --reschedule" in str(refused.value)
-        check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], None, True)
-        check_results_of_the_run(out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
+    result.write_text(json.dumps({**json.loads(before), "prepared_systems_sha256": "another receptor"}))
+    for reschedule in (False, True):
+        with pytest.raises(WorkflowError, match="other prepared systems") as refused:
+            check(reschedule)
+        assert "Restore the preparation they were computed from" in str(refused.value)
+    # a result of version 1 (main), its samples of the System this version makes (no REST2: the same) or of another
+    (leg_dir / "hrex").mkdir()
+    (leg_dir / "hrex" / "checkpoint.npz").write_bytes(b"")
+    same = hashlib.sha256(build_leg(rcfg, edge_dir, "solvent").xml.encode()).hexdigest()
+    result.write_text(json.dumps({**json.loads(before), "run": {}}))
+    for digest, refused_too in ((same, False), ("0" * 64, True)):
+        monkeypatch.setattr(leg_module, "_samples_system_digest", lambda leg_dir, digest=digest: digest)
+        if refused_too:
+            with pytest.raises(WorkflowError, match="another System than this version makes") as refused:
+                check()
+            assert "--repeat 0 --leg solvent --reschedule" in str(refused.value)
+            check(True)
+        else:
+            check()
+    # no result yet, the checkpoint of the start of another System: refused before anything is written
+    result.unlink()
+    with pytest.raises(WorkflowError, match="another System than this version makes"):
+        check()
     assert prepared_edge(rcfg, *ligands, edge_dir, "cube") is not None
     (edge_dir / "prep" / "complex_b_system.xml").unlink()
     with pytest.raises(WorkflowError, match="incomplete .complex_b_system.xml missing"):

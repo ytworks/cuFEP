@@ -186,6 +186,26 @@ def _samples_system_digest(leg_dir: Path) -> str | None:
     return conditions.get("system_sha256") if isinstance(conditions, dict) else None
 
 
+def system_of_the_samples(leg_dir: Path, xml: str) -> bool | None:
+    """Whether the samples of a leg (or the checkpoint of their start) were made with the System ``xml`` of the leg,
+    in either form they recorded it (:func:`recorded_form_of_the_system`); None where they record no checksum."""
+    import hashlib
+
+    import openmm as mm
+
+    digest = _samples_system_digest(leg_dir)
+    if digest is None:
+        return None
+    if hashlib.sha256(xml.encode()).hexdigest() == digest:
+        return True
+    cell = _fixed_cell_of(leg_dir)
+    if cell is None:
+        return False
+    system = mm.XmlSerializer.deserialize(xml)
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(cell, dtype=float)])
+    return hashlib.sha256(mm.XmlSerializer.serialize(system).encode()).hexdigest() == digest
+
+
 def _fixed_cell_of(leg_dir: Path):
     """The cell a leg with grand canonical moves of water is fixed in: the mean cell of its pre-equilibration, else
     the cell of the replicas of its checkpoint; None without either."""
@@ -800,6 +820,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                        "windows": "chosen by this precalculation"}
             else:
                 schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
+                check_scale(schedule)              # before its windows are written (sixteenth review of PR #19)
                 cfgs = from_pre_equilibration(schedule)
                 how = {**starting, "windows": "those of the solvent leg"}
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}
