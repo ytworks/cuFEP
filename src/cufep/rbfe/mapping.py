@@ -45,19 +45,33 @@ def mapping_settings(m) -> MappingSettings:
                            allow_bond_breaks=m.allow_bond_breaks, core_smarts=m.core_smarts)
 
 
+#: the most matches of ``mapping.core_smarts`` (sets of atoms) taken in one ligand: a rule of computation, the
+#: limit of the search of RDKit, which stops there. A pattern with more is refused, since a match beyond the limit
+#: would be missing from the core (eleventh review of PR #19).
+MAX_CORE_MATCHES = 1000
+
+
 def core_atoms(molecule, smarts: str) -> set[int]:
     """The atoms of an RDKit molecule (with its hydrogens) in any match of ``smarts``, its stereochemistry respected (a
     pattern without it matches either configuration; review of PR #19: a pattern of one configuration matched the
-    other); MappingError without one."""
+    other); MappingError without one, or with more than ``MAX_CORE_MATCHES``. A match is a set of atoms: the orders of
+    the same atoms (the permutations of a symmetric pattern) are one match. They were counted one by one, and the
+    1296 orders of one tert-butyl group used up the search before the other group of the ligand was reached
+    (eleventh review of PR #19)."""
     from rdkit import Chem
 
     pattern = Chem.MolFromSmarts(smarts)
     if pattern is None:
         raise MappingError(f"mapping.core_smarts {smarts!r} is not a SMARTS pattern")
-    matches = molecule.GetSubstructMatches(pattern, uniquify=False, useChirality=True)
+    matches = molecule.GetSubstructMatches(pattern, uniquify=True, useChirality=True,
+                                           maxMatches=MAX_CORE_MATCHES + 1)
+    name = f" of {molecule.GetProp('_Name')}" if molecule.HasProp("_Name") else ""
+    if len(matches) > MAX_CORE_MATCHES:
+        raise MappingError(f"mapping.core_smarts {smarts!r} matches more than {MAX_CORE_MATCHES} sets of atoms{name}, "
+                           f"the most that are taken: a match beyond them would be left out of the core; give a "
+                           f"pattern with fewer matches")
     if not matches:
-        raise MappingError(f"mapping.core_smarts {smarts!r} matches no atom of {molecule.GetProp('_Name')}"
-                           if molecule.HasProp("_Name") else f"mapping.core_smarts {smarts!r} matches no atom")
+        raise MappingError(f"mapping.core_smarts {smarts!r} matches no atom{name}")
     return {int(i) for match in matches for i in match}
 
 

@@ -69,6 +69,18 @@ def test_the_hot_atoms_grow_from_the_perturbation_along_rotatable_bonds_and_ring
     assert len(heavy) == MAX_HEAVY_ATOMS and not heavy & set(range(6))
 
 
+def test_a_bond_that_closes_a_ring_is_read_in_the_end_state_that_has_it():
+    """Eleventh review of PR #19: propane into cyclopropane with the three carbons mapped. The bond of the two end
+    carbons is in B only; it was read in A (both atoms are atoms of A), where it is neither rotatable nor a bond to a
+    ring, and the region stayed empty. Read in B it is a bond to a ring: the ring and every hydrogen is hot."""
+    from cufep.rbfe.hot_region import perturbed_hot_atoms
+
+    a, b, to_a, to_b, core = _pair("CCC", "C1CC1")
+    assert {to_a[0], to_a[1], to_a[2]} <= core
+    hot = perturbed_hot_atoms(a, b, to_a, to_b, core)
+    assert hot == set(to_a.values()) | set(to_b.values())
+
+
 def _scaled(system, hot: set[int], s: float, ligand: set[int]):
     """``system`` with the REST2 scaling of the atoms ``hot`` written into its parameters: charge times sqrt(s),
     epsilon times s; the exceptions of the ligand times the factors of their atoms; the torsions of four hot atoms

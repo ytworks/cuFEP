@@ -87,8 +87,9 @@ def perturbed_hot_atoms(molecule_a, molecule_b, to_hybrid_a: dict[int, int], to_
     atoms = in_a | in_b
 
     def end_of(i: int, j: int) -> dict:
-        """The end state that has the bond i-j (A where both are atoms of A)."""
-        return a if i in in_a and j in in_a else b
+        """The end state that has the bond i-j (A where both ends have it). A bond of mapped atoms can be in one end
+        only (a ring closed in B): it is read where it is (eleventh review of PR #19)."""
+        return a if j in a["neighbours"].get(i, ()) else b
 
     neighbours = {i: a["neighbours"].get(i, set()) | b["neighbours"].get(i, set()) for i in atoms}
     heavy = {**b["heavy"], **a["heavy"]}

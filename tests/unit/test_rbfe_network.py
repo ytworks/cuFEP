@@ -510,6 +510,19 @@ def test_a_custom_core_maps_only_its_atoms_and_the_records_of_other_edges_stay_a
     with pytest.raises(MappingError, match="matches no atom"):
         core_atoms(other, "C[C@@H](F)Cl")
     assert core_atoms(other, "CC(F)Cl") == core_atoms(same, "CC(F)Cl")
+    # eleventh review of PR #19: the 1296 orders of the atoms of one tert-butyl group used up the 1000 matches of the
+    # search, and the other group of the ligand was left out of the core; a match is a set of atoms
+    butyls = Chem.AddHs(Chem.MolFromSmiles("CC(C)(C)CCC(C)(C)C"))
+    group = "C([CH3]([H])([H])[H])([CH3]([H])([H])[H])[CH3]([H])([H])[H]"
+    assert len(core_atoms(butyls, group)) == 26
+    # a search that reaches its limit is refused, not cut
+    import cufep.rbfe.mapping as mapping_module
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(mapping_module, "MAX_CORE_MATCHES", 2)
+        assert len(core_atoms(butyls, group)) == 26                         # two matches, the limit
+        with pytest.raises(MappingError, match="more than 2 sets of atoms"):  # six methyl groups
+            core_atoms(butyls, "[CH3]")
     plain = RbfeConfig.model_validate({"system": {"protein": "p.pdb", "ligands": "l.sdf"}})
     recorded = hybrid_settings(plain, "solvent")["rbfe"]
     assert "core_smarts" not in recorded["mapping"] and "alchemical_water_cutoff_nm" not in recorded["alchemy"]
