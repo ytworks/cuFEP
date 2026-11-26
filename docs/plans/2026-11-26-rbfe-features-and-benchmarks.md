@@ -246,3 +246,15 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - 実行中の TYK2(image 2ecbcd2)への影響: 記録は版 2(`grand_canonical` あり)、電荷変化と custom core は無く、TYK2 の
   配位子は切れないので結果は同じ。ただし新しい image で再開すると complex leg の平衡化は ghost の記録が無いため拒否される:
   再開は同じ image 2ecbcd2 で。
+
+### 2026-11-26 TYK2 のフル実行(image 2ecbcd2)が止まった: GCMC の GPU stand-in が GPU 0 に context を作る
+- 結果: 44 leg 中 29(solvent 20、complex 9)が完了し、終了コード 1。最初の 4 本の complex leg は動き、5 本目からの
+  complex leg の worker が起動時に `cudaErrorDevicesUnavailable`(CuPy、GCMC の stand-in)で失敗した。後半は OpenMM の
+  worker も "The requested CUDA device could not be loaded"。実行中は GPU 0 のメモリだけ多かった(14 GB、他は 3〜4 GB)。
+- 再現(`spikes/out/cupy_ctx_check/`、image の中で): `with cupy.cuda.Device(3)` の後、その process は GPU 0 と 3 に
+  context を持つ(先に `use()` すると 3 だけ)。CUDA 12 では元のデバイス(0)へ戻すときに context が作られる。cuFEP の MPS
+  の下で、1 つの GPU に 80 process を置くと 60 が起動し、20 が同じエラーで失敗した(MPS の 1 GPU あたり 60 client)。
+  つまり GCMC の worker は、どの GPU で動いていても GPU 0 の client を 1 つ使い、GPU 0 が 60 を超えた。
+- 修正(d512824): stand-in は自分のデバイスを process の現在のデバイスにする。GPU テスト(GPU 1 の stand-in の process
+  が持つ context): 修正前 [0, 1]、修正後 [1]。
+- TYK2 は image d512824 で最初からやり直す(`runs/rbfe_bench_tyk2_d512824`)。2ecbcd2 の出力は残す。
