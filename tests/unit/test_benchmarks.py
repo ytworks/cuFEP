@@ -570,3 +570,153 @@ def test_frozen_schedules_go_to_the_run_directory_by_default(tmp_path, monkeypat
     assert sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*.yaml")) == ["ejm_31/complex_r0.yaml",
                                                                                      "ejm_31/solvent_r0.yaml"]
     assert not list((data / "benchmarks").iterdir())
+
+
+def test_a_relative_benchmark_runs_with_the_settings_of_its_relative_example(tmp_path):
+    """`--protocol rbfe`: a set runs with every setting of its relative example but the input files, the choice of
+    ligands, the edges (LOMAP's network of the ligands) and the output directory; the smoke tier runs the first edge
+    of the example, shortened, and the example's protein and ligands are those of the set."""
+    from cufep.benchmarks.rbfe import rbfe_benchmark_config
+    from cufep.rbfe.config import load_rbfe_config
+
+    for name in ("tyk2", "a2a"):
+        entry, root = load_registry()[name], data_root()
+        example = load_rbfe_config(root / entry["rbfe_example"])
+
+        def settings(cfg) -> dict:
+            data = cfg.model_dump(mode="json")
+            for key in ("protein", "ligands", "ligand_names"):
+                data["system"].pop(key)
+            data["network"].pop("edges"), data.pop("output")
+            return data
+
+        for tier, names in (("subset", entry["subset"]), ("full", None)):
+            cfg = rbfe_benchmark_config(name, tier, tmp_path / tier)
+            assert settings(cfg) == settings(example)
+            assert cfg.system.ligand_names == names and cfg.network.edges is None
+            assert cfg.system.protein == root / entry["protein"] and cfg.system.ligands == root / entry["rbfe_ligands"]
+        smoke = rbfe_benchmark_config(name, "smoke", tmp_path / "s")
+        first = tuple(example.network.edges[0])
+        assert [tuple(e) for e in smoke.network.edges] == [first] and smoke.system.ligand_names == list(first)
+        assert smoke.sampling.production_ns == 0.1 and smoke.lambda_schedule.adaptive.window("complex") == 10
+        assert smoke.membrane.enabled is (name == "a2a")
+        assert example.system.protein.read_bytes() == (root / entry["protein"]).read_bytes()
+        # the example's records were written again by RDKit: the same atoms at the same places as the set's
+        records = _sdf_records(root / entry["rbfe_ligands"])
+        for lig, record in _sdf_records(example.system.ligands).items():
+            assert _atoms(record) == _atoms(records[lig])
+    with pytest.raises(KeyError):
+        rbfe_benchmark_config("tyk2", "huge")
+
+
+def _atoms(record: str) -> list[tuple]:
+    """The elements and coordinates (A, 4 decimals) of a V2000 record."""
+    lines = record.split("\n")
+    n = int(lines[3][:3])
+    return [(line.split()[3], tuple(round(float(x), 4) for x in line.split()[:3])) for line in lines[4:4 + n]]
+
+
+def _relative_run(path, name: str, noise: float = 0.4, seed: int = 3) -> dict:
+    """A directory of a relative run of the whole set NAME: dG of every ligand and ddG of the published edges with
+    known errors (experiment + noise), as cufep rbfe run writes them."""
+    from cufep.benchmarks.rbfe import published_edges
+
+    ref = read_reference(name)
+    rng = np.random.default_rng(seed)
+    dg = {lig: v["exp"] + noise * rng.normal() for lig, v in ref.items()}
+    edges = []
+    for (a, b), _ in published_edges(name).items():
+        ddg = dg[b] - dg[a] + 0.2 * rng.normal()
+        edges.append({"edge": f"{a}~{b}", "ligand_a": a, "ligand_b": b, "ddg": ddg, "se": 0.3,
+                      "network_ddg": dg[b] - dg[a], "network_se": 0.2, "exp_ddg": ref[b]["exp"] - ref[a]["exp"],
+                      "lowest_overlap": {"complex": 0.1, "solvent": 0.2}, "not_reliable": []})
+    summary = {"ligands": list(ref), "edges": edges, "experiment_kcal_mol": {k: v["exp"] for k, v in ref.items()},
+               "cycle_closures": [], "notes": [],
+               "dg": {"reference": "mean of the experimental values", "reference_ligands": list(ref),
+                      "values": {k: {"dg": v, "se": 0.15} for k, v in dg.items()}}}
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "summary.json").write_text(json.dumps(summary))
+    (path / "network.json").write_text(json.dumps({"ligands": list(ref), "edges": [[e["ligand_a"], e["ligand_b"]]
+                                                                                   for e in edges],
+                                                   "edges_from": "planned by LOMAP"}))
+    return summary
+
+
+def test_the_relative_report_gives_the_statistics_of_the_public_benchmark(tmp_path):
+    """The report of a relative run: the pairwise RMSE, R^2 and tau of the dG against experiment for cuFEP, the
+    published predictions and the recorded absolute run on the same ligands; the edgewise errors of the edges' own
+    ddG, of the network's, and of the published ones on the same edges, matched also when published the other way
+    round. The same text through `cufep benchmark report`."""
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep.benchmarks.rbfe import published_edges, report, stored_abfe
+
+    summary = _relative_run(tmp_path / "run", "tyk2")
+    text = report("tyk2", tmp_path / "run")
+    ref = read_reference("tyk2")
+    names = list(ref)
+    exp = [ref[n]["exp"] for n in names]
+    ours = metrics([summary["dg"]["values"][n]["dg"] for n in names], exp)
+    theirs = metrics([ref[n]["fepplus"] for n in names], exp)
+    abfe = stored_abfe("tyk2")
+    assert len(abfe) == 16
+    absolute = metrics([abfe[n] for n in names], exp)
+    row = next(line for line in text.splitlines() if line.startswith("| pairwise ddG RMSE"))
+    cells = [c.split("[")[0].strip() for c in row.split("|")[2:5]]
+    assert cells == [f"{m['pairwise_rmse']:.2f}" for m in (ours, theirs, absolute)]
+    assert "Ligands with a dG: 16 of 16; edges with a ddG: 24 of 24 (edges planned by LOMAP)." in text
+    published = published_edges("tyk2")
+    assert len(published) == 24
+    own = [(e["ddg"], e["exp_ddg"]) for e in summary["edges"]]
+    rmse = float(np.sqrt(np.mean([(p - x) ** 2 for p, x in own])))
+    assert f"| cuFEP, own | 24 | {rmse:.2f} |" in text
+    bennett = float(np.sqrt(np.mean([(v["bennett"] - (ref[b]["exp"] - ref[a]["exp"])) ** 2
+                                     for (a, b), v in published.items()])))
+    assert f"| FEP+ Bennett, the same edges | 24 | {bennett:.2f} |" in text
+    for f in ("rbfe_report.md", "rbfe_report_ligands.csv", "rbfe_report_edges.csv", "rbfe_report.png",
+              "rbfe_report_edges.png"):
+        assert (tmp_path / "run" / f).exists()
+    # an edge run the other way round meets the published prediction with its sign turned
+    turned = dict(summary)
+    a, b = summary["edges"][0]["ligand_a"], summary["edges"][0]["ligand_b"]
+    turned["edges"] = [dict(summary["edges"][0], edge=f"{b}~{a}", ligand_a=b, ligand_b=a,
+                            ddg=-summary["edges"][0]["ddg"], exp_ddg=-summary["edges"][0]["exp_ddg"])]
+    (tmp_path / "turned").mkdir()
+    (tmp_path / "turned" / "summary.json").write_text(json.dumps(turned))
+    report("tyk2", tmp_path / "turned")
+    rows = list(csv.DictReader((tmp_path / "turned" / "rbfe_report_edges.csv").open()))
+    assert float(rows[0]["fepplus_bennett_ddg"]) == pytest.approx(-published[(a, b)]["bennett"])
+    result = CliRunner().invoke(cli.main, ["benchmark", "report", "tyk2", str(tmp_path / "run")])
+    assert result.exit_code == 0 and result.output == text + "\n"
+
+
+def test_a_relative_benchmark_run_is_the_relative_run_of_its_tier(tmp_path, monkeypatch):
+    """`cufep benchmark run NAME --protocol rbfe` runs the configuration of the tier through the driver of
+    `cufep rbfe run`, prints the report of the directory and ends with 1 when a leg of this run failed; a relative
+    directory has no lambda schedules to freeze."""
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep.benchmarks.rbfe import rbfe_benchmark_config
+    from cufep.rbfe import run as rbfe_run
+
+    seen = {}
+
+    def fake_run(rcfg, **kwargs):
+        seen["cfg"] = rcfg
+        summary = _relative_run(rcfg.output.dir, "tyk2")
+        summary["failed_in_this_run"] = ["jmc_23~jmc_30/r0/complex: boom"]
+        return summary
+
+    monkeypatch.setattr(rbfe_run, "run_rbfe", fake_run)
+    out = tmp_path / "out"
+    result = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--tier", "subset", "--protocol", "rbfe",
+                                           "-o", str(out), "--gpus", "0,1"])
+    expected = rbfe_benchmark_config("tyk2", "subset", out)
+    expected.resources.gpus = [0, 1]
+    assert seen["cfg"].model_dump() == expected.model_dump()
+    assert result.exit_code == 1 and "# cuFEP relative benchmark report: tyk2" in result.output
+    assert (out / "rbfe_report.md").exists()
+    frozen = CliRunner().invoke(cli.main, ["benchmark", "freeze", "tyk2", str(out)])
+    assert frozen.exit_code != 0 and "is a relative run" in frozen.output

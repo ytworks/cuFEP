@@ -45,6 +45,28 @@ def test_exact_edges_give_the_true_differences_and_zero_cycle_closures():
     assert cov.shape == (4, 4)
 
 
+def test_the_network_gives_every_pair_the_difference_of_its_estimate_with_the_error_of_the_paths():
+    """The ddG the whole network gives a pair (what the cycle closure correction gives an edge): exact edges give the
+    true difference also for a pair that is no edge; an edge outside every cycle keeps its own ddG and error; an edge
+    of a triangle of equal errors s has the error s sqrt(2/3) (its two paths in parallel: s^2 against 2 s^2)."""
+    from cufep.rbfe.network import Edge, mle, network_ddg
+
+    names = list(TRUTH)
+    exact = network_ddg(names, _edges(), [("a", "b"), ("b", "d")])
+    assert exact[("b", "d")][0] == pytest.approx(TRUTH["d"] - TRUTH["b"], abs=1e-9)
+    tree = [Edge("a", "b", -1.7, 0.3), Edge("b", "c", 2.9, 0.4)]
+    out = network_ddg(["a", "b", "c"], tree, [("a", "b"), ("b", "c"), ("a", "c")])
+    assert out[("a", "b")] == pytest.approx((-1.7, 0.3)) and out[("b", "c")] == pytest.approx((2.9, 0.4))
+    assert out[("a", "c")] == pytest.approx((1.2, 0.5))
+    triangle = [Edge("a", "b", -1.0, 0.3), Edge("b", "c", 2.0, 0.3), Edge("a", "c", 1.6, 0.3)]
+    out = network_ddg(["a", "b", "c"], triangle, [("a", "b"), ("a", "c")])
+    f, _ = mle(["a", "b", "c"], triangle)
+    assert out[("a", "b")][0] == pytest.approx(f[1] - f[0]) and out[("a", "c")][0] == pytest.approx(f[2] - f[0])
+    # the closure of the cycle (-1 + 2 - 1.6 = -0.6) is spread over its three edges in equal parts
+    assert out[("a", "b")][0] == pytest.approx(-1.0 + 0.2) and out[("a", "c")][0] == pytest.approx(1.6 - 0.2)
+    assert out[("a", "b")][1] == pytest.approx(0.3 * math.sqrt(2.0 / 3.0))
+
+
 def test_the_estimate_is_cinnabars_for_noisy_edges():
     """The same numbers as cinnabar's maximum likelihood estimate through its own FEMap (Xu 2019), which OpenFE
     reports; the network fixes differences only, so both are compared after removing the mean."""
@@ -159,6 +181,26 @@ def test_legs_of_other_conditions_or_without_a_standard_error_give_no_ddg_and_th
     assert "ddg" not in edges["b~c"] and any("temperature" in item for item in edges["b~c"]["inconsistent_legs"])
     assert "ddg" not in edges["a~c"]
     assert edges["a~c"]["repeats"][0]["no_standard_error"] == ["complex"]
+
+
+def test_an_edge_without_its_own_ddg_gets_that_of_the_network(tmp_path):
+    """Every edge of the network gets the ddG of the network, in the summary and in edges.csv; one whose legs failed
+    gets the sum along the path the other edges make."""
+    import csv
+
+    from cufep.rbfe.run import combine_network, write_results
+
+    _write_legs(tmp_path, "a~b", 0, _leg_result(-12.0), _leg_result(-10.5))
+    _write_legs(tmp_path, "b~c", 0, _leg_result(-8.0), _leg_result(-9.0))
+    _write_legs(tmp_path, "a~c", 0, _leg_result(-7.0, se_kcal=None), _leg_result(-6.0))
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")], 1, {})
+    edges = {e["edge"]: e for e in summary["edges"]}
+    assert "ddg" not in edges["a~c"] and edges["a~c"]["network_ddg"] == pytest.approx(-1.5 + 1.0)
+    assert edges["a~b"]["network_ddg"] == pytest.approx(edges["a~b"]["ddg"])
+    assert edges["a~c"]["network_se"] == pytest.approx(math.hypot(edges["a~b"]["se"], edges["b~c"]["se"]))
+    write_results(tmp_path, summary)
+    rows = {r["edge"]: r for r in csv.DictReader((tmp_path / "edges.csv").open())}
+    assert float(rows["a~c"]["network_ddg_kcal_mol"]) == pytest.approx(-0.5) and rows["a~c"]["ddg_kcal_mol"] == ""
 
 
 def test_the_free_energies_of_the_legs_in_the_table_give_its_ddg(tmp_path):

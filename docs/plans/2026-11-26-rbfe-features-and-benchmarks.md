@@ -68,3 +68,24 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
 - GPU: 電荷変化と GCMC 付き hybrid の各状態を両バックエンドで(`tests/gpu`)。
 
 ## 記録
+
+### 2026-11-26 手順 2: ベンチマークの RBFE 経路、各エッジのネットワーク ddG、経路を絞る確認
+- `cufep benchmark run NAME --tier smoke|subset|full --protocol rbfe`(`src/cufep/benchmarks/rbfe.py`): 相対 example の
+  設定で、入力・化合物・エッジ(LOMAP)・出力だけ変える。smoke は example の最初のエッジを短く。`cufep benchmark report`
+  は相対の出力ディレクトリ(`network.json`)を見分ける。`freeze` は相対の出力を断る(RBFE に `lambda_schedule.file` が無い)。
+  レポート: 化合物の dG(実験、FEP+、cuFEP ABFE e77a6c5)、エッジの ddG(自身、ネットワーク、FEP+ の Bennett と CCC)、
+  pairwise・edgewise RMSE、R²、τ(bootstrap 95 %)、図 2 枚。
+- 各エッジのネットワーク ddG(`network_ddg`、`summary.json` と `edges.csv`): MLE の dG(B) − dG(A) と共分散からの SE。
+  脚の失敗したエッジにも出す。
+- 読んで分かった誤り: lomap2 の `distance_cutoff` 0.4 は「score 0.6(= 1 − 0.4)未満の組を外す」で、外して残った部品は
+  score を問わず最良の組で 2 本ずつつなぐ(`GraphGen`)。`docs/rbfe.md` と設定のコメントは「score 0.4 以上の辺」と
+  書いていた。直した。TYK2 の 22 本のうち 8 本が部品をつなぐ辺で score 0.25〜0.37。
+- `spikes/m39_network_reduction.py tyk2`(CPU、cufep:dev): 公開されたエッジの Bennett ddG と SE で dG を出し実験値と比較。
+  (a) 公開 map の 24 本: pairwise RMSE 0.70 [0.41, 0.93]、R² 0.86 [0.72, 0.96]、τ 0.80 [0.58, 0.96]、RMSE 0.48。
+  (b) その中から LOMAP の規則で選んだ 22 本: 0.72 [0.43, 0.95]、0.85 [0.70, 0.96]、0.80 [0.58, 0.96]、0.49。
+  エッジの誤差を全部 1 とした dG の平均 SE: (a) 0.690、(b) 0.784、(c) cuFEP が全ペアから選ぶ LOMAP の 22 本 0.773。
+  (b) は (a) より pairwise RMSE が 0.02 大きい: 計画どおりオーナーに報告し、手順 8 の前に判断を受ける。A2A は 29 状態の
+  補正(手順 5)の後に同じ確認をする。
+- テスト(CPU): ネットワーク ddG(木では自身の値と誤差、三角形では閉路の和が 3 等分され SE が s√(2/3)、脚の失敗した
+  エッジは経路の和)、相対ベンチマークの設定が example と同じ、レポートの数字が手計算と一致し `benchmark report` で同じ
+  文字列、`benchmark run --protocol rbfe` が `run_rbfe` に同じ設定を渡し失敗で 1。

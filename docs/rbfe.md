@@ -123,9 +123,17 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
 
 - Edges: `network.edges`, or the LOMAP network (Liu et al., J. Comput. Aided Mol. Des. 2013; lomap2's
   `generate_lomap_network` with its default score and Kartograf, as the OpenFE benchmark of Baumann et al.
-  2026 planned its networks): edges of score 0.4 or more, every ligand in a cycle.
+  2026 planned its networks). lomap2's rule (`GraphGen`): every pair is scored; the pairs of a score below
+  1 - `distance_cutoff` (0.6) are left out; from the rest, edges are taken away from the lowest score up as long
+  as every ligand stays in a cycle, no edge becomes the only link between two parts and no path between two ligands
+  gets longer than `max_path_length` (6) edges; the parts that this leaves are then joined by the pairs of the
+  highest score between them, a second one between each pair of parts for a cycle, whatever their score (of the 22
+  edges of the TYK2 set, 8 join parts so, with scores of 0.25 to 0.37).
 - Cycle closure: the sum of the ddG around every cycle of a cycle basis, with its standard error, as
   numbers without a verdict.
+- The ddG that the network gives every edge (`network_ddg` in `summary.json` and `edges.csv`): dG(B) - dG(A) of the
+  estimate below, with its standard error from the covariance of the estimate, what the cycle closure correction of
+  Wang et al. (J. Chem. Theory Comput. 2013) gives an edge; an edge whose legs gave no ddG gets it too.
 - The edges combined into cycle closures and dG must have been made under the same conditions (temperature,
   pressure, tail correction) from the same preparation besides their ligands (protein, force field, solvation,
   bilayer, pH ...), and a ligand of one name must be one molecule in all of them; otherwise each edge gives its
@@ -204,7 +212,7 @@ output:
 |---|---|---|
 | `mapping.*` | Kartograf's defaults | Kartograf (Ries et al. 2024); the defaults of OpenFE's relative protocol (since openfe 1.7) |
 | `alchemy.softcore_alpha` | 0.85 | Gapsys et al. 2012; OpenFE's `softcore_alpha` |
-| `network.*` | LOMAP, score 0.4, every ligand in a cycle, paths of at most 6 edges | lomap2's defaults of `generate_lomap_network`, with which the OpenFE benchmark (Baumann et al. 2026) planned its networks |
+| `network.*` | LOMAP: pairs of a score below 1 - 0.4 left out (but those that join the parts), every ligand in a cycle, paths of at most 6 edges | lomap2's defaults of `generate_lomap_network`, with which the OpenFE benchmark (Baumann et al. 2026) planned its networks |
 | `lambda_schedule.adaptive.*` | 9 windows, 0.04, 101 candidates, the matrix of the stage | Midgley et al. 2025: the values and the rule of the paper, which is about relative transformations |
 | `lambda_schedule.adaptive.legs` | each | the owner's choice of 2026-11-25: the paper's (`solvent`, the windows of the ligand in solution for both legs) left a pair of windows of the ejm_31 -> ejm_49 complex leg of TYK2 at an overlap of 0.013 (where a precalculation of the solvent leg of another run had added a window); each leg its own precalculation, as the ABFE |
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent 50 ps and 0; complex 500 ps after 500 ps | the solvent leg: the paper's; the complex leg: the values of the ABFE, measured on TYK2 (`docs/protocol.md`, "What was measured on TYK2") |

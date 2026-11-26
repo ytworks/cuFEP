@@ -92,6 +92,20 @@ def mle(ligands: list[str], edges: list[Edge]):
     return np.asarray(f)[index], np.asarray(cov)[np.ix_(index, index)]
 
 
+def network_ddg(ligands: list[str], edges: list[Edge], pairs: list[tuple[str, str]]) -> dict[tuple[str, str], tuple]:
+    """ddG of every pair (A, B) from the network, dG(B) - dG(A) of the maximum likelihood estimate, with its standard
+    error from the covariance of the estimate: the ddG that all edges together give a pair (an edge's own and that of
+    the paths around it), as the cycle closure correction of Wang et al. (J. Chem. Theory Comput. 2013) gives every
+    edge a corrected ddG. It does not depend on the constant that the edges leave."""
+    f, cov = mle(ligands, edges)
+    at = {name: i for i, name in enumerate(ligands)}
+    out = {}
+    for a, b in pairs:
+        i, j = at[a], at[b]
+        out[(a, b)] = (float(f[j] - f[i]), float(math.sqrt(max(cov[i, i] + cov[j, j] - 2.0 * cov[i, j], 0.0))))
+    return out
+
+
 def ligand_dg(ligands: list[str], edges: list[Edge], experiment: dict[str, float]) -> dict:
     """dG of every ligand from the edges: ``{"reference": ..., "values": {name: (dG, standard error)}}``.
 

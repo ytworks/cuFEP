@@ -44,7 +44,8 @@ class NetworkConfig(_Section):
     #: the edges [ligand A, ligand B]; not given, the LOMAP network of the ligands (lomap2's
     #: generate_lomap_network with the default LOMAP score and Kartograf, as the OpenFE benchmark planned)
     edges: list[tuple[str, str]] | None = None
-    #: LOMAP: edges of a score below this are not made
+    #: LOMAP (lomap2's distance_cutoff): pairs of a score below 1 - distance_cutoff are left out, except those that
+    #: join the parts the others leave (docs/rbfe.md, "The network")
     distance_cutoff: float = Field(default=0.4, ge=0.0, le=1.0)
     #: LOMAP: the longest path between two ligands, in edges
     max_path_length: int = Field(default=6, ge=1)

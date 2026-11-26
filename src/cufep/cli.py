@@ -458,11 +458,17 @@ def benchmark_list() -> None:
 @click.option("-o", "--output", help="Output directory (default: runs/benchmark_<name>_<tier>).")
 @click.option("--gpus", help="'auto' or a comma separated list of CUDA device numbers.")
 @click.option("--repeats", type=int, help="Override the number of repeats.")
-def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
+@click.option("--protocol", type=click.Choice(["abfe", "rbfe"]), default="abfe", show_default=True,
+              help="abfe: absolute binding free energies of every ligand; rbfe: relative calculations on the network "
+                   "of the ligands (smoke: the first edge of the relative example).")
+def benchmark_run(name: str, tier: str, output, gpus, repeats, protocol: str) -> None:
     """Run benchmark NAME (resumable)."""
     from cufep import run as driver
     from cufep.benchmarks.runner import benchmark_config, example_notices, report
 
+    if protocol == "rbfe":
+        _benchmark_rbfe(name, tier, output, gpus, repeats)
+        return
     try:
         example, notices = example_notices(name)
         for notice in notices:
@@ -480,13 +486,44 @@ def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
         sys.exit(1)
 
 
+def _benchmark_rbfe(name: str, tier: str, output, gpus, repeats) -> None:
+    """``cufep benchmark run NAME --protocol rbfe``: the relative run of the set and its report; the exit code is that
+    of ``cufep rbfe run``."""
+    from cufep.benchmarks.rbfe import rbfe_benchmark_config
+    from cufep.benchmarks.rbfe import report as rbfe_report
+    from cufep.rbfe.run import failed_edges, run_rbfe
+
+    try:
+        rcfg = rbfe_benchmark_config(name, tier, output)
+        if gpus:
+            rcfg.resources.gpus = "auto" if gpus == "auto" else [int(x) for x in gpus.split(",")]
+        if repeats is not None:
+            rcfg.sampling.repeats = int(repeats)
+        summary = run_rbfe(rcfg)
+        click.echo(rbfe_report(name, rcfg.output.dir))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    missing = failed_edges(summary)
+    if missing:
+        click.echo("no ddG: " + ", ".join(missing), err=True)
+    failed = summary.get("failed_in_this_run") or []
+    if failed:
+        click.echo("failed in this run: " + ", ".join(failed), err=True)
+        sys.exit(1)
+
+
 @benchmark.command("report")
 @click.argument("name")
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
 def benchmark_report(name: str, directory: str) -> None:
-    """Compare a benchmark run in DIRECTORY with experiment and FEP+."""
+    """Compare a benchmark run in DIRECTORY with experiment and FEP+ (an absolute or a relative run)."""
+    from cufep.benchmarks.rbfe import is_relative_run
+    from cufep.benchmarks.rbfe import report as rbfe_report
     from cufep.benchmarks.runner import report
-    click.echo(report(name, directory))
+    try:
+        click.echo(rbfe_report(name, directory) if is_relative_run(directory) else report(name, directory))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
 
 
 @benchmark.command("freeze")
@@ -495,7 +532,11 @@ def benchmark_report(name: str, directory: str) -> None:
 @click.option("--dest", help="Where to write the schedules (default: DIRECTORY/frozen_schedules).")
 def benchmark_freeze(name: str, directory: str, dest) -> None:
     """Save the lambda schedules of a finished benchmark run for exact re-runs."""
+    from cufep.benchmarks.rbfe import is_relative_run
     from cufep.benchmarks.runner import freeze_schedules
+    if is_relative_run(directory):
+        raise click.ClickException(f"{directory} is a relative run: its lambda windows cannot be given to a later run "
+                                   "as a file (a relative calculation has no lambda_schedule.file)")
     try:
         click.echo(f"schedules written to {freeze_schedules(name, directory, dest)}")
     except Exception as exc:  # noqa: BLE001

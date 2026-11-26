@@ -19,7 +19,7 @@ import yaml
 from cufep import jsonio
 from cufep.files import publish_text, publish_with
 from cufep.rbfe.config import RbfeConfig, RbfeSampling
-from cufep.rbfe.network import Edge, cycle_closures, edge_ddg, ligand_dg
+from cufep.rbfe.network import Edge, cycle_closures, edge_ddg, ligand_dg, network_ddg
 from cufep.rbfe.prep import edge_name
 from cufep.workflow import KCAL, WorkflowError, _Log, select_ligands
 
@@ -367,6 +367,10 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     dg = ligand_dg(ligands, measured, experiment)
     summary["dg"] = {"reference": dg["reference"], "reference_ligands": dg["reference_ligands"],
                      "values": {name: {"dg": v, "se": e} for name, (v, e) in dg["values"].items()}}
+    # the ddG that the whole network gives every edge (that of an edge without its own ddG too)
+    inferred = network_ddg(ligands, measured, [(r["ligand_a"], r["ligand_b"]) for r in results])
+    for r in results:
+        r["network_ddg"], r["network_se"] = inferred[(r["ligand_a"], r["ligand_b"])]
     if dg["reference"] == "mean of the network":
         summary["notes"].append("no ligand has an experimental value: the dG are relative to the mean of the network")
     return summary
@@ -379,6 +383,7 @@ def write_results(out_dir: Path, summary: dict) -> None:
     def edges_table(fh) -> None:
         w = csv.writer(fh)
         w.writerow(["edge", "ligand_a", "ligand_b", "ddg_kcal_mol", "standard_error", "exp_ddg_kcal_mol",
+                    "network_ddg_kcal_mol", "network_standard_error",
                     "complex_dg", "solvent_dg", "windows_complex", "windows_solvent", "lowest_overlap_complex",
                     "lowest_overlap_solvent", "lowest_overlap_used_complex", "lowest_overlap_used_solvent",
                     "not_reliable", "backend_complex", "backend_solvent"])
@@ -389,7 +394,8 @@ def write_results(out_dir: Path, summary: dict) -> None:
             windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
             used = e.get("lowest_overlap_used") or {}
             w.writerow([e["edge"], e["ligand_a"], e["ligand_b"], fmt(e.get("ddg")), fmt(e.get("se")),
-                        fmt(e.get("exp_ddg")), fmt(e.get("complex_dg")), fmt(e.get("solvent_dg")),
+                        fmt(e.get("exp_ddg")), fmt(e.get("network_ddg")), fmt(e.get("network_se")),
+                        fmt(e.get("complex_dg")), fmt(e.get("solvent_dg")),
                         joined(windows.get("complex")), joined(windows.get("solvent")),
                         fmt(overlap.get("complex")), fmt(overlap.get("solvent")), fmt(used.get("complex")),
                         fmt(used.get("solvent")), "; ".join(e.get("not_reliable", [])),

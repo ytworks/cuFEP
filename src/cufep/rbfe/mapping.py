@@ -10,7 +10,8 @@ Mapping
 Network
     The edges are given, or planned by LOMAP (Liu et al., J. Comput. Aided Mol. Des. 2013; lomap2's
     ``generate_lomap_network`` with ``default_lomap_score`` and Kartograf, as the OpenFE benchmark of Baumann et
-    al. 2026 planned its networks): edges of score at least ``distance_cutoff`` (0.4), every ligand in a
+    al. 2026 planned its networks): pairs of a score below 1 - ``distance_cutoff`` (0.6) left out except those
+    that join the parts the others leave (lomap2's ``GraphGen``; docs/rbfe.md, "The network"), every ligand in a
     cycle (``require_cycle_covering``), paths of at most ``max_path_length`` (6) edges.
 """
 from __future__ import annotations
