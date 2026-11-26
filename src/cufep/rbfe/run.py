@@ -304,16 +304,24 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                         problems.append(f"the {leg} leg of {edge}, repeat {r}: {'; '.join(found)}")
                         commands.append(rerun_command(edge, r, [leg], out_dir))
                     continue
-                set_aside = False
+                set_aside, built = False, None
                 if gcmc_in(rcfg, leg) and starts_anew(leg_dir, reschedule):
+                    built = build_leg(rcfg, edge_dir, leg, leg_dir, reschedule, inputs)
                     why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
-                           else equil_ghosts_problem(leg_dir / "equil.npz",
-                                                     build_leg(rcfg, edge_dir, leg, leg_dir, reschedule,
-                                                               inputs).gcmc))
+                           else equil_ghosts_problem(leg_dir / "equil.npz", built.gcmc))
                     if why is not None and reschedule:
                         set_aside = True                 # --reschedule sets it aside; a new one is made
                     elif why is not None:
                         found.append(f"its pre-equilibration cannot start its replica exchange: {why}")
+                if not set_aside and starts_anew(leg_dir, reschedule):
+                    # the leg starts from it: its positions must be of the System of the leg (seventeenth review of
+                    # PR #19: one of another receptor, whose leg of main recorded no prepared systems, was kept by
+                    # --reschedule). No command of this directory makes the leg from them
+                    built = built or build_leg(rcfg, edge_dir, leg, leg_dir, reschedule, inputs)
+                    why = kept_pre_equilibration_problem(leg_dir, built.hybrid.system.getNumParticles())
+                    if why is not None:
+                        kept_problems.append(f"the {leg} leg of {edge}, repeat {r}: {why}")
+                        continue
                 if not set_aside:
                     # a pre-equilibration that is used again must have been made with the settings of this run, as the
                     # ABFE checks it before a run (check_equil_file; tenth review of PR #19: --reschedule kept one of
@@ -328,11 +336,33 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                     problems.append(f"the {leg} leg of {edge}, repeat {r}: {'; '.join(found)}")
                     commands.append(rerun_command(edge, r, [leg], out_dir))
     if kept_problems:
-        raise WorkflowError("; ".join(kept_problems))
+        raise WorkflowError("; ".join(kept_problems)
+                            + (". Nothing was changed. Restore the preparation they were made from, or compute the "
+                               "edge in a new output.dir" if any("other prepared systems" in k for k in kept_problems)
+                               else ""))
     if problems:
         raise WorkflowError("; ".join(problems) + ". Nothing was changed. --reschedule sets aside what cannot be used "
                             "with the windows, samples and result of a leg in previous_<n>/ and computes it anew: "
                             + "; ".join(commands) + "; or run the calculation in a new output.dir")
+
+
+def kept_pre_equilibration_problem(leg_dir: Path, n_particles: int) -> str | None:
+    """Why the pre-equilibration of a leg cannot start the System this run makes of the leg: positions of another
+    number of atoms, made from other prepared systems than the record of the edge (seventeenth review of PR #19: a leg
+    of main stopped before its result records no prepared systems, and --reschedule, which keeps the
+    pre-equilibration, stopped after it had set the samples aside). None where they fit, or where there is none."""
+    import numpy as np
+
+    equil = Path(leg_dir) / "equil.npz"
+    try:
+        with np.load(equil) as eq:
+            n = len(eq["positions"])
+    except (OSError, ValueError, KeyError):
+        return None                              # none, or one the checks of its record refuse
+    if n == n_particles:
+        return None
+    return (f"its pre-equilibration ({equil}) holds {n} atoms and the System this run makes of the leg "
+            f"{n_particles}: it was made from other prepared systems than the record of the edge")
 
 
 def equil_settings_problem(rcfg: RbfeConfig, edge_dir: Path, leg: str, repeat: int) -> str | None:
@@ -458,7 +488,13 @@ def check_results_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, on
                 version = int(((result or {}).get("run") or {}).get("hybrid_version") or 1)
                 if result is not None and version == HYBRID_VERSION:
                     continue
-                if system_of_the_samples(leg_dir, build_leg(rcfg, edge_dir, leg, leg_dir, False, inputs).xml) is False:
+                built = build_leg(rcfg, edge_dir, leg, leg_dir, False, inputs)
+                if system_of_the_samples(leg_dir, built.xml) is False:
+                    # --reschedule keeps the pre-equilibration: only where it fits the System of the leg (seventeenth
+                    # review of PR #19: one of another receptor, of a leg of main that records no prepared systems)
+                    if kept_pre_equilibration_problem(leg_dir, built.hybrid.system.getNumParticles()) is not None:
+                        elsewhere.append(f"the {leg} leg of {edge}, repeat {r}")
+                        continue
                     other_system.append(f"the {leg} leg of {edge}, repeat {r}")
                     commands.append(rerun_command(edge, r, [leg], out_dir))
     problems = []

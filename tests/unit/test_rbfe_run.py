@@ -2211,6 +2211,27 @@ def test_a_leg_this_version_cannot_continue_is_refused_before_the_run_writes(tmp
     begin_leg(leg_dir, EdgeLegJob(**{**job.__dict__, "prepared_systems_sha256": made}))
     with pytest.raises(WorkflowError, match="another System than this version makes"):
         check()
+    # (seventeenth review, P2) a leg of main stopped before its result (its marker names no prepared systems), its
+    # samples of another System and its pre-equilibration of another number of atoms (another receptor): not told
+    # --reschedule, which keeps the pre-equilibration, and refused by --reschedule before anything is set aside; one
+    # whose pre-equilibration fits the System of the leg is told --reschedule as above
+    from cufep.rbfe.run import check_pre_equilibrations_of_the_run
+
+    (leg_dir / STARTED_FILE).write_text(json.dumps({"edge": "toluene~phenol", "leg": "solvent", "repeat": 0}))
+    n_particles = build_leg(rcfg, edge_dir, "solvent").hybrid.system.getNumParticles()
+    np.savez(leg_dir / "equil.npz", positions=np.zeros((n_particles - 3, 3)))
+    with pytest.raises(WorkflowError, match="other prepared systems") as refused:
+        check()
+    assert "--reschedule" not in str(refused.value).split("Restore the preparation")[0]
+    with pytest.raises(WorkflowError, match=f"holds {n_particles - 3} atoms and the System this run makes of the "
+                                            f"leg {n_particles}") as refused:
+        check_pre_equilibrations_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], True)
+    assert "Restore the preparation they were made from, or compute the edge in a new output.dir" in str(refused.value)
+    np.savez(leg_dir / "equil.npz", positions=np.zeros((n_particles, 3)))
+    with pytest.raises(WorkflowError, match="another System than this version makes") as refused:
+        check()
+    assert "--repeat 0 --leg solvent --reschedule" in str(refused.value)
+    (leg_dir / "equil.npz").unlink()
     assert prepared_edge(rcfg, *ligands, edge_dir, "cube") is not None
     (edge_dir / "prep" / "complex_b_system.xml").unlink()
     with pytest.raises(WorkflowError, match="incomplete .complex_b_system.xml missing"):
