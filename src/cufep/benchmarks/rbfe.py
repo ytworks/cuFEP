@@ -269,19 +269,41 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         values, names_of = (summary.get("dg") or {}).get("values") or {}, list(summary["ligands"])
         experiment_of = experiment
 
+    def experiment_of_end(x: str):
+        """The experimental dG an end of an edge is compared with: of its compound for a state, else of the ligand;
+        the value the run was given, else that of the benchmark (eleventh review of PR #19: the table of ligands took
+        the benchmark's and the edges did not)."""
+        name_of = compound_of.get(x) if states else x
+        if name_of is None:
+            return None
+        return experiment_of.get(name_of, reference.get(name_of, {}).get("exp"))
+
     ligands = []
     for lig in names_of:
         ref = reference.get(lig, {})
         v = values.get(lig) or {}
         ligands.append({"ligand": lig, "exp": experiment_of.get(lig, ref.get("exp")), "cufep_rbfe": v.get("dg"),
                         "cufep_rbfe_error": v.get("se"), "fepplus": ref.get("fepplus"), "cufep_abfe": abfe.get(lig)})
+    # the origin of the dG of the run: the mean of the experimental values it was given, or (none given) the mean of
+    # the network, which is not that of experiment; shifted then to the mean of the experiment of the ligands compared
+    # (eleventh review of PR #19: a ddG reproduced exactly gave a raw RMSE of 10.4 kcal/mol)
+    origin = ((summary.get("dg") or {}).get("reference") or "")
+    shifted = None
+    if origin != "mean of the experimental values":
+        scored_rows = [r for r in ligands if r["cufep_rbfe"] is not None and r["exp"] is not None]
+        if scored_rows:
+            shifted = (sum(r["exp"] for r in scored_rows)
+                       - sum(r["cufep_rbfe"] for r in scored_rows)) / len(scored_rows)
+            for r in ligands:
+                if r["cufep_rbfe"] is not None:
+                    r["cufep_rbfe"] = r["cufep_rbfe"] + shifted
     edges = []
     for e in summary["edges"]:
         a, b = e["ligand_a"], e["ligand_b"]
         pub = _published(published, a, b) or {}
         exp_ddg = e.get("exp_ddg")
-        if exp_ddg is None and experiment.get(a) is not None and experiment.get(b) is not None:
-            exp_ddg = experiment[b] - experiment[a]
+        if exp_ddg is None and experiment_of_end(a) is not None and experiment_of_end(b) is not None:
+            exp_ddg = experiment_of_end(b) - experiment_of_end(a)
         if states and (a not in compound_of or b not in compound_of or compound_of[a] == compound_of[b]):
             # two states of one compound: experiment has no ddG between them (review of PR #19: 0 in the figure);
             # a state whose compound is not known: not compared (eighth review)
@@ -310,8 +332,12 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                  "(docs/rbfe.md, \"States of a compound\"). Experiment measures compounds: the ddG compared with it "
                  "are those of the pairs of compounds the edges join, from the dG of the compounds; an edge between "
                  "states is compared with the published prediction of the same edge only.", ""]),
-             "The dG of cuFEP come from the edges alone, their mean over the ligands with an experimental value set to "
-             "the mean of those values (`docs/rbfe.md`, \"The network\"); the published FEP+ values are relative "
+             ("The dG of cuFEP come from the edges alone, their mean over the ligands with an experimental value set "
+              "to the mean of those values (`docs/rbfe.md`, \"The network\")" if shifted is None else
+              "The dG of cuFEP come from the edges alone; the run was given no experimental values and set their mean "
+              "over the network to 0 (`docs/rbfe.md`, \"The network\"): here they are shifted by "
+              f"{shifted:+.2f} kcal/mol to the mean of the experimental values of the ligands compared")
+             + "; the published FEP+ values are relative "
              "calculations shifted to the experimental mean of the whole published set, with 20 ns per lambda window "
              "(Ross et al. 2023), and cuFEP's absolute values (`benchmarks/results/`) are not shifted. The pairwise "
              "RMSE, R^2 and Kendall tau do not depend on a shift.", ""]
@@ -420,14 +446,23 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
         lines.append(edge_row("FEP+ Bennett, the same edges",
                               [(r["fepplus_bennett_ddg"], r["exp_ddg"]) for r in common]))
         names = set(summary["ligands"])
-        own_map = [(v["bennett"], experiment[b] - experiment[a]) for (a, b), v in published.items()
-                   if a in names and b in names and experiment.get(a) is not None and experiment.get(b) is not None]
+        own_map = [(v["bennett"], experiment_of_end(b) - experiment_of_end(a)) for (a, b), v in published.items()
+                   if a in names and b in names and experiment_of_end(a) is not None
+                   and experiment_of_end(b) is not None]
         lines.append(edge_row("FEP+ Bennett, its whole map among these ligands", own_map))
 
     text = "\n".join(lines) + "\n"
     if write:
         _save(run_dir, text, ligands, edges, name, pair_rows if states else None)
     return text
+
+
+def axis_range(rows: list[dict], x: str, ys) -> tuple[float, float]:
+    """The range of both axes of a figure of calculated against experimental values: every value and the ends of
+    every error bar (eleventh review of PR #19: they were cut off at the axes), 1 kcal/mol beyond them."""
+    values = [r[x] for r in rows] + [r[k] + s * ((r[err] or 0.0) if err else 0.0) for r in rows
+                                     for k, err, _ in ys if r[k] is not None for s in (-1.0, 1.0)]
+    return min(values) - 1.0, max(values) + 1.0
 
 
 def _save(run_dir: Path, text: str, ligands: list[dict], edges: list[dict], name: str, pairs=None) -> None:
@@ -464,8 +499,7 @@ def _plot(run_dir: Path, ligands: list[dict], edges: list[dict], name: str, of_c
              "ddG")):
         if not rows:
             continue
-        values = [r[x] for r in rows] + [r[k] for r in rows for k, _, _ in ys if r[k] is not None]
-        lo, hi = min(values) - 1.0, max(values) + 1.0
+        lo, hi = axis_range(rows, x, ys)
         fig, ax = plt.subplots(figsize=(5.2, 5.0), dpi=150)
         ax.plot([lo, hi], [lo, hi], color=GUIDE_COLOUR, lw=1)
         ax.fill_between([lo, hi], [lo - 1, hi - 1], [lo + 1, hi + 1], color="0.92", zorder=0)

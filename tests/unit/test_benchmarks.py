@@ -1027,3 +1027,30 @@ def test_a_run_of_ligands_named_as_states_is_reported_as_a_run_of_ligands(tmp_pa
         assert "Ligands with a dG: 2 of 2" in text, name
         rows = {r["ligand"]: r for r in csv.DictReader((tmp_path / name / "rbfe_report_ligands.csv").open())}
         assert float(rows["4jS"]["cufep_rbfe"]) == pytest.approx(-10.6), name
+
+
+def test_the_report_compares_edges_with_the_experiment_of_its_table_and_dg_of_any_origin(tmp_path):
+    """Eleventh review of PR #19: (P2) without ejm_31 and ejm_46 in the experiment of the run, the table of ligands
+    took the benchmark's values and the edge ejm_31 -> ejm_46 (-1.770 kcal/mol in the benchmark) had none and left
+    the statistics of the edges; (P2) a run without experimental values sets the mean of its dG over the network to 0
+    (+0.885 and -0.885 for a ddG of -1.770 reproduced exactly), and the report compared them with -9.540 and -11.310:
+    a raw RMSE of 10.425. The edges take the experiment of the table, and dG of another origin are shifted to the mean
+    of the experiment compared, which the report says; (P3) the axes of the figures hold the ends of the error bars."""
+    from cufep.benchmarks.rbfe import axis_range, report
+
+    ref = read_reference("tyk2")
+    exact = ref["ejm_46"]["exp"] - ref["ejm_31"]["exp"]
+    summary = {"ligands": ["ejm_31", "ejm_46"], "cycle_closures": [], "notes": [], "experiment_kcal_mol": {},
+               "dg": {"reference": "mean of the network", "reference_ligands": [],
+                      "values": {"ejm_31": {"dg": -exact / 2, "se": 0.1}, "ejm_46": {"dg": exact / 2, "se": 0.1}}},
+               "edges": [{"edge": "ejm_31~ejm_46", "ligand_a": "ejm_31", "ligand_b": "ejm_46", "ddg": exact,
+                          "se": 0.2, "network_ddg": exact, "network_se": 0.2, "not_reliable": []}]}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    text = report("tyk2", tmp_path)
+    row = next(csv.DictReader((tmp_path / "rbfe_report_edges.csv").open()))
+    assert float(row["exp_ddg"]) == pytest.approx(exact, abs=1e-6)
+    assert "| cuFEP, own | 1 | 0.00 |" in text
+    raw = next(line for line in text.splitlines() if line.startswith("| RMSE, raw"))
+    assert raw.split("|")[2].strip().startswith("0.00") and "shifted by" in text
+    assert axis_range([{"exp": -1.77, "calc": -1.77, "err": 3.0}], "exp", (("calc", "err", "calc"),))[1] \
+        == pytest.approx(-1.77 + 3.0 + 1.0)
