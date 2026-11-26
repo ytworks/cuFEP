@@ -348,8 +348,16 @@ def _load_rbfe(config: str):
 @click.argument("config", type=click.Path(exists=True, dir_okay=False))
 def rbfe_plan(config: str) -> None:
     """Show the ligands, the edges and their atom mappings of CONFIG, without simulating."""
-    from cufep.rbfe.mapping import kartograf_mapping, lomap_score, mapping_settings
-    from cufep.rbfe.run import edges_of, experiment_of, ligands_of
+    from cufep.rbfe.mapping import (
+        MappingError,
+        as_prepared,
+        bridging_dummies,
+        hydrogen_constraints_of,
+        kartograf_mapping,
+        lomap_score,
+        mapping_settings,
+    )
+    from cufep.rbfe.run import compound_experiment, edges_of, experiment_of, ligands_of, states_of
 
     rcfg = _load_rbfe(config)
     try:
@@ -363,15 +371,42 @@ def rbfe_plan(config: str) -> None:
     problems = charge_change_problems(ligands, edges)
     if problems:
         raise click.ClickException("; ".join(problems))
-    experiment = experiment_of(rcfg, ligands)
+    # the states and the experiment as the run reads them, once, for the list of the ligands and the reference
+    # (eleventh and thirteenth reviews of PR #19: the list read the experiment without the states, and a value of 0.0
+    # was shown as none)
+    try:
+        states = states_of(rcfg, ligands)
+        exp = experiment_of(rcfg, ligands, states)
+        of_compounds = compound_experiment(states, exp) if states is not None else None
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
     by_name = {lig.name: lig for lig in ligands}
     m = rcfg.mapping
     settings = mapping_settings(m)
     for lig in ligands:
-        exp = experiment.get(lig.name)
-        click.echo(f"ligand {lig.name}: {lig.n_atoms} atoms" + (f", experiment {exp:.2f} kcal/mol" if exp else ""))
+        if states is not None:
+            compound = states["compound"][lig.name]
+            value = (of_compounds or {}).get(compound)
+            shown = (f", experiment {value:.2f} kcal/mol (compound {compound})" if value is not None
+                     else f" (compound {compound})")
+        else:
+            value = exp.get(lig.name)
+            shown = f", experiment {value:.2f} kcal/mol" if value is not None else ""
+        click.echo(f"ligand {lig.name}: {lig.n_atoms} atoms" + shown)
+    constrained = hydrogen_constraints_of(rcfg)
     for a, b in edges:
-        mapping = kartograf_mapping(by_name[a], by_name[b], settings)
+        try:
+            mapping = kartograf_mapping(by_name[a], by_name[b], settings)
+        except MappingError as exc:
+            raise click.ClickException(str(exc)) from exc
+        # the mapping as the preparation leaves it after the rule of the constrained bonds: what `cufep rbfe run`
+        # refuses, the plan refuses (thirteenth review of PR #19: an edge of network.edges whose oxygen leaves the
+        # mapping and joins two mapped carbons was shown as possible)
+        bridges = bridging_dummies(by_name[a].to_rdkit(), by_name[b].to_rdkit(),
+                                   as_prepared(by_name[a].to_rdkit(), by_name[b].to_rdkit(), mapping, constrained))
+        if bridges:
+            raise click.ClickException(f"edge {a} -> {b}: the mapping cannot be used after the atoms of constrained "
+                                       f"bonds that change leave it: {'; '.join(bridges)}")
         dq = by_name[b].formal_charge - by_name[a].formal_charge
         click.echo(f"edge {a} -> {b}: {len(mapping)} atoms mapped, {by_name[a].n_atoms - len(mapping)} unique to {a}, "
                    f"{by_name[b].n_atoms - len(mapping)} unique to {b}; LOMAP score "
@@ -383,14 +418,6 @@ def rbfe_plan(config: str) -> None:
                                                  if ls.mode == "adaptive" else f", {ls.windows}"))
     # the reference the run takes: of the compounds where the ligands are states of them (system.states, read and
     # checked as the run reads it; eleventh review of PR #19)
-    from cufep.rbfe.run import compound_experiment, states_of
-
-    try:
-        states = states_of(rcfg, ligands)
-        exp = experiment_of(rcfg, ligands, states)
-        of_compounds = compound_experiment(states, exp) if states is not None else None
-    except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(str(exc)) from exc
     reference = (("mean of the experimental values of the compounds " + ", ".join(of_compounds) if of_compounds
                   else "mean of the network") if states is not None
                  else ("mean of the experimental values of " + ", ".join(exp) if exp else "mean of the network"))

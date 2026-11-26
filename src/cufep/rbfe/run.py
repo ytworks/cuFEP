@@ -117,14 +117,18 @@ def states_of(rcfg: RbfeConfig, ligands) -> dict | None:
 def _symmetry(row: dict) -> int | None:
     """The symmetry number of the state of a row of system.states (1 where it is not given; None where it is not a
     whole number)."""
+    from decimal import Decimal, InvalidOperation
+
     text = (row.get("symmetry_number") or "").strip()
     if not text:
         return 1
+    # the decimal value as written, not its nearest double (thirteenth review of PR #19: 1.0000000000000001 was 1, and
+    # 9007199254740993 was 9007199254740992)
     try:
-        value = float(text)
-    except ValueError:
+        value = Decimal(text)
+    except InvalidOperation:
         return None
-    return int(value) if math.isfinite(value) and value.is_integer() else None
+    return int(value) if value.is_finite() and value == value.to_integral_value() else None
 
 
 def _meaning(said: dict) -> tuple:
@@ -198,13 +202,13 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
             raise WorkflowError(f"network.edges names ligands that are not ligands of the run: {', '.join(unknown)}")
         how = "given (network.edges)"
     else:
-        from cufep.rbfe.mapping import mapping_settings, plan_network
+        from cufep.rbfe.mapping import hydrogen_constraints_of, mapping_settings, plan_network
 
         m = rcfg.mapping
         settings = mapping_settings(m)
         n = rcfg.network
         edges = plan_network(ligands, settings, n.distance_cutoff, n.max_path_length, n.require_cycle_covering,
-                             hydrogen_constraints=rcfg.dynamics.constraints in ("auto", "hbonds"))
+                             hydrogen_constraints=hydrogen_constraints_of(rcfg))
         how = "planned by LOMAP"
     import networkx as nx
 

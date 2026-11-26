@@ -692,6 +692,12 @@ def test_rows_of_states_that_contradict_each_other_or_fractions_outside_the_run_
         states_of(config("ligand,compound,solution_fraction\na,A,1\na,A,0.5\nb,B,1\n"), [Lig("a"), Lig("b")])
     with pytest.raises(WorkflowError, match="is not a positive whole number"):
         states_of(config("ligand,compound,symmetry_number\na,A,1.5\nb,B,1\n"), [Lig("a"), Lig("b")])
+    # (thirteenth review, P3) the decimal value as written: 1.0000000000000001 is not whole (as a double it is 1.0), and
+    # 9007199254740993 is that number (as a double 9007199254740992)
+    with pytest.raises(WorkflowError, match="symmetry_number 1.0000000000000001 is not a positive whole number"):
+        states_of(config("ligand,compound,symmetry_number\na,A,1.0000000000000001\nb,B,1\n"), [Lig("a"), Lig("b")])
+    big = states_of(config("ligand,compound,symmetry_number\na,A,9007199254740993\nb,B,1e0\n"), [Lig("a"), Lig("b")])
+    assert big["symmetry"] == {"A": 9007199254740993, "B": 1}
 
 
 def test_a_state_takes_the_experiment_of_its_compound_and_the_states_are_combined_at_the_temperature_of_their_legs(

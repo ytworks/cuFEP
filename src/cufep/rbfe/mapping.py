@@ -145,6 +145,20 @@ def without_mixed_hydrogens(molecule_a, molecule_b, mapping: dict[int, int]) -> 
     return out
 
 
+def as_prepared(molecule_a, molecule_b, mapping: dict[int, int], hydrogen_constraints: bool) -> dict[int, int]:
+    """The mapping as the preparation leaves it as far as atoms that join mapped atoms go: without the pairs that the
+    rule of the constrained bonds takes out where the bonds of hydrogens are constrained
+    (:func:`without_mixed_hydrogens`), as it is without constraints. For what is planned and shown before an edge
+    is prepared (the network, `cufep rbfe plan`), so that they check what the preparation checks (twelfth and
+    thirteenth reviews of PR #19)."""
+    return without_mixed_hydrogens(molecule_a, molecule_b, mapping) if hydrogen_constraints else dict(mapping)
+
+
+def hydrogen_constraints_of(rcfg) -> bool:
+    """Whether the bonds of hydrogens are constrained in the systems of a relative run (``dynamics.constraints``)."""
+    return rcfg.dynamics.constraints in ("auto", "hbonds")
+
+
 class WithoutBridges:
     """A mapper whose mappings in which atoms unique to one ligand join two mapped atoms (:func:`bridging_dummies`)
     are left out, for the network of LOMAP: an edge is planned only with a mapping the preparation takes. With
@@ -158,9 +172,7 @@ class WithoutBridges:
     def suggest_mappings(self, a, b):
         for m in self.mapper.suggest_mappings(a, b):
             mol_a, mol_b = a.to_rdkit(), b.to_rdkit()
-            mapping = dict(m.componentA_to_componentB)
-            if self.hydrogen_constraints:
-                mapping = without_mixed_hydrogens(mol_a, mol_b, mapping)
+            mapping = as_prepared(mol_a, mol_b, dict(m.componentA_to_componentB), self.hydrogen_constraints)
             if not bridging_dummies(mol_a, mol_b, mapping):
                 yield m
 

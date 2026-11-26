@@ -1639,6 +1639,16 @@ def test_the_plan_reads_the_states_as_the_run_does(tmp_path):
     (tmp_path / "states.csv").write_text("ligand,compound\ntoluene,T\n")
     result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
     assert result.exit_code != 0 and "does not name the ligands phenol" in result.output
+    # (thirteenth review, P3) the list of the ligands shows the value of the compound of a state, also one the file
+    # gives for a state the run leaves out, and a value of 0.0
+    (tmp_path / "states.csv").write_text("ligand,compound\ntoluene,T\nphenol,P\nother,T\n")
+    (tmp_path / "exp.csv").write_text("ligand,dg\nother,-10\nphenol,0.0\n")
+    (tmp_path / "config.yaml").write_text("system: {protein: protein.pdb, ligands: ligands.sdf, states: states.csv, "
+                                          "experiment: exp.csv}\nnetwork: {edges: [[toluene, phenol]]}\n")
+    result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
+    assert result.exit_code == 0, result.output
+    assert "ligand toluene: 15 atoms, experiment -10.00 kcal/mol (compound T)" in result.output
+    assert "ligand phenol: 13 atoms, experiment 0.00 kcal/mol (compound P)" in result.output
 
 
 def test_a_prepared_edge_whose_mapping_joins_mapped_atoms_or_whose_record_is_lost_is_not_taken(tmp_path,
@@ -1796,3 +1806,17 @@ def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is
     a, b = _component(oxirane), _component(ethane)
     assert list(WithoutBridges(_mapper(settings), True).suggest_mappings(a, b)) == []
     assert list(WithoutBridges(_mapper(settings), False).suggest_mappings(a, b))
+    # (thirteenth review, P2) `cufep rbfe plan` of the edge given in network.edges: refused as the run refuses it with
+    # the bonds of hydrogens constrained, shown without constraints, where the mapping keeps the oxygen
+    import yaml
+    from click.testing import CliRunner
+
+    from cufep import cli
+
+    for constraints, refused in (("hbonds", True), ("none", False)):
+        config = {**rcfg.model_dump(mode="json"), "network": {"edges": [["oxirane", "ethane"]]},
+                  "dynamics": {**rcfg.model_dump(mode="json")["dynamics"], "constraints": constraints}}
+        (tmp_path / "plan.yaml").write_text(yaml.safe_dump(config))
+        result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "plan.yaml")])
+        assert (result.exit_code != 0) == refused, result.output
+        assert ("unique to A are bonded to the mapped atoms [0, 1]" in result.output) == refused, result.output
