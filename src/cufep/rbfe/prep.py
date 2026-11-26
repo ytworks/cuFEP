@@ -109,9 +109,6 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     mapping = kartograf_mapping(ligand_a, ligand_b, settings)
     score = lomap_score(ligand_a, ligand_b, mapping)
     kartograf = dict(mapping)
-    # the hydrogens of a mapped atom as the integrator of the plugin constrains them (the owner, 2026-11-26: six edges
-    # of TYK2 and A2A ran on stock OpenMM): Kartograf's mapping changed where it would not (mapping_for_the_plugin)
-    mapping, mapping_notes = mapping_for_the_plugin(ligand_a, ligand_b, mapping, settings)
     ffspec = ForceFieldSpec(protein=cfg.forcefield.protein, water=cfg.forcefield.water, lipid=cfg.forcefield.lipid,
                             ligand=cfg.forcefield.ligand)
     membrane = bool(cfg.membrane.enabled)
@@ -128,7 +125,7 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
     ionic = cfg.thermodynamics.ionic_strength_M
     heavy = np.vstack([ligand_a.positions_nm()[ligand_a.heavy_atom_indices()],
                        ligand_b.positions_nm()[ligand_b.heavy_atom_indices()]])
-    notes: list[str] = list(mapping_notes)
+    notes: list[str] = []
 
     def build(with_protein: bool, edge_ion: dict | None = None) -> tuple:
         modeller = combine((protein.topology, protein.positions) if with_protein else None, ligand_a)
@@ -195,6 +192,14 @@ def prepare_edge(cfg, ligand_a, ligand_b, protein, edge_dir: Path, box_shape: st
         built[leg] = build(with_protein, (complex_water or {}).get("ion"))
         modeller_a, system_a, modeller_b, system_b = built[leg][:4]
         atoms_a, atoms_b = ligand_atom_indices(modeller_a.topology), ligand_atom_indices(modeller_b.topology)
+        if leg == "complex":
+            # the hydrogens of a mapped atom as the integrator of the plugin constrains them, from their lengths in the
+            # end states (the same in both legs; the owner, 2026-11-26: six edges of TYK2 and A2A ran on stock
+            # OpenMM): Kartograf's mapping changed where it would not (mapping_for_the_plugin)
+            mapping, mapping_notes = mapping_for_the_plugin(
+                ligand_a, ligand_b, kartograf, settings, system_a, system_b, dict(enumerate(atoms_a)),
+                dict(enumerate(atoms_b)))
+            notes.extend(mapping_notes)
         kept = constrained_bond_rule(mapping, system_a, system_b, dict(enumerate(atoms_a)), dict(enumerate(atoms_b)),
                                      hydrogens_a, hydrogens_b)
         # the mapping the hybrid is made of, after the rule of the constrained bonds: an atom that left it can join
@@ -470,6 +475,41 @@ def earlier_rules_of(info, ligands=None) -> list[str]:
         out.append("its legs turn the alchemical water into other ions ("
                    + ", ".join(f"{leg} {(ion or {}).get('name')}" for leg, ion in sorted(ions.items())) + ")")
     return out
+
+
+def hydrogens_the_plugin_cannot_constrain_in(edge_dir: Path, info: dict, ligand_a, ligand_b) -> list[str]:
+    """What the hybrid of a prepared edge would put on its atoms that the integrator of the cuPotential plugin cannot
+    constrain (:func:`cufep.rbfe.mapping.hydrogens_the_plugin_cannot_constrain`), leg by leg, from its record and its
+    end states: an edge prepared before the mapping for the plugin
+    (:func:`cufep.rbfe.mapping.mapping_for_the_plugin`)."""
+    import openmm as mm
+
+    from cufep.rbfe.mapping import hydrogens_the_plugin_cannot_constrain
+
+    out = []
+    for leg in ("complex", "solvent"):
+        end = load_end_states(edge_dir, leg)
+        mapping = {int(i): j for i, j in (info.get("legs") or {}).get(leg, {}).get("mapping", {}).items()}
+        problems = hydrogens_the_plugin_cannot_constrain(
+            mapping, mm.XmlSerializer.deserialize(end["a"]["system_xml"]),
+            mm.XmlSerializer.deserialize(end["b"]["system_xml"]), dict(enumerate(end["a"]["ligand"])),
+            dict(enumerate(end["b"]["ligand"])), ligand_a.to_rdkit(), ligand_b.to_rdkit())
+        out += [f"{leg} leg: {p}" for p in problems]
+    return out
+
+
+def set_aside_edge(edge_dir: Path, log=print) -> Path:
+    """Move what the directory of an edge holds to ``<edge>.earlier_mapping_<n>`` beside it, so that the edge is
+    prepared and computed anew (an edge of a mapping the plugin cannot run whose legs have no result). Nothing is
+    deleted."""
+    edge_dir = Path(edge_dir)
+    n = 1
+    while (edge_dir.parent / f"{edge_dir.name}.earlier_mapping_{n}").exists():
+        n += 1
+    dest = edge_dir.parent / f"{edge_dir.name}.earlier_mapping_{n}"
+    edge_dir.rename(dest)
+    log(f"{edge_dir.name}: what it held is kept in {dest.name}/; it is prepared again with the mapping for the plugin")
+    return dest
 
 
 def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> dict | None:

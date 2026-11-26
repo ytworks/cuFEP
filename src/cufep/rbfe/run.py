@@ -682,7 +682,7 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
 def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None,
          only_repeats=None) -> dict:
     from cufep.rbfe.leg import EdgeLegJob
-    from cufep.rbfe.prep import prepare_edge, prepared_edge
+    from cufep.rbfe.prep import hydrogens_the_plugin_cannot_constrain_in, prepare_edge, prepared_edge, set_aside_edge
     from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
     from cufep.workflow import record_digest
 
@@ -724,21 +724,39 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     # of the run whose results the directory holds (review of PR #17)
     # (every edge, so that the refusal names all the edges to prepare again: one at a time, the run that prepared the
     # first was refused for the next; fifth review of PR #19)
-    refused = []
+    refused, anew = [], set()
     for a, b in edges:
         try:
-            prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
+            info = prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
         except WorkflowError as exc:
             refused.append((edge_name(a, b), str(exc)))
+            continue
+        # a prepared edge whose mapping leaves hydrogens the integrator of the cuPotential plugin cannot constrain
+        # (prepared before the mapping for the plugin; the owner, 2026-11-26: every leg on the plugin) is prepared
+        # again where none of its legs has a result; one with results is refused, with the way to prepare it again
+        if info is not None and rcfg.backend.name == "cupotential" and (a, b) in selected:
+            problems = hydrogens_the_plugin_cannot_constrain_in(out_dir / "edges" / edge_name(a, b), info,
+                                                                by_name[a], by_name[b])
+            if problems and any((out_dir / "edges" / edge_name(a, b)).glob("repeat_*/*/result.json")):
+                refused.append((edge_name(a, b), f"{edge_name(a, b)}: its prepared systems are of a mapping whose "
+                                "hybrid has hydrogens the cuPotential plugin cannot constrain "
+                                f"({'; '.join(problems)}); its legs ran on stock OpenMM and hold results"))
+            elif problems:
+                anew.add(edge_name(a, b))
+                log(f"{edge_name(a, b)}: its prepared systems are of a mapping whose hybrid has hydrogens the "
+                    "cuPotential plugin cannot constrain, and no leg has a result: it is prepared again with the "
+                    "mapping for the plugin (what it has is kept in edges/" + edge_name(a, b) + ".earlier_mapping_<n>)")
     if refused:
         raise WorkflowError("; ".join(message for _edge, message in refused) + ". Nothing was changed. "
                             + prepare_again_command([edge for edge, _message in refused], out_dir))
+    # the edges prepared again are checked as edges without anything: what their directories hold is set aside
+    selected_checked = [(a, b) for a, b in selected if edge_name(a, b) not in anew]
     if not reschedule:
-        check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
-    check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
-    check_results_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
-    check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
-    check_windows_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
+        check_legs_have_their_windows(out_dir, selected_checked, repeats_run, only_legs)
+    check_pre_equilibrations_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule, ligands)
+    check_results_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule, ligands)
+    check_samples_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule)
+    check_windows_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule)
     states = states_of(rcfg, ligands)
     experiment = experiment_of(rcfg, ligands, states)
     if states is not None:
@@ -776,6 +794,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         # one job at a time in this process: every edge is prepared first
         jobs = []
         for a, b in selected:
+            if edge_name(a, b) in anew:
+                set_aside_edge(out_dir / "edges" / edge_name(a, b), log)
             jobs += jobs_of(edge_name(a, b), prepare_edge(rcfg, by_name[a], by_name[b], protein,
                                                          out_dir / "edges" / edge_name(a, b), box_shape, log))
         write_record()
@@ -788,8 +808,9 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         # the others go on
         jobs, (results, monitor, mps_used), t_prepared = _run_while_edges_are_prepared(
             [(edge_name(a, b), by_name[a], by_name[b]) for a, b in selected],
-            lambda lig_a, lig_b, edge: prepare_edge(rcfg, lig_a, lig_b, protein, out_dir / "edges" / edge,
-                                                    box_shape, log),
+            lambda lig_a, lig_b, edge: (set_aside_edge(out_dir / "edges" / edge, log) if edge in anew else None,
+                                        prepare_edge(rcfg, lig_a, lig_b, protein, out_dir / "edges" / edge,
+                                                     box_shape, log))[1],
             jobs_of, write_record, lambda jobs, more: execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor,
                                                                    log, more),
             unprepared, log)

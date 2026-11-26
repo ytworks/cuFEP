@@ -228,38 +228,67 @@ def _hydrogens(atom) -> list[int]:
     return [nb.GetIdx() for nb in atom.GetNeighbors() if nb.GetAtomicNum() == 1]
 
 
-def mapping_for_the_plugin(ligand_a, ligand_b, mapping: dict[int, int], settings: MappingSettings | None = None
-                           ) -> tuple[dict[int, int], list[str]]:
-    """The mapping of Kartograf changed where the hybrid would put on one atom hydrogens that the integrator of the
-    cuPotential plugin cannot constrain: it constrains three hydrogens of one length on an atom at most (SHAKE; the
-    plugin: "only SETTLE and SHAKE constraints are implemented"), and the unmapped hydrogens of both ligands stay on
-    a mapped atom of the hybrid. Returns the mapping and what was changed; a mapping that needs neither is returned
-    as it is.
+def _hydrogen_lengths(system, to_system: dict[int, int], molecule) -> dict[int, dict[int, float]]:
+    """Heavy atom of the ligand -> {its hydrogen: the length of their constraint in nm} (ligand indices)."""
+    import openmm.unit as unit
 
-    1. A mapped pair of heavy atoms of other elements that both carry hydrogens (the O of an OH onto the C of a CH3,
-       the C of a CH2 onto the N of an NH): their hydrogens are constrained to other lengths and cannot be mapped
-       onto each other. Kartograf maps again without that pair, as its own ``filter_element_changes`` ("Forces a
-       mapping to exclude any alchemical element changes in the core") does for every pair, and keeps the largest
-       connected part as it does after its filters.
+    back = {v: k for k, v in to_system.items()}
+    out: dict[int, dict[int, float]] = {}
+    for k in range(system.getNumConstraints()):
+        x, y, d = system.getConstraintParameters(k)
+        if x not in back or y not in back:
+            continue
+        p, q = back[x], back[y]
+        h_p = molecule.GetAtomWithIdx(p).GetAtomicNum() == 1
+        if h_p == (molecule.GetAtomWithIdx(q).GetAtomicNum() == 1):
+            continue
+        heavy, hydrogen = (q, p) if h_p else (p, q)
+        out.setdefault(heavy, {})[hydrogen] = float(d.value_in_unit(unit.nanometer))
+    return out
+
+
+def _one_length(lengths) -> bool:
+    """Constraint lengths that OpenMM puts into one SHAKE cluster (``ShakeCluster::addAtom``: within 1e-8)."""
+    lengths = list(lengths)
+    return all(abs(d - lengths[0]) <= 1e-8 * lengths[0] for d in lengths)
+
+
+def mapping_for_the_plugin(ligand_a, ligand_b, mapping: dict[int, int], settings, system_a, system_b,
+                           to_system_a: dict[int, int], to_system_b: dict[int, int]
+                           ) -> tuple[dict[int, int], list[str]]:
+    """Kartograf's mapping changed where the hybrid would put on one atom hydrogens that the integrator of the
+    cuPotential plugin cannot constrain: it constrains three hydrogens of one length on an atom at most (SHAKE; the
+    plugin: "only SETTLE and SHAKE constraints are implemented"), and the hydrogens of both ligands that are not mapped
+    stay on a mapped atom of the hybrid. The lengths are those of the constraints of the end states (``system_*``,
+    whose ligand atoms ``to_system_*`` give). Returns the mapping and what was changed; a mapping that needs neither
+    change is returned as it is.
+
+    1. A mapped pair of heavy atoms that both carry hydrogens constrained to other lengths (the O of an OH onto the C
+       of a CH3, a CH2 onto an NH, a carbon of four bonds onto one of three): such hydrogens cannot be mapped onto each
+       other (their constrained bond would change), so both stay on the atom. Kartograf maps again without that pair,
+       passed to it as a filter of its own kind, as its ``filter_element_changes`` ("Forces a mapping to exclude any
+       alchemical element changes in the core") leaves out every pair of other elements, and it then keeps whole
+       rings only and the largest connected part, as after its own filters.
     2. A mapped heavy atom on which the hybrid would carry more than three hydrogens (a methyl group turned between
        the two poses, whose hydrogens are farther apart than Kartograf's ``atom_max_distance``): its unmapped
-       hydrogens of A and of B are mapped onto each other, the closest pair first, as LOMAP maps the hydrogens of
-       its mapped heavy atoms (lomap2, ``MCS.all_atom_match_list``: "In 3D mode, ensure that maps happen to the
-       closest atom in 3D coordinates - this gets mappings to prochiral hydrogens correct")."""
+       hydrogens of A and of B are mapped onto each other, the closest pair first, as LOMAP maps the hydrogens of its
+       mapped heavy atoms (lomap2, ``MCS.all_atom_match_list``: "In 3D mode, ensure that maps happen to the closest
+       atom in 3D coordinates - this gets mappings to prochiral hydrogens correct")."""
     mol_a, mol_b = ligand_a.to_rdkit(), ligand_b.to_rdkit()
+    len_a = _hydrogen_lengths(system_a, to_system_a, mol_a)
+    len_b = _hydrogen_lengths(system_b, to_system_b, mol_b)
     notes = []
-    exclude = frozenset(
-        (i, j) for i, j in mapping.items()
-        if mol_a.GetAtomWithIdx(i).GetAtomicNum() > 1 and mol_b.GetAtomWithIdx(j).GetAtomicNum() > 1
-        and mol_a.GetAtomWithIdx(i).GetAtomicNum() != mol_b.GetAtomWithIdx(j).GetAtomicNum()
-        and _hydrogens(mol_a.GetAtomWithIdx(i)) and _hydrogens(mol_b.GetAtomWithIdx(j)))
+    exclude = frozenset((i, j) for i, j in mapping.items()
+                        if len_a.get(i) and len_b.get(j)
+                        and not _one_length(list(len_a[i].values()) + list(len_b[j].values())))
     if exclude:
         before = len(mapping)
         mapping = kartograf_mapping(ligand_a, ligand_b, settings, exclude)
         for i, j in sorted(exclude):
             notes.append(f"atom {i} ({mol_a.GetAtomWithIdx(i).GetSymbol()}) of {ligand_a.name} is not mapped onto atom "
-                         f"{j} ({mol_b.GetAtomWithIdx(j).GetSymbol()}) of {ligand_b.name}: both carry hydrogens, which "
-                         "the plugin cannot constrain on one atom")
+                         f"{j} ({mol_b.GetAtomWithIdx(j).GetSymbol()}) of {ligand_b.name}: their hydrogens are "
+                         f"constrained to {10 * next(iter(len_a[i].values())):.4f} and "
+                         f"{10 * next(iter(len_b[j].values())):.4f} A, which the plugin cannot constrain on one atom")
         notes.append(f"Kartograf mapped again without them: {before} -> {len(mapping)} mapped atoms")
     pos_a, pos_b = np.asarray(ligand_a.positions_nm()), np.asarray(ligand_b.positions_nm())
     mapping = dict(mapping)
@@ -291,33 +320,21 @@ def hydrogens_the_plugin_cannot_constrain(mapping: dict[int, int], system_a, sys
     carry hydrogens that the integrator of the cuPotential plugin cannot constrain: more than three, or constrained
     to lengths that differ (OpenMM's SHAKE clusters, ``ShakeCluster::addAtom`` in
     ``platforms/common/src/IntegrationUtilities.cpp`` 8.4: three at most, of one length within 1e-8)."""
-    import openmm.unit as unit
-
-    def lengths(system, to_system, molecule) -> dict[tuple[int, int], float]:
-        back = {v: k for k, v in to_system.items()}
-        out = {}
-        for k in range(system.getNumConstraints()):
-            x, y, d = system.getConstraintParameters(k)
-            if x in back and y in back:
-                out[(back[x], back[y])] = out[(back[y], back[x])] = d.value_in_unit(unit.nanometer)
-        return out
-
-    len_a, len_b = lengths(system_a, to_system_a, molecule_a), lengths(system_b, to_system_b, molecule_b)
+    len_a = _hydrogen_lengths(system_a, to_system_a, molecule_a)
+    len_b = _hydrogen_lengths(system_b, to_system_b, molecule_b)
     inverse = {v: k for k, v in mapping.items()}
     problems = []
     for i, j in sorted(mapping.items()):
         if molecule_a.GetAtomWithIdx(i).GetAtomicNum() == 1:
             continue
-        on_a, on_b = _hydrogens(molecule_a.GetAtomWithIdx(i)), _hydrogens(molecule_b.GetAtomWithIdx(j))
+        on_a, on_b = len_a.get(i, {}), len_b.get(j, {})
         # each hydrogen once, with its length in A and, mapped, in B (the hybrid keeps one constraint of a mapped
         # hydrogen only where the two are one length: constrained_bond_rule)
-        carried = ([len_a.get((i, h)) for h in on_a]
-                   + [len_b.get((j, h)) for h in on_b])
         count = len(on_a) + len([h for h in on_b if inverse.get(h) not in on_a])
-        carried = [d for d in carried if d is not None]
-        if count > 3 or any(abs(d - carried[0]) > 1e-8 * carried[0] for d in carried):
+        lengths = list(on_a.values()) + list(on_b.values())
+        if count > 3 or (lengths and not _one_length(lengths)):
             problems.append(f"atom {i} of A ({j} of B) would carry {count} constrained hydrogen(s) of lengths "
-                            + ", ".join(f"{d:.4f}" for d in sorted(set(carried))) + " nm")
+                            + ", ".join(f"{10 * d:.4f}" for d in sorted(set(lengths))) + " A")
     return problems
 
 

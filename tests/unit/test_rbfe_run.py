@@ -385,9 +385,12 @@ def test_every_hydrogen_of_the_hybrid_is_one_the_plugin_constrains(tmp_path):
     plugin constrains three hydrogens of one length on an atom at most (SHAKE) and their hybrids put more on one atom:
     a methyl group turned between the poses (Kartograf maps atoms within 0.95 A only), and atoms of other elements
     mapped onto each other with their hydrogens (CH3 and NH2, CH2 and NH). Their hydrogens are mapped onto each other
-    as LOMAP does; such a pair is not mapped, as Kartograf's filter_element_changes leaves it, and Kartograf keeps
-    the largest connected part (the methyl beyond the CH2 too). Kartograf's mapping of them has hydrogens the plugin
-    cannot constrain, the mapping the preparation keeps has none; an edge that needs neither keeps Kartograf's."""
+    as LOMAP does; a pair whose hydrogens are constrained to other lengths is not mapped, as Kartograf's
+    filter_element_changes leaves out pairs of other elements, and Kartograf keeps whole rings and the largest
+    connected part (the methyl beyond the CH2 too): other elements, carbons of four bonds and of three (ethylbenzene
+    and styrene, 1.0940 and 1.0859 A), the NH of a ring onto a CH2 (the ring leaves). Kartograf's mapping of them has
+    hydrogens the plugin cannot constrain, the mapping the preparation keeps has none; an edge that needs neither
+    keeps Kartograf's."""
     import openmm as mm
     from rdkit import Chem
     from rdkit.Chem import AllChem
@@ -437,15 +440,32 @@ def test_every_hydrogen_of_the_hybrid_is_one_the_plugin_constrains(tmp_path):
     amine.GetAtomWithIdx(1).SetAtomicNum(7)
     amine = amine.GetMol()
     Chem.SanitizeMol(amine)
+    vinyl = Chem.RWMol(ethyl)                    # the same carbons with three bonds each: C-H 1.0859 against 1.0940 A
+    for k in (0, 1):
+        vinyl.RemoveAtom(max(nb.GetIdx() for nb in vinyl.GetAtomWithIdx(k).GetNeighbors() if nb.GetAtomicNum() == 1))
+    vinyl.GetBondBetweenAtoms(0, 1).SetBondType(Chem.BondType.DOUBLE)
+    vinyl = vinyl.GetMol()
+    Chem.SanitizeMol(vinyl)
+    piperidine = placed("c1ccc(cc1)C1CCNCC1", 5)  # 9 the NH of the ring
+    cyclohexane = Chem.RWMol(Chem.RemoveHs(piperidine))
+    cyclohexane.GetAtomWithIdx(9).SetAtomicNum(6)
+    cyclohexane = cyclohexane.GetMol()
+    Chem.SanitizeMol(cyclohexane)
+    cyclohexane = Chem.AddHs(cyclohexane, addCoords=True)
     tol, tol_turned, tol_shifted = write(tmp_path / "toluene", [("toluene", toluene), ("toluene_turned", turned),
                                                                 ("toluene_shifted", shifted)])
-    ethylbenzene, methylaniline = write(tmp_path / "chain", [("ethylbenzene", ethyl), ("methylaniline", amine)])
+    ethylbenzene, methylaniline, styrene = write(tmp_path / "chain", [("ethylbenzene", ethyl), ("methylaniline", amine),
+                                                                      ("styrene", vinyl)])
+    phenylpiperidine, phenylcyclohexane = write(tmp_path / "ring", [("phenylpiperidine", piperidine),
+                                                                    ("phenylcyclohexane", cyclohexane)])
     (tmp_path / "aniline").mkdir()
     _tol, aniline = _ligands(tmp_path / "aniline", out_dir, "Nc1ccccc1", "aniline", 9)
     rcfg = _config(tmp_path, out_dir, "fixed")
     protein = _protein()
     for lig_a, lig_b, left_out, changed in ((tol, tol_turned, set(), True), (tol, aniline, {0}, True),
                                             (ethylbenzene, methylaniline, {0, 1}, True),
+                                            (ethylbenzene, styrene, {0, 1}, True),
+                                            (phenylpiperidine, phenylcyclohexane, {9}, True),
                                             (tol, tol_shifted, set(), False)):
         edge_dir = out_dir / "edges" / f"{lig_a.name}~{lig_b.name}"
         info = prepare_edge(rcfg, lig_a, lig_b, protein, edge_dir, "cube", print)
@@ -464,6 +484,50 @@ def test_every_hydrogen_of_the_hybrid_is_one_the_plugin_constrains(tmp_path):
         if not changed:
             assert info["legs"]["solvent"]["mapping"] == info["mapping_kartograf"]
             assert not any("Kartograf mapped again" in n or "the closest first" in n for n in info["notes"])
+
+
+def test_an_edge_prepared_with_a_mapping_the_plugin_cannot_run_is_prepared_again_or_refused(tmp_path, monkeypatch):
+    """The owner, 2026-11-26: every leg on the plugin; an edge prepared before the mapping for the plugin (its hybrid
+    has hydrogens the plugin cannot constrain, as 4d~4f of A2A) is prepared again by a run on the plugin where none of
+    its legs has a result, what its directory held kept beside it; with a result the run is refused before it writes
+    anything, with the way to prepare the edge again."""
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe import mapping as mapping_module
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.prep import hydrogens_the_plugin_cannot_constrain_in, prepare_edge
+    from cufep.rbfe.run import run_rbfe
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    rcfg = RbfeConfig.model_validate({**data, "backend": {**data["backend"], "name": "cupotential", "platform": "CUDA"},
+                                      "network": {"edges": [["toluene", "phenol"]]}})
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    protein = _protein()
+    with monkeypatch.context() as earlier:            # the preparation before the mapping for the plugin
+        earlier.setattr(mapping_module, "mapping_for_the_plugin", lambda a, b, mapping, *rest: (dict(mapping), []))
+        earlier.setattr(mapping_module, "hydrogens_the_plugin_cannot_constrain", lambda *args: [])
+        info = prepare_edge(rcfg, ligands[0], ligands[1], protein, edge_dir, "cube", print)
+    assert hydrogens_the_plugin_cannot_constrain_in(edge_dir, info, *ligands)
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+    monkeypatch.setattr(run_module, "execute_jobs", lambda jobs, gpus, factor, log, more=None: ([], None, False))
+    monkeypatch.setattr(run_module, "write_timing", lambda *args, **kwargs: None)
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    leg_dir.mkdir(parents=True)
+    (leg_dir / "result.json").write_text("{}")
+    with pytest.raises(WorkflowError, match="cannot constrain .* hold results.* remove") as refused:
+        run_rbfe(rcfg, log=lambda line: None)
+    assert "toluene~phenol" in str(refused.value)
+    assert not (out_dir / "network.json").exists() and (leg_dir / "result.json").exists()
+    (leg_dir / "result.json").unlink()
+    run_rbfe(rcfg, log=lambda line: None)
+    kept = out_dir / "edges" / "toluene~phenol.earlier_mapping_1"
+    assert json.loads((kept / "prep" / "prep.json").read_text())["legs"] == info["legs"]
+    again = json.loads((edge_dir / "prep" / "prep.json").read_text())
+    assert again["legs"]["solvent"]["mapping"] != info["legs"]["solvent"]["mapping"]
+    assert hydrogens_the_plugin_cannot_constrain_in(edge_dir, again, *ligands) == []
 
 
 def test_each_end_state_has_the_charges_of_its_own_ligand(tmp_path):
