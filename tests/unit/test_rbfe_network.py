@@ -142,7 +142,8 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
         leg_dir.mkdir(parents=True)
         (leg_dir / "result.json").write_text(json.dumps({
             "delta_g": dg, "delta_g_error": 0.3 * 4.184, "n_states": 9, "backend": "openmm", "notes": [],
-            "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}}}))
+            "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}},
+            "run": {"hybrid_version": 2}}))
     summary = analyse_directory(tmp_path)
     edge = summary["edges"][0]
     assert edge["ddg"] == pytest.approx(-1.5) and edge["se"] == pytest.approx(0.3 * math.sqrt(2))
@@ -154,7 +155,8 @@ def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float 
     return {"delta_g": dg_kcal * 4.184, "delta_g_error": None if se_kcal is None else se_kcal * 4.184,
             "temperature_K": temperature, "pressure_bar": pressure, "lrc_method": "none",
             "prepared_systems_sha256": "abc", "n_states": 9, "backend": "openmm", "notes": [],
-            "quality": {"overlap": {"lowest": overlap, "ok": overlap >= 0.03}, "samples": {"counted": 100.0}}}
+            "quality": {"overlap": {"lowest": overlap, "ok": overlap >= 0.03}, "samples": {"counted": 100.0}},
+            "run": {"hybrid_version": 2}}
 
 
 def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
@@ -562,7 +564,8 @@ def test_a_first_repeat_of_an_earlier_version_does_not_let_others_of_other_ensem
     from cufep.rbfe.run import combine_network, water_moves_of
     from cufep.sampling import storage
 
-    old = {**_leg_result(-12.0), "gcmc": {"insertions_attempted": [1]}}
+    # (an earlier version without REST2, so that its hybrid is that of this version)
+    old = {**_leg_result(-12.0), "run": {"rest2": {"scale": 1.0}}, "gcmc": {"insertions_attempted": [1]}}
     _write_legs(tmp_path, "a~b", 0, old, _leg_result(-10.5))
     _write_legs(tmp_path, "a~b", 1, _with_moves(_leg_result(-11.0), -6.0), _leg_result(-10.5))
     _write_legs(tmp_path, "a~b", 2, _with_moves(_leg_result(-11.5), -4.0), _leg_result(-10.5))

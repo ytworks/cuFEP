@@ -25,6 +25,7 @@ Grand canonical moves of water (``sampling.gcmc``, on by default in the complex 
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -225,6 +226,32 @@ def end_states_heavy(a: dict, b: dict) -> tuple[list, list]:
         bonds += [(len(points) + int(i), len(points) + int(j)) for i, j in heavy_bonds(end["topology"], heavy)]
         points += [np.asarray(end["positions"], dtype=float)[i] for i in heavy]
     return points, bonds
+
+
+def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> int | None:
+    """The terms of B of the proper torsions of the core of the hybrid of a leg of a prepared edge that version 1 of
+    the hybrid left unscaled with REST2 (:func:`cufep.rbfe.hybrid.terms_version_1_left_unscaled`), the hot region of
+    the ligand by ``region``; None for an edge without its prepared systems. They are terms of the two ligands and
+    their mapping: counted on the end states of the solvent leg where the leg has its mapping."""
+    import openmm as mm
+
+    from cufep.rbfe.hybrid import make_hybrid_system, terms_version_1_left_unscaled
+    from cufep.rbfe.prep import load_end_states
+
+    done = Path(edge_dir) / "prep" / "prep.json"
+    if not done.exists():
+        return None
+    info = json.loads(done.read_text())
+    of = "solvent" if info["legs"]["solvent"]["mapping"] == info["legs"][leg]["mapping"] else leg
+    end = load_end_states(edge_dir, of)
+    a, b = end["a"], end["b"]
+    unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
+    hot = perturbed_region(edge_dir, a, b, end["core_map"], unique_b) if region == "perturbed" else None
+    water = (info["legs"][of].get("alchemical_water") or {}).get("atoms_a", [])
+    hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
+                                mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
+                                end["core_map"], rest2=True, alchemical_water=water, rest2_ligand_atoms=hot)
+    return terms_version_1_left_unscaled(hybrid.system)
 
 
 def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
@@ -540,10 +567,13 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
 
     # ---- 5. analysis ---------------------------------------------------------------------------------
     t_analysis = time.perf_counter()
+    from cufep.rbfe.hybrid import HYBRID_VERSION
     from cufep.workflow import record_digest
 
     run_record = {"edge": job.edge, "leg": job.leg, "repeat": job.repeat, "backend": backend_name,
                   "timestep_fs": timestep_fs, "notes": list(run.notes), "origin_not_recorded": [],
+                  # which hybrid System the leg ran (cufep.rbfe.run.legs_of_version_1; second review of PR #19)
+                  "hybrid_version": HYBRID_VERSION,
                   # the prepared systems of the edge, which the legs of one ddG must share (edge_result)
                   "prepared_systems_sha256": record_digest(built.info.get("made_from")),
                   # the thermodynamic state of the grand canonical moves of water, which the complex legs of one network

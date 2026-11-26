@@ -196,6 +196,10 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   bilayer, pH ...), and a ligand of one name must be one molecule in all of them; otherwise each edge gives its
   ddG and the run says what differs, without cycle closures and without dG. `edges.csv` gives the lowest overlap
   of all iterations and that among the samples of the estimate, the two checks behind NOT RELIABLE.
+- A leg records the version of its hybrid System (`run.hybrid_version`). Version 1, every leg whose record has
+  neither this key nor `grand_canonical`, multiplied the term of A alone of the proper torsions of the core by the
+  REST2 factor: a leg of it with REST2, on an edge whose ligand B has terms in those torsions, is left out of the
+  ddG as a missing leg, and its RESULT line names the legs to run again (`--edge ... --leg ... --reschedule`).
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
   of their variance. The edges fix the differences between the ligands; the one constant they leave is set

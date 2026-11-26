@@ -803,3 +803,61 @@ def test_the_plan_refuses_an_edge_that_the_run_refuses(tmp_path):
     result = CliRunner().invoke(cli.main, ["rbfe", "plan", str(tmp_path / "config.yaml")])
     assert result.exit_code != 0 and "changes the net charge by +2" in result.output
 
+
+
+def test_legs_of_the_hybrid_before_its_torsion_fix_are_left_out_and_named_to_run_again(tmp_path):
+    """Second review of PR #19 (P2): the REST2 factor of the proper torsions of the core multiplied their term of A
+    alone (version 1 of the hybrid, as the A2A edge 4e~4b of the example was computed), and a result of such a leg was
+    combined with a leg of this version after `--leg solvent --reschedule`. A leg of version 1 (its record has neither
+    hybrid_version nor grand_canonical, which came with the fix) with REST2, on an edge with terms of B in those
+    torsions, is left out of the ddG, and its RESULT line names the legs to run again; a leg of this version, one of
+    the commit of the fix (grand_canonical recorded), one without REST2 and an edge without such terms keep it."""
+    import shutil
+
+    import openmm as mm
+    from test_rbfe_network import _leg_result, _write_legs
+    from test_rbfe_rest2_region import _change_a_core_torsion
+
+    from cufep.rbfe.leg import terms_left_unscaled_by_version_1
+    from cufep.rbfe.prep import load_end_states, prepare_edge
+    from cufep.rbfe.run import combine_network, result_lines
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    prep = out_dir / "edges" / "toluene~phenol" / "prep"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), prep.parent, "cube", print)
+    plain = terms_left_unscaled_by_version_1(prep.parent, "complex", "pocket")
+    changed = tmp_path / "changed"
+    shutil.copytree(prep, changed)
+    for leg in ("complex", "solvent"):
+        end = load_end_states(prep.parent, leg)
+        xml = changed / f"{leg}_b_system.xml"
+        system = mm.XmlSerializer.deserialize(xml.read_text())
+        assert _change_a_core_torsion(system, end["b"]["ligand"], end["core_map"]) == 1
+        xml.write_text(mm.XmlSerializer.serialize(system))
+
+    def version_1(dg: float, scale: float = 2.0) -> dict:
+        return {**_leg_result(dg), "run": {"rest2": {"scale": scale}}}
+
+    def edge_of(name: str, complex_, solvent, prepared=changed) -> tuple[dict, list[str]]:
+        root = tmp_path / name
+        shutil.copytree(prepared, root / "edges" / "toluene~phenol" / "prep")
+        _write_legs(root, "toluene~phenol", 0, complex_, solvent)
+        summary = combine_network(root, ["toluene", "phenol"], [("toluene", "phenol")], 1, {})
+        return summary["edges"][0], result_lines(summary)
+
+    shutil.copytree(changed, tmp_path / "count" / "prep")
+    n = terms_left_unscaled_by_version_1(tmp_path / "count", "complex", "pocket")
+    assert n >= 1
+    edge, lines = edge_of("both", version_1(-12.0), version_1(-10.5))
+    assert "ddg" not in edge and len(edge["earlier_version"]) == 2
+    assert f"REST2 left {n} terms of ligand B" in edge["earlier_version"][0]
+    assert any("--edge toluene~phenol --leg complex --leg solvent --reschedule" in x for x in lines)
+    current = {**_leg_result(-12.0)}                                       # this version (hybrid_version 2)
+    edge, lines = edge_of("solvent", current, version_1(-10.5))
+    assert "ddg" not in edge and any("--leg solvent --reschedule" in x and "--leg complex" not in x for x in lines)
+    fixed = {**_leg_result(-12.0), "run": {"grand_canonical": {"enabled": False}, "rest2": {"scale": 2.0}}}
+    assert "ddg" in edge_of("fix", fixed, {**fixed, "delta_g": -10.5 * 4.184})[0]
+    assert "ddg" in edge_of("cold", version_1(-12.0, 1.0), version_1(-10.5, 1.0))[0]
+    assert plain == 0 and "ddg" in edge_of("plain", version_1(-12.0), version_1(-10.5), prep)[0]

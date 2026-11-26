@@ -286,6 +286,41 @@ def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, 
     publish_text(out_dir / "network.json", json.dumps(record, indent=1))
 
 
+def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | None = None) -> list[str]:
+    """The legs of a repeat whose hybrid System was of version 1 (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`) and differs
+    from that of this version: with REST2 and terms of B in the proper torsions of the core, which it left unscaled,
+    so that the energies of its states were not those of its Hamiltonian (second review of PR #19: such a leg was
+    combined with a leg of this version). A leg records its version; one without the record is of version 1 unless
+    it records ``grand_canonical``, which came with the fix. ``counted`` keeps the counts of an edge between calls."""
+    from cufep.rbfe.hybrid import HYBRID_VERSION
+    from cufep.rbfe.leg import terms_left_unscaled_by_version_1
+    from cufep.sampling.storage import stored_conditions
+
+    counted = {} if counted is None else counted
+    out = []
+    for leg, result in legs.items():
+        record = result.get("run") or {}
+        if record.get("hybrid_version", HYBRID_VERSION if "grand_canonical" in record else 1) >= HYBRID_VERSION:
+            continue
+        _n, conditions = stored_conditions(Path(edge_dir) / f"repeat_{repeat}" / leg / "hrex")
+        rest2 = ((conditions or {}).get("settings") or {}).get("sampling.rest2") or {}
+        scale = (record.get("rest2") or {}).get("scale", rest2.get("scale"))
+        if scale is not None and float(scale) <= 1.0:
+            continue
+        key = (leg, rest2.get("region", "pocket"))
+        if key not in counted:
+            counted[key] = terms_left_unscaled_by_version_1(edge_dir, *key)
+        if counted[key] is None:
+            out.append(f"the {leg} leg of repeat {repeat} is of an earlier version with REST2, whose hybrid left the "
+                       "terms of ligand B in the proper torsions of the core unscaled, and its edge has no prepared "
+                       "systems to tell whether it had such terms")
+        elif counted[key]:
+            out.append(f"the {leg} leg of repeat {repeat} is of an earlier version whose REST2 left {counted[key]} "
+                       "terms of ligand B in the proper torsions of the core unscaled (the energies of its states were "
+                       "not those of its Hamiltonian)")
+    return out
+
+
 def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     """ddG of an edge from the results of its legs (kcal/mol); repeats are averaged, their standard deviation
     given (as the ABFE combines repeats).
@@ -299,7 +334,7 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     from cufep.workflow import cycle_differences
 
     out = {"edge": edge_name(a, b), "ligand_a": a, "ligand_b": b, "repeats": []}
-    complete = []
+    complete, counted = [], {}
     for r in range(repeats):
         legs = {}
         for leg in ("complex", "solvent"):
@@ -308,6 +343,11 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         if not all(legs.values()) or any(legs[leg].get("delta_g") is None for leg in legs):
             out["repeats"].append({"repeat": r, "missing": [leg for leg in legs if not legs[leg]
                                                              or legs[leg].get("delta_g") is None]})
+            continue
+        earlier = legs_of_version_1(Path(edge_dir), r, legs, counted)
+        if earlier:
+            # left out, as a leg that is missing: it is computed again (result_lines says how)
+            out["repeats"].append({"repeat": r, "earlier_version": earlier})
             continue
         no_error = [leg for leg in legs if legs[leg].get("delta_g_error") is None]
         if no_error:
@@ -349,6 +389,9 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         out["inconsistent_legs"] = inconsistent
     if not_compared:
         out["not_compared"] = not_compared
+    earlier = [item for r in out["repeats"] for item in r.get("earlier_version", [])]
+    if earlier:
+        out["earlier_version"] = earlier
     done = [r for r in out["repeats"] if "ddg" in r] if not inconsistent else []
     if done:
         values = [r["ddg"] for r in done]
@@ -593,6 +636,11 @@ def write_results(out_dir: Path, summary: dict) -> None:
 def result_lines(summary: dict) -> list[str]:
     lines = []
     for e in summary["edges"]:
+        if e.get("earlier_version"):
+            legs = sorted({item.split(" leg of")[0].removeprefix("the ") for item in e["earlier_version"]})
+            lines.append(f"RESULT {e['edge']}: legs left out: {'; '.join(e['earlier_version'])}; run them again: "
+                         f"cufep rbfe run CONFIG --edge {e['edge']} " + " ".join(f"--leg {leg}" for leg in legs)
+                         + " --reschedule")
         if "ddg" in e:
             exp = ""
             if e.get("exp_ddg") is not None:

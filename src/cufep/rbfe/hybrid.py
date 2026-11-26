@@ -197,6 +197,12 @@ CORE_ANGLE_ENERGY = ("(K/2)*(theta-theta0)^2; K = (1.0-lambda_angles)*K_1 + lamb
 CORE_TORSION_ENERGY = ("(1-lambda_torsions)*U1 + lambda_torsions*U2; U1 = K1*(1+cos(periodicity1*theta-phase1));"
                        "U2 = K2*(1+cos(periodicity2*theta-phase2))")
 
+#: the version of the hybrid System, recorded by every leg (``run.hybrid_version``). 2: the REST2 factor of the proper
+#: torsions of the core multiplies their term of B too; version 1 (every leg whose record has neither this key nor
+#: ``grand_canonical``, which came with the fix) multiplied the term of A alone, so that the energies of the states
+#: of a leg with REST2 and a term of B in those torsions were not those of its Hamiltonian (review of PR #19)
+HYBRID_VERSION = 2
+
 _KNOWN_FORCES = {"HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce", "NonbondedForce",
                  "CMMotionRemover"}
 
@@ -277,6 +283,25 @@ def _same_environment_term(what: str, key, in_a, in_b) -> None:
         raise AlchemyError(f"the environment {what} {key} is in B but not in A")
     if not np.allclose(in_a, in_b, rtol=1e-9, atol=0.0):
         raise AlchemyError(f"the environment {what} {key} has other parameters in B than in A: {in_b} and {in_a}")
+
+
+def terms_version_1_left_unscaled(system: mm.System) -> int:
+    """The terms of B of the proper torsions of the core of a hybrid ``system`` that its REST2 scales and version 1 of
+    the hybrid (:data:`HYBRID_VERSION`) left unscaled: those with a force constant of B, of a hot torsion; 0 without
+    REST2."""
+    force = next((f for f in system.getForces() if isinstance(f, mm.CustomTorsionForce)
+                  and f.getName() == CORE_PROPER_TORSION_FORCE_NAME), None)
+    if force is None:
+        return 0
+    if REST2_DS not in [force.getGlobalParameterName(k) for k in range(force.getNumGlobalParameters())]:
+        return 0
+    names = [force.getPerTorsionParameterName(k) for k in range(force.getNumPerTorsionParameters())]
+    k2, hot = names.index("K2"), names.index("hot") if "hot" in names else None
+    n = 0
+    for k in range(force.getNumTorsions()):
+        values = force.getTorsionParameters(k)[4]
+        n += int(values[k2] != 0.0 and (hot is None or values[hot] != 0.0))
+    return n
 
 
 def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.System, positions_b, ligand_b,
