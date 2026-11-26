@@ -167,13 +167,15 @@ def edge_errors(pred, exp) -> dict[str, float | None]:
 
 
 def analysed_summary(run_dir: Path) -> dict:
-    """The summary of a relative run as its directory gives it now: from the results of its legs where it has them and
-    what combining them needs (``resolved_config.yaml``, ``network.json``), else its ``summary.json``."""
+    """The summary of a relative run as its directory gives it now: from its legs where it is the directory of a run
+    (``edges/``, ``resolved_config.yaml``, ``network.json``), whatever results its legs have at the moment (fourth
+    review of PR #19: with every leg run again and none finished yet, the ddG of an earlier summary.json came back);
+    else (a directory that holds the summary alone) its ``summary.json``."""
     from cufep.rbfe.run import analyse_directory
 
     run_dir = Path(run_dir)
-    has_legs = any((run_dir / "edges").glob("*/repeat_*/*/result.json")) if (run_dir / "edges").is_dir() else False
-    if has_legs and (run_dir / "resolved_config.yaml").exists() and (run_dir / "network.json").exists():
+    if ((run_dir / "edges").is_dir() and (run_dir / "resolved_config.yaml").exists()
+            and (run_dir / "network.json").exists()):
         return analyse_directory(run_dir)
     return json.loads((run_dir / "summary.json").read_text())
 

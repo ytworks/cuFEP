@@ -396,8 +396,12 @@ def rbfe_plan(config: str) -> None:
 @click.option("--edge", "edges", multiple=True, help="Run only this edge (A~B); repeat for several.")
 @click.option("--leg", "legs", multiple=True, type=click.Choice(["complex", "solvent"]),
               help="Run only this leg of the edges; the other keeps the result it has.")
-@click.option("--reschedule", is_flag=True, help="Determine the lambda windows of the legs that run again.")
-def rbfe_run(config: str, production_ns, gpus, backend, output, edges, legs, reschedule: bool) -> None:
+@click.option("--repeat", "repeats", multiple=True, type=int,
+              help="Run only this repeat of the edges (0, 1, ...); repeat for several.")
+@click.option("--reschedule", is_flag=True,
+              help="Start the legs that run anew: their windows, samples and result (and a pre-equilibration that "
+                   "cannot be used again) are set aside in previous_<n>/.")
+def rbfe_run(config: str, production_ns, gpus, backend, output, edges, legs, repeats, reschedule: bool) -> None:
     """Run (or resume) the relative calculation described by CONFIG."""
     from cufep.rbfe.run import failed_edges, run_rbfe
 
@@ -411,7 +415,8 @@ def rbfe_run(config: str, production_ns, gpus, backend, output, edges, legs, res
     if backend:
         rcfg.backend.name = backend
     try:
-        summary = run_rbfe(rcfg, reschedule=reschedule, only_edges=list(edges) or None, only_legs=list(legs) or None)
+        summary = run_rbfe(rcfg, reschedule=reschedule, only_edges=list(edges) or None, only_legs=list(legs) or None,
+                           only_repeats=list(repeats) or None)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
     missing = failed_edges(summary)

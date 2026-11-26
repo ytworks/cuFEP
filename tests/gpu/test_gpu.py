@@ -767,20 +767,28 @@ def test_the_trial_energies_with_ghosts_on_the_gpu_are_those_of_the_processor(gc
         assert np.abs(everything - reference.water_energies(which, moves.cutoff_nm)).max() > 1.0   # (ghosts count)
 
 
+def _bus(bus_id: str) -> tuple[int, int, str]:
+    """A PCI bus ID as CUDA (``0000:1b:00.0``) and nvidia-smi (``00000000:1B:00.0``) write it, in one form."""
+    domain, bus, device = bus_id.strip().split(":")
+    return int(domain, 16), int(bus, 16), device.lower()
+
+
 def _devices_of_a_stand_in(moves, pos, box, device: int, q) -> None:
+    """In a process of its own: the stand-in on CUDA device ``device``; puts (the PCI bus ID of that device, those of
+    the GPUs the process holds a context on)."""
     import os
     import subprocess
+
+    import cupy
 
     from cufep.sampling.relocation_mc import GpuStandIn
 
     gpu = GpuStandIn(moves, device)
     gpu.load(pos, box, 1.0, 1.0).water_energies(np.arange(3), moves.cutoff_nm)
-    bus = dict(reversed([s.strip() for s in line.split(",")]) for line in subprocess.run(
-        ["nvidia-smi", "--query-gpu=index,pci.bus_id", "--format=csv,noheader"], capture_output=True,
-        text=True).stdout.splitlines())
     apps = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,gpu_bus_id", "--format=csv,noheader"],
                           capture_output=True, text=True).stdout.splitlines()
-    q.put(sorted({int(bus[b.strip()]) for pid, b in (line.split(",") for line in apps) if int(pid) == os.getpid()}))
+    held = sorted({_bus(b) for pid, b in (line.split(",") for line in apps) if int(pid) == os.getpid()})
+    q.put((_bus(cupy.cuda.runtime.deviceGetPCIBusId(device)), held))
 
 
 @needs_cuda
@@ -788,7 +796,8 @@ def test_the_stand_in_on_a_gpu_makes_a_context_on_that_gpu_alone(gcmc_leg):
     """The full relative TYK2 benchmark: the stand-in of the water moves on GPU k returned the process to device 0
     after each use, and CUDA 12 made a context there; with every worker of the moves holding one on GPU 0, GPU 0 had
     more than the 60 clients of an MPS server and workers failed to start (cudaErrorDevicesUnavailable). A process
-    with the stand-in on GPU 1 holds a context on GPU 1 alone."""
+    with the stand-in on CUDA device 1 holds a context on that GPU alone, by its PCI bus ID (the numbers of
+    nvidia-smi are not those of CUDA when CUDA_VISIBLE_DEVICES orders the GPUs otherwise; fourth review of PR #19)."""
     import multiprocessing
 
     if _cuda_devices() < 2:
@@ -799,9 +808,9 @@ def test_the_stand_in_on_a_gpu_makes_a_context_on_that_gpu_alone(gcmc_leg):
     child = ctx.Process(target=_devices_of_a_stand_in, args=(moves, np.asarray(pos, dtype=float),
                                                              np.asarray(box, dtype=float), 1, q))
     child.start()
-    devices = q.get(timeout=300)
+    device, held = q.get(timeout=300)
     child.join()
-    assert devices == [1]
+    assert held == [device]
 
 
 def _cuda_devices() -> int:

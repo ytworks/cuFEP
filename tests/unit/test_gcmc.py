@@ -768,3 +768,38 @@ def test_the_sphere_takes_the_bonds_the_topology_does_not_hold_and_puts_the_two_
         radii.append(spec_of(system, top, positions, box, ligand, 2, radius_from_nm=np.asarray(points),
                              radius_from_bonds=bonds).radius_nm)
     assert radii == pytest.approx([1.395, 1.395], abs=1e-9)
+
+
+def test_an_absolute_leg_with_the_moves_is_told_a_way_that_keeps_its_restraint(tmp_path, monkeypatch):
+    """Fourth review of PR #19 (P2): a complex leg of the ABFE with the moves whose pre-equilibration cannot be used
+    was told to remove equil.npz and run --reschedule, which its restraint (chosen from the MD that started from that
+    pre-equilibration) then refuses, and which leaves the archive without the files its samples were made from. The
+    run refuses it before it writes anything, with a new output directory as the way on, whatever --reschedule; start
+    configurations in another cell than the pre-equilibration fixes are refused without --reschedule only."""
+    import json
+    from types import SimpleNamespace
+
+    from cufep import workflow
+    from cufep.config.schema import Config
+    from cufep.engine.leg import EQUIL_GHOSTS
+
+    leg_dir = tmp_path / "lig" / "repeat_0" / "complex"
+    leg_dir.mkdir(parents=True)
+    box = np.eye(3) * 4.0
+    np.savez(leg_dir / "equil.npz", mean_box=box, box=box)
+    moves = SimpleNamespace(ghosts=np.arange(5), waters=np.zeros((50, 3)))
+    monkeypatch.setattr(workflow, "load_prepared", lambda prep_dir, leg: {})
+    monkeypatch.setattr(workflow, "leg_system", lambda cfg, prep, leg: (None, moves))
+    monkeypatch.setattr(workflow, "earlier_ghosts_of", lambda prep, gcmc: None)
+    cfg = Config.model_validate(dict(BASE, sampling={"gcmc": MOVES}))
+    for reschedule in (False, True):
+        with pytest.raises(workflow.WorkflowError) as refused:
+            workflow.check_pre_equilibration_of_a_leg_with_moves(cfg, tmp_path / "lig", "complex", leg_dir, reschedule)
+        assert "records no ghost waters" in str(refused.value) and "run the calculation in a new output.dir" in str(
+            refused.value) and "remove" not in str(refused.value)
+    (leg_dir / EQUIL_GHOSTS).write_text(json.dumps({"ghosts": list(range(5))}))
+    workflow.check_pre_equilibration_of_a_leg_with_moves(cfg, tmp_path / "lig", "complex", leg_dir, False)
+    np.savez(leg_dir / "start_configs.npz", boxes=np.stack([box * 1.01, box * 1.01]))
+    with pytest.raises(workflow.WorkflowError, match="in another cell than its pre-equilibration fixes"):
+        workflow.check_pre_equilibration_of_a_leg_with_moves(cfg, tmp_path / "lig", "complex", leg_dir, False)
+    workflow.check_pre_equilibration_of_a_leg_with_moves(cfg, tmp_path / "lig", "complex", leg_dir, True)

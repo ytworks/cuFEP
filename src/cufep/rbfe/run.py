@@ -150,14 +150,15 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
     return edges, how
 
 
-def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, only_legs) -> None:
+def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, only_legs, repeats=None) -> None:
     """Refuses, before the edges are prepared, a run of complex legs alone that take the windows of the solvent leg
     (`lambda_schedule.adaptive.legs: solvent`) when a solvent leg has none yet: with no solvent leg to run, the
     complex leg would wait for ever."""
     s = rcfg.lambda_schedule
     if not only_legs or "solvent" in only_legs or s.mode != "adaptive" or s.adaptive.legs != "solvent":
         return
-    missing = [f"{edge_name(a, b)}/repeat_{r}" for a, b in edges for r in range(rcfg.sampling.repeats)
+    missing = [f"{edge_name(a, b)}/repeat_{r}" for a, b in edges
+               for r in (range(rcfg.sampling.repeats) if repeats is None else repeats)
                if not all((out_dir / "edges" / edge_name(a, b) / f"repeat_{r}" / "solvent" / f).exists()
                           for f in ("schedule.yaml", "start_configs.npz"))]
     if missing:
@@ -165,15 +166,66 @@ def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, onl
                             f"solvent leg, which {', '.join(missing)} does not have yet: run the solvent leg first")
 
 
-def check_legs_have_their_windows(out_dir: Path, edges, repeats: int, only_legs) -> None:
+def rerun_command(edge: str, repeat: int, legs) -> str:
+    """The command that computes the legs ``legs`` of one repeat of an edge anew, and no other leg."""
+    return (f"cufep rbfe run CONFIG --edge {edge} --repeat {repeat} " + " ".join(f"--leg {leg}" for leg in legs)
+            + " --reschedule")
+
+
+def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, repeats, only_legs,
+                                        reschedule: bool) -> None:
+    """Before a run moves or writes anything, for every leg it runs with grand canonical moves of water: a
+    pre-equilibration that cannot start its replica exchange (:func:`cufep.engine.leg.equil_ghosts_problem`; a
+    relative leg does not take one without a record of its ghost waters), where the leg starts from it, and start
+    configurations in another cell than its pre-equilibration fixes (:func:`cufep.engine.leg.start_cell_problem`).
+    Both are refused, with the command for each leg, unless the run has --reschedule, under which such a leg sets them
+    aside with its windows and samples and starts anew (third review of PR #19: a leg was refused after its result had
+    been set aside, and a finished one on a resume)."""
+    from cufep.engine.leg import EQUIL_GHOSTS, NO_GHOST_RECORD, equil_ghosts_problem, start_cell_problem, starts_anew
+    from cufep.rbfe.leg import build_leg
+    from cufep.workflow import gcmc_in
+
+    if reschedule:
+        return
+    problems, commands = [], []
+    for a, b in edges:
+        edge = edge_name(a, b)
+        edge_dir = out_dir / "edges" / edge
+        for r in repeats:
+            for leg in ("solvent", "complex"):
+                leg_dir = edge_dir / f"repeat_{r}" / leg
+                if only_legs and leg not in only_legs:
+                    continue
+                if not gcmc_in(rcfg, leg) or not (leg_dir / "equil.npz").exists():
+                    continue
+                found = []
+                if starts_anew(leg_dir, False):
+                    why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
+                           else equil_ghosts_problem(leg_dir / "equil.npz", build_leg(rcfg, edge_dir, leg).gcmc))
+                    if why is not None:
+                        found.append(f"its pre-equilibration cannot start its replica exchange: {why}")
+                why = start_cell_problem(leg_dir)
+                if why is not None:
+                    found.append(why)
+                if found:
+                    problems.append(f"the {leg} leg of {edge}, repeat {r}: {'; '.join(found)}")
+                    commands.append(rerun_command(edge, r, [leg]))
+    if problems:
+        raise WorkflowError("; ".join(problems) + ". Nothing was changed. --reschedule sets aside what cannot be used "
+                            "with the windows, samples and result of a leg in previous_<n>/ and computes it anew: "
+                            + "; ".join(commands) + "; or run the calculation in a new output.dir")
+
+
+def check_legs_have_their_windows(out_dir: Path, edges, repeats, only_legs) -> None:
     """Before a run moves or writes anything: every leg it runs that has samples (or the checkpoint of their start)
     has the schedule of their windows (:func:`cufep.engine.leg.check_samples_have_their_windows`), so that a leg is
-    not refused after its result was set aside (fifth review of PR #18, the class of the ABFE's)."""
+    not refused after its result was set aside (fifth review of PR #18, the class of the ABFE's). ``repeats``: the
+    repeats the run runs."""
     from cufep.alchemy.schedule import Schedule
     from cufep.engine.leg import check_samples_have_their_windows
 
     for a, b in edges:
-        for r in range(repeats):
+        for r in repeats:
             for leg in ("solvent", "complex"):
                 if only_legs and leg not in only_legs:
                     continue
@@ -183,20 +235,24 @@ def check_legs_have_their_windows(out_dir: Path, edges, repeats: int, only_legs)
                     leg_dir, [state.to_dict() for state in Schedule.load(sched).states] if sched.exists() else None)
 
 
-def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None) -> dict:
-    """Run the whole relative calculation. Safe to call again to resume."""
+def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None,
+             only_repeats=None) -> dict:
+    """Run the whole relative calculation. Safe to call again to resume. ``only_edges``, ``only_legs`` and
+    ``only_repeats`` restrict the legs that run (`--edge`, `--leg`, `--repeat`)."""
     from cufep.run import lock_output_directory
 
     out_dir = Path(rcfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)
     try:
-        return _run(rcfg, out_dir, reschedule, log or _Log(out_dir / "cufep.log"), only_edges, only_legs)
+        return _run(rcfg, out_dir, reschedule, log or _Log(out_dir / "cufep.log"), only_edges, only_legs,
+                    only_repeats)
     finally:
         lock.close()
 
 
-def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None) -> dict:
+def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None,
+         only_repeats=None) -> dict:
     from cufep.rbfe.leg import EdgeLegJob
     from cufep.rbfe.prep import prepare_edge, prepared_edge
     from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
@@ -219,7 +275,14 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     unknown = sorted(set(only_edges or []) - set(names))
     if unknown:
         raise WorkflowError(f"--edge: {', '.join(unknown)} is not an edge of the run (edges: {', '.join(names)})")
-    check_windows_of_the_solvent_leg(rcfg, out_dir, selected, only_legs)
+    repeats_run = list(range(rcfg.sampling.repeats))
+    if only_repeats:
+        wrong = sorted({int(r) for r in only_repeats} - set(repeats_run))
+        if wrong:
+            raise WorkflowError(f"--repeat: {', '.join(map(str, wrong))} is not a repeat of the run (sampling.repeats "
+                                f"is {rcfg.sampling.repeats}: repeats 0 to {rcfg.sampling.repeats - 1})")
+        repeats_run = sorted({int(r) for r in only_repeats})
+    check_windows_of_the_solvent_leg(rcfg, out_dir, selected, only_legs, repeats_run)
     from cufep.rbfe.charge import charge_change_problems
 
     problems = charge_change_problems(ligands, edges)
@@ -233,7 +296,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     for a, b in edges:
         prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
     if not reschedule:
-        check_legs_have_their_windows(out_dir, selected, rcfg.sampling.repeats, only_legs)
+        check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
+    check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     experiment = experiment_of(rcfg, ligands)
     states = states_of(rcfg, ligands)
     if states is not None:
@@ -252,10 +316,10 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
                          devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
                          reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]))
-            for a, b in selected for r in range(repeats) for leg in ("solvent", "complex")
+            for a, b in selected for r in repeats_run for leg in ("solvent", "complex")
             if not only_legs or leg in only_legs]
     t_prepared = time.time()
-    log(f"{len(jobs)} job(s) of {len(selected)} edge(s) x 2 legs x {repeats} repeat(s); per lambda window "
+    log(f"{len(jobs)} job(s) of {len(selected)} edge(s) x 2 legs x {len(repeats_run)} repeat(s); per lambda window "
         f"{rcfg.sampling.equilibration('complex'):g} ns equilibration and "
         f"{rcfg.sampling.production_ns:g} ns production")
     gpus = list(rcfg.resources.gpus) if rcfg.resources.gpus else [None]
@@ -293,10 +357,9 @@ def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | N
     review of PR #19: such a leg was combined with a leg of this version). A leg records its version; one without the
     record is of version 1 unless it records ``grand_canonical``, which came with the fix. Where whether it had such
     terms cannot be told (its prepared systems cannot be read, or its hot region was ``perturbed``, which version 1
-    chose by an earlier rule), the leg is left out too (third review of PR #19). Each is ``{"leg", "repeat", "why",
-    "remove"}``: ``remove``, the files of the run directory to remove before the leg is computed again with
-    ``--reschedule`` (the pre-equilibration of a complex leg without a record of its ghost waters, which a leg with
-    the moves does not use again). ``counted`` keeps the counts of an edge between calls."""
+    chose by an earlier rule), the leg is left out too (third review of PR #19). Each is ``{"leg", "repeat", "why"}``;
+    `--edge E --repeat R --leg L --reschedule` computes it anew, and no other leg (:func:`rerun_command`; a
+    pre-equilibration it cannot use is set aside with it). ``counted`` keeps the counts of an edge between calls."""
     from cufep.rbfe.hybrid import HYBRID_VERSION
     from cufep.rbfe.leg import terms_left_unscaled_by_version_1
     from cufep.sampling.storage import stored_conditions
@@ -335,11 +398,8 @@ def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | N
                    "torsions of the core, which that version left unscaled with REST2" if n is None else
                    f"its REST2 left {n} terms of ligand B in the proper torsions of the core unscaled (the energies of "
                    "its states were not those of its Hamiltonian)")
-        remove = []
-        if leg == "complex" and (leg_dir / "equil.npz").exists() and not (leg_dir / "equil_ghosts.json").exists():
-            remove.append(f"edges/{Path(edge_dir).name}/repeat_{repeat}/{leg}/equil.npz")
         out.append({"leg": leg, "repeat": repeat, "why": f"the {leg} leg of repeat {repeat} is of an earlier version: "
-                    + why, "remove": remove})
+                    + why})
     return out
 
 
@@ -356,6 +416,17 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     from cufep.workflow import cycle_differences
 
     out = {"edge": edge_name(a, b), "ligand_a": a, "ligand_b": b, "repeats": []}
+    # an edge prepared by an earlier rule is left out, as the run refuses it (prepared_edge)
+    from cufep.rbfe.prep import earlier_rules_of
+
+    try:
+        info = json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
+    except (OSError, ValueError):
+        info = {}
+    earlier_rules = earlier_rules_of(info) if isinstance(info, dict) else []
+    if earlier_rules:
+        out["earlier_preparation"] = earlier_rules
+        return out
     complete, counted = [], {}
     for r in range(repeats):
         legs = {}
@@ -562,6 +633,10 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     left_out = [r["edge"] for r in results if r.get("earlier_version")]
     left_note = ([f"legs of an earlier version are left out of {len(left_out)} edge(s) ({', '.join(left_out)}); "
                   "their RESULT lines say why and how to compute them again"] if left_out else [])
+    prepared_before = [r["edge"] for r in results if r.get("earlier_preparation")]
+    if prepared_before:
+        left_note.append(f"{len(prepared_before)} edge(s) prepared by an earlier rule are left out "
+                         f"({', '.join(prepared_before)}); their RESULT lines say why and how to compute them again")
     # the experimental value of a state is that of its compound (third review of PR #19: ligands.csv gave it as if it
     # were measured for the state)
     of_compound = {"experiment_of_compound": dict(compound_of)} if compound_of else {}
@@ -668,15 +743,20 @@ def write_results(out_dir: Path, summary: dict) -> None:
 def result_lines(summary: dict) -> list[str]:
     lines = []
     for e in summary["edges"]:
+        if e.get("earlier_preparation"):
+            lines.append(f"RESULT {e['edge']}: no ddG; the edge was prepared by an earlier rule: "
+                         f"{'; '.join(e['earlier_preparation'])}. To compute it again: remove edges/{e['edge']} of the "
+                         f"run directory, then cufep rbfe run CONFIG --edge {e['edge']}")
+            continue
         if e.get("earlier_version"):
             left = e["earlier_version"]
-            legs = sorted({item["leg"] for item in left})
-            remove = [path for item in left for path in item["remove"]]
+            by_repeat: dict[int, list[str]] = {}
+            for item in left:
+                by_repeat.setdefault(int(item["repeat"]), []).append(item["leg"])
             lines.append(f"RESULT {e['edge']}: left out: {'; '.join(item['why'] for item in left)}. To compute "
                          + ("it" if len(left) == 1 else "them") + " again: "
-                         + (f"remove {', '.join(remove)} of the run directory, then " if remove else "")
-                         + f"cufep rbfe run CONFIG --edge {e['edge']} " + " ".join(f"--leg {leg}" for leg in legs)
-                         + " --reschedule")
+                         + "; ".join(rerun_command(e["edge"], r, sorted(legs))
+                                     for r, legs in sorted(by_repeat.items())))
         if "ddg" in e:
             exp = ""
             if e.get("exp_ddg") is not None:

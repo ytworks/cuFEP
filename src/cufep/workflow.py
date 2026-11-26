@@ -764,6 +764,20 @@ def electrostatics_annihilated(conditions: dict | None) -> bool:
     return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
 
 
+def earlier_ghosts_of(prep: dict, gcmc):
+    """The ghost waters that the versions which recorded none chose for an absolute leg with grand canonical moves of
+    water: those of this run where the images nearest to the first heavy atom of the ligand keep it whole (the sphere
+    of every earlier version); None where they are not known."""
+    if gcmc is None:
+        return None
+    from cufep.sampling.relocation_mc import nearest_first_is_whole
+
+    heavy = np.asarray(prep["positions"], dtype=float)[gcmc.ligand_heavy]
+    if nearest_first_is_whole(heavy, gcmc.ligand_heavy_bonds, np.asarray(prep["box"], dtype=float)):
+        return gcmc.ghosts
+    return None
+
+
 def alchemical_box(eq, gcmc) -> np.ndarray:
     """The cell in which the alchemical run of a leg starts, from its pre-equilibration (the arrays
     of ``equil.npz``): the cell of its last configuration. A leg with grand canonical moves of water
@@ -1084,6 +1098,27 @@ def old_checkpoint_refusal(leg_hrex: Path) -> str | None:
             "(cufep analyze); --reschedule starts the leg anew and keeps them in previous_<n>/")
 
 
+def check_pre_equilibration_of_a_leg_with_moves(cfg: Config, lig_dir: Path, leg: str, leg_dir: Path,
+                                                reschedule: bool) -> None:
+    """Before a run writes anything, for an absolute leg with grand canonical moves of water: a pre-equilibration
+    that cannot start its replica exchange where the leg starts from it (its restraint and the MD for it were made
+    from it: refused, for a new output directory), and, without --reschedule, start configurations in another cell
+    than it fixes (third review of PR #19). The same checks are made in the leg."""
+    from cufep.engine.leg import equil_ghosts_problem, start_cell_problem, starts_anew, unusable_pre_equilibration
+
+    equil_file = leg_dir / "equil.npz"
+    if starts_anew(leg_dir, reschedule):
+        prep = load_prepared(lig_dir / "prep", leg)
+        _system, moves = leg_system(cfg, prep, leg)
+        why = equil_ghosts_problem(equil_file, moves, earlier_ghosts_of(prep, moves))
+        if why is not None:
+            raise WorkflowError(unusable_pre_equilibration(equil_file, why, reschedule_sets_it_aside=False))
+    why = None if reschedule else start_cell_problem(leg_dir)
+    if why is not None:
+        raise WorkflowError(f"{why}. Nothing was changed; run the leg again with --reschedule (its windows, samples "
+                            "and result are set aside in previous_<n>/), or run the calculation in a new output.dir")
+
+
 def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info: dict, production_ns: float,
                     reschedule: bool = False, log=print) -> None:
     """Before a run writes or samples anything: what the leg directory holds must be usable by it.
@@ -1122,6 +1157,8 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     if equil_file.exists():
         eq = np.load(equil_file)
         check_equil_file(eq, equil_file, cfg, leg, in_membrane, leg_seed(cfg, repeat, leg), quiet)
+        if gcmc_in(cfg, leg):
+            check_pre_equilibration_of_a_leg_with_moves(cfg, lig_dir, leg, leg_dir, reschedule)
     # the system on which the MD for a restraint is made and the pre-equilibration it starts from: those of
     # the leg, or the complex in the bilayer of a leg whose alchemical run is in water (restraint_system)
     stage = restraint_system(prep_info) if is_complex else None
@@ -2276,14 +2313,20 @@ def leg_files(sample_dir: Path) -> dict[str, Path | None]:
     return out
 
 
-def archive_leg(leg_dir: Path) -> Path | None:
+def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
     """Move the lambda windows, samples and result of a leg into ``previous_<n>/`` in its directory.
 
     The leg then starts anew from its pre-equilibration and restraint, which stay where they
     are. Nothing is deleted. Returns the new directory, or None if the leg had none of these.
+    With ``pre_equilibration`` (a relative leg whose pre-equilibration cannot be used again,
+    :func:`cufep.engine.leg.equil_ghosts_problem`) the pre-equilibration and the record of its
+    ghost waters are moved too, and the leg starts anew from its prepared system.
     """
+    from cufep.engine.leg import EQUIL_GHOSTS
 
     present = [leg_dir / name for name in LEG_RUN_FILES if (leg_dir / name).exists()]
+    if pre_equilibration:
+        present += [leg_dir / name for name in ("equil.npz", EQUIL_GHOSTS) if (leg_dir / name).exists()]
     present += sorted(path for path in leg_dir.glob(f"{FAILED_BACKEND_DIR}_*") if path.is_dir())
     # an archive that an interrupted call began is completed, not begun a second time
     staging = sorted(leg_dir.glob(".previous_*.partial"))
@@ -2302,6 +2345,8 @@ def archive_leg(leg_dir: Path) -> Path | None:
     # the files these samples were made from stay with the leg, which uses them again; the archive
     # gets copies (leg_files), each written whole under another name first
     for name in LEG_INPUT_FILES:
+        if pre_equilibration and name == "equil.npz":
+            continue                                    # moved below, not copied
         if (leg_dir / name).exists() and not (stage / name).exists():
             publish(stage / name, lambda tmp, source=leg_dir / name: shutil.copy2(source, tmp))
     for f in present:
@@ -2692,6 +2737,7 @@ def run_leg(job: LegJob) -> dict:
         open_leg,
         pre_equilibrated,
         refuse_samples_without_windows,
+        starts_anew,
         with_fallback,
     )
     from cufep.mps import thread_percentage
@@ -2707,18 +2753,12 @@ def run_leg(job: LegJob) -> dict:
     if is_complex:
         check_manual_anchors(cfg, lig_dir)
     system, gcmc = leg_system(cfg, prep, job.leg)
-    earlier_ghosts = None
-    if gcmc is not None:
-        from cufep.sampling.relocation_mc import nearest_first_is_whole
-
-        # every earlier version took the sphere from the images nearest to the first heavy atom of the ligand: where
-        # they keep the molecule whole, its ghosts were those of this run
-        heavy = np.asarray(prep["positions"], dtype=float)[gcmc.ligand_heavy]
-        if nearest_first_is_whole(heavy, gcmc.ligand_heavy_bonds, np.asarray(prep["box"], dtype=float)):
-            earlier_ghosts = gcmc.ghosts
-    # a pre-equilibration this leg cannot use is refused before --reschedule sets anything aside (third review of
-    # PR #19)
-    check_equil_ghosts(job.leg_dir / "equil.npz", gcmc, earlier_ghosts)
+    # a pre-equilibration that cannot start the replica exchange of the leg is refused before anything is set aside
+    # (the run refuses it before it writes anything, check_leg_reuse); a leg that goes on from its samples does not
+    # use it (third review of PR #19)
+    if starts_anew(job.leg_dir, job.reschedule):
+        check_equil_ghosts(job.leg_dir / "equil.npz", gcmc, earlier_ghosts_of(prep, gcmc),
+                           reschedule_sets_it_aside=False)
     run = open_leg(job, cfg)
     leg_dir, log, seed, notes, timing, timed = run.leg_dir, run.log, run.seed, run.notes, run.timing, run.timed
     if gcmc is not None:
@@ -2736,8 +2776,7 @@ def run_leg(job: LegJob) -> dict:
     # ---- 1. pre-equilibration: plain MD of the fully interacting system -------------------
     equil_file = leg_dir / "equil.npz"
     in_membrane = is_complex and barostat == "membrane"
-    eq, equil_recorded = pre_equilibrated(run, prep, system, barostat, prep_info.get("membrane_info", {}), gcmc,
-                                          earlier_ghosts)
+    eq, equil_recorded = pre_equilibrated(run, prep, system, barostat, prep_info.get("membrane_info", {}), gcmc)
     # files of this leg that an earlier version wrote without a record of what they were made from
     origin_not_recorded: list[str] = [] if prep_info.get("made_from") is not None else ["the prepared systems"]
     if not equil_recorded:
@@ -3363,11 +3402,12 @@ def stored_windows(leg_dir: Path, leg: str, stages: list[str], settings: dict, l
     check_windows_settings(made, settings, start_file, log)
     if cell is not None and not np.allclose(np.asarray(configs[1], dtype=float),
                                             np.asarray(cell, dtype=float)[None], rtol=0.0, atol=1e-9):
+        # (the run refuses it before it writes anything: cufep.engine.leg.start_cell_problem)
         raise WorkflowError(
-            f"the start configurations of the lambda windows in {start_file} are in another cell than the "
-            f"pre-equilibration of this leg fixes ({Path(leg_dir) / 'equil.npz'}): they were made from another "
-            "pre-equilibration. Nothing was changed; run the leg again with --reschedule (its windows, samples and "
-            "result are set aside in previous_<n>/), or run the calculation in a new output.dir")
+            f"the start configurations of its windows ({start_file}) are in another cell than its pre-equilibration "
+            f"fixes ({Path(leg_dir) / 'equil.npz'}): they were made from another pre-equilibration. Run the leg again "
+            "with --reschedule (its windows, samples and result are set aside in previous_<n>/), or run the "
+            "calculation in a new output.dir")
     return schedule, configs, made
 
 

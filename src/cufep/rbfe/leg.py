@@ -233,6 +233,8 @@ def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> i
     the hybrid left unscaled with REST2 (:func:`cufep.rbfe.hybrid.terms_version_1_left_unscaled`), the hot region of
     the ligand by ``region``; None where the prepared systems of the edge cannot be read. They are terms of the two
     ligands and their mapping: counted on the end states of the solvent leg where the leg has its mapping."""
+    import zipfile
+
     import openmm as mm
 
     from cufep.rbfe.hybrid import make_hybrid_system, terms_version_1_left_unscaled
@@ -249,9 +251,10 @@ def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str) -> i
         hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                     mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
                                     end["core_map"], rest2=True, alchemical_water=water, rest2_ligand_atoms=hot)
-    except (OSError, KeyError, ValueError):
-        # a file of the prepared edge is missing or cannot be read: not known for this leg alone, and the analysis of
-        # the other edges goes on (third review of PR #19: FileNotFoundError stopped `cufep rbfe analyze`)
+    except (OSError, EOFError, zipfile.BadZipFile, KeyError, ValueError, mm.OpenMMException):
+        # a file of the prepared edge is missing or cannot be read (an XML, an NPZ empty or cut short): not known for
+        # this leg alone, and the analysis of the other edges goes on (third and fourth reviews of PR #19:
+        # FileNotFoundError, EOFError and BadZipFile stopped `cufep rbfe analyze`)
         return None
     return terms_version_1_left_unscaled(hybrid.system)
 
@@ -369,6 +372,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         check_equil_ghosts,
         check_kept_windows,
         chosen_backend,
+        equil_ghosts_problem,
         finish_leg,
         goes_on_from_its_samples,
         kept_start_record,
@@ -377,6 +381,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         pre_equilibrated,
         record_of_kept_windows,
         refuse_samples_without_windows,
+        starts_anew,
         starts_from,
         with_fallback,
     )
@@ -396,10 +401,14 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     rcfg = RbfeConfig.model_validate(job.config)
     edge_dir = Path(job.edge_dir)
     built = build_leg(rcfg, edge_dir, job.leg)
-    # a pre-equilibration this leg cannot use is refused before --reschedule sets anything aside (third review of
-    # PR #19: the leg was refused after its result had been moved, and the command it was told to run could not go on)
-    check_equil_ghosts(job.leg_dir / "equil.npz", built.gcmc)
-    run = open_leg(job, rcfg)
+    # a pre-equilibration that cannot start the replica exchange of the leg (an earlier version recorded no ghost
+    # waters, which a relative leg does not take on trust): --reschedule sets it aside with the windows and samples and
+    # the leg starts anew; without it a leg that would start from it is refused (the run refuses it before it writes
+    # anything, check_pre_equilibrations_of_the_run); a leg that goes on from its samples does not use it
+    unusable = equil_ghosts_problem(job.leg_dir / "equil.npz", built.gcmc)
+    if unusable is not None and not job.reschedule and starts_anew(job.leg_dir, False):
+        check_equil_ghosts(job.leg_dir / "equil.npz", built.gcmc)
+    run = open_leg(job, rcfg, unusable if job.reschedule else None)
     leg_dir, log, seed = run.leg_dir, run.log, run.seed
     hybrid, prep, barostat = built.hybrid, built.prep, built.barostat
     n_atoms = hybrid.system.getNumParticles()
@@ -431,7 +440,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info, gcmc)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
-    cell = None
+    cell, leg_xml = None, built.xml
     if gcmc is not None:
         # the cell is fixed from here on (cufep.workflow.alchemical_box), the configuration moved into it as a
         # barostat moves it
@@ -440,6 +449,13 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         cell = alchemical_box(eq, gcmc)
         start = (positions_in_cell(start[0], start[1], cell,
                                    molecules_of(hybrid.system, prep["topology"], hybrid.bonds)), cell, start[2])
+        # the cell is of the System of the samples, as in the ABFE (cufep.workflow.alchemical_leg): samples or a
+        # checkpoint of another cell are not continued (third review of PR #19: a leg that made its start
+        # configurations again in the cell of a new pre-equilibration went on from its checkpoint in the old one)
+        import openmm as mm
+
+        hybrid.system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in cell])
+        leg_xml = mm.XmlSerializer.serialize(hybrid.system)
 
     # ---- 2. backend -------------------------------------------------------------------------------
     backend_name = chosen_backend(run, hybrid.system)
@@ -457,7 +473,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more) -> LegSpec:
-        return LegSpec(name=job.tag, system_xml=built.xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
+        return LegSpec(name=job.tag, system_xml=leg_xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
                        backend=backend, precision=_precision(rcfg, backend), platform=rcfg.backend.platform,
                        temperature_K=T, pressure_bar=None if gcmc is not None else rcfg.thermodynamics.pressure_bar,
                        barostat="none" if gcmc is not None else barostat,

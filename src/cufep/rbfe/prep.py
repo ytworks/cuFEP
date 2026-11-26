@@ -218,6 +218,24 @@ PREPARATION_RULES = {
 }
 
 
+def earlier_rules_of(info: dict) -> list[str]:
+    """The rules of :data:`PREPARATION_RULES` by which an edge with the record ``info`` (its prep.json) was prepared
+    in an earlier version: the rule acts on the edge and its record does not hold the present version of it. The
+    analysis leaves such an edge out as the run refuses it (independent review of PR #19: `cufep rbfe analyze` and
+    `cufep benchmark report` took edges that `cufep rbfe run` refuses)."""
+    made_from = info.get("made_from") or {}
+    out = []
+    charge_changes = ("alchemical_water_cutoff_nm" in made_from
+                      or any((leg or {}).get("alchemical_water") for leg in (info.get("legs") or {}).values()))
+    if charge_changes and made_from.get("alchemical_water_rule") != PREPARATION_RULES["alchemical_water"]:
+        out.append("its alchemical water was chosen by the distances in the cell alone, which could take a water near "
+                   "the solutes across the boundary of the cell")
+    if ((made_from.get("mapping") or {}).get("core_smarts") is not None
+            and made_from.get("custom_core_rule") != PREPARATION_RULES["custom_core"]):
+        out.append("its custom core was mapped without the chirality of its atoms")
+    return out
+
+
 def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> dict | None:
     """The record of the prepared systems of an edge if they exist and this run can take them, None if there are
     none yet; WorkflowError if they were made from other inputs or settings. Writes nothing: a run checks every edge

@@ -169,13 +169,14 @@ def test_a_pre_equilibration_of_other_ghost_waters_is_not_used_again(tmp_path, m
     """Second review of PR #19 (P2): with `ghost_waters: auto` a radius of 1.05 nm instead of 1.00 nm gives 160 ghosts
     instead of 139; equil.npz recorded `auto`, and a leg resumed after its pre-equilibration was fixed in the cell
     equilibrated with the other waters. The ghosts are recorded before the pre-equilibration is made (equil_ghosts.json)
-    and a pre-equilibration of other ghosts, or of an earlier version whose ghosts are not known, is refused before
-    anything is written; one of the same ghosts is used again."""
+    and a pre-equilibration of other ghosts, or of an earlier version whose ghosts are not known, is refused
+    (check_equil_ghosts: the leg calls it before anything is set aside, the run for all its legs before it writes
+    anything); one of the same ghosts is used again."""
     import json
     from types import SimpleNamespace
 
     from cufep import workflow
-    from cufep.engine.leg import EQUIL_GHOSTS, pre_equilibrated
+    from cufep.engine.leg import EQUIL_GHOSTS, check_equil_ghosts, pre_equilibrated
 
     made = []
 
@@ -193,13 +194,16 @@ def test_a_pre_equilibration_of_other_ghost_waters_is_not_used_again(tmp_path, m
     assert json.loads((tmp_path / EQUIL_GHOSTS).read_text())["ghosts"] == list(range(139)) and made == [1]
     pre_equilibrated(run, {}, None, "isotropic", {}, moves)
     assert made == [1]
+    equil = tmp_path / "equil.npz"
+    check_equil_ghosts(equil, moves)
     more = SimpleNamespace(ghosts=np.arange(160), waters=moves.waters)
     with pytest.raises(workflow.WorkflowError, match="made with 139 ghost waters and this run has 160"):
-        pre_equilibrated(run, {}, None, "isotropic", {}, more)
+        check_equil_ghosts(equil, more)
     (tmp_path / EQUIL_GHOSTS).unlink()                               # a pre-equilibration of an earlier version
     with pytest.raises(workflow.WorkflowError, match="records no ghost waters"):
-        pre_equilibrated(run, {}, None, "isotropic", {}, moves)
-    pre_equilibrated(run, {}, None, "isotropic", {}, moves, earlier_ghosts=np.arange(139))
+        check_equil_ghosts(equil, moves)
+    check_equil_ghosts(equil, moves, earlier_ghosts=np.arange(139))
+    pre_equilibrated(run, {}, None, "isotropic", {}, moves)
     assert made == [1] and not (tmp_path / EQUIL_GHOSTS).exists()
 
 

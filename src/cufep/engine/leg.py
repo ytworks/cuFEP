@@ -41,19 +41,24 @@ class LegRun:
         self.timing["phases"][name] = self.timing["phases"].get(name, 0.0) + (time.perf_counter() - t_start)
 
 
-def open_leg(job, cfg) -> LegRun:
+def open_leg(job, cfg, set_aside_pre_equilibration: str | None = None) -> LegRun:
     """The directory and the log of a leg, with what it had set aside when its windows are determined again
-    (``--reschedule``)."""
+    (``--reschedule``). ``set_aside_pre_equilibration``: why the pre-equilibration of the leg cannot be used again
+    (:func:`equil_ghosts_problem`); with ``--reschedule`` it is set aside with the windows and samples, and the leg
+    starts anew from its prepared system (third review of PR #19)."""
     from cufep.workflow import _Log, archive_leg, leg_seed
 
     leg_dir = job.leg_dir
     leg_dir.mkdir(parents=True, exist_ok=True)
     log = _Log(leg_dir / "log.txt", prefix=f"[{job.tag}] ")
     if job.reschedule:
-        previous = archive_leg(leg_dir)
+        previous = archive_leg(leg_dir, pre_equilibration=set_aside_pre_equilibration is not None)
         if previous is not None:
             log(f"the lambda windows are determined again; the windows and samples this leg had are in "
-                f"{previous.name}/")
+                f"{previous.name}/"
+                + ("" if set_aside_pre_equilibration is None else
+                   f", with its pre-equilibration, which cannot be used again ({set_aside_pre_equilibration}): "
+                   "it is made anew"))
     return LegRun(job=job, cfg=cfg, leg_dir=leg_dir, log=log, seed=leg_seed(cfg, job.repeat, job.leg),
                   device0=job.devices[0] if job.devices else None)
 
@@ -63,48 +68,94 @@ def open_leg(job, cfg) -> LegRun:
 EQUIL_GHOSTS = "equil_ghosts.json"
 
 
-def check_equil_ghosts(equil_file: Path, gcmc, earlier_ghosts=None) -> None:
-    """Refuse a pre-equilibration of a leg with grand canonical moves of water whose ghost waters are not those of
-    this run (second review of PR #19: a change of the radius of the sphere changed the number of ghosts of ``auto``
-    from 139 to 160, and the leg was fixed in the cell equilibrated with 139). Its record (:data:`EQUIL_GHOSTS`), else
-    ``earlier_ghosts``, the ghosts that the versions which wrote no record chose for it (None: not known). Nothing to
-    check for a leg without the moves or without a pre-equilibration. A leg calls it before ``--reschedule`` sets
-    anything aside (:func:`open_leg`), so that a refused leg keeps what it had."""
-    from cufep.workflow import WorkflowError
-
+def equil_ghosts_problem(equil_file: Path, gcmc, earlier_ghosts=None) -> str | None:
+    """Why the pre-equilibration of a leg with grand canonical moves of water cannot start the replica exchange of
+    this run: its ghost waters are not those of this run (second review of PR #19: a change of the radius of the
+    sphere changed the number of ghosts of ``auto`` from 139 to 160, and the leg was fixed in the cell equilibrated
+    with 139). Its record (:data:`EQUIL_GHOSTS`), else ``earlier_ghosts``, the ghosts that the versions which wrote no
+    record chose for it (None: not known). None for a leg without the moves or without a pre-equilibration, and for
+    one whose ghosts are those of this run. It matters only for a leg that starts its replica exchange from the
+    pre-equilibration (:func:`starts_anew`): samples record the System they were made with, ghosts and all."""
     equil_file = Path(equil_file)
     if gcmc is None or not equil_file.exists():
-        return
+        return None
     record = equil_file.parent / EQUIL_GHOSTS
     current = [int(i) for i in gcmc.ghosts]
     if record.exists():
         stored = [int(i) for i in json.loads(record.read_text())["ghosts"]]
-        why = None if stored == current else (f"it was made with {len(stored)} ghost waters and this run has "
-                                              f"{len(current)}" + ("" if len(stored) != len(current) else
-                                                                    " others"))
-    elif earlier_ghosts is not None and [int(i) for i in earlier_ghosts] == current:
-        why = None
-    else:
-        why = "it records no ghost waters (an earlier version wrote it) and they are not known to be those of this run"
+        if stored == current:
+            return None
+        return (f"it was made with {len(stored)} ghost waters and this run has {len(current)}"
+                + ("" if len(stored) != len(current) else " others"))
+    if earlier_ghosts is not None and [int(i) for i in earlier_ghosts] == current:
+        return None
+    return NO_GHOST_RECORD
+
+
+#: why a pre-equilibration without a record of its ghost waters cannot start a replica exchange that needs it
+NO_GHOST_RECORD = ("it records no ghost waters (an earlier version wrote it) and they are not known to be those of "
+                   "this run")
+
+
+def starts_anew(leg_dir: Path, reschedule: bool) -> bool:
+    """Whether the replica exchange of a leg starts from its pre-equilibration in this run: with ``--reschedule``
+    (its samples are set aside), or without samples or the checkpoint of their start
+    (:func:`goes_on_from_its_samples`). A leg that goes on from its samples, or is analysed again from complete
+    ones, does not make configurations from its pre-equilibration (third review of PR #19: a finished leg was refused
+    on a resume and lost its result)."""
+    return bool(reschedule) or not goes_on_from_its_samples(leg_dir)
+
+
+def start_cell_problem(leg_dir: Path) -> str | None:
+    """Why the start configurations of the windows of a leg with grand canonical moves of water cannot be used: they
+    are in another cell than its pre-equilibration fixes (:func:`cufep.workflow.alchemical_box`; third review of
+    PR #19: a pre-equilibration made again left the run in the cell of the one before). None where the leg has not
+    both files."""
+    from cufep.workflow import alchemical_box
+
+    equil_file, start_file = Path(leg_dir) / "equil.npz", Path(leg_dir) / "start_configs.npz"
+    if not (equil_file.exists() and start_file.exists()):
+        return None
+    with np.load(equil_file) as eq, np.load(start_file) as start:
+        cell = alchemical_box(eq, True)
+        boxes = np.asarray(start["boxes"], dtype=float)
+    if np.allclose(boxes, np.asarray(cell, dtype=float)[None], rtol=0.0, atol=1e-9):
+        return None
+    return (f"the start configurations of its windows ({start_file}) are in another cell than its pre-equilibration "
+            f"fixes ({equil_file}): they were made from another pre-equilibration")
+
+
+def unusable_pre_equilibration(equil_file: Path, why: str, reschedule_sets_it_aside: bool) -> str:
+    """The refusal of a pre-equilibration that cannot start the replica exchange of a leg, with the way on: a relative
+    leg is computed anew with ``--reschedule``, which sets the pre-equilibration aside (:func:`open_leg`); an absolute
+    leg has made its restraint and the MD for it from it, and is computed in a new output directory."""
+    return (f"the pre-equilibration of this leg in {equil_file} cannot be used again: {why}. Nothing was changed; "
+            + ("run the leg with --reschedule, which sets it aside with the windows, samples and result of the leg in "
+               "previous_<n>/ and computes the leg anew, or run the calculation in a new output.dir"
+               if reschedule_sets_it_aside else
+               "the restraint of the leg and the MD for it were made from it: run the calculation in a new output.dir"))
+
+
+def check_equil_ghosts(equil_file: Path, gcmc, earlier_ghosts=None, reschedule_sets_it_aside: bool = True) -> None:
+    """Refuse a pre-equilibration that cannot start the replica exchange of a leg (:func:`equil_ghosts_problem`):
+    the check in the leg, after the run has made it for all its legs before it wrote anything."""
+    from cufep.workflow import WorkflowError
+
+    why = equil_ghosts_problem(equil_file, gcmc, earlier_ghosts)
     if why is not None:
-        raise WorkflowError(f"the pre-equilibration of this leg in {equil_file} cannot be used again: {why}. Nothing "
-                            f"was changed. To compute the leg again, remove {equil_file.name} and {EQUIL_GHOSTS} of "
-                            "this leg and run it with --reschedule (its windows, samples and result are set aside in "
-                            "previous_<n>/); or run the calculation in a new output.dir")
+        raise WorkflowError(unusable_pre_equilibration(equil_file, why, reschedule_sets_it_aside))
 
 
-def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_info: dict, gcmc=None,
-                     earlier_ghosts=None):
+def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_info: dict, gcmc=None):
     """The pre-equilibration of the leg (``equil.npz``), made if the leg has none, checked against the settings of
     this run: ``(its arrays, whether its file records what it was made with)``. With grand canonical moves of water
-    (``gcmc``) the ghost waters it is made with are recorded first, and checked when it is used again
-    (:func:`check_equil_ghosts`)."""
+    (``gcmc``) the ghost waters it is made with are recorded first (:data:`EQUIL_GHOSTS`); whether one that is there
+    can start the replica exchange the leg checks before anything is set aside (:func:`check_equil_ghosts`)."""
     from cufep.files import publish_text
     from cufep.workflow import check_equil_file, run_pre_equilibration
 
     equil_file = run.leg_dir / "equil.npz"
     leg = run.job.leg
-    check_equil_ghosts(equil_file, gcmc, earlier_ghosts)
     if not equil_file.exists():
         if gcmc is not None:
             publish_text(run.leg_dir / EQUIL_GHOSTS, json.dumps({"ghosts": [int(i) for i in gcmc.ghosts],
