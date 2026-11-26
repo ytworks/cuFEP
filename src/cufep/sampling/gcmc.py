@@ -116,6 +116,7 @@ class GcmcSpec:
     #: the state (an ABFE leg). A relative leg has no such pair: its ligand interacts in U' with the parameters of
     #: both end states at full strength, which the test with the full potential corrects (cuFEP's own)
     stand_in_lambdas: tuple[float, float] | None = None
+    ligand_heavy_bonds: np.ndarray | None = None   # the bonds between the heavy atoms (pairs of positions in them)
 
     @property
     def adams(self) -> float:
@@ -132,12 +133,12 @@ class GcmcSpec:
 
 
 def farthest_waters(waters: np.ndarray, positions: np.ndarray, box: np.ndarray, ligand_heavy: np.ndarray,
-                    n: int) -> np.ndarray:
+                    n: int, bonds=None) -> np.ndarray:
     """The ``n`` waters whose oxygen is farthest from the geometric centre of the heavy atoms of the
-    ligand (nearest image), in ascending order of their number: the ghosts of the start."""
+    ligand (the molecule whole along ``bonds``, nearest image), in ascending order of their number: the ghosts of the
+    start."""
     x, box = np.asarray(positions, dtype=float), np.asarray(box, dtype=float)
-    heavy = x[np.asarray(ligand_heavy)]
-    centre = heavy[0] + nearest_image(heavy - heavy[0], box).mean(axis=0)
+    centre = _centre(x, box, ligand_heavy, bonds)
     distance = np.linalg.norm(nearest_image(x[np.asarray(waters)[:, 0]] - centre, box), axis=1)
     if int(n) > len(distance):
         raise GcmcError(f"{int(n)} ghost waters are asked for and the system has {len(distance)} waters")
@@ -207,15 +208,16 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
               softcore_alpha: float, softcore_b: int, temperature_K: float, interval_ps: float, attempts: int,
               batch_size: int, radius_margin_nm: float, excess_chemical_potential_kcal_per_mol: float,
               standard_volume_nm3: float, ghost_waters: int | None,
-              radius_from_nm: np.ndarray | None = None) -> GcmcSpec:
+              radius_from_nm: np.ndarray | None = None, radius_from_bonds=None) -> GcmcSpec:
     """What a mover needs, from the ``system`` of a leg with every water interacting, its
     ``topology`` and the pose that was prepared. The waters and the sphere are found as for the
     water relocation moves (:func:`cufep.sampling.relocation_mc.relocation_spec`, with its
     conditions). ``ghost_waters`` None: as many as the sphere would hold if it were all bulk water
     (its volume by the standard volume, rounded up; cuFEP's own: the sources give examples of 10 to
     50 and no rule). ``radius_from_nm``: the heavy atoms whose largest distance gives the radius, where they are not
-    those of the ligand in ``positions`` (the two end states of a relative leg). Raises GcmcError where the moves cannot
-    be made."""
+    those of the ligand in ``positions`` (the two end states of a relative leg), with ``radius_from_bonds`` the bonds
+    between them (pairs of positions in them), each molecule taken whole (:func:`whole_pose`). Raises GcmcError where
+    the moves cannot be made."""
     try:
         base = relocation_spec(system, topology, positions, box, ligand, cutoff_nm, softcore_alpha, softcore_b,
                                temperature_K, 1, None, interval_ps, radius_margin_nm)
@@ -226,10 +228,9 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
     if radius_from_nm is not None:
         import dataclasses
 
-        from cufep.sampling.relocation_mc import sphere_radius
+        from cufep.sampling.relocation_mc import sphere_radius, whole_pose
 
-        pose = np.asarray(radius_from_nm, dtype=float)
-        pose = pose[0] + nearest_image(pose - pose[0], np.asarray(box, dtype=float))
+        pose = whole_pose(np.asarray(radius_from_nm, dtype=float), radius_from_bonds, np.asarray(box, dtype=float))
         base = dataclasses.replace(base, radius_nm=sphere_radius(pose, radius_margin_nm))
         check_cell(np.asarray(box, dtype=float), base.radius_nm, float(cutoff_nm))
     if int(attempts) < 1 or int(batch_size) < 1:
@@ -240,10 +241,11 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
         ghost_waters = int(np.ceil(4.0 / 3.0 * np.pi * base.radius_nm ** 3 / float(standard_volume_nm3)))
     if int(ghost_waters) < 1:
         raise GcmcError("at least one ghost water is needed")
-    ghosts = farthest_waters(base.waters, positions, box, base.ligand_heavy, int(ghost_waters))
+    ghosts = farthest_waters(base.waters, positions, box, base.ligand_heavy, int(ghost_waters), base.ligand_heavy_bonds)
     inside = np.linalg.norm(
         nearest_image(np.asarray(positions, dtype=float)[base.waters[ghosts, 0]]
-                      - _centre(np.asarray(positions, dtype=float), np.asarray(box, dtype=float), base.ligand_heavy),
+                      - _centre(np.asarray(positions, dtype=float), np.asarray(box, dtype=float), base.ligand_heavy,
+                                base.ligand_heavy_bonds),
                       np.asarray(box, dtype=float)), axis=1) < base.radius_nm
     if inside.any():
         raise GcmcError(f"{int(ghost_waters)} ghost waters would take waters of the sphere itself")
@@ -253,12 +255,15 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
                     temperature_K=base.temperature_K, interval_ps=float(interval_ps), attempts=int(attempts),
                     batch_size=int(batch_size),
                     excess_chemical_potential_kj_per_mol=4.184 * float(excess_chemical_potential_kcal_per_mol),
-                    standard_volume_nm3=float(standard_volume_nm3), ghosts=ghosts)
+                    standard_volume_nm3=float(standard_volume_nm3), ghosts=ghosts,
+                    ligand_heavy_bonds=base.ligand_heavy_bonds)
 
 
-def _centre(x: np.ndarray, box: np.ndarray, ligand_heavy: np.ndarray) -> np.ndarray:
-    heavy = x[np.asarray(ligand_heavy)]
-    return heavy[0] + nearest_image(heavy - heavy[0], box).mean(axis=0)
+def _centre(x: np.ndarray, box: np.ndarray, ligand_heavy: np.ndarray, bonds=None) -> np.ndarray:
+    """The geometric centre of the heavy atoms of the ligand, the molecule whole along ``bonds``."""
+    from cufep.sampling.relocation_mc import whole_pose
+
+    return whole_pose(x[np.asarray(ligand_heavy)], bonds, box).mean(axis=0)
 
 
 class WaterSwitch:
@@ -341,7 +346,7 @@ class GcmcMover:
 
     # -- the configuration -------------------------------------------------------------------------
     def centre(self, x: np.ndarray, box: np.ndarray) -> np.ndarray:
-        return _centre(x, box, self.spec.ligand_heavy)
+        return _centre(x, box, self.spec.ligand_heavy, self.spec.ligand_heavy_bonds)
 
     def in_sphere(self, x: np.ndarray, box: np.ndarray, on: np.ndarray | None = None) -> np.ndarray:
         """The waters that interact and have their oxygen in the sphere (their numbers)."""

@@ -133,14 +133,14 @@ class HybridLeg:
     gcmc: object = None           # cufep.sampling.gcmc.GcmcSpec of a leg with grand canonical moves of water
 
 
-def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None):
+def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=None):
     """The grand canonical moves of water of a hybrid System (all its waters interacting): their specification
     (:func:`cufep.sampling.gcmc.gcmc_spec`), with the ligand of the stand-in energy at fixed lambdas, its atoms with
     the parameters of A and those unique to B with the parameters of B (the module's docstring; the alchemical water
     enters it as the NonbondedForce has it, its charges of A and no Lennard-Jones). The test with the full potential
     corrects what the stand-in leaves out. The radius of the sphere is from the heavy atoms of both end states in
     their poses (``end_heavy_nm``), so that A -> B and B -> A have one sphere (review of PR #19: from the hybrid, which
-    holds the mapped atoms where A has them)."""
+    holds the mapped atoms where A has them), each molecule whole along its bonds (``end_heavy_bonds``)."""
     import dataclasses
 
     from cufep.sampling.gcmc import GcmcError, gcmc_spec
@@ -153,7 +153,7 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None):
                          list(hybrid.ligand_atoms), rcfg.dynamics.cutoff_nm, rcfg.alchemy.softcore_alpha, 1,
                          rcfg.thermodynamics.temperature_K, g.interval_ps, g.attempts, g.batch_size,
                          g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters),
-                         radius_from_nm=end_heavy_nm)
+                         radius_from_nm=end_heavy_nm, radius_from_bonds=end_heavy_bonds)
     except GcmcError as exc:
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {exc}") from exc
     charge, sigma, epsilon = (np.array(v, dtype=float) for v in (spec.charge, spec.sigma, spec.epsilon))
@@ -212,11 +212,19 @@ def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int],
     return sorted(perturbed_hot_atoms(molecules[0], molecules[1], to_a, to_b, set(core_map)))
 
 
-def end_heavy(end: dict) -> list:
-    """The positions (nm) of the heavy atoms of the ligand of a prepared end state."""
-    atoms = list(end["topology"].atoms())
-    positions = np.asarray(end["positions"], dtype=float)
-    return [positions[i] for i in end["ligand"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
+def end_states_heavy(a: dict, b: dict) -> tuple[list, list]:
+    """The heavy atoms of the ligands of the two prepared end states, A then B (positions, nm), and the bonds between
+    them (pairs of positions in that list): what the radius of the sphere of the moves is taken from, each molecule
+    whole along its bonds (second review of PR #19)."""
+    from cufep.sampling.relocation_mc import heavy_bonds
+
+    points, bonds = [], []
+    for end in (a, b):
+        atoms = list(end["topology"].atoms())
+        heavy = [i for i in end["ligand"] if atoms[i].element is not None and atoms[i].element.symbol != "H"]
+        bonds += [(len(points) + int(i), len(points) + int(j)) for i, j in heavy_bonds(end["topology"], heavy)]
+        points += [np.asarray(end["positions"], dtype=float)[i] for i in heavy]
+    return points, bonds
 
 
 def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
@@ -248,7 +256,7 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
     if gcmc_in(rcfg, leg):
         from cufep.sampling.gcmc import ghosts_off
 
-        gcmc = hybrid_gcmc(rcfg, hybrid, topology, a["box"], end_heavy(a) + end_heavy(b))
+        gcmc = hybrid_gcmc(rcfg, hybrid, topology, a["box"], *end_states_heavy(a, b))
         # every MD of the leg is of the System with the ghosts of the start switched off
         ghosts_off(hybrid.system, gcmc.waters[gcmc.ghosts].reshape(-1))
     xml = mm.XmlSerializer.serialize(hybrid.system)

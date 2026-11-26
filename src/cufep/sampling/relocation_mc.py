@@ -103,6 +103,54 @@ def sphere_radius(ligand_heavy_positions: np.ndarray, margin_nm: float) -> float
     return 0.5 * float(np.max(np.linalg.norm(x[:, None, :] - x[None, :, :], axis=2))) + float(margin_nm)
 
 
+def whole_pose(points: np.ndarray, bonds, box: np.ndarray) -> np.ndarray:
+    """The points (n x 3, nm) of molecules in a periodic cell with every molecule whole: each along its ``bonds``
+    (pairs of indices of the points), every molecule after the first at the image of its geometric centre nearest to
+    that of the first. Where the image of every point nearest to the first point keeps every bond whole, that pose
+    (the pose of a molecule shorter than half the cell, the same numbers as before; second review of PR #19: a ligand
+    of 2.1 nm in a cell of 4 nm was broken by the images nearest to its first atom, and its sphere took 2.225 nm
+    instead of 1.35)."""
+    x, box = np.asarray(points, dtype=float), np.asarray(box, dtype=float)
+    simple = x[0] + nearest_image(x - x[0], box)
+    pairs = np.asarray(list(bonds) if bonds is not None else [], dtype=np.int64).reshape(-1, 2)
+    if not len(pairs):
+        return simple
+    d = simple[pairs[:, 1]] - simple[pairs[:, 0]]
+    if np.allclose(d, nearest_image(d, box), rtol=0.0, atol=1e-9):
+        return simple
+    neighbours: dict[int, list[int]] = {i: [] for i in range(len(x))}
+    for i, j in pairs:
+        neighbours[int(i)].append(int(j))
+        neighbours[int(j)].append(int(i))
+    out = np.full_like(x, np.nan)
+    first_centre = None
+    for start in range(len(x)):
+        if not np.isnan(out[start, 0]):
+            continue
+        out[start] = x[start]
+        members, todo = [start], [start]
+        while todo:
+            i = todo.pop()
+            for j in sorted(neighbours[i]):
+                if np.isnan(out[j, 0]):
+                    out[j] = out[i] + nearest_image((x[j] - x[i])[None], box)[0]
+                    members.append(j)
+                    todo.append(j)
+        centre = out[members].mean(axis=0)
+        if first_centre is None:
+            first_centre = centre
+        else:
+            out[members] += first_centre + nearest_image((centre - first_centre)[None], box)[0] - centre
+    return out
+
+
+def heavy_bonds(topology, heavy) -> np.ndarray:
+    """The bonds of the topology between the atoms ``heavy`` (pairs of positions in ``heavy``)."""
+    where = {int(a): k for k, a in enumerate(heavy)}
+    return np.array(sorted((where[a.index], where[b.index]) for a, b in topology.bonds()
+                           if a.index in where and b.index in where), dtype=np.int64).reshape(-1, 2)
+
+
 @dataclass
 class RelocationSpec:
     """What a mover needs of a leg (picklable; made by the workflow from the prepared system)."""
@@ -122,6 +170,7 @@ class RelocationSpec:
     trial_poses: int
     inner_fraction: float | None  # None: anchors uniform in the whole cell (the paper)
     interval_ps: float
+    ligand_heavy_bonds: np.ndarray | None = None   # the bonds between them (pairs of positions in ligand_heavy)
 
 
 def image_within_half_a_cell(delta: np.ndarray, box: np.ndarray) -> np.ndarray:
@@ -661,8 +710,7 @@ class RelocationMover:
     def centre(self, x: np.ndarray, box: np.ndarray) -> np.ndarray:
         """The centre of the sphere: the geometric centre of the heavy atoms of the ligand, the
         molecule taken whole."""
-        heavy = x[self.spec.ligand_heavy]
-        return heavy[0] + nearest_image(heavy - heavy[0], box).mean(axis=0)
+        return whole_pose(x[self.spec.ligand_heavy], self.spec.ligand_heavy_bonds, box).mean(axis=0)
 
     def inside(self, x: np.ndarray, box: np.ndarray) -> np.ndarray:
         """Whether each water is in the sphere: by its oxygen."""
@@ -862,9 +910,8 @@ def relocation_spec(system, topology, positions: np.ndarray, box: np.ndarray, li
     if not len(heavy):
         raise RelocationError("the ligand has no heavy atom")
     box = np.asarray(box, dtype=float)
-    pose = np.asarray(positions, dtype=float)[heavy]
-    pose = pose[0] + nearest_image(pose - pose[0], box)
-    radius = sphere_radius(pose, radius_margin_nm)
+    bonds = heavy_bonds(topology, heavy)
+    radius = sphere_radius(whole_pose(np.asarray(positions, dtype=float)[heavy], bonds, box), radius_margin_nm)
     check_cell(box, radius, float(cutoff_nm))
     if float(cutoff_nm) < SCORE_RADIUS_NM:
         raise RelocationError(f"the cutoff ({float(cutoff_nm):g} nm) is shorter than the radius of the scores "
@@ -875,4 +922,4 @@ def relocation_spec(system, topology, positions: np.ndarray, box: np.ndarray, li
                           softcore_alpha=float(softcore_alpha), softcore_b=int(softcore_b),
                           temperature_K=float(temperature_K), trial_poses=int(trial_poses),
                           inner_fraction=None if inner_fraction is None else float(inner_fraction),
-                          interval_ps=float(interval_ps))
+                          interval_ps=float(interval_ps), ligand_heavy_bonds=bonds)

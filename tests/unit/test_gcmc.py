@@ -666,3 +666,72 @@ def test_the_windows_started_in_this_process_make_the_moves_a_worker_makes(water
                           10, 0.08)
     assert len(configs) == len(schedule.states)
     assert all(len(c) == 4 and c[3].dtype == bool and len(c[3]) == len(moves.waters) for c in configs)
+
+
+def _chain_in_a_cell(xs, edge: float = 4.0):
+    """A chain of carbon atoms at ``xs`` (nm, in this order of atoms, bonded along x) through the middle of a cubic
+    cell of ``edge`` nm, and four waters far from it: (system, topology, positions, box, ligand)."""
+    system, top = mm.System(), app.Topology()
+    nb = mm.NonbondedForce()
+    nb.setNonbondedMethod(mm.NonbondedForce.CutoffPeriodic)
+    nb.setCutoffDistance(0.9)
+    chain = top.addChain()
+    residue = top.addResidue("LIG", chain)
+    atoms, positions = [], []
+    for x in xs:
+        system.addParticle(12.0)
+        nb.addParticle(0.0, 0.34, 0.4)
+        atoms.append(top.addAtom("C", app.Element.getBySymbol("C"), residue))
+        positions.append([x, 0.5 * edge, 0.5 * edge])
+    order = np.argsort(xs)
+    for i, j in zip(order[:-1], order[1:]):
+        top.addBond(atoms[i], atoms[j])
+    for k in range(4):
+        water = top.addResidue("HOH", chain)
+        o = [3.05, 0.1 + 0.3 * k, 0.1]
+        for name, element, q, s, e, dx in (("O", "O", -0.834, 0.315, 0.636, 0.0), ("H1", "H", 0.417, 0.1, 0.0, 0.0957),
+                                           ("H2", "H", 0.417, 0.1, 0.0, -0.024)):
+            system.addParticle(15.999 if element == "O" else 1.008)
+            nb.addParticle(q, s, e)
+            top.addAtom(name, app.Element.getBySymbol(element), water)
+            positions.append([o[0] + dx, o[1] + (0.0927 if name == "H2" else 0.0), o[2]])
+    system.addForce(nb)
+    box = np.eye(3) * edge
+    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in box])
+    top.setPeriodicBoxVectors([mm.Vec3(*row) for row in box])
+    return system, top, np.asarray(positions), box, list(range(len(xs)))
+
+
+def test_the_sphere_of_a_long_ligand_is_that_of_the_molecule_whole_whatever_its_first_atom():
+    """Second review of PR #19 (P2): a chain of heavy atoms from x = 0 to 2.10 nm, 0.15 nm apart, in a cubic cell of
+    4 nm, margin 0.30 nm: with the atom at x = 0 first, the image nearest to it put the atom at 2.10 nm at -1.90, the
+    radius was 2.225 nm and the cell was refused; with the atom at 1.05 nm first it was 1.35 nm. The molecule is taken
+    whole along its bonds: 1.35 nm whatever the first atom, for the water relocation moves, for the grand canonical
+    moves, and for the two end states of a relative leg in the order of its call, A then B or B then A; the centre of
+    the sphere is the middle of the chain. A molecule that needs no unwrapping has the pose of before."""
+    from cufep.alchemy.lrc import nearest_image
+    from cufep.rbfe.leg import end_states_heavy
+    from cufep.sampling.gcmc import _centre
+    from cufep.sampling.relocation_mc import relocation_spec, whole_pose
+
+    xs = 0.15 * np.arange(15)
+    middle_first = np.concatenate([xs[7:], xs[:7]])
+    radii = []
+    for order in (xs, middle_first):
+        system, top, positions, box, ligand = _chain_in_a_cell(order)
+        radii.append(relocation_spec(system, top, positions, box, ligand, 0.9, 0.5, 1, 298.15, 4, None, 4.0,
+                                     0.3).radius_nm)
+        spec = spec_of(system, top, positions, box, ligand, 2)
+        radii.append(spec.radius_nm)
+        assert _centre(positions, box, spec.ligand_heavy, spec.ligand_heavy_bonds) == pytest.approx([1.05, 2.0, 2.0])
+    a = dict(zip(("topology", "positions", "ligand"), _chain_in_a_cell(xs)[1:3] + (list(range(15)),)))
+    b = dict(zip(("topology", "positions", "ligand"), _chain_in_a_cell(middle_first[:-1])[1:3] + (list(range(14)),)))
+    system, top, positions, box, ligand = _chain_in_a_cell(xs)
+    for first, second in ((a, b), (b, a)):
+        points, bonds = end_states_heavy(first, second)
+        radii.append(spec_of(system, top, positions, box, ligand, 2, radius_from_nm=np.asarray(points),
+                             radius_from_bonds=bonds).radius_nm)
+    assert radii == pytest.approx([1.35] * 6, abs=1e-9)
+    compact = positions[:5]
+    assert np.array_equal(whole_pose(compact, [(i, i + 1) for i in range(4)], box),
+                          compact[0] + nearest_image(compact - compact[0], box))
