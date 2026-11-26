@@ -236,6 +236,15 @@ barostat; the solvent leg is in water. Ligand B is moved with the rigid motion t
 system gave ligand A. With a water of more than three sites the bilayer is built with the 3-site water of the
 lipid patch and given the water of the run afterwards, as in the ABFE.
 
+### Running the edges
+
+On GPUs the legs of an edge start as soon as the edge is prepared, while the next edges are prepared (a complex
+leg in a bilayer takes about two minutes to prepare). The record of the run (`resolved_config.yaml`,
+`network.json`) is written when the first edge is prepared, before any job starts: a run whose first edge cannot be
+prepared stops with nothing written, as one that is refused; an edge whose preparation stops after jobs of other
+edges have started is a failure of the run (`failed_in_this_run`, exit code 1), and the other edges go on. Without
+a GPU every edge is prepared before the legs run one after another.
+
 ## The network
 
 - Edges: `network.edges`, or the LOMAP network (Liu et al., J. Comput. Aided Mol. Des. 2013; lomap2's

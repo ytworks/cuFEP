@@ -1342,7 +1342,13 @@ exchanged.
   restraint is chosen (`restraints.selection: interactions`, one worker per trajectory), that
   are in the lambda precalculation
   (its new windows of an iteration run at the same time) or sampling, in proportion to the
-  work they still have to do and never more than one worker per window or replica. When a job starts sampling or ends, the shares are recomputed, and jobs start
+  work they still have to do and never more than one worker per window or replica. A job that
+  asks for workers it cannot move afterwards (the trajectories of the restraint, the
+  precalculation, the start of the windows) gets one for every trajectory or window first, as far
+  as the GPUs go, and the jobs in sampling share the rest: such a part is short and the leg waits
+  for it (by its share of the work a precalculation of nine windows that asked while four replica
+  exchanges filled eight GPUs got one worker, kept it, and ran its windows one after another).
+  When a job starts sampling or ends, the shares are recomputed, and jobs start
   or stop workers at their next iteration. With one ligand the solvent leg therefore uses
   the free GPUs while the complex leg is still in pre-equilibration, and the complex leg
   takes all of them afterwards.
