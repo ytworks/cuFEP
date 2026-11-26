@@ -948,6 +948,10 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
         summary["dg"] = {"reference": by_compound["reference"],
                          "reference_compounds": by_compound["reference_compounds"],
                          "values": by_compound["states"]}
+        # what the estimate takes of the states, so that a summary alone can be computed again (thirteenth review of
+        # PR #19: the report of a summary.json without network.json kept the errors of the mean of the network)
+        summary["states"] = {"compound": dict(states["compound"]), "fraction": dict(states["fraction"]),
+                             "symmetry": dict(states["symmetry"])}
         summary["compounds"] = {"temperature_K": float(temperature_K),
                                 "experiment_kcal_mol": compound_experiment(states, experiment),
                                 "values": by_compound["compounds"]}

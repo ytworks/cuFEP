@@ -1074,3 +1074,44 @@ def test_the_report_compares_edges_with_the_experiment_of_its_table_and_dg_of_an
     summary["dg"]["values"] = {"ylig": {"dg": -1.0, "se": 0.5}, "xlig": {"dg": 1.0, "se": 0.5}}
     (tmp_path / "summary.json").write_text(json.dumps(summary))
     assert "their mean over the network set to 0 (no experimental value" in report("tyk2", tmp_path)
+
+
+def test_the_report_of_a_summary_alone_gives_the_errors_of_the_values_it_shows(tmp_path):
+    """Thirteenth review of PR #19: (P2) a summary.json alone of a run of states (A2A: state h of compound 4h, state x
+    of compound X, h -> x +2 kcal/mol, no experimental values in the run, 4h alone in the table) was shifted, and its
+    table and figure gave the standard errors of the mean of the network; the summary records what the estimate takes
+    of the states, and the report computes the dG and their errors again on the scale of 4h. A summary of an earlier
+    version that does not record them is shifted, and its table says what the errors are about. (P2) a network that
+    gave no dG was said to have been given no experimental value."""
+    from test_rbfe_network import _leg_result, _write_legs
+
+    from cufep.benchmarks.rbfe import report
+    from cufep.rbfe.run import combine_network
+
+    run = tmp_path / "run"
+    _write_legs(run, "h~x", 0, _leg_result(-10.0), _leg_result(-12.0))
+    states = {"compound": {"h": "4h", "x": "X"}, "form": {"h": "", "x": ""}, "fraction": {"h": 1.0, "x": 1.0},
+              "symmetry": {"4h": 1, "X": 1}}
+    summary = combine_network(run, ["h", "x"], [("h", "x")], 1, {}, states, 298.15)
+    se_edge = summary["edges"][0]["se"]
+    alone = tmp_path / "alone"
+    alone.mkdir()
+    (alone / "summary.json").write_text(json.dumps(summary))
+    report("a2a", alone)
+    rows = {r["ligand"]: r for r in csv.DictReader((alone / "rbfe_report_ligands.csv").open())}
+    exp_4h = read_reference("a2a")["4h"]["exp"]
+    assert float(rows["4h"]["cufep_rbfe"]) == pytest.approx(exp_4h, abs=1e-6)
+    assert float(rows["X"]["cufep_rbfe"]) == pytest.approx(exp_4h + 2.0, abs=1e-6)
+    assert float(rows["4h"]["cufep_rbfe_error"]) == pytest.approx(0.0, abs=1e-9)
+    assert float(rows["X"]["cufep_rbfe_error"]) == pytest.approx(se_edge, abs=1e-9)
+    # a summary of an earlier version without the states: shifted, and the table says what the errors are about
+    del summary["states"]
+    (alone / "summary.json").write_text(json.dumps(summary))
+    text = report("a2a", alone)
+    rows = list(csv.DictReader((alone / "rbfe_report_ligands.csv").open()))
+    assert "shifted by" in text and all(r["cufep_rbfe_error_of"].startswith("the dG of the run") for r in rows)
+    # no dG from the network: said so, not "no experimental value"
+    summary["dg"] = None
+    (alone / "summary.json").write_text(json.dumps(summary))
+    text = report("a2a", alone)
+    assert "The network of the run gave no dG" in text and "no experimental value" not in text

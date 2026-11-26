@@ -281,7 +281,11 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     # the states of the compounds as the run recorded them, whether its network gave dG or not (review of PR #19: an
     # incomplete network lost them, and an edge between two states of one compound got an experimental ddG of 0)
     # the network records whether the run had states; a summary alone is read for them (states_of_a_summary)
-    states = record.get("states") if network.exists() else states_of_a_summary(summary, name)
+    # a summary of this version records the states of its compounds as the estimate takes them (thirteenth review of
+    # PR #19: without their populations the report could not compute the dG of a summary alone again)
+    states = (record.get("states") if network.exists()
+              else summary.get("states") if isinstance(summary.get("states"), dict)
+              else states_of_a_summary(summary, name))
     compound_of = dict((states or {}).get("compound") or {})
     compounds = summary.get("compounds")
     published = published_edges(name, by_state=bool(states))
@@ -379,7 +383,10 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                  "(docs/rbfe.md, \"States of a compound\"). Experiment measures compounds: the ddG compared with it "
                  "are those of the pairs of compounds the edges join, from the dG of the compounds; an edge between "
                  "states is compared with the published prediction of the same edge only.", ""]),
-             (f"The dG of cuFEP come from the edges alone, their mean over the {what.lower()} with an experimental "
+             ("The network of the run gave no dG (the notes of the run below say why), and no dG of cuFEP is "
+              "compared with experiment; the ddG of the edges are"
+              if not origin else
+              f"The dG of cuFEP come from the edges alone, their mean over the {what.lower()} with an experimental "
               "value set to the mean of those values (`docs/rbfe.md`, \"The network\")"
               if how == "run" and origin == "mean of the experimental values" else
               "The dG of cuFEP come from the edges alone; the run was given no experimental values and set their mean "
@@ -511,7 +518,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
 
     text = "\n".join(lines) + "\n"
     if write:
-        _save(run_dir, text, ligands, edges, name, pair_rows if states else None)
+        _save(run_dir, text, ligands, edges, name, pair_rows if states else None,
+              errors_of_the_run=shifted is not None)
     return text
 
 
@@ -523,11 +531,22 @@ def axis_range(rows: list[dict], x: str, ys) -> tuple[float, float]:
     return min(values) - 1.0, max(values) + 1.0
 
 
-def _save(run_dir: Path, text: str, ligands: list[dict], edges: list[dict], name: str, pairs=None) -> None:
+#: of a summary whose dG are shifted (it does not record what computing them again needs): what their standard errors
+#: are about, in a column of the table of the ligands and in the figure (thirteenth review of PR #19)
+ERRORS_OF_THE_RUN = "the dG of the run, about the mean of its network, not the shifted values"
+
+
+def _save(run_dir: Path, text: str, ligands: list[dict], edges: list[dict], name: str, pairs=None,
+          errors_of_the_run: bool = False) -> None:
     from cufep.files import publish_text, publish_with
 
     publish_text(run_dir / "rbfe_report.md", text)
-    for path, columns, rows in ((run_dir / "rbfe_report_ligands.csv", LIGAND_COLUMNS, ligands),
+    columns_of_ligands = LIGAND_COLUMNS
+    if errors_of_the_run:
+        columns_of_ligands = LIGAND_COLUMNS + ("cufep_rbfe_error_of",)
+        ligands = [{**r, "cufep_rbfe_error_of": ERRORS_OF_THE_RUN if r.get("cufep_rbfe_error") is not None else ""}
+                   for r in ligands]
+    for path, columns, rows in ((run_dir / "rbfe_report_ligands.csv", columns_of_ligands, ligands),
                                 (run_dir / "rbfe_report_edges.csv", EDGE_COLUMNS, edges)):
         def table(fh, columns=columns, rows=rows) -> None:
             w = csv.DictWriter(fh, fieldnames=list(columns), restval="")
@@ -537,12 +556,14 @@ def _save(run_dir: Path, text: str, ligands: list[dict], edges: list[dict], name
         publish_with(path, table, newline="")
     for figure in FIGURES:
         (run_dir / figure).unlink(missing_ok=True)     # never the figure of an earlier state of the run
-    _plot(run_dir, ligands, edges if pairs is None else pairs, name, pairs is not None)
+    _plot(run_dir, ligands, edges if pairs is None else pairs, name, pairs is not None, errors_of_the_run)
 
 
-def _plot(run_dir: Path, ligands: list[dict], edges: list[dict], name: str, of_compounds: bool = False) -> None:
+def _plot(run_dir: Path, ligands: list[dict], edges: list[dict], name: str, of_compounds: bool = False,
+          errors_of_the_run: bool = False) -> None:
     """The figures: the dG against experiment, and the ddG against experiment (of the edges, or with states of the
-    pairs of compounds the edges join)."""
+    pairs of compounds the edges join). ``errors_of_the_run``: the error bars of the dG are those of the run about the
+    mean of its network (shifted dG), which the figure says."""
     plt = _pyplot()
     if plt is None:
         return
@@ -572,7 +593,9 @@ def _plot(run_dir: Path, ligands: list[dict], edges: list[dict], name: str, of_c
         ax.set_ylim(lo, hi)
         ax.set_xlabel(f"experiment {label} (kcal/mol)")
         ax.set_ylabel(f"calculated {label} (kcal/mol)")
-        ax.set_title(f"{name}: relative calculations, {label}")
+        ax.set_title(f"{name}: relative calculations, {label}"
+                     + ("\n(error bars: standard errors about the mean of the network)"
+                        if errors_of_the_run and label == "dG" else ""), fontsize=9 if errors_of_the_run else None)
         ax.legend(frameon=False, fontsize=8, loc="upper left")
         _save_figure(fig, run_dir / figure)
         plt.close(fig)
