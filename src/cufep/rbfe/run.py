@@ -265,7 +265,8 @@ def check_pre_equilibrations_of_the_run(rcfg: RbfeConfig, out_dir: Path, edges, 
                 set_aside = False
                 if gcmc_in(rcfg, leg) and starts_anew(leg_dir, reschedule):
                     why = (NO_GHOST_RECORD if not (leg_dir / EQUIL_GHOSTS).exists()
-                           else equil_ghosts_problem(leg_dir / "equil.npz", build_leg(rcfg, edge_dir, leg).gcmc))
+                           else equil_ghosts_problem(leg_dir / "equil.npz",
+                                                     build_leg(rcfg, edge_dir, leg, leg_dir, reschedule).gcmc))
                     if why is not None and reschedule:
                         set_aside = True                 # --reschedule sets it aside; a new one is made
                     elif why is not None:

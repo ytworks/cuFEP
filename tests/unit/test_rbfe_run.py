@@ -1095,6 +1095,23 @@ def test_a_leg_with_the_moves_is_computed_again_only_from_its_own_pre_equilibrat
     assert "error" not in anew and (leg_dir(old) / "equil_ghosts.json").exists()
     assert [p.parent.name for p in leg_dir(old).glob("previous_*/equil.npz")] == ["previous_1"]
     assert not (leg_dir(old) / "previous_1" / "equil_ghosts.json").exists()
+    # (eleventh review) a record of the ghosts that cannot be read stopped every run of the leg with an error of JSON:
+    # a leg that goes on from its samples does not read it; one that would start from its pre-equilibration is
+    # refused, and --reschedule sets both aside and computes the leg anew
+    for text in ("", "{}"):
+        broken = copy("broken" + str(len(text)))
+        (leg_dir(broken) / "equil_ghosts.json").write_text(text)
+        checked(broken)
+        again = run_hybrid_leg_safe(job(broken))
+        assert "error" not in again and again["delta_g"] == first["delta_g"]
+    shutil.rmtree(leg_dir(broken) / "hrex")
+    (leg_dir(broken) / "result.json").unlink()
+    with pytest.raises(WorkflowError, match="record of ghost waters .* cannot be read"):
+        checked(broken)
+    checked(broken, reschedule=True)
+    anew = run_hybrid_leg_safe(job(broken, reschedule=True))
+    assert "error" not in anew and json.loads((leg_dir(broken) / "equil_ghosts.json").read_text())["ghosts"]
+    assert (leg_dir(broken) / "previous_1" / "equil_ghosts.json").read_text() == "{}"
     # (fifth review, P1) the samples record the System of the prepared hybrid, as every earlier version did: a
     # finished leg of an earlier version is analysed again with its result (the cell in the System changed it)
     import hashlib
@@ -1254,6 +1271,15 @@ def test_an_archive_of_a_pre_equilibration_that_a_run_stopped_in_is_completed_an
     done = archive_leg(leg_dir)
     assert done == leg_dir / "previous_2" and (done / EQUIL_GHOSTS).exists() and not (leg_dir / EQUIL_GHOSTS).exists()
     assert not (done / ARCHIVE_RECORD).exists()
+    # (eleventh review, P3) an archive that keeps the pre-equilibration in the leg has a copy of it and of the record
+    # of its ghosts: it can be used as a leg again (the record was left out)
+    for name, text in (("schedule.yaml", "windows"), (EQUIL_GHOSTS, '{"ghosts": [3]}'), ("equil.npz", "kept")):
+        (leg_dir / name).write_text(text)
+    done = archive_leg(leg_dir)
+    assert done == leg_dir / "previous_3"
+    assert sorted(p.name for p in done.iterdir()) == sorted(["schedule.yaml", "equil.npz", EQUIL_GHOSTS])
+    assert all((d / EQUIL_GHOSTS).read_text() == '{"ghosts": [3]}' for d in (leg_dir, done))
+    assert (leg_dir / "equil.npz").exists()
 
 
 def test_start_configurations_that_are_made_again_are_not_refused_for_their_cell(tmp_path):

@@ -770,6 +770,41 @@ def test_the_sphere_takes_the_bonds_the_topology_does_not_hold_and_puts_the_two_
     assert radii == pytest.approx([1.395, 1.395], abs=1e-9)
 
 
+def test_a_pre_equilibration_of_an_earlier_version_is_used_with_the_ghosts_of_the_earlier_rule(tmp_path):
+    """Eleventh review of PR #19 (P3): a pre-equilibration of an absolute leg of an earlier version (no record of its
+    ghosts) was refused where the images nearest to the first heavy atom of the ligand break it (a chain of 2.1 nm in
+    a cell of 4 nm), though the rule of those versions (radius 1.955 nm from those images, the waters farthest from
+    their centre) chose the ghost of this run (radius 1.080 nm). The ghosts of that rule are computed from the
+    prepared system and the settings of the moves: the same are used, others are refused. A record that cannot be
+    read is not used."""
+    from cufep.config.schema import Config
+    from cufep.engine.leg import EQUIL_GHOSTS, NO_GHOST_RECORD, equil_ghosts_problem
+    from cufep.workflow import earlier_ghosts_of
+
+    settings = Config.model_validate(dict(BASE, sampling={"gcmc": {**MOVES, "radius_margin_nm": 0.03,
+                                                                     "ghost_waters": 1}})).sampling.gcmc
+    equil = tmp_path / "equil.npz"
+    equil.write_bytes(b"made by a version that recorded no ghosts")
+    system, top, positions, box, ligand = _chain_in_a_cell(0.15 * np.arange(15))
+    spec = spec_of(system, top, positions, box, ligand, 1, radius_margin_nm=0.03)
+    assert spec.radius_nm == pytest.approx(1.08) and list(spec.ghosts) == [0]
+    earlier = earlier_ghosts_of({"positions": positions, "box": box}, spec, settings)
+    assert list(earlier) == [0] and equil_ghosts_problem(equil, spec, earlier) is None
+    # waters that the two centres (x 0.783 and 1.05 nm) put in another order: the earlier rule chose another ghost
+    moved = np.array(positions, dtype=float)
+    for k, oxygen in enumerate(([3.05, 2.0, 0.1], [2.75, 2.0, 0.1], [1.0, 2.0, 0.1], [1.3, 2.0, 0.1])):
+        moved[15 + 3 * k:18 + 3 * k] += np.asarray(oxygen) - moved[15 + 3 * k]
+    spec = spec_of(system, top, moved, box, ligand, 1, radius_margin_nm=0.03)
+    earlier = earlier_ghosts_of({"positions": moved, "box": box}, spec, settings)
+    assert list(spec.ghosts) == [0] and list(earlier) == [1]
+    assert equil_ghosts_problem(equil, spec, earlier) == NO_GHOST_RECORD
+    for text in ("", "{}", "[0]"):
+        (tmp_path / EQUIL_GHOSTS).write_text(text)
+        assert "cannot be read" in equil_ghosts_problem(equil, spec, earlier)
+    (tmp_path / EQUIL_GHOSTS).write_text('{"ghosts": [0]}')
+    assert equil_ghosts_problem(equil, spec, earlier) is None
+
+
 def test_an_absolute_leg_with_the_moves_is_told_a_way_that_keeps_its_restraint(tmp_path, monkeypatch):
     """Fourth review of PR #19 (P2): a complex leg of the ABFE with the moves whose pre-equilibration cannot be used
     was told to remove equil.npz and run --reschedule, which its restraint (chosen from the MD that started from that
@@ -790,7 +825,7 @@ def test_an_absolute_leg_with_the_moves_is_told_a_way_that_keeps_its_restraint(t
     moves = SimpleNamespace(ghosts=np.arange(5), waters=np.zeros((50, 3)))
     monkeypatch.setattr(workflow, "load_prepared", lambda prep_dir, leg: {})
     monkeypatch.setattr(workflow, "leg_system", lambda cfg, prep, leg: (None, moves))
-    monkeypatch.setattr(workflow, "earlier_ghosts_of", lambda prep, gcmc: None)
+    monkeypatch.setattr(workflow, "earlier_ghosts_of", lambda *args: None)
     cfg = Config.model_validate(dict(BASE, sampling={"gcmc": MOVES}))
     for reschedule in (False, True):
         with pytest.raises(workflow.WorkflowError) as refused:

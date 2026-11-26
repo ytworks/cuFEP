@@ -764,18 +764,36 @@ def electrostatics_annihilated(conditions: dict | None) -> bool:
     return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
 
 
-def earlier_ghosts_of(prep: dict, gcmc):
+def earlier_ghosts_of(prep: dict, gcmc, settings):
     """The ghost waters that the versions which recorded none chose for an absolute leg with grand canonical moves of
-    water: those of this run where the images nearest to the first heavy atom of the ligand keep it whole (the sphere
-    of every earlier version); None where they are not known."""
+    water (``gcmc``, with the settings ``sampling.gcmc``), by their rule, from the prepared system: the heavy atoms of
+    the ligand at the images nearest to its first heavy atom, the radius of the sphere from them, the number of ghosts
+    (``auto``: from that radius) and the waters farthest from their centre. Where that pose is whole they are the
+    ghosts of this version; elsewhere they can be the same too (eleventh review of PR #19: such a pre-equilibration
+    was refused, though its ghosts were those of the run). None where those versions made no pre-equilibration (the
+    sphere did not fit the cell, there were fewer waters, a ghost was in the sphere)."""
     if gcmc is None:
         return None
-    from cufep.sampling.relocation_mc import nearest_first_is_whole
+    from cufep.alchemy.lrc import nearest_image
+    from cufep.sampling.relocation_mc import RelocationError, check_cell, sphere_radius
 
-    heavy = np.asarray(prep["positions"], dtype=float)[gcmc.ligand_heavy]
-    if nearest_first_is_whole(heavy, gcmc.ligand_heavy_bonds, np.asarray(prep["box"], dtype=float)):
-        return gcmc.ghosts
-    return None
+    x, box = np.asarray(prep["positions"], dtype=float), np.asarray(prep["box"], dtype=float)
+    heavy = x[np.asarray(gcmc.ligand_heavy)]
+    pose = heavy[0] + nearest_image(heavy - heavy[0], box)
+    radius = sphere_radius(pose, float(settings.radius_margin_nm))
+    try:
+        check_cell(box, radius, float(gcmc.cutoff_nm))
+    except RelocationError:
+        return None
+    n = (int(np.ceil(4.0 / 3.0 * np.pi * radius ** 3 / float(gcmc.standard_volume_nm3)))
+         if settings.ghost_waters == "auto" else int(settings.ghost_waters))
+    distance = np.linalg.norm(nearest_image(x[np.asarray(gcmc.waters)[:, 0]] - pose.mean(axis=0), box), axis=1)
+    if n > len(distance):
+        return None
+    ghosts = np.sort(np.lexsort((np.arange(len(distance)), -distance))[:n])   # farthest first, ties by number
+    if (distance[ghosts] < radius).any():
+        return None
+    return ghosts
 
 
 def alchemical_box(eq, gcmc) -> np.ndarray:
@@ -1110,7 +1128,7 @@ def check_pre_equilibration_of_a_leg_with_moves(cfg: Config, lig_dir: Path, leg:
     if starts_anew(leg_dir, reschedule):
         prep = load_prepared(lig_dir / "prep", leg)
         _system, moves = leg_system(cfg, prep, leg)
-        why = equil_ghosts_problem(equil_file, moves, earlier_ghosts_of(prep, moves))
+        why = equil_ghosts_problem(equil_file, moves, earlier_ghosts_of(prep, moves, cfg.sampling.gcmc))
         if why is not None:
             raise WorkflowError(unusable_pre_equilibration(equil_file, why, reschedule_sets_it_aside=False))
     found = [] if reschedule else fixed_cell_problems(leg_dir)
@@ -2377,8 +2395,10 @@ def archive_leg(leg_dir: Path, pre_equilibration: bool = False) -> Path | None:
     dest = leg_dir / f"previous_{n}"
     # the files these samples were made from stay with the leg, which uses them again; the archive
     # gets copies (leg_files), each written whole under another name first
-    for name in LEG_INPUT_FILES:
-        if pre_equilibration and name == "equil.npz":
+    # the record of the ghost waters of the pre-equilibration goes with it (eleventh review of PR #19: an archive
+    # with a copy of equil.npz and without the record could not be used as a leg again)
+    for name in LEG_INPUT_FILES + (EQUIL_GHOSTS,):
+        if pre_equilibration and name in ("equil.npz", EQUIL_GHOSTS):
             continue                                    # moved below, not copied
         if (leg_dir / name).exists() and not (stage / name).exists():
             publish(stage / name, lambda tmp, source=leg_dir / name: shutil.copy2(source, tmp))
@@ -2791,7 +2811,7 @@ def run_leg(job: LegJob) -> dict:
     # (the run refuses it before it writes anything, check_leg_reuse); a leg that goes on from its samples does not
     # use it (third review of PR #19)
     if starts_anew(job.leg_dir, job.reschedule):
-        check_equil_ghosts(job.leg_dir / "equil.npz", gcmc, earlier_ghosts_of(prep, gcmc),
+        check_equil_ghosts(job.leg_dir / "equil.npz", gcmc, earlier_ghosts_of(prep, gcmc, cfg.sampling.gcmc),
                            reschedule_sets_it_aside=False)
     run = open_leg(job, cfg)
     leg_dir, log, seed, notes, timing, timed = run.leg_dir, run.log, run.seed, run.notes, run.timing, run.timed

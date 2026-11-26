@@ -82,7 +82,11 @@ def equil_ghosts_problem(equil_file: Path, gcmc, earlier_ghosts=None) -> str | N
     record = equil_file.parent / EQUIL_GHOSTS
     current = [int(i) for i in gcmc.ghosts]
     if record.exists():
-        stored = [int(i) for i in json.loads(record.read_text())["ghosts"]]
+        stored = recorded_ghosts(record)
+        if stored is None:
+            # what it was made with is not known: a pre-equilibration that cannot be used, set aside by --reschedule
+            # (eleventh review of PR #19: an empty record stopped the leg with an error of JSON, also with --reschedule)
+            return f"its record of ghost waters ({record}) cannot be read"
         if stored == current:
             return None
         return (f"it was made with {len(stored)} ghost waters and this run has {len(current)}"
@@ -90,6 +94,25 @@ def equil_ghosts_problem(equil_file: Path, gcmc, earlier_ghosts=None) -> str | N
     if earlier_ghosts is not None and [int(i) for i in earlier_ghosts] == current:
         return None
     return NO_GHOST_RECORD
+
+
+def ghost_record(record: Path) -> dict | None:
+    """A record of the ghost waters of a pre-equilibration (:data:`EQUIL_GHOSTS`), its ghosts as numbers, and
+    ``start_centre`` where it gives one; None where it cannot be read (empty, not JSON, without its list of ghosts)."""
+    try:
+        data = json.loads(Path(record).read_text())
+        out = {"ghosts": [int(i) for i in data["ghosts"]]}
+        if "start_centre" in data:
+            out["start_centre"] = str(data["start_centre"])
+        return out
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def recorded_ghosts(record: Path) -> list[int] | None:
+    """The ghost waters of a record of a pre-equilibration (:data:`EQUIL_GHOSTS`); None where it cannot be read."""
+    data = ghost_record(record)
+    return None if data is None else data["ghosts"]
 
 
 #: why a pre-equilibration without a record of its ghost waters cannot start a replica exchange that needs it
@@ -208,8 +231,9 @@ def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_in
     leg = run.job.leg
     if not equil_file.exists():
         if gcmc is not None:
-            publish_text(run.leg_dir / EQUIL_GHOSTS, json.dumps({"ghosts": [int(i) for i in gcmc.ghosts],
-                                                                 "waters": int(len(gcmc.waters))}))
+            publish_text(run.leg_dir / EQUIL_GHOSTS, json.dumps(
+                {"ghosts": [int(i) for i in gcmc.ghosts], "waters": int(len(gcmc.waters)),
+                 **({} if gcmc.start_centre == "ligand" else {"start_centre": gcmc.start_centre})}))
         t0 = time.perf_counter()
         run_pre_equilibration(run.cfg, leg, prep, system, barostat, membrane_info, run.seed, equil_file, run.device0,
                               run.log)

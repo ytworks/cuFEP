@@ -738,8 +738,10 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   directory), and so are start configurations of the windows in another cell than the
   pre-equilibration fixes (`--reschedule` starts the leg anew); a leg that goes on from its samples
   does not start from its pre-equilibration. One of an earlier version without the record is used
-  where its ghosts are those of this run (the images nearest to the first heavy atom keep the ligand
-  whole). Switching is done in the Context while it
+  where the rule of those versions gives the ghosts of this run, from the prepared system and the
+  settings of the moves (the sphere from the images of the ligand nearest to its first heavy atom, the
+  waters farthest from their centre); a record that cannot be read is not used. Switching is done in the
+  Context while it
   runs (charge and epsilon of every site of the water in the nonbonded force and in the soft-core force of the
   ligand); a Context switched so gives the energies and forces of a System built so, on both
   backends (`spikes/m33_ghost_waters_on_the_backends.py`, the tests). With no ghost left an

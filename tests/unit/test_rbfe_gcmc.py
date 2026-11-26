@@ -134,7 +134,7 @@ def test_the_moves_are_on_by_default_in_the_complex_leg_only_and_recorded_there(
     assert _rbfe_config(gcmc={"attempts": 5000}).sampling.gcmc.enabled
 
 
-def test_the_sphere_of_an_edge_is_the_same_both_ways(edge):
+def test_the_sphere_of_an_edge_is_the_same_both_ways(edge, tmp_path):
     """Review of PR #19: the radius of the sphere came from the hybrid, which holds the mapped atoms where A has them;
     with a mapped atom of B 0.1 nm from where A has it, A -> B and B -> A had spheres of other radii (and other Adams
     values). The radius comes from the heavy atoms of both end states: one sphere both ways."""
@@ -163,6 +163,55 @@ def test_the_sphere_of_an_edge_is_the_same_both_ways(edge):
                       hybrid_gcmc(rcfg, hybrid, top, box, both).radius_nm))
     assert abs(radii[0][0] - radii[1][0]) > 0.005                           # from the hybrid: not one sphere
     assert radii[0][1] == pytest.approx(radii[1][1], abs=1e-12)
+    # eleventh review of PR #19: the ghosts of the start were the waters farthest from the centre of the hybrid, which
+    # holds the mapped atoms where A has them: with B 0.3 nm along x from A the two directions chose other waters. They
+    # are counted from the mapped atoms midway between the two end states: the same waters both ways
+    from cufep.rbfe.leg import centre_positions_of
+
+    pos_b = np.array(edge[4], dtype=float)
+    pos_b[ligand_b] += [0.3, 0.0, 0.0]
+    a_end = {"positions": pos_a, "ligand": ligand_a, "box": box, "system": system_a}
+    b_end = {"positions": pos_b, "ligand": ligand_b, "box": box, "system": system_b}
+    chosen = {}
+    for first, second, mapping in ((a_end, b_end, core), (b_end, a_end, {j: i for i, j in core.items()})):
+        hybrid = make_hybrid_system(first["system"], first["positions"], first["ligand"], second["system"],
+                                    second["positions"], second["ligand"], mapping)
+        top = hybrid_edge_topology(hybrid.system.getNumParticles(), list(hybrid.ligand_atoms), hybrid.system, box)
+        both = (heavy(first["system"], first["positions"], first["ligand"])
+                + heavy(second["system"], second["positions"], second["ligand"]))
+        for rule, centre in (("hybrid", None), ("midway", centre_positions_of(hybrid, first, second))):
+            moves = hybrid_gcmc(rcfg, hybrid, top, box, both, centre_positions=centre)
+            oxygens = np.asarray(hybrid.positions)[moves.waters[moves.ghosts, 0]]
+            chosen.setdefault(rule, []).append(sorted(map(tuple, np.round(oxygens, 6))))
+    assert chosen["hybrid"][0] != chosen["hybrid"][1]
+    assert chosen["midway"][0] == chosen["midway"][1]
+    # a leg whose pre-equilibration or samples an earlier version made keeps their ghosts, those of the centre of the
+    # hybrid: where its record names no centre and has them, or without a record where it goes on from its samples
+    import json
+
+    from cufep.rbfe.leg import ghosts_of_the_leg
+
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
+    top = hybrid_edge_topology(hybrid.system.getNumParticles(), list(hybrid.ligand_atoms), hybrid.system, box)
+    both = heavy(system_a, pos_a, ligand_a) + heavy(system_b, pos_b, ligand_b)
+    midway = hybrid_gcmc(rcfg, hybrid, top, box, both, centre_positions=centre_positions_of(hybrid, a_end, b_end))
+    earlier = hybrid_gcmc(rcfg, hybrid, top, box, both)
+    assert midway.start_centre == "midway" and list(midway.ghosts) != list(earlier.ghosts)
+    leg_dir = tmp_path / "leg"
+    leg_dir.mkdir()
+    (leg_dir / "equil.npz").write_bytes(b"made by an earlier version")
+    for record, kept in (({"ghosts": earlier.ghosts.tolist()}, earlier),
+                         ({"ghosts": earlier.ghosts.tolist(), "start_centre": "midway"}, midway),
+                         ({"ghosts": midway.ghosts.tolist()}, midway), (None, midway)):
+        (leg_dir / "equil_ghosts.json").unlink(missing_ok=True)
+        if record is not None:
+            (leg_dir / "equil_ghosts.json").write_text(json.dumps(record))
+        moves = ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False)
+        assert list(moves.ghosts) == list(kept.ghosts)
+    (leg_dir / "hrex").mkdir()
+    (leg_dir / "hrex" / "checkpoint.npz").write_bytes(b"")              # goes on from its samples
+    assert list(ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, False).ghosts) == list(earlier.ghosts)
+    assert list(ghosts_of_the_leg(midway, hybrid.positions, box, leg_dir, True).ghosts) == list(midway.ghosts)
 
 
 def test_a_pre_equilibration_of_other_ghost_waters_is_not_used_again(tmp_path, monkeypatch):
@@ -189,7 +238,7 @@ def test_a_pre_equilibration_of_other_ghost_waters_is_not_used_again(tmp_path, m
     monkeypatch.setattr(workflow, "check_equil_file", lambda *args, **kwargs: True)
     run = SimpleNamespace(leg_dir=tmp_path, job=SimpleNamespace(leg="complex"), cfg=None, seed=1, device0=None,
                           log=lambda *a: None, timed=lambda *a: None)
-    moves = SimpleNamespace(ghosts=np.arange(139), waters=np.zeros((900, 3)))
+    moves = SimpleNamespace(ghosts=np.arange(139), waters=np.zeros((900, 3)), start_centre="ligand")
     pre_equilibrated(run, {}, None, "isotropic", {}, moves)
     assert json.loads((tmp_path / EQUIL_GHOSTS).read_text())["ghosts"] == list(range(139)) and made == [1]
     pre_equilibrated(run, {}, None, "isotropic", {}, moves)

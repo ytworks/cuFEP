@@ -117,6 +117,10 @@ class GcmcSpec:
     #: both end states at full strength, which the test with the full potential corrects (cuFEP's own)
     stand_in_lambdas: tuple[float, float] | None = None
     ligand_heavy_bonds: np.ndarray | None = None   # the bonds between the heavy atoms (pairs of positions in them)
+    #: what the ghosts of the start are counted from: the centre of the ligand (``ligand``), or of a hybrid with its
+    #: mapped atoms midway between the two end states (``midway``, :func:`cufep.rbfe.leg.centre_positions_of`);
+    #: recorded with a pre-equilibration where it is not ``ligand``, the rule of every earlier version
+    start_centre: str = "ligand"
 
     @property
     def adams(self) -> float:
@@ -133,12 +137,13 @@ class GcmcSpec:
 
 
 def farthest_waters(waters: np.ndarray, positions: np.ndarray, box: np.ndarray, ligand_heavy: np.ndarray,
-                    n: int, bonds=None) -> np.ndarray:
+                    n: int, bonds=None, centre_positions: np.ndarray | None = None) -> np.ndarray:
     """The ``n`` waters whose oxygen is farthest from the geometric centre of the heavy atoms of the
-    ligand (the molecule whole along ``bonds``, nearest image), in ascending order of their number: the ghosts of the
-    start."""
+    ligand (the molecule whole along ``bonds``, nearest image; with ``centre_positions`` the ligand where they put it),
+    in ascending order of their number: the ghosts of the start."""
     x, box = np.asarray(positions, dtype=float), np.asarray(box, dtype=float)
-    centre = _centre(x, box, ligand_heavy, bonds)
+    centre = _centre(x if centre_positions is None else np.asarray(centre_positions, dtype=float), box, ligand_heavy,
+                     bonds)
     distance = np.linalg.norm(nearest_image(x[np.asarray(waters)[:, 0]] - centre, box), axis=1)
     if int(n) > len(distance):
         raise GcmcError(f"{int(n)} ghost waters are asked for and the system has {len(distance)} waters")
@@ -208,7 +213,8 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
               softcore_alpha: float, softcore_b: int, temperature_K: float, interval_ps: float, attempts: int,
               batch_size: int, radius_margin_nm: float, excess_chemical_potential_kcal_per_mol: float,
               standard_volume_nm3: float, ghost_waters: int | None,
-              radius_from_nm: np.ndarray | None = None, radius_from_bonds=None, bonds=None) -> GcmcSpec:
+              radius_from_nm: np.ndarray | None = None, radius_from_bonds=None, bonds=None,
+              centre_positions: np.ndarray | None = None) -> GcmcSpec:
     """What a mover needs, from the ``system`` of a leg with every water interacting, its
     ``topology`` and the pose that was prepared. The waters and the sphere are found as for the
     water relocation moves (:func:`cufep.sampling.relocation_mc.relocation_spec`, with its
@@ -218,7 +224,10 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
     those of the ligand in ``positions`` (the two end states of a relative leg), with ``radius_from_bonds`` the bonds
     between them (pairs of positions in them), each molecule taken whole (:func:`whole_pose`). ``bonds``: pairs of
     atoms of the System bonded that the topology does not hold (of a hybrid: the bonds of both end states), for the
-    ligand taken whole in the check of the cell and in the moves. Raises GcmcError where the moves cannot be made."""
+    ligand taken whole in the check of the cell and in the moves. ``centre_positions``: the positions of the ligand
+    whose centre the ghosts of the start are counted from and kept out of the sphere around, where they are not those
+    of ``positions`` (of a hybrid: its mapped atoms between their positions in the two end states). Raises GcmcError
+    where the moves cannot be made."""
     try:
         base = relocation_spec(system, topology, positions, box, ligand, cutoff_nm, softcore_alpha, softcore_b,
                                temperature_K, 1, None, interval_ps, radius_margin_nm, bonds)
@@ -242,11 +251,12 @@ def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, 
         ghost_waters = int(np.ceil(4.0 / 3.0 * np.pi * base.radius_nm ** 3 / float(standard_volume_nm3)))
     if int(ghost_waters) < 1:
         raise GcmcError("at least one ghost water is needed")
-    ghosts = farthest_waters(base.waters, positions, box, base.ligand_heavy, int(ghost_waters), base.ligand_heavy_bonds)
+    ghosts = farthest_waters(base.waters, positions, box, base.ligand_heavy, int(ghost_waters), base.ligand_heavy_bonds,
+                             centre_positions)
+    centre = _centre(np.asarray(positions if centre_positions is None else centre_positions, dtype=float),
+                     np.asarray(box, dtype=float), base.ligand_heavy, base.ligand_heavy_bonds)
     inside = np.linalg.norm(
-        nearest_image(np.asarray(positions, dtype=float)[base.waters[ghosts, 0]]
-                      - _centre(np.asarray(positions, dtype=float), np.asarray(box, dtype=float), base.ligand_heavy,
-                                base.ligand_heavy_bonds),
+        nearest_image(np.asarray(positions, dtype=float)[base.waters[ghosts, 0]] - centre,
                       np.asarray(box, dtype=float)), axis=1) < base.radius_nm
     if inside.any():
         raise GcmcError(f"{int(ghost_waters)} ghost waters would take waters of the sphere itself")

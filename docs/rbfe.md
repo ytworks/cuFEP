@@ -171,8 +171,14 @@ replica exchange without a barostat in the mean cell of the pre-equilibration (i
 its last cell). For a hybrid (cuFEP's own): the sphere is around the heavy atoms of both end states, so that A -> B
 and B -> A have one sphere, each molecule taken whole along its bonds (those of the hybrid System, which its topology
 does not all hold) and the two end states put together by their centres, so that a ligand longer than half the cell
-has the sphere of the molecule whatever atom comes first; the ghost waters a pre-equilibration was made with are
-recorded beside it (`equil_ghosts.json`); a leg that would start its replica exchange from a pre-equilibration of other
+has the sphere of the molecule whatever atom comes first; the ghosts of the start are the waters farthest from the
+centre of the hybrid with each mapped atom midway between its positions in the two end states, the same waters both
+ways (the hybrid holds the mapped atoms where A has them; earlier versions counted from that centre, and a leg whose
+pre-equilibration or samples they made keeps those ghosts: where the record of the pre-equilibration names no
+centre and has them, or without a record where the leg goes on from its samples); the ghost waters a
+pre-equilibration was made with are recorded beside it (`equil_ghosts.json`, with the centre); a record that cannot
+be read is a pre-equilibration whose ghosts are not known, and it is read only by a leg that would start from it; a
+leg that would start its replica exchange from a pre-equilibration of other
 ghosts or without that record (a relative leg does not take one on trust), or from start configurations in another
 cell than the pre-equilibration fixes, is refused before the run writes anything, with the command for that leg:
 `--reschedule` sets such a pre-equilibration aside with the windows and samples and computes the leg anew; a leg that
