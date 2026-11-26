@@ -170,7 +170,7 @@ def hybrid_gcmc(rcfg, hybrid, topology, box, end_heavy_nm=None, end_heavy_bonds=
         q, s, e = hybrid.parameters_a[h] if h in hybrid.parameters_a else hybrid.parameters_b[h]
         charge[h], sigma[h], epsilon[h] = q, s, e
     return dataclasses.replace(spec, charge=charge, sigma=sigma, epsilon=epsilon, stand_in_lambdas=(1.0, 1.0),
-                               start_centre="ligand" if centre_positions is None else MIDWAY_OF_BOTH)
+                               start_centre="ligand" if centre_positions is None else "midway")
 
 
 def _samples_system_digest(leg_dir: Path) -> str | None:
@@ -222,31 +222,25 @@ def _digests_with_ghosts(system, waters, ghosts, cell) -> set[str]:
     return out
 
 
-#: the rules of the ghosts of the start of a hybrid, by the name its record of a pre-equilibration gives
-#: (``start_centre``): the centre of the heavy atoms of the ligand of the hybrid (none: every version up to e7af433), of
-#: those of A with the mapped atoms midway between the end states ("midway": e0f9743 to 1124b1e, and f54e96e to 9dacb52,
-#: which counted from the atoms heavy in either end and recorded the same name), of those heavy in either end, midway
-#: (MIDWAY_OF_BOTH: this version; fourteenth review of PR #19)
-MIDWAY_OF_BOTH = "midway, heavy in either end"
-
-
 def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, system=None, earlier_heavy=None,
                       midway=None):
-    """The moves of a leg (``gcmc``, its ghosts of the start by the rule of this version, :data:`MIDWAY_OF_BOTH`) with
-    the ghosts its samples or its pre-equilibration were made with, and the rules whose centres they are checked
-    around: ``(moves, rules)``.
+    """The moves of a leg (``gcmc``, its ghosts of the start by the rule of this version, "midway") with the ghosts its
+    samples or its pre-equilibration were made with, and the rules whose centres they are checked around:
+    ``(moves, rules)``.
 
-    The rules of the versions that made legs (``earlier_heavy``: the heavy atoms of A, (atoms, bonds); ``midway``: the
-    positions with the mapped atoms midway): "ligand", the centre of the hybrid (``positions``) and the heavy atoms of
-    A; "midway", the midway positions and the heavy atoms of A; :data:`MIDWAY_OF_BOTH`, the midway positions and the
-    atoms heavy in either end (``gcmc``). A leg that goes on from its samples has the ghosts of the System its samples
-    recorded: those of its record and of each rule are put into ``system`` (the hybrid System before its ghosts are
-    switched off) and compared with the checksum of the samples (twelfth review of PR #19). A leg that starts from its
-    pre-equilibration has the ghosts of its record where a rule its record allows gives them; without a record, a leg
-    that goes on from its samples those of "ligand". Ghosts so taken up are checked around the centre of each rule that
-    gives them (of the rules the record allows), one of which suffices; ghosts chosen anew, where the ghosts of the leg
-    are none of these, around that of this version alone (fourteenth review of PR #19: a new choice passed around the
-    earlier centre, and the rule of e0f9743 was not among those tried)."""
+    Two rules made legs that are kept: "ligand", the centre of the heavy atoms of A in the hybrid (``positions``,
+    which holds the mapped atoms where A has them; ``earlier_heavy``, (atoms, bonds)), the rule of the full TYK2 run of
+    08d58d5, whose records name no centre; and "midway", this version: the centre of the atoms heavy in either end
+    state with the mapped atoms midway between the two (``midway``, the positions; ``gcmc``). (The relative leg with
+    grand canonical moves exists from this pull request on; commits of it before this one made no other data, and a
+    leg of one of them is not taken up: its ghosts match neither rule, and it is set aside or refused.)
+
+    A leg that goes on from its samples has the ghosts of the System its samples recorded: those of its record and of
+    each rule are put into ``system`` (the hybrid System before its ghosts are switched off) and compared with the
+    checksum of the samples (twelfth review of PR #19). A leg that starts from its pre-equilibration has the ghosts of
+    its record where a rule its record allows gives them; without a record, a leg that goes on from its samples those
+    of "ligand". Ghosts so taken up are checked around the centre of each rule that gives them, one of which suffices;
+    ghosts chosen anew around that of this version alone (fourteenth review of PR #19)."""
     import dataclasses
 
     from cufep.engine.leg import EQUIL_GHOSTS, ghost_record, starts_anew
@@ -256,16 +250,11 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
     record = leg_dir / EQUIL_GHOSTS
     data = ghost_record(record, len(gcmc.waters)) if record.exists() else None
     heavy, bonds = earlier_heavy if earlier_heavy is not None else (gcmc.ligand_heavy, gcmc.ligand_heavy_bonds)
-    n = len(gcmc.ghosts)
-    rules = {MIDWAY_OF_BOTH: sorted(int(i) for i in gcmc.ghosts),
-             "midway": sorted(int(i) for i in farthest_waters(gcmc.waters, positions, box, heavy, n, bonds,
-                                                              positions if midway is None else midway)),
-             "ligand": sorted(int(i) for i in farthest_waters(gcmc.waters, positions, box, heavy, n, bonds))}
+    rules = {"midway": sorted(int(i) for i in gcmc.ghosts),
+             "ligand": sorted(int(i) for i in farthest_waters(gcmc.waters, positions, box, heavy, len(gcmc.ghosts),
+                                                              bonds))}
     named = (data or {}).get("start_centre")
-    # the rules a record allows: the one it names ("midway" was written by the rules of both sets of heavy atoms),
-    # every rule where it names none
-    allowed = (list(rules) if named is None else ["midway", MIDWAY_OF_BOTH] if named == "midway"
-               else [named] if named in rules else [])
+    allowed = list(rules) if named is None else [named] if named in rules else []
 
     def taken_up(ghosts):
         of_rules = [name for name, of_rule in rules.items() if of_rule == ghosts]
@@ -291,7 +280,7 @@ def ghosts_of_the_leg(gcmc, positions, box, leg_dir: Path, reschedule: bool, sys
         return taken_up(data["ghosts"])
     if not record.exists() and goes_on:
         return taken_up(rules["ligand"])                      # samples of a version that recorded no ghosts
-    return gcmc, (MIDWAY_OF_BOTH,)                            # chosen anew by this version
+    return gcmc, ("midway",)                                  # chosen anew by this version
 
 
 def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | None = None,
@@ -311,12 +300,11 @@ def start_moves(rcfg, hybrid, topology, box, end_heavy, midway, leg_dir: Path | 
     of_a = np.array([i for i in sorted(hybrid.ligand_atoms)
                      if atoms[i].element is not None and atoms[i].element.symbol != "H"], dtype=np.int64)
     earlier_heavy = (of_a, heavy_bonds(topology, of_a, hybrid.bonds))
-    centres = (MIDWAY_OF_BOTH,)
+    centres = ("midway",)
     if leg_dir is not None:
         gcmc, centres = ghosts_of_the_leg(gcmc, hybrid.positions, box, leg_dir, reschedule, hybrid.system,
                                           earlier_heavy, midway)
-    of = {MIDWAY_OF_BOTH: (midway, None), "midway": (midway, earlier_heavy),
-          "ligand": (hybrid.positions, earlier_heavy)}
+    of = {"midway": (midway, None), "ligand": (hybrid.positions, earlier_heavy)}
     # the ghosts pass where the sphere around one of the centres they may have been counted from holds none of them
     if all(start_ghosts_in_sphere(gcmc, hybrid.positions, box, gcmc.ghosts, *of[name]) for name in centres):
         raise WorkflowError(f"sampling.gcmc cannot be used with this system: {len(gcmc.ghosts)} ghost waters would "
@@ -357,10 +345,9 @@ def molecules_of(system, topology, bonds) -> list[list[int]]:
 
 
 def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int], unique_b: list[int],
-                     rule: int | None = None, inputs=None) -> list[int]:
+                     inputs=None) -> list[int]:
     """The hot atoms of the hybrid ligand by the rule of :mod:`cufep.rbfe.hot_region`, from the two prepared ligands
-    (their bonds and bond orders; atom i of a ligand is atom ``ligand[i]`` of its System); ``rule``: a version of the
-    rule (:data:`cufep.rbfe.hot_region.HOT_REGION_RULE`, the present one where None)."""
+    (their bonds and bond orders; atom i of a ligand is atom ``ligand[i]`` of its System)."""
     from cufep.rbfe.hot_region import perturbed_hot_atoms
     from cufep.rbfe.prep import ligands_of_the_edge
 
@@ -376,80 +363,7 @@ def perturbed_region(edge_dir: Path, a: dict, b: dict, core_map: dict[int, int],
     b_to_hybrid.update({j: n_a + k for k, j in enumerate(unique_b)})
     to_a = {i: int(atom) for i, atom in enumerate(a["ligand"])}
     to_b = {i: b_to_hybrid[int(atom)] for i, atom in enumerate(b["ligand"])}
-    return sorted(perturbed_hot_atoms(molecules[0], molecules[1], to_a, to_b, set(core_map),
-                                      **({} if rule is None else {"rule": rule})))
-
-
-def hot_region_rule_of(rcfg, edge_dir: Path, leg: str, inputs=None) -> dict:
-    """``{"hot_region_rule": n}`` for the settings of a leg whose hot atoms (``sampling.rest2.region: perturbed``) the
-    present rule chooses otherwise than version 1 did (a bond that closes a ring in B); empty elsewhere, so that the
-    records of the other legs are those of earlier versions. The samples of such a leg made by version 1 record no
-    rule: a run refuses to continue them before it writes anything, and their result stays (twelfth review of PR #19:
-    the leg was refused after its result had been set aside), unless the System they recorded is the one of the hot
-    atoms of this rule (versions 48eea8c to e0f9743 chose them and recorded no version; thirteenth review,
-    :func:`settings_of_the_samples`). Their free energy is not changed by the hot atoms (the end states are not
-    scaled), and the analysis takes it."""
-    from cufep.rbfe.hot_region import HOT_REGION_RULE
-    from cufep.rbfe.prep import load_end_states
-
-    rest2 = rcfg.sampling.rest2
-    if not (rest2.scale > 1.0 and rest2.region == "perturbed"):
-        return {}
-    try:
-        end = load_end_states(edge_dir, leg)
-    except (OSError, KeyError, ValueError, EOFError):
-        return {}
-    a, b = end["a"], end["b"]
-    unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
-    now = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, inputs=inputs)
-    before = perturbed_region(edge_dir, a, b, end["core_map"], unique_b, rule=1, inputs=inputs)
-    return {} if now == before else {"hot_region_rule": HOT_REGION_RULE}
-
-
-def without_the_hot_region_rule(settings: dict) -> dict:
-    """``settings`` of a leg (:func:`hybrid_settings`) without the version of the rule of the hot atoms."""
-    rest2 = settings.get("sampling.rest2")
-    if not isinstance(rest2, dict) or "hot_region_rule" not in rest2:
-        return settings
-    return {**settings, "sampling.rest2": {k: v for k, v in rest2.items() if k != "hot_region_rule"}}
-
-
-def settings_of_the_samples(leg_dir: Path, settings: dict) -> dict:
-    """The settings of a leg in the form its samples (or the checkpoint of their start) recorded them: without the
-    version of the rule of the hot atoms where they were made before it was recorded (48eea8c to e0f9743, which chose
-    the hot atoms of the present rule and recorded no version; thirteenth review of PR #19). Whether they were made
-    with the hot atoms of this rule the System decides, which they record too (:func:`system_of_the_samples`)."""
-    from cufep.sampling.storage import StorageError, _same, stored_layout
-
-    try:
-        _parts, attrs = stored_layout(Path(leg_dir) / "hrex")
-    except (StorageError, OSError, ValueError):
-        return settings
-    stored = (attrs.get("conditions") or {}).get("settings") if isinstance(attrs.get("conditions"), dict) else None
-    without = without_the_hot_region_rule(settings)
-    if without is not settings and isinstance(stored, dict) and _same(stored, without):
-        return without
-    return settings
-
-
-def system_of_the_samples(leg_dir: Path, xml: str) -> bool | None:
-    """Whether the samples of a leg (or the checkpoint of their start) were made with the System ``xml`` of the leg,
-    in either form they recorded it (:func:`recorded_form_of_the_system`); None where they record no checksum."""
-    import hashlib
-
-    import openmm as mm
-
-    digest = _samples_system_digest(leg_dir)
-    if digest is None:
-        return None
-    if hashlib.sha256(xml.encode()).hexdigest() == digest:
-        return True
-    cell = _fixed_cell_of(leg_dir)
-    if cell is None:
-        return False
-    system = mm.XmlSerializer.deserialize(xml)
-    system.setDefaultPeriodicBoxVectors(*[mm.Vec3(*row) for row in np.asarray(cell, dtype=float)])
-    return hashlib.sha256(mm.XmlSerializer.serialize(system).encode()).hexdigest() == digest
+    return sorted(perturbed_hot_atoms(molecules[0], molecules[1], to_a, to_b, set(core_map)))
 
 
 def hybrid_heavy_atoms(hybrid, a: dict, b: dict) -> list[int]:
@@ -635,44 +549,17 @@ def water_moves_record(gcmc: dict | None) -> dict:
             "standard_volume_nm3": float(gcmc["standard_volume_nm3"])}
 
 
-def sphere_atoms_of(edge_dir: Path, leg: str) -> dict:
-    """``{"sphere_atoms": ...}`` for the settings of the grand canonical moves of a leg whose sphere this version takes
-    around other atoms than earlier versions did: a mapped atom that is a hydrogen in A and heavy in B, which this
-    version counts among the heavy atoms of the hybrid ligand (:func:`hybrid_heavy_atoms`) and earlier versions did not.
-    Empty elsewhere (every edge that maps hydrogens on hydrogens only), so that the records of those legs are those of
-    earlier versions. The samples of such a leg that record no such setting are not continued: their moves were made
-    around the heavy atoms of A, or (f54e96e to 9dacb52, which recorded nothing either) of both ends, which their
-    records do not tell apart (fourteenth review of PR #19: continued, they mixed waters in the sphere counted two
-    ways)."""
-    from cufep.rbfe.prep import load_end_states
-
-    try:
-        end = load_end_states(edge_dir, leg)
-    except (OSError, KeyError, ValueError, EOFError):
-        return {}
-    atoms_a, atoms_b = list(end["a"]["topology"].atoms()), list(end["b"]["topology"].atoms())
-
-    def heavy(atom) -> bool:
-        return atom.element is not None and atom.element.symbol != "H"
-
-    changes = any(not heavy(atoms_a[int(i)]) and heavy(atoms_b[int(j)]) for i, j in end["core_map"].items())
-    return {"sphere_atoms": "heavy in either end state"} if changes else {}
-
-
-def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None, inputs=None) -> dict:
+def hybrid_settings(rcfg, leg: str | None = None) -> dict:
     """The settings of a relative run that the samples of a leg depend on beyond its System; the grand canonical
     moves of water for the leg that makes them (written only there, so that the solvent leg and the legs of
-    earlier versions keep the record they had); with the directory of the edge, the version of the rule of the hot
-    atoms where it acts on the leg (:func:`hot_region_rule_of`)."""
+    earlier versions keep the record they had)."""
     settings = {"rbfe": {"alchemy": settings_as_recorded(rcfg.alchemy),
                          "mapping": settings_as_recorded(rcfg.mapping)},
-                "sampling.rest2": {**rcfg.sampling.rest2.model_dump(mode="json"),
-                                   **(hot_region_rule_of(rcfg, edge_dir, leg, inputs) if edge_dir is not None and leg
-                                      else {})}}
+                "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
     if gcmc_in(rcfg, leg):
         from cufep.workflow import gcmc_record
 
-        settings["gcmc"] = {**gcmc_record(rcfg), **(sphere_atoms_of(edge_dir, leg) if edge_dir is not None else {})}
+        settings["gcmc"] = gcmc_record(rcfg)
     return settings
 
 
@@ -811,7 +698,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
-    settings = settings_of_the_samples(leg_dir, hybrid_settings(rcfg, job.leg, edge_dir))
+    settings = hybrid_settings(rcfg, job.leg)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more) -> LegSpec:

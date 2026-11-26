@@ -81,11 +81,23 @@ def _ligands(tmp_path, out_dir, smiles_b: str = "Oc1ccccc1", name_b: str = "phen
     return ligands
 
 
-def _usable(made_from: dict) -> dict:
+def _usable(made_from: dict, water: bool = False) -> dict:
     """A record of a prepared edge of toluene or phenol(ate) that the checks of a record pass: both legs, each mapping
-    the first ring carbon (thirteenth review of PR #19: a record without legs was taken)."""
-    return {"made_from": made_from, "legs": {leg: {"mapping": {"1": 1}, "n_atoms_a": 15, "n_atoms_b": 13}
-                                             for leg in ("complex", "solvent")}}
+    the first ring carbon (thirteenth review of PR #19: a record without legs was taken), with the alchemical water of
+    an edge that changes the net charge (``water``; fourteenth review)."""
+    ion = {"name": "NA", "charge": 1.0, "sigma_nm": 0.2439, "epsilon_kj_mol": 0.3658}
+    leg = {"mapping": {"1": 1}, "n_atoms_a": 15, "n_atoms_b": 13,
+           **({"alchemical_water": {"atoms_a": [20, 21, 22], "atoms_b": [18, 19, 20], "ion": ion}} if water else {})}
+    return {"made_from": made_from, "legs": {name: dict(leg) for name in ("complex", "solvent")}}
+
+
+def _of_the_record(result: dict, prep_dir) -> dict:
+    """A leg result of the prepared systems of the record in ``prep_dir`` (the digest a leg records of what it was
+    made from; fourteenth review of PR #19)."""
+    from cufep.workflow import record_digest
+
+    made = json.loads((Path(prep_dir) / "prep.json").read_text()).get("made_from")
+    return {**result, "prepared_systems_sha256": record_digest(made)}
 
 
 def _config(tmp_path, out_dir, mode: str, legs: str = "each"):
@@ -405,12 +417,12 @@ def test_an_edge_prepared_by_an_earlier_rule_is_not_taken(tmp_path):
         earlier = {k: v for k, v in record.items() if k != key}
         edge_dir = tmp_path / key
         (edge_dir / "prep").mkdir(parents=True)
-        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(earlier)))
+        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(earlier, key == "alchemical_water_rule")))
         before = (edge_dir / "prep" / "prep.json").read_text()
         with pytest.raises(WorkflowError, match=f"{key}.*an earlier rule"):
             prepared_edge(cfg, *ligands, edge_dir, "cube")
         assert (edge_dir / "prep" / "prep.json").read_text() == before
-        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(record)))
+        (edge_dir / "prep" / "prep.json").write_text(json.dumps(_usable(record, key == "alchemical_water_rule")))
         assert prepared_edge(cfg, *ligands, edge_dir, "cube") is not None
 
 
@@ -851,7 +863,7 @@ def test_legs_of_the_hybrid_before_its_torsion_fix_are_left_out_and_named_to_run
     def edge_of(name: str, complex_, solvent, prepared=changed) -> tuple[dict, list[str]]:
         root = tmp_path / name
         shutil.copytree(prepared, root / "edges" / "toluene~phenol" / "prep")
-        _write_legs(root, "toluene~phenol", 0, complex_, solvent)
+        _write_legs(root, "toluene~phenol", 0, _of_the_record(complex_, prepared), _of_the_record(solvent, prepared))
         summary = combine_network(root, ["toluene", "phenol"], [("toluene", "phenol")], 1, {})
         return summary["edges"][0], result_lines(summary)
 
@@ -919,9 +931,14 @@ def _run_dir(root: Path, legs: dict) -> Path:
 
     for edge, (prepared, c, s) in legs.items():
         shutil.copytree(prepared, root / "edges" / edge / "prep")
-        # legs of this preparation: the digest of what its record was made from (fourteenth review of PR #19)
-        made = record_digest(json.loads((Path(prepared) / "prep.json").read_text()).get("made_from"))
-        _write_legs(root, edge, 0, {**c, "prepared_systems_sha256": made}, {**s, "prepared_systems_sha256": made})
+        # legs of this preparation: the digest of what its record was made from (fourteenth review of PR #19); a
+        # record that cannot be read leaves the legs as they are
+        try:
+            made = record_digest(json.loads((Path(prepared) / "prep.json").read_text()).get("made_from"))
+            c, s = {**c, "prepared_systems_sha256": made}, {**s, "prepared_systems_sha256": made}
+        except ValueError:
+            pass
+        _write_legs(root, edge, 0, c, s)
     pairs = [edge.split("~") for edge in legs]
     names = sorted({x for pair in pairs for x in pair})
     (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 1}}))
@@ -972,8 +989,11 @@ def test_the_line_of_a_left_out_leg_runs_that_leg_alone_again(tmp_path, edges_of
 
     root = tmp_path / "run"
     shutil.copytree(edges_of_version_1["changed"], root / "edges" / "toluene~phenol" / "prep")
-    _write_legs(root, "toluene~phenol", 0, _version_1(-12.0), _leg_result(-10.5))
-    _write_legs(root, "toluene~phenol", 1, _leg_result(-11.9), _leg_result(-10.4))
+    prep = edges_of_version_1["changed"]
+    _write_legs(root, "toluene~phenol", 0, _of_the_record(_version_1(-12.0), prep),
+                _of_the_record(_leg_result(-10.5), prep))
+    _write_legs(root, "toluene~phenol", 1, _of_the_record(_leg_result(-11.9), prep),
+                _of_the_record(_leg_result(-10.4), prep))
     (root / "edges" / "toluene~phenol" / "repeat_0" / "complex" / "equil.npz").write_bytes(b"of version 1")
     (root / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 2}}))
     (root / "network.json").write_text(json.dumps({"ligands": ["phenol", "toluene"], "edges": [["toluene", "phenol"]]}))
@@ -1706,26 +1726,17 @@ def test_a_prepared_edge_whose_mapping_joins_mapped_atoms_or_whose_record_is_los
         prepared_edge(rcfg, *ligands, lost, "cube")
     assert not (lost / "prep").exists()
     assert prepared_edge(rcfg, *ligands, tmp_path / "new", "cube") is None    # nothing computed: prepared anew
-    # (thirteenth review, P2) a custom core of version 2 of the rule is taken where the present rule maps its ligands
-    # as it recorded (version 2 searched as now from 48eea8c), and left out where it does not (a search that stopped
-    # before a match); the rule of the search alone said nothing of the mapping
-    from cufep.rbfe.mapping import MappingSettings, kartograf_mapping
-
+    # a custom core of an earlier version of its rule (which exists from this pull request on) is prepared again
     custom = rcfg.model_copy(update={"mapping": rcfg.mapping.model_copy(update={"core_smarts": "c1ccccc1"})})
     record = edge_made_from(custom, *ligands, "cube")
     assert record["custom_core_rule"] == PREPARATION_RULES["custom_core"] == 3
-    mapped = kartograf_mapping(*ligands, MappingSettings(core_smarts="c1ccccc1"))
     of_rule_2 = tmp_path / "rule_2"
     (of_rule_2 / "prep").mkdir(parents=True)
-    for stored, taken in ((mapped, True), (dict(list(mapped.items())[:3]), False)):
-        made = {**_usable({**record, "custom_core_rule": 2}),
-                "mapping_kartograf": {str(i): j for i, j in stored.items()}}
-        (of_rule_2 / "prep" / "prep.json").write_text(json.dumps(made))
-        if taken:
-            assert prepared_edge(custom, *ligands, of_rule_2, "cube") is not None
-        else:
-            with pytest.raises(WorkflowError, match="custom_core_rule"):
-                prepared_edge(custom, *ligands, of_rule_2, "cube")
+    (of_rule_2 / "prep" / "prep.json").write_text(json.dumps(_usable({**record, "custom_core_rule": 2})))
+    with pytest.raises(WorkflowError, match="custom_core_rule"):
+        prepared_edge(custom, *ligands, of_rule_2, "cube")
+    (of_rule_2 / "prep" / "prep.json").write_text(json.dumps(_usable(record)))
+    assert prepared_edge(custom, *ligands, of_rule_2, "cube") is not None
     # (thirteenth review, P2) the records of the ligands lost (a backup without ligand_a.json): the run takes the
     # ligands of its input, which the record was made from, and writes their records again; the analysis takes the
     # ligands of the SDF of the run where its records are missing: both judge the edge alike
@@ -1759,99 +1770,50 @@ def test_a_prepared_edge_whose_mapping_joins_mapped_atoms_or_whose_record_is_los
     # (fourteenth review, P2) REST2 on the perturbed region reads the ligands of the edge where its record of A is
     # missing: those of the input of the run, before anything is written (the check before a run stopped with
     # FileNotFoundError)
-    from cufep.rbfe.leg import hybrid_settings
+    from cufep.rbfe.leg import perturbed_region
+    from cufep.rbfe.prep import load_end_states
 
+    end = load_end_states(kept, "solvent")
+    region = (end["a"], end["b"], end["core_map"],
+              sorted(j for j in end["b"]["ligand"] if j not in set(end["core_map"].values())))
+    hot = perturbed_region(kept, *region)
     (kept / "prep" / "ligand_a.json").unlink()
-    perturbed = rcfg.model_validate({**rcfg.model_dump(mode="json"), "sampling": {
-        **rcfg.model_dump(mode="json")["sampling"], "rest2": {"scale": 1.5, "region": "perturbed"}}})
     with pytest.raises(WorkflowError, match="known neither from the records of its preparation"):
-        hybrid_settings(perturbed, "solvent", kept)
-    assert hybrid_settings(perturbed, "solvent", kept, ligands) == hybrid_settings(perturbed, "solvent")
+        perturbed_region(kept, *region)
+    assert perturbed_region(kept, *region, inputs=ligands) == hot
 
 
-def test_a_leg_whose_hot_atoms_the_earlier_rule_chose_otherwise_is_refused_before_anything_is_written(
+def test_windows_a_leg_would_start_from_are_compared_with_the_settings_of_the_run_before_it_writes(
         tmp_path, monkeypatch, edges_of_version_1):
-    """Twelfth review of PR #19 (P2): a leg computed with `sampling.rest2.region: perturbed` by version 1 of the rule of
-    the hot atoms (a bond that closes a ring in B was read in A: propane -> cyclopropane had none), extended by this
-    version, was refused in the leg after the run had written its record and set the result of the leg aside. The
-    version of the rule is recorded with the settings of a leg where the two versions choose other hot atoms, and a
-    run refuses the samples of the earlier one before it writes anything (their free energy, whose end states are not
-    scaled, stays in the analysis); the other legs keep the record of before."""
+    """Fourteenth review of PR #19 (P2): a leg stopped before its replica exchange (its windows and their start
+    configurations, no samples, no checkpoint) whose windows were made with other settings was refused in the leg,
+    after the run had written its record. The windows are compared with the settings of the run, as the leg compares
+    them, before anything is written, with the command that starts the leg anew; --reschedule sets them aside."""
     import shutil
 
-    from cufep.rbfe import leg as leg_module
-    from cufep.rbfe.leg import hybrid_settings
-    from cufep.rbfe.run import check_samples_of_the_run
-    from cufep.sampling import storage
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.rbfe.leg import STAGES, hybrid_settings
+    from cufep.rbfe.run import check_windows_of_the_run
     from cufep.workflow import WorkflowError
 
     out_dir = tmp_path / "run"
     edge_dir = out_dir / "edges" / "toluene~phenol"
     shutil.copytree(edges_of_version_1["prep"], edge_dir / "prep")
-    base = _config(tmp_path, out_dir, "fixed")
-    rcfg = base.model_validate({**base.model_dump(mode="json"), "sampling": {
-        **base.model_dump(mode="json")["sampling"], "rest2": {"scale": 1.5, "region": "perturbed"}}})
-    assert hybrid_settings(rcfg, "solvent", edge_dir) == hybrid_settings(rcfg, "solvent")   # the two rules agree
-    hrex = edge_dir / "repeat_0" / "solvent" / "hrex"
-    hrex.mkdir(parents=True)
-    of_version_1 = {"settings": hybrid_settings(rcfg, "solvent")}
-    monkeypatch.setattr(storage, "stored_layout", lambda d: (([(Path(d) / "segment_0.h5", 5, 0, 0)],
-                                                              {"conditions": of_version_1})
-                                                             if Path(d) == hrex else ([], {})))
-    check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
-    # the rules choose otherwise (the hot atoms of version 1 one fewer): this version records its rule with the leg
-    import hashlib
-
-    from cufep.rbfe.leg import build_leg
-    from cufep.rbfe.prep import load_end_states
-
-    end = load_end_states(edge_dir, "solvent")
-    unique_b = sorted(j for j in end["b"]["ligand"] if j not in set(end["core_map"].values()))
-    hot = leg_module.perturbed_region(edge_dir, end["a"], end["b"], end["core_map"], unique_b)
-    of_rule_1 = hot[1:]
-
-    def by_rule(*args, rule=None, inputs=None):
-        return of_rule_1 if rule == 1 else hot
-
-    def of_rule_1_only(*args, rule=None, inputs=None):
-        return of_rule_1
-
-    monkeypatch.setattr(leg_module, "perturbed_region", by_rule)
-    assert hybrid_settings(rcfg, "solvent", edge_dir)["sampling.rest2"]["hot_region_rule"] == 2
-    made_now = hashlib.sha256(build_leg(rcfg, edge_dir, "solvent").xml.encode()).hexdigest()
-    monkeypatch.setattr(leg_module, "perturbed_region", of_rule_1_only)
-    made_by_rule_1 = hashlib.sha256(build_leg(rcfg, edge_dir, "solvent").xml.encode()).hexdigest()
-    monkeypatch.setattr(leg_module, "perturbed_region", by_rule)
-    assert made_now != made_by_rule_1
-    # (thirteenth review, P2) samples of 48eea8c to e0f9743: the hot atoms of this rule, no version recorded; their
-    # System is that of this rule, and they are continued (they were refused for the record of the version)
-    of_version_1["system_sha256"] = made_now
-    check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
-    # samples of version 1: their System is another; refused before anything is written, their result stays
-    of_version_1["system_sha256"] = made_by_rule_1
-    with pytest.raises(WorkflowError, match="hot atoms of version 1") as refused:
-        check_samples_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
-    assert "--reschedule" in str(refused.value)
-    # (fourteenth review, P2) a leg of e0f9743 stopped before its replica exchange (its windows and their start
-    # configurations, which record no version of the rule and not the System they were made with): refused before a
-    # run writes anything, with the command that starts it anew (it was refused in the leg after the run had written
-    # its record); --reschedule sets the windows aside
-    from cufep.alchemy.schedule import fixed_schedule
-    from cufep.rbfe.leg import STAGES
-    from cufep.rbfe.run import check_windows_of_the_run
-
-    monkeypatch.setattr(storage, "stored_layout", lambda d: ([], {}))          # no samples, no checkpoint
+    rcfg = _config(tmp_path, out_dir, "fixed")
+    other = rcfg.model_validate({**rcfg.model_dump(mode="json"), "sampling": {
+        **rcfg.model_dump(mode="json")["sampling"], "rest2": {"scale": 2.0}}})
     leg_dir = edge_dir / "repeat_0" / "solvent"
+    leg_dir.mkdir(parents=True)
     schedule = fixed_schedule(list(STAGES), {stage: 2 for stage in STAGES})
     schedule.save(leg_dir / "schedule.yaml")
     np.savez(leg_dir / "start_configs.npz", positions=np.zeros((len(schedule.states), 1, 3)),
              made_with=json.dumps({"states": [state.to_dict() for state in schedule.states],
-                                   "settings": hybrid_settings(rcfg, "solvent")}))
+                                   "settings": hybrid_settings(other, "solvent")}))
     with pytest.raises(WorkflowError, match="were made with other settings") as refused:
         check_windows_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
     assert "--leg solvent --reschedule" in str(refused.value)
     check_windows_of_the_run(rcfg, out_dir, [("toluene", "phenol")], [0], ["solvent"], True)
-
+    check_windows_of_the_run(other, out_dir, [("toluene", "phenol")], [0], ["solvent"], False)
 
 def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is_refused_before_writing(tmp_path):
     """Twelfth review of PR #19 (P1): oxirane -> ethane with hydrogens mapped onto heavy atoms (Kartograf's settings
@@ -1974,62 +1936,6 @@ def test_a_mapping_that_the_rule_of_constrained_bonds_makes_join_mapped_atoms_is
     assert np.allclose(f_mover.centre(x_f, box), b_mover.centre(x_b, box), rtol=0.0, atol=1e-9)
     on = np.ones(len(f_moves.waters), dtype=bool)
     assert list(f_mover.in_sphere(x_f, box, on)) == list(b_mover.in_sphere(x_b, box, on))
-    # (fourteenth review, P2) the rule of e0f9743 (the mapped atoms midway, the heavy atoms of A) is one of the rules a
-    # pre-equilibration of an earlier version is taken up by, and checked by: a record of its ghosts ("midway") where
-    # they are not those of this version. Ethane -> oxirane: a hydrogen of A mapped onto the oxygen of B
-    from cufep.rbfe.leg import hybrid_settings, sphere_atoms_of
-    from cufep.rbfe.run import check_samples_of_the_run
-    from cufep.sampling import storage
-    from cufep.sampling.gcmc import farthest_waters
-    from cufep.sampling.relocation_mc import heavy_bonds
-
-    reverse = out_dir / "edges" / "ethane~oxirane"
-    prepare_edge(free, ethane, oxirane, _protein(), reverse, "cube", print)
-    end_r = load_end_states(reverse, "complex")
-    ra, rb, rcore = end_r["a"], end_r["b"], end_r["core_map"]
-    hybrid_r = make_hybrid_system(mm.XmlSerializer.deserialize(ra["system_xml"]), ra["positions"], ra["ligand"],
-                                  mm.XmlSerializer.deserialize(rb["system_xml"]), rb["positions"], rb["ligand"], rcore)
-    top_r = hybrid_topology(ra["topology"], rb["topology"],
-                            sorted(j for j in rb["ligand"] if j not in set(rcore.values())))
-    box_r = np.asarray(ra["box"], dtype=float)
-    midway_r = centre_positions_of(hybrid_r, ra, rb)
-    both_ends = hybrid_heavy_atoms(hybrid_r, ra, rb)
-    moves_r = start_moves(free, hybrid_r, top_r, box_r, end_states_heavy(ra, rb), midway_r, heavy_atoms=both_ends)
-    atoms = list(top_r.atoms())
-    of_a = np.array([i for i in sorted(hybrid_r.ligand_atoms) if atoms[i].element.symbol != "H"], dtype=np.int64)
-    assert len(of_a) < len(moves_r.ligand_heavy)                       # the oxygen, a hydrogen of A
-    bonds_a = heavy_bonds(top_r, of_a, hybrid_r.bonds)
-
-    def of_rule(heavy, bonds, k):
-        return list(farthest_waters(moves_r.waters, hybrid_r.positions, box_r, heavy, k, bonds, midway_r))
-
-    n = next(k for k in range(1, len(moves_r.waters))
-             if of_rule(of_a, bonds_a, k) != of_rule(moves_r.ligand_heavy, moves_r.ligand_heavy_bonds, k))
-    of_e0f9743 = of_rule(of_a, bonds_a, n)
-    leg_dir = tmp_path / "leg_of_e0f9743"
-    leg_dir.mkdir()
-    (leg_dir / "equil.npz").write_bytes(b"made by e0f9743")
-    (leg_dir / "equil_ghosts.json").write_text(json.dumps({"ghosts": [int(i) for i in of_e0f9743],
-                                                           "start_centre": "midway"}))
-    counted = free.model_validate({**free.model_dump(mode="json"), "sampling": {
-        **free.model_dump(mode="json")["sampling"], "gcmc": {"ghost_waters": n}}})
-    taken = start_moves(counted, hybrid_r, top_r, box_r, end_states_heavy(ra, rb), midway_r, leg_dir, False,
-                        both_ends)
-    assert list(taken.ghosts) == [int(i) for i in of_e0f9743] and taken.start_centre == "midway"
-    # (fourteenth review, P2) the atoms of the sphere of the moves are those of this version only where the edge maps a
-    # hydrogen of A onto a heavy atom of B: recorded with the settings of its complex leg there alone, and samples of
-    # such a leg that record nothing are not continued (refused before a run writes anything)
-    assert sphere_atoms_of(reverse, "complex") == {"sphere_atoms": "heavy in either end state"}
-    assert sphere_atoms_of(edge_dir, "complex") == {}                 # the heavy atoms of A are heavy in both
-    hrex = reverse / "repeat_0" / "complex" / "hrex"
-    hrex.mkdir(parents=True)
-    unrecorded = {"settings": hybrid_settings(free, "complex")}
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(storage, "stored_layout",
-                      lambda d: (([(Path(d) / "segment_0.h5", 5, 0, 0)], {"conditions": unrecorded})
-                                 if Path(d) == hrex else ([], {})))
-        with pytest.raises(WorkflowError, match="sphere_atoms"):
-            check_samples_of_the_run(free, out_dir, [("ethane", "oxirane")], [0], ["complex"], False)
 
 
 def test_the_plan_gives_the_mapping_of_kartograf_and_the_one_the_preparation_leaves(tmp_path):

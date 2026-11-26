@@ -798,15 +798,6 @@ def test_a_pre_equilibration_of_an_earlier_version_is_used_with_the_ghosts_of_th
     earlier = earlier_ghosts_of({"positions": moved, "box": box}, spec, settings)
     assert list(spec.ghosts) == [0] and list(earlier) == [1]
     assert equil_ghosts_problem(equil, spec, earlier) == NO_GHOST_RECORD
-    # twelfth review (P3): with a margin of 0.30 nm the first rule could not have made it (a sphere of 2.225 nm in a
-    # cell of 4 nm); the versions from fc2ba44 to 507e435, which recorded nothing yet, had the rule of this version
-    # (1.35 nm), and their ghosts are those of this run
-    wide = Config.model_validate(dict(BASE, sampling={"gcmc": {**MOVES, "radius_margin_nm": 0.3,
-                                                                 "ghost_waters": 1}})).sampling.gcmc
-    spec_wide = spec_of(system, top, positions, box, ligand, 1, radius_margin_nm=0.3)
-    assert spec_wide.radius_nm == pytest.approx(1.35)
-    earlier = earlier_ghosts_of({"positions": positions, "box": box}, spec_wide, wide)
-    assert list(earlier) == list(spec_wide.ghosts) and equil_ghosts_problem(equil, spec_wide, earlier) is None
     earlier = earlier_ghosts_of({"positions": moved, "box": box}, spec, settings)
     # a record is the list of integers it is written as (twelfth review, P3: 0.9 was taken as 0, and 1e999 stopped
     # the leg)

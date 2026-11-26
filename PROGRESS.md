@@ -111,6 +111,14 @@ Open items:
 
 ## Change Log
 
+### 2026-11-26 — [design] Review findings judged by product quality; compatibility for unmerged commits removed
+- What: findings are fixed where users meet the state (wrong numbers, a stop after writing, a stopped analysis, a
+  wrong report) and rejected where they ask compatibility with data only commits of this unmerged PR made. Removed:
+  the e0f9743 ghost rule and `sphere_atoms`, the version of the hot-region rule, the custom core of rule 2, the ABFE
+  rule of fc2ba44..507e435. Kept: main's formats and the TYK2 run of 08d58d5.
+- Why: the owner's order of 2026-11-26 (the criterion is the quality of the product).
+- Refs: `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md`, `docs/rbfe.md` ("Sampling", "Atom mapping")
+
 ### 2026-11-26 — [amendment] RBFE: the fourteenth review of PR #19 (14 findings)
 - What: legs taken only with the record they were made from (`prepared_systems_sha256`); records need their inputs,
   atom counts and the alchemical water of both legs of a charge change; ligands of an edge from its records or the

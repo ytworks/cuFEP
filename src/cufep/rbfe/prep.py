@@ -241,30 +241,10 @@ PREPARATION_RULES = {
     # 2: a custom core maps its atoms with their chirality (version 1 could map an atom of the other configuration)
     # 3: its matches are sets of atoms, and a pattern with more than the matches searched is refused (version 2
     #    counted the orders of the atoms of a match one by one, and the search of RDKit could stop before a match of
-    #    the ligand: twelfth review of PR #19). An edge of version 2 is taken where both rules give the same core
+    #    the ligand: twelfth review of PR #19). The custom core exists from this pull request on: an edge of version 1
+    #    or 2 was made by a commit of it and is prepared again
     "custom_core": 3,
 }
-
-
-def custom_core_rule_holds(info: dict, ligands) -> bool:
-    """Whether an edge whose custom core was mapped by version 2 of its rule has the mapping of the present rule: its
-    two ligands (A then B, with their poses) mapped again with the settings of its record give the Kartograf mapping it
-    recorded (``mapping_kartograf``). Version 2 recorded both the search that could stop before a match and, from
-    48eea8c, the present search (thirteenth review of PR #19: a core of 26 atoms that the present rule gives was
-    refused for the 13 of the first search); the mapping it made tells them apart."""
-    from cufep.rbfe.config import MappingConfig
-    from cufep.rbfe.mapping import MappingError, kartograf_mapping, mapping_settings
-
-    made_from = info.get("made_from") or {}
-    stored = info.get("mapping_kartograf")
-    if made_from.get("custom_core_rule") != 2 or ligands is None or not isinstance(stored, dict):
-        return False
-    try:
-        settings = mapping_settings(MappingConfig.model_validate(made_from.get("mapping") or {}))
-        again = kartograf_mapping(ligands[0], ligands[1], settings)
-        return again == {int(i): int(j) for i, j in stored.items()}
-    except (MappingError, ValueError, TypeError):
-        return False
 
 
 def _ligand_of_record(prep_dir: Path, end: str, name, digest):
@@ -458,11 +438,8 @@ def earlier_rules_of(info, ligands=None) -> list[str]:
                    "the solutes across the boundary of the cell")
     mapping_made = made_from.get("mapping") if isinstance(made_from.get("mapping"), dict) else {}
     if (mapping_made.get("core_smarts") is not None
-            and made_from.get("custom_core_rule") != PREPARATION_RULES["custom_core"]
-            and not custom_core_rule_holds(info, ligands)):
-        out.append("its custom core was mapped without the chirality of its atoms"
-                   if made_from.get("custom_core_rule") is None else
-                   "its custom core was mapped by an earlier rule, and the present rule maps its ligands otherwise")
+            and made_from.get("custom_core_rule") != PREPARATION_RULES["custom_core"]):
+        out.append("its custom core was mapped by an earlier rule of cuFEP")
     ions = {leg: legs[leg]["alchemical_water"]["ion"] for leg in ("complex", "solvent")
             if legs[leg].get("alchemical_water")}
     found = list(ions.values())
@@ -505,9 +482,6 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
         raise WorkflowError(f"the record of the prepared systems {done} cannot be used: {'; '.join(unusable)}; remove "
                             "the directory of the edge to prepare it again")
     stored, current = info.get("made_from"), edge_made_from(cfg, ligand_a, ligand_b, box_shape)
-    if (stored.get("custom_core_rule") == 2 and current.get("custom_core_rule") == PREPARATION_RULES["custom_core"]
-            and custom_core_rule_holds(info, (ligand_a, ligand_b))):
-        stored = {**stored, "custom_core_rule": current["custom_core_rule"]}   # the mapping of the present rule
     if stored != current:
         differing = sorted(k for k in set(stored or {}) | set(current) if (stored or {}).get(k) != current.get(k))
         rules = [k for k in differing if k.endswith("_rule")]

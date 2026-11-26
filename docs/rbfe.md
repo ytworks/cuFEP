@@ -106,8 +106,8 @@ with the record they were made from (the digest each leg records, `prepared_syst
 edge are those of its records (`ligand_a.json`, `ligand_b.json`), else those of the input of the run that the record
 was made from (its digests), for every reader (the analysis, the checks before a run, the hot atoms of REST2): the
 run writes the record of a ligand that is missing again, that one alone, with its partial charges; the analysis
-reads the SDF of the run. A custom core of version 2 of its rule (whose search could stop before a match) is taken where Kartograf, run
-again with the settings of its record, gives the mapping it recorded. An edge whose record of its preparation is lost
+reads the SDF of the run. A custom core mapped by an earlier rule of cuFEP is prepared again. An edge whose record of
+its preparation is lost
 while its legs hold results is refused: it is prepared anew only when its directory is moved away.
 
 ### Hybrid topology
@@ -176,11 +176,8 @@ heavy atom). The ligand is then hot only in part: a charge of a hot atom carries
 not (the NonbondedForce, which the plugin carries, has electrostatic lambdas of each kind), and every pair inside the
 ligand and with the environment carries the factor of its hot atoms (s for two, sqrt(s) for one), every proper
 torsion of four hot atoms s, as REST2 scales them (Wang, Friesner and Berne 2011). A bond of two mapped atoms is
-read in the end state that has it (a bond that closes a ring in B is a bond to a ring); version 1 of the rule read it
-in A, and a leg whose hot atoms the two versions choose otherwise records the version with its settings. Samples
-of such a leg that record no version are continued where the System they record is that of the hot atoms of this
-rule (versions 48eea8c to e0f9743 chose them and recorded no version), and refused before a run writes anything
-where it is that of version 1; their free energy, whose end states are not scaled, stays in the analysis. The charges of an alchemical water
+read in the end state that has it (a bond that closes a ring in B is a bond to a ring). The charges of an alchemical
+water
 are cold whatever the region. The energies of every state equal those of a System with the scaling written into its
 parameters (`tests/unit/test_rbfe_rest2_region.py`), on both backends (`tests/gpu`).
 
@@ -204,12 +201,10 @@ pre-equilibration or samples they made keeps those ghosts: where the record of t
 centre and has them, or without a record where the leg goes on from its samples; a leg that goes on from its
 samples has the ghosts whose System has the checksum its samples recorded, whatever its record), checked against the
 sphere around the centre they were counted from (the one the record names, else every centre whose rule gives
-them, of which one suffices: the centre of the hybrid and the heavy atoms of A, up to e7af433; the midway positions
-and the heavy atoms of A, e0f9743 to 1124b1e, whose records name "midway"; the midway positions and the atoms heavy
-in either end, this version); ghosts chosen anew, where the leg has none of these, are checked around the centre of
-this version alone. Where the edge maps a hydrogen of A onto a heavy atom of B, the atoms of the sphere of the moves
-differ from those of earlier versions: the complex leg records them with its settings (`sphere_atoms`), and samples
-of such a leg that record nothing are not continued (refused before a run writes anything); the ghost
+them, of which one suffices: the centre of the hybrid and the heavy atoms of A, the rule of the full TYK2 run of
+08d58d5; the midway positions and the atoms heavy in either end, this version); ghosts chosen anew, where the leg has
+none of these, are checked around the centre of this version alone (legs of other commits of the pull request that
+brought these moves to the relative legs are not taken up); the ghost
 waters a pre-equilibration was made with are recorded beside it (`equil_ghosts.json`, with the centre: a set of
 numbers of the waters of the leg, each once); a record that is not that is a
 pre-equilibration whose ghosts are not known, and it is read only by a leg that would start from it; a
