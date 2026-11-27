@@ -608,6 +608,11 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             junction_torsions.append((atoms, [0.0, 0.0, 0.0, per, phase, kk, 0.0]))
         else:
             standard_torsions.addTorsion(*atoms, per, phase, kk)
+    # the dihedrals that anchor the dummy bridge atoms of dual junctions, at the dummy end only
+    for atoms, phase, kk in dummies_a.anchor_torsions():
+        junction_torsions.append((atoms, [1.0, 0.0, 0.0, 1.0, phase, kk, 1.0]))
+    for atoms, phase, kk in dummies_b.anchor_torsions():
+        junction_torsions.append((atoms, [1.0, phase, kk, 1.0, 0.0, 0.0, 0.0]))
     # a term both ends have (as many times as both have it) is standard; the others go from one end to the other
     for key in sorted(old_terms.keys() & new_terms.keys()):
         for atoms, per, phase, kk in new_terms[key][:len(old_terms[key])]:

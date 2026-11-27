@@ -415,37 +415,3 @@ def hybrid_edge_topology(n_particles: int, ligand: list[int], system, box=None):
             top.addBond(water[0], water[1]), top.addBond(water[0], water[2])
             water = []
     return top
-
-
-def valence_energy(system, atoms, positions, box) -> float:
-    """Energy of the bonds, angles and torsions of ``system`` that have an atom of ``atoms``."""
-    import openmm as mm
-
-    keep = mm.System()
-    for i in range(system.getNumParticles()):
-        keep.addParticle(system.getParticleMass(i))
-    keep.setDefaultPeriodicBoxVectors(*system.getDefaultPeriodicBoxVectors())
-    atoms = set(atoms)
-    for f in system.getForces():
-        if isinstance(f, mm.HarmonicBondForce):
-            g = mm.HarmonicBondForce()
-            for k in range(f.getNumBonds()):
-                i, j, r, kk = f.getBondParameters(k)
-                if {i, j} & atoms:
-                    g.addBond(i, j, r, kk)
-        elif isinstance(f, mm.HarmonicAngleForce):
-            g = mm.HarmonicAngleForce()
-            for k in range(f.getNumAngles()):
-                i, j, m, t, kk = f.getAngleParameters(k)
-                if {i, j, m} & atoms:
-                    g.addAngle(i, j, m, t, kk)
-        elif isinstance(f, mm.PeriodicTorsionForce):
-            g = mm.PeriodicTorsionForce()
-            for k in range(f.getNumTorsions()):
-                i, j, m, n, p, ph, kk = f.getTorsionParameters(k)
-                if {i, j, m, n} & atoms:
-                    g.addTorsion(i, j, m, n, p, ph, kk)
-        else:
-            continue
-        keep.addForce(g)
-    return potential(reference_context(keep, positions, box))

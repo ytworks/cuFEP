@@ -113,8 +113,8 @@ Open items:
 
 ### 2026-11-27 — [amendment] RBFE: dummy atoms by Fleck et al. 2021 where both ligands have unmapped atoms on one atom
 - What: hybrid version 3 (`src/cufep/rbfe/junction.py`): where a mapped atom carries unmapped atoms of both ligands, the
-  dummy atoms get the bonded terms of a terminal, dual or triple junction of Fleck, Wieder and Boresch, JCTC 17, 4403
-  (2021), changed with the steric lambda of their ligand; other atoms keep OpenFE's rule. Legs of versions 1 and 2 at such
+  dummy atoms get the bonded terms of a terminal, dual (bond, angle and dihedral) or triple junction of Fleck, Wieder
+  and Boresch, JCTC 17, 4403 (2021), changed with the steric lambda of their ligand; other atoms keep OpenFE's rule. Legs of versions 1 and 2 at such
   edges are left out of the analysis, and a run refuses to continue them. 57 such atoms in the prepared TYK2 and A2A edges.
 - Why: the five TYK2 edges on the mapping for the plugin (431eee3, 10 legs on cuPotential) agree with 08d58d5 within
   1.8 SE except ejm_42~ejm_54 (-2.03 +- 0.22 vs -0.24 +- 0.64, -2.6 SE): the dummies at C17 raised the urea C-N barrier of

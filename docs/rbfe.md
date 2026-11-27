@@ -187,11 +187,11 @@ anchored to the mapped neighbours of X alone (the unmapped atoms of the other li
 | mapped neighbours of X | junction (Fleck 2021) | terms of the dummy atoms with mapped atoms other than X |
 |---|---|---|
 | 1 | terminal (sec. 2.3.1) | every angle kept; of the dihedrals Z-P-X-D, those from one atom Z kept, the others deleted |
-| 2 | dual, bond and two angles (sec. 2.3.2) | the two angles P-X-D at 90 degrees with 100 kcal/(mol rad^2); every dihedral D-X-P-Z deleted; dihedrals D'-D-X-P of the deeper dummy atoms to one P only; terms with dummy atoms of two groups at X deleted |
+| 2 | dual, bond, angle and dihedral (sec. 2.3.2, TOL2PYR-2) | the angle P-X-D kept and the other deleted; one dihedral D-X-P-Z with periodicity 1 and 100 kcal/mol, its minimum where the dummy is, every other dihedral D-X-P-Z deleted; dihedrals D'-D-X-P of the deeper dummy atoms to that P only; terms with dummy atoms of two groups at X deleted; where no anchor has a mapped neighbour other than X, the two angles P-X-D at 90 degrees with 100 kcal/(mol rad^2) instead |
 | 3 | nonplanar triple (sec. 2.3.3) | the three angles P-X-D with 3.55 kcal/(mol rad^2) (the value of its calculations) and equilibrium values adapted to the ligand of that end; every dihedral D-X-P-Z deleted; D'-D-X-P to one P only |
 
 The force constants are CHARMM's, whose angle energy is K (theta - theta0)^2: in OpenMM's (k/2)(theta - theta0)^2
-they are k = 2K. With them the dummy atoms have three nonredundant terms each ("The derivation of eq 2 relies
+they are k = 2K (its dihedral energy is OpenMM's). With them the dummy atoms have three nonredundant terms each ("The derivation of eq 2 relies
 crucially on using exactly three, nonredundant degrees of freedom (three bonded energy terms) per dummy atom",
 sec. 2.1.1) and add the same factor to the free energy of both legs. Checked
 (`tests/unit/test_rbfe_hybrid.py`): with the dummy atoms at their minimum, what the hybrid adds to the ligand of
@@ -199,9 +199,14 @@ an end is the same wherever that ligand's atoms are and at every angle of the bo
 added from 24.97 to 59.74 kJ/mol over the angles of the amide C-N bond of N-methylpropanamide into
 1,3-dimethylurea, and 4.6 to 39.4 kJ/mol on ejm_42~ejm_54.
 
-cuFEP's own choices, where the source is silent: improper torsions with D and a mapped atom other than X are
-deleted at a dual and a triple junction (terms beyond the three); the one P or Z that keeps its dihedrals is the
-atom of the lowest index; the adapted angles of a triple junction are those of the direction of D that fits the
+cuFEP's own choices, where the source is silent: of the two anchorings the source gives a dual junction, the
+bond, angle and dihedral, which leaves the dummy where it is (the two angles at 90 degrees move a group out of
+the plane of X along lambda, which "may reduce phase-space overlap and necessitate additional λ-states", sec.
+2.1.2: on 99afe76 the windows of short legs of toluene into phenol no longer overlapped); its P and Z are the
+first, by the index of the hybrid, with a Z bonded to more than one atom ("problems may arise if the 'anchor'
+of the dihedral angle term is itself a rotamer, such as a methyl group"); improper torsions with D and a mapped
+atom other than X are deleted at a dual and a triple junction (terms beyond the three); the one P or Z of a
+triple and a terminal junction that keeps its dihedrals is the atom of the lowest index; the adapted angles of a triple junction are those of the direction of D that fits the
 three angles of the force field best, with X and its neighbours where the other ligand has them (Fleck 2021
 minimises the molecule with the dummy at 0.05 kcal/(mol rad^2)); along lambda each changed term goes linearly
 from the force field's term, where its ligand exists, to the dummy's, with the steric lambda of its ligand
