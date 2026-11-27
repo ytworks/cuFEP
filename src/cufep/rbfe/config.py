@@ -20,12 +20,14 @@ from pydantic import Field, field_validator, model_validator
 from cufep.config.schema import (
     AnalysisConfig,
     CommonConfig,
+    GcmcConfig,
     OutputConfig,
     PrecalculationLengths,
     SamplingConfig,
     _of_leg,
     _Section,
     common_problems,
+    gcmc_problems,
 )
 
 
@@ -166,15 +168,24 @@ def initial_window_problems(schedule: HybridLambdaSchedule) -> list[str]:
     return []
 
 
+class RbfeGcmcConfig(GcmcConfig):
+    """Grand canonical moves of water in the complex leg, on by default in a relative calculation (the owner's
+    decision of 2026-11-28), also where the YAML gives only some of their settings; the settings and their basis
+    are those of the ABFE (docs/configuration.md), where they are off by default."""
+
+    enabled: bool = True
+
+
 class RbfeSampling(SamplingConfig):
     #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol
     production_ns: float = 5.0
+    gcmc: RbfeGcmcConfig = Field(default_factory=RbfeGcmcConfig)
 
     @model_validator(mode="after")
     def _no_water_moves(self):
-        if self.relocation_mc.enabled or self.gcmc.enabled:
-            raise ValueError("sampling.relocation_mc and sampling.gcmc are moves of the ABFE; a relative "
-                             "calculation does not have them")
+        if self.relocation_mc.enabled:
+            raise ValueError("sampling.relocation_mc is a move of the ABFE; a relative calculation does not have it "
+                             "(it has sampling.gcmc)")
         if not isinstance(self.equilibration_ns, (int, float)):
             raise ValueError("sampling.equilibration_ns is one value for both legs")
         return self
@@ -211,6 +222,7 @@ class RbfeConfig(CommonConfig):
             problems.append("membrane.complex_leg: water is a setting of the ABFE; a relative calculation runs the "
                             "complex leg in the bilayer")
         problems += initial_window_problems(self.lambda_schedule)
+        problems += gcmc_problems(self)
         if problems:
             raise ValueError("; ".join(problems))
         return self

@@ -943,3 +943,125 @@ def test_replica_exchange_of_a_hybrid_leg(tmp_path, hybrid_leg, backend):
     k = len(schedule.states)
     assert data["u"].shape == (10, k, k) and np.all(np.isfinite(data["u"]))
     assert data["swaps"][:, :, 1].sum() > 0
+
+
+@pytest.fixture(scope="module")
+def hybrid_gcmc_leg():
+    """Toluene into phenol in a 3.2 nm box of water with REST2, as a relative leg with grand canonical moves of water
+    is made of it (cufep.rbfe.leg.hybrid_gcmc): the specification of the moves from the hybrid with every water,
+    the leg's hybrid with the ghosts of the start off. The excess chemical potential is that of the ABFE's GPU tests,
+    so that a few moves insert waters."""
+    from conftest import build_hybrid_edge
+
+    from cufep.rbfe.hybrid import make_hybrid_system
+    from cufep.rbfe.leg import hybrid_topology
+    from cufep.sampling.gcmc import gcmc_spec, ghosts_off, hybrid_parameters
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box, (top_a, top_b) = build_hybrid_edge(
+        box_nm=3.2, with_topologies=True)
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, rest2=True,
+                                rest2_atoms=[])
+    topology = hybrid_topology(top_a, top_b, sorted(j for j in ligand_b if j not in set(core.values())))
+    moves = gcmc_spec(hybrid.system, topology, hybrid.positions, np.asarray(box), list(hybrid.ligand_atoms), 0.9, 0.5,
+                      1, 300.0, interval_ps=0.4, attempts=400, batch_size=200, radius_margin_nm=0.3,
+                      excess_chemical_potential_kcal_per_mol=-2.0, standard_volume_nm3=0.0303, ghost_waters=None)
+    moves.hybrid = hybrid_parameters(hybrid, moves.ligand)
+    every = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(hybrid.system))
+    ghosts_off(hybrid.system, moves.waters[moves.ghosts].reshape(-1))
+    schedule = fixed_schedule(["morph"], {"morph": 6}, rest2_scale=1.5)
+    return hybrid, every, schedule, box, moves
+
+
+@needs_cuda
+def test_the_trial_energies_of_a_hybrid_ligand_on_the_gpu_are_those_of_the_processor(hybrid_gcmc_leg):
+    """The stand-in of a hybrid ligand (each atom in the state of its own at the lambda of the window) on the CUDA
+    device of the Context equals the NumPy stand-in, at the ends and in the middle of the transformation."""
+    from cufep.sampling.gcmc import hybrid_ligand_parameters
+    from cufep.sampling.relocation_mc import GpuStandIn, StandIn, random_rotations
+
+    hybrid, _every, _schedule, box, moves = hybrid_gcmc_leg
+    pos = np.asarray(hybrid.positions, dtype=float)
+    rng = np.random.default_rng(5)
+    on = moves.initial_on()
+    active = np.ones(len(pos), dtype=bool)
+    active[moves.waters[~on].reshape(-1)] = False
+    ghost = int(np.flatnonzero(~on)[0])
+    local = pos[moves.waters[ghost]] - pos[moves.waters[ghost][0]]
+    centre = pos[list(moves.ligand_heavy)].mean(axis=0)
+    points = centre + rng.normal(0.0, 0.3, size=(256, 3))                    # near the ligand
+    poses = points[:, None, :] + np.einsum("kij,sj->ksi", random_rotations(rng, 256), local)
+    gpu = GpuStandIn(moves, 0)
+    for x in (0.0, 0.3, 0.5, 0.8, 1.0):
+        ligand = hybrid_ligand_parameters(moves, x)
+        reference = StandIn(moves, pos, box, 1.0, 1.0, active=active, ligand=ligand)
+        device = gpu.load(pos, box, 1.0, 1.0, active=active, ligand=ligand, state_key=x)
+        a = reference.pose_energies(poses, ghost, moves.cutoff_nm)
+        b = device.pose_energies(poses, ghost, moves.cutoff_nm)
+        assert np.isfinite(a).all() and np.allclose(a, b, rtol=1e-9, atol=1e-9)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_waters_switched_in_a_hybrid_context_give_the_energies_of_a_system_built_so(hybrid_gcmc_leg, backend):
+    """A Context of the hybrid leg (the ghosts of the start off) whose ghosts are switched on gives the energies of the
+    hybrid with every water in every window, and switched back those it had (the NonbondedForce, or the plugin's
+    force in its place, and the Lennard-Jones of the hybrid ligand with its environment)."""
+    import openmm.unit as u
+
+    from cufep.sampling.gcmc import WaterSwitch
+
+    hybrid, every, schedule, box, moves = hybrid_gcmc_leg
+    be = get_backend(backend)
+
+    def context_of(system):
+        ctx = be.make_context(be.prepare_system(system),
+                              be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=3), 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(hybrid.positions)
+        return ctx
+
+    def numbers(ctx):
+        from cufep.sampling.states import set_state
+
+        ctx.setPositions(hybrid.positions)
+        # in the middle window: the evaluator of the hybrid states leaves the Context in another state
+        set_state(ctx, schedule.states[len(schedule.states) // 2])
+        energy = ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)
+        return energy, make_state_evaluator(ctx, schedule.states, 300.0, None).reduced_potentials()[0]
+
+    leg, all_on = context_of(hybrid.system), context_of(every)
+    (e_leg, u_leg), (e_every, u_every) = numbers(leg), numbers(all_on)
+    assert abs(e_every - e_leg) > 100.0                                    # kJ/mol: the ghosts of the start
+    switch = WaterSwitch(leg, moves)
+    assert switch.apply(np.ones(len(moves.waters), dtype=bool)) == len(moves.ghosts)
+    e_on, u_on = numbers(leg)
+    assert e_on == pytest.approx(e_every, abs=0.05) and np.allclose(u_on, u_every, rtol=0.0, atol=0.02)
+    assert switch.apply(moves.initial_on()) == len(moves.ghosts)
+    e_off, u_off = numbers(leg)
+    assert e_off == pytest.approx(e_leg, abs=0.05) and np.allclose(u_off, u_leg, rtol=0.0, atol=0.02)
+
+
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+def test_replica_exchange_of_a_hybrid_leg_with_grand_canonical_moves_of_water(tmp_path, hybrid_gcmc_leg, backend):
+    """Replica exchange of the hybrid states with the moves, without a barostat: the counts by window, waters
+    inserted, finite energies and the cell the leg started in."""
+    hybrid, _every, schedule, box, moves = hybrid_gcmc_leg
+    devices = [0, 1] if _gpu_count() >= 2 else [0]
+    spec = LegSpec(name="gpu-hybrid-gcmc", system_xml=mm.XmlSerializer.serialize(hybrid.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=hybrid.system.getNumParticles(),
+                   protocol="hybrid", backend=backend, temperature_K=300.0, pressure_bar=None, barostat="none",
+                   timestep_fs=2.0, steps_per_iteration=100, seed=3, frame_atoms=list(hybrid.ligand_atoms),
+                   gcmc=moves)
+    k = len(schedule.states)
+    with ReplicaExchangeSampler(spec, tmp_path / "hrex", devices=devices, log=lambda m: None) as s:
+        s.initialize(hybrid.positions, box)
+        s.run(10, record_stride=2, checkpoint_stride=5)
+    data = read_samples(tmp_path / "hrex")
+    own = data["u"][np.arange(10)[:, None], np.arange(k), data["states"]]
+    assert np.all(np.isfinite(own))
+    counts = data["gcmc"]
+    assert counts.shape == (10, k, 5) and (counts[:, :, 0] + counts[:, :, 2]).sum(axis=1).tolist() == \
+        [0, k * moves.attempts] * 5
+    assert counts[:, :, 1].sum() > 0                                        # (insertions were made)
+    assert np.allclose(data["volume"], abs(np.linalg.det(box)), rtol=1e-6)  # no barostat

@@ -69,4 +69,12 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   ので、TYK2 は実行のコピー(`runs/rbfe_bench_tyk2_39ee4ac_d61c215`)から 4 辺の脚を除き、`--edge` で 4 辺だけ image
   d61c215 で計算する。A2A(383758f は 42 脚中 6 脚で止めた)は新しいディレクトリ `runs/rbfe_bench_a2a_d61c215` に準備済みの辺を
   写して image d61c215 で最初から(GPU 2〜7)。
+- 2026-11-28 オーナーの指示「やはり GCMC を入れて計測したい」: RBFE の complex 脚に GCMC(既定 ON、オーナーの選択)。計測は
+  TYK2 と A2A の両方(「今の計算は止めて両方」: d61c215 の TYK2 4 辺の再計算は 8 脚中 4 脚、A2A は 42 脚中 6 脚で止めた)。
+  実装: 幽霊の水は NonbondedForce と hybrid 配位子の LJ(epsilonA・B)の両方で切る; 球は hybrid 配位子の重原子(A と B)の
+  中心; stand-in は各配位子原子をその窓の λ の電荷と LJ で(ABFE の stand-in のソフトコア); 前平衡化は幽霊を切って
+  barostat あり、窓と replica exchange はその平均セルで barostat なし; 結果に GCMC の回数を窓ごとに。設定の検査は ABFE と
+  共通の関数(`gcmc_problems`)。YAML が `sampling.gcmc` の一部だけを書くと既定 OFF の型で読まれて切れていた → RBFE 用の型
+  (`RbfeGcmcConfig`、既定 ON)。CPU テスト(幽霊が両方の力で無いこと、Context での切り替え、stand-in の端と中間、hybrid での
+  移動)と GPU テスト(両 backend での切り替え、GPU の stand-in、hybrid の replica exchange と移動): 23 passed。
 

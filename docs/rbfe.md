@@ -112,6 +112,17 @@ Hamiltonian replica exchange with REST2 on the whole hybrid ligand and the pocke
 `sampling.rest2` of the ABFE): 1 ns of equilibration and 5 ns of production per window, the defaults of
 OpenFE's relative protocol. One calculation per edge (`sampling.repeats: 1`).
 
+Grand canonical moves of water (`sampling.gcmc`, on by default in the complex leg; the owner's decision of
+2026-11-28): the moves of the ABFE (`docs/protocol.md`, `src/cufep/sampling/gcmc.py`), water inserted into and
+deleted from a sphere around the heavy atoms of the hybrid ligand (those of A and of B, so that the sphere is one
+whichever way the edge is run), in equilibrium with bulk water. The waters farthest from the ligand are ghosts from
+the start; the pre-equilibration, with its barostat, settles the cell without them, and the windows and the replica
+exchange run in the mean cell of its second half without a barostat. A ghost has no charge and no Lennard-Jones in
+the NonbondedForce and in the Lennard-Jones of the hybrid ligand with its environment. The trials are first
+evaluated with a stand-in energy in which each atom of the hybrid ligand has its charge and Lennard-Jones at the
+lambda of the window; the one that passes is tested with the full potential of the replica. The solvent leg has no
+moves.
+
 ### Membrane proteins
 
 `membrane.enabled` builds the complex leg in a POPC bilayer (Lipid21) as the ABFE does, with the membrane
@@ -162,8 +173,7 @@ with 95 % bootstrap intervals, and for every edge its windows, lowest overlap an
 - A correction of the Lennard-Jones of the ligand with its surroundings beyond the cutoff: none, as OpenFE's
   relative protocol (`use_dispersion_correction: False` for the hybrid); the NonbondedForce of the
   environment keeps its own long-range correction.
-- Water moves (`sampling.relocation_mc`, `sampling.gcmc`) and `membrane.complex_leg: water`, which are of
-  the ABFE.
+- Water relocation moves (`sampling.relocation_mc`) and `membrane.complex_leg: water`, which are of the ABFE.
 
 ## All settings and their defaults
 
@@ -206,6 +216,15 @@ lambda_schedule:
 sampling:
   production_ns: 5.0
   equilibration_ns: 1.0
+  gcmc:
+    enabled: true
+    interval_ps: 4.0
+    attempts: 2500
+    batch_size: 1000
+    radius_margin_nm: 0.3
+    ghost_waters: auto
+    excess_chemical_potential_kcal_per_mol: auto
+    standard_volume_nm3: auto
 analysis:
   lrc: none
 output:
@@ -224,6 +243,7 @@ output:
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent 50 ps and 0; complex 500 ps after 500 ps | the solvent leg: the paper's; the complex leg: the values of the ABFE, measured on TYK2 (`docs/protocol.md`, "What was measured on TYK2") |
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
+| `sampling.gcmc.enabled` | true (the complex leg) | the owner's decision of 2026-11-28; the moves and their other settings are those of the ABFE, with their basis (`docs/configuration.md`), where they are off by default |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |
 | `analysis.lrc` | none | OpenFE's `use_dispersion_correction: False` for the hybrid |
 | the constant of the dG (no setting) | the mean of the experimental values, else the mean of the network | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; cinnabar gives estimates of mean 0 |

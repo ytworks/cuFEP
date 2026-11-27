@@ -803,6 +803,39 @@ def common_problems(cfg: "CommonConfig") -> list[str]:
     return problems
 
 
+def gcmc_problems(cfg) -> list[str]:
+    """The problems of ``sampling.gcmc`` with the other settings, in the absolute and the relative calculation
+    alike."""
+    gcmc = cfg.sampling.gcmc
+    if not gcmc.enabled:
+        return []
+    from cufep.prep.water import bulk_water_values
+
+    problems = []
+    if cfg.sampling.relocation_mc.enabled:
+        problems.append("sampling.gcmc and sampling.relocation_mc are both enabled: a complex leg makes one "
+                        "kind of water moves")
+    if cfg.analysis.lrc == "isotropic":
+        problems.append("sampling.gcmc with analysis.lrc: isotropic: that tail correction takes the atoms "
+                        "around the ligand as a fixed set, and the moves change which waters interact; use "
+                        "analysis.lrc: reweight")
+    if cfg.membrane.for_restraint_only:
+        problems.append("sampling.gcmc with membrane.complex_leg: water is not supported: the moves are made "
+                        "in the system whose pre-equilibration fixes the cell")
+    if gcmc.batch_size > gcmc.attempts:
+        problems.append(f"sampling.gcmc.batch_size = {gcmc.batch_size} is more than sampling.gcmc.attempts = "
+                        f"{gcmc.attempts}, the trials of one move")
+    known = bulk_water_values(cfg.forcefield.water)
+    for name, value in (("excess_chemical_potential_kcal_per_mol", gcmc.excess_chemical_potential_kcal_per_mol),
+                        ("standard_volume_nm3", gcmc.standard_volume_nm3)):
+        if value == "auto" and known is None:
+            problems.append(
+                f"sampling.gcmc.{name} is auto and cuFEP has no value for forcefield.water = "
+                f"{cfg.forcefield.water!r}: give the number (docs/configuration.md says how it is determined), or "
+                "switch the moves off (sampling.gcmc.enabled: false)")
+    return problems
+
+
 def configuration_problems(cfg: "Config") -> list[str]:
     """Settings that contradict each other, found without any input file: every problem in the
     words of the configuration. :class:`Config` refuses to exist with one of them, so no command
@@ -815,30 +848,7 @@ def configuration_problems(cfg: "Config") -> list[str]:
             f"membrane.complex_leg is 'water': the bilayer is then built for the MD from which the restraint is "
             f"chosen, which only restraints.selection: interactions has (it is '{cfg.restraints.selection}'). Use "
             "restraints.selection: interactions, or membrane.complex_leg: bilayer")
-    gcmc = cfg.sampling.gcmc
-    if gcmc.enabled:
-        from cufep.prep.water import bulk_water_values
-
-        if cfg.sampling.relocation_mc.enabled:
-            problems.append("sampling.gcmc and sampling.relocation_mc are both enabled: a complex leg makes one "
-                            "kind of water moves")
-        if cfg.analysis.lrc == "isotropic":
-            problems.append("sampling.gcmc with analysis.lrc: isotropic: that tail correction takes the atoms "
-                            "around the ligand as a fixed set, and the moves change which waters interact; use "
-                            "analysis.lrc: reweight")
-        if cfg.membrane.for_restraint_only:
-            problems.append("sampling.gcmc with membrane.complex_leg: water is not supported: the moves are made "
-                            "in the system whose pre-equilibration fixes the cell")
-        if gcmc.batch_size > gcmc.attempts:
-            problems.append(f"sampling.gcmc.batch_size = {gcmc.batch_size} is more than sampling.gcmc.attempts = "
-                            f"{gcmc.attempts}, the trials of one move")
-        known = bulk_water_values(cfg.forcefield.water)
-        for name, value in (("excess_chemical_potential_kcal_per_mol", gcmc.excess_chemical_potential_kcal_per_mol),
-                            ("standard_volume_nm3", gcmc.standard_volume_nm3)):
-            if value == "auto" and known is None:
-                problems.append(
-                    f"sampling.gcmc.{name} is auto and cuFEP has no value for forcefield.water = "
-                    f"{cfg.forcefield.water!r}: give the number (docs/configuration.md says how it is determined)")
+    problems += gcmc_problems(cfg)
     problems += initial_window_problems(cfg)
     if cfg.restraints.selection == "interactions":
         # the thresholds of the rule are numbers of frames, rounded down: none of them may be no frame

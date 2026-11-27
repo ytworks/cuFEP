@@ -403,8 +403,11 @@ def test_a_bilayer_with_a_water_of_four_sites_gets_its_force_field_for_the_lipid
     base = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
     from cufep.rbfe.config import RbfeConfig
 
+    # (cuFEP has no bulk values of this water for the grand canonical moves, which are on by default in a relative
+    # calculation: they are switched off here, where the subject is the force field of the lipid patch)
     rcfg = RbfeConfig.model_validate({**base, "membrane": {"enabled": True},
-                                      "forcefield": {**base["forcefield"], "water": "amber14/tip4pew.xml"}})
+                                      "forcefield": {**base["forcefield"], "water": "amber14/tip4pew.xml"},
+                                      "sampling": {**base["sampling"], "gcmc": {"enabled": False}}})
     prepare_edge(rcfg, ligands[0], ligands[1], _protein(), out_dir / "edges" / "toluene~phenol", "cube", print)
     assert asked == ["amber14/tip4pew.xml"]
 
