@@ -5,6 +5,43 @@ Frozen history: entries are inserted at the marker and never edited or deleted.
 
 <!-- ARCHIVE-INSERT-POINT -->
 
+### 2026-11-26 — [design] Review findings judged by product quality; compatibility for unmerged commits removed
+- What: findings are fixed where users meet the state (wrong numbers, a stop after writing, a stopped analysis, a
+  wrong report) and rejected where they ask compatibility with data only commits of this unmerged PR made. Removed:
+  the e0f9743 ghost rule and `sphere_atoms`, the version of the hot-region rule, the custom core of rule 2, the ABFE
+  rule of fc2ba44..507e435. Kept: main's formats and the TYK2 run of 08d58d5.
+- Why: the owner's order of 2026-11-26 (the criterion is the quality of the product).
+- Refs: `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md`, `docs/rbfe.md` ("Sampling", "Atom mapping")
+
+### 2026-11-26 — [amendment] RBFE: the fourteenth review of PR #19 (14 findings)
+- What: legs taken only with the record they were made from (`prepared_systems_sha256`); records need their inputs,
+  atom counts and the alchemical water of both legs of a charge change; ligands of an edge from its records or the
+  verified input for every reader; three ghost rules of earlier versions, new choices checked around this centre;
+  `sphere_atoms` recorded where it changed; windows checked before a run; plan gives both mapping counts.
+- Why: findings of the owner's review (issue comment 7190519498); each reproduced on the code before its fix.
+- Verified: the unit tests of each file changed; the TYK2 run of 08d58d5 analysed with the new checks (22 of 22).
+- Refs: `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (fourteenth review), `docs/rbfe.md`
+
+### 2026-11-26 — [amendment] RBFE: the thirteenth review of PR #19 (14 findings)
+- What: `cufep rbfe plan` checks the mapping as prepared; records of prepared edges checked before they are read (both
+  legs, one-to-one atom numbers), ligands from the records or the verified input; ghost records are sets of the leg's
+  waters, checked around the centre they were counted from; the sphere of a hybrid around the atoms heavy in either
+  end; samples without a hot-region rule version judged by their System; summaries record their states.
+- Why: findings of the owner's review (review 6072724680); each reproduced on the code before its fix.
+- Verified: the unit tests of each file changed; the TYK2 run of 08d58d5 analysed by 9dacb52 (22 of 22 edges, report
+  identical, ghosts of the 22 complex legs equal to their records). Full suite and GPU tests: see Current Status.
+- Refs: `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (thirteenth review), `docs/rbfe.md`
+
+### 2026-11-26 — [amendment] RBFE: the twelfth review of PR #19 (16 findings)
+- What: the mapping of each leg after the rule of constrained bonds is checked for unique atoms that join mapped atoms
+  (before writing; prepared edges when taken again and in the analysis); custom core rule 3 (sets of atoms); ions
+  compared by their parameters; a resumed leg has the ghosts of the System its samples recorded; a hot-region rule
+  version recorded where it acts; the report computes dG and errors again for the reference of its table.
+- Why: findings of the owner's review (review 6071967806); each reproduced on e0f9743.
+- Verified: unit tests of each file changed; the TYK2 run of 08d58d5 analysed by the new code (22 of 22 edges, report
+  identical). Full unit suite and GPU tests of the commit: see Current Status.
+- Refs: `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (twelfth review), `docs/rbfe.md`
+
 ### 2026-11-26 — [amendment] RBFE: the eleventh review of PR #19 (17 findings)
 - What: one ion for the alchemical water of both legs of an edge; mappings whose dummy atoms join mapped atoms refused;
   compounds take their temperature from the legs used and their experiment to every state; the report compares edges
