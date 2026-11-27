@@ -624,3 +624,14 @@ Liu et al. J. Comput. Aided Mol. Des. 2013 (LOMAP)
   伸ばすと全状態で結合の項の 5.03 kJ/mol。この項は全 λ で同じ。
 - 次: TYK2 の残り 17 辺を同じディレクトリで計算(05d3ff0、8 GPU)。A2A は `runs/rbfe_bench_a2a_0cd6147` を 05d3ff0 で続ける
   (0cd6147 から変わったコードは拘束・hybrid・脚・スケジューラのみ。4d~4f は `--reschedule` で計算し直す)。
+
+### 2026-11-28 TYK2 の全 22 辺(image 05d3ff0)
+- `runs/rbfe_tyk2_05d3ff0_five`(5 辺の続きに 17 辺、同じ設定)。44 脚すべて cuPotential、切り替え 0。`cufep benchmark report`:
+  pairwise ddG RMSE 1.10 [0.71, 1.36](08d58d5 0.86 [0.57, 1.03]、FEP+ 0.69)、dG RMSE(平均誤差を除く)0.75(0.59)、R² 0.66
+  (0.81)、Kendall τ 0.55(0.68)、辺の RMSE(ネットワーク)0.94(0.75)。
+- 入れ替えによる分解(`spikes/out/m47/mix.py`、cinnabar の MLE で報告の 0.86 と 1.10 を再現): 拘束を外した 5 辺だけ 05d3ff0 の値
+  → 0.90、残り 17 辺だけ → 0.98。1 辺だけでは ejm_50~ejm_55 → 0.97(対照 08d58d5 でも −1.37)、ejm_42~ejm_54 → 0.93。
+- 脚ごと(`spikes/out/m47/legs.py`): System のチェックサムが同じ溶媒脚 8 本で差/SE の二乗平均 1.21(最大 −2.0)、複合体脚 22 本で
+  1.22(最大 jmc_23~jmc_27 −1.30 kcal/mol、−3.3)。08d58d5 から b31e551 までに複合体脚の水の GCMC の球とゴーストの選び方が
+  変わっている(f54e96e、e0f9743)。4 配位子(ejm_44、ejm_49、jmc_23、jmc_30)の AM1BCC 電荷が 2 回の準備で原子あたり 1e-4〜5e-4 e
+  違う(`spikes/out/m47/conditions.py` と準備の md5)。
