@@ -870,8 +870,17 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                                   sample_interval_ps=a.sample_interval_ps, start_configurations=a.start_configurations,
                                   walk_ps=a.walk_ps, max_windows=a.max_windows, rest2_scale=float(rest2_scale))
                 pool_spec = spec_of(ends, backend, seed=seed + 23)
-                # the Context of this process, which walks through the windows of the first iteration
-                ctx, integ = leg_context(pool_spec, hybrid.system, start[1], start[0], start[2], run.device0, seed)
+                # the Context of this process, which walks through the windows of the first iteration; a start moved
+                # into the fixed cell of the moves of water is minimised there first (minimised_in_cell)
+                walk_start = start[0]
+                if cell is not None:
+                    from cufep.engine.leg import CELL_MINIMIZE_STEPS, minimised_in_cell
+
+                    walk_start = minimised_in_cell(pool_spec, hybrid.system, cell, start[0], start[2], run.device0,
+                                                   seed)
+                    log(f"the end of the pre-equilibration moved into the fixed cell of the moves of water and "
+                        f"minimised there ({CELL_MINIMIZE_STEPS} steps, stock OpenMM) before the walk")
+                ctx, integ = leg_context(pool_spec, hybrid.system, start[1], walk_start, start[2], run.device0, seed)
 
                 def inline_mover():
                     """The moves of water of the windows that run in this process, on its Context."""

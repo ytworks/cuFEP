@@ -298,6 +298,38 @@ def leg_context(spec, system, box, positions, velocities, device, seed: int):
     return ctx, integ
 
 
+#: OpenMM's minimisation of a configuration moved into the fixed cell of the grand canonical moves, before any MD in it
+#: (steps; OpenFE's 5000, as the windows of a relative leg minimise their starts)
+CELL_MINIMIZE_STEPS = 5000
+
+
+def minimised_in_cell(spec, system, cell, positions, velocities, device, seed: int) -> np.ndarray:
+    """The end of a pre-equilibration moved into the fixed cell of the grand canonical moves
+    (:func:`cufep.workflow.alchemical_box`, :func:`cufep.workflow.positions_in_cell`; ``positions`` may be a function
+    of the Context, as for :func:`leg_context`), minimised there before any MD in it: OpenMM's minimiser, on stock
+    OpenMM, in the first state of ``spec`` (its backend, barostat and seed are replaced), ``CELL_MINIMIZE_STEPS``
+    steps. Every molecule moved whole keeps its geometry but not its contacts: the cell of the moves is the mean cell
+    of the pre-equilibration, a few per cent from its last one (A2A 4g~4kU: z -2.0 %, a largest force 5.7e4
+    kJ/mol/nm against 5.9e3, energy +14600 kJ/mol), and MD on cuPotential from such a start stopped in its first 5 ps
+    (a kernel's contract check, ``cuda_matrix_migrate``; ``spikes/out/m48``), which under MPS stopped every worker of
+    the run with it. Positions in nm."""
+    import dataclasses
+
+    import openmm as mm
+    import openmm.unit as u
+
+    from cufep.engine.protocol import state_from_dict
+    from cufep.sampling.states import set_state
+
+    stock = dataclasses.replace(spec, backend="openmm", barostat="none")
+    ctx, integ = leg_context(stock, system, cell, positions, velocities, device, seed)
+    set_state(ctx, state_from_dict(spec.states[0], spec.protocol))
+    mm.LocalEnergyMinimizer.minimize(ctx, 10.0, CELL_MINIMIZE_STEPS)
+    out = ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer)
+    del ctx, integ
+    return np.asarray(out)
+
+
 def granted_devices(job, n_windows: int, work_per_window: float, what: str) -> list:
     """The GPUs for ``n_windows`` windows that run at the same time: those the scheduler grants (pinned: the job
     cannot move these workers), else those of the job."""

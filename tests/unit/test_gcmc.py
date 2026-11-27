@@ -361,6 +361,46 @@ def test_a_leg_with_the_moves_stores_them_and_the_waters_of_every_replica_and_go
         s.restore()
 
 
+def test_a_start_moved_into_the_fixed_cell_is_minimised_there_on_stock_openmm(water_ligand_system):
+    """A2A 4g~4kU (2026-11-28): the end of a pre-equilibration moved into the fixed cell of the moves (z -2.0 %) went
+    to the walk on cuPotential as it was, and a contract check of the plugin stopped it in its first 5 ps, with every
+    worker of the run under MPS (stock OpenMM ran the same walk; minimised first, the plugin ran it too). The one
+    function both protocols use minimises it in the cell on stock OpenMM whatever the backend of the leg (here the
+    plugin, which this machine does not have), in the first state of the leg: lower energy and largest force, and every
+    water keeps its geometry."""
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.engine.leg import minimised_in_cell
+    from cufep.sampling.states import set_state
+    from cufep.sampling.worker import LegSpec
+    from cufep.workflow import positions_in_cell
+
+    system, pos, box, ligand = water_ligand_system
+    _moves, alch, _tail = leg_with_moves(system, pos, box, ligand)
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 1, "vanish": 1})
+    spec = LegSpec(name="cell", system_xml=mm.XmlSerializer.serialize(alch.system),
+                   states=[s.to_dict() for s in schedule.states], n_atoms=system.getNumParticles(),
+                   backend="cupotential", platform="CPU", precision="mixed", temperature_K=300.0, pressure_bar=None,
+                   barostat="none", timestep_fs=4.0, steps_per_iteration=10, seed=5)
+    probe = mm.Context(alch.system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    cell = np.asarray(box) @ np.diag([1.0, 1.0, 0.95])
+    moved = positions_in_cell(pos, box, cell, probe.getMolecules())
+    out = minimised_in_cell(spec, alch.system, cell, moved, np.zeros_like(moved), None, 5)
+
+    def energy_and_force(x) -> tuple[float, float]:
+        probe.setPeriodicBoxVectors(*[mm.Vec3(*row) for row in cell])
+        probe.setPositions(x)
+        set_state(probe, schedule.states[0])
+        st = probe.getState(getEnergy=True, getForces=True)
+        f = st.getForces(asNumpy=True).value_in_unit(u.kilojoule_per_mole / u.nanometer)
+        return st.getPotentialEnergy().value_in_unit(u.kilojoule_per_mole), float(np.linalg.norm(f, axis=1).max())
+
+    (e0, f0), (e1, f1) = energy_and_force(moved), energy_and_force(out)
+    assert e1 < e0 and f1 < f0
+    waters = np.arange(0, system.getNumParticles(), 3)
+    for x in (moved, out):
+        assert np.allclose(np.linalg.norm(x[waters + 1] - x[waters], axis=1), 0.09572, atol=1e-4)
+
+
 def test_a_window_of_the_precalculation_starts_with_the_waters_of_its_configuration_and_returns_them(
         water_ligand_system):
     """A window of the precalculation of adaptive lambda scheduling makes the moves too. A configuration that

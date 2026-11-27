@@ -3068,11 +3068,19 @@ def run_leg(job: LegJob) -> dict:
             )
             # (with grand canonical moves the cell is fixed, alchemical_box, and the spec has no barostat)
             start_box = alchemical_box(eq, gcmc)
-            ctx, integ = leg_context(
-                pool_spec, alch.system, start_box,
-                eq["positions"] if gcmc is None else
-                (lambda c: positions_in_cell(eq["positions"], eq["box"], start_box, c.getMolecules())),
-                eq["velocities"], device0, seed)
+            start_positions = eq["positions"]
+            if gcmc is not None:
+                # moved into the fixed cell of the moves of water and minimised there before any MD in it
+                from cufep.engine.leg import CELL_MINIMIZE_STEPS, minimised_in_cell
+
+                start_positions = minimised_in_cell(
+                    pool_spec, alch.system, start_box,
+                    lambda c: positions_in_cell(eq["positions"], eq["box"], start_box, c.getMolecules()),
+                    eq["velocities"], device0, seed)
+                log(f"the end of the pre-equilibration moved into the fixed cell of the moves of water and minimised "
+                    f"there ({CELL_MINIMIZE_STEPS} steps, stock OpenMM) before the walk")
+            ctx, integ = leg_context(pool_spec, alch.system, start_box, start_positions, eq["velocities"], device0,
+                                     seed)
             t0 = time.perf_counter()
             # a replica exchange that goes on from samples (or the checkpoint of their start) keeps their windows:
             # checked before anything is written, as the replica exchange would refuse them only afterwards

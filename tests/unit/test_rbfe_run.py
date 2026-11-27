@@ -1162,6 +1162,55 @@ def test_a_leg_whose_prepared_systems_cannot_be_read_is_left_out_alone(tmp_path,
         assert edges["phenol~toluene"]["ddg"] == pytest.approx(1.5), name
 
 
+def test_the_walk_of_a_leg_with_the_moves_starts_from_its_start_minimised_in_the_fixed_cell(tmp_path, monkeypatch,
+                                                                                            deterministic_cpu):
+    """A2A 4g~4kU (2026-11-28): the complex leg walked through its first windows on cuPotential from the end of its
+    pre-equilibration moved into the fixed cell of the moves of water, unminimised, and a contract check of the plugin
+    stopped it in its first 5 ps with every worker of the run under MPS. The walk starts from that configuration
+    minimised in the cell (cufep.engine.leg.minimised_in_cell), the cell of the pre-equilibration
+    (cufep.workflow.alchemical_box)."""
+    import openmm.unit as u
+
+    from cufep.engine import leg as engine_leg
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.workflow import alchemical_box
+
+    monkeypatch.setattr(engine_leg, "CELL_MINIMIZE_STEPS", 50)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    rcfg = _config(tmp_path, out_dir, "adaptive")
+    assert rcfg.sampling.gcmc.enabled
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    real, made, walked = engine_leg.minimised_in_cell, [], []
+
+    def minimised(spec, system, cell, positions, velocities, device, seed):
+        out = real(spec, system, cell, positions, velocities, device, seed)
+        made.append((np.asarray(cell), np.asarray(positions), out))
+        return out
+
+    class Walked(Exception):
+        pass
+
+    def walk(run, pool_spec, ctx, *args, **kwargs):
+        walked.append(ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer))
+        raise Walked("the walk starts here")
+
+    monkeypatch.setattr(engine_leg, "minimised_in_cell", minimised)
+    monkeypatch.setattr(engine_leg, "adaptive_windows", walk)
+    result = run_hybrid_leg_safe(EdgeLegJob(edge="toluene~phenol", leg="complex", repeat=0, edge_dir=str(edge_dir),
+                                            devices=[None], config=rcfg.model_dump(mode="json"),
+                                            production_ns=rcfg.sampling.production_ns, inline=True))
+    assert "the walk starts here" in result["error"]
+    assert len(made) == 1 and len(walked) == 1
+    cell, moved, out = made[0]
+    with np.load(edge_dir / "repeat_0" / "complex" / "equil.npz") as eq:
+        assert np.allclose(cell, alchemical_box(eq, True))
+    assert np.allclose(walked[0], out, atol=1e-6) and not np.allclose(out, moved, atol=1e-4)
+    assert "minimised there" in (edge_dir / "repeat_0" / "complex" / "log.txt").read_text()
+
+
 def test_a_leg_with_the_moves_is_computed_again_only_from_its_own_pre_equilibration(tmp_path, monkeypatch,
                                                                                     deterministic_cpu):
     """Third and fourth reviews of PR #19 and the independent review, on a complex leg with the grand canonical moves
