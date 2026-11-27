@@ -110,6 +110,12 @@ ELECTROSTATIC_LAMBDAS = (LAMBDA_ELECTROSTATICS_CORE, LAMBDA_ELECTROSTATICS_DELET
 COLD_ELECTROSTATIC_LAMBDAS = tuple(name + "_cold" for name in ELECTROSTATIC_LAMBDAS)
 STERIC_LAMBDAS = (LAMBDA_STERICS_CORE, LAMBDA_STERICS_INSERT, LAMBDA_STERICS_DELETE)
 BONDED_LAMBDAS = (LAMBDA_BONDS, LAMBDA_ANGLES, LAMBDA_TORSIONS)
+#: the lambdas of the bonded terms of the dummy atoms that cufep.rbfe.junction changes: those of A go from the force
+#: field's to the dummy's with LAMBDA_JUNCTION_DELETE, those of B from the dummy's to the force field's with
+#: LAMBDA_JUNCTION_INSERT (cufep.rbfe.states: in narrow ranges about the middle of the leg)
+LAMBDA_JUNCTION_DELETE = "lambda_junction_delete"
+LAMBDA_JUNCTION_INSERT = "lambda_junction_insert"
+JUNCTION_LAMBDAS = (LAMBDA_JUNCTION_DELETE, LAMBDA_JUNCTION_INSERT)
 
 #: OpenFE's default (``softcore_alpha``, Gapsys et al. 2012)
 SOFTCORE_ALPHA = 0.85
@@ -125,12 +131,12 @@ CORE_ANGLE_FORCE_NAME = "cufep_core_angles"
 CORE_TORSION_FORCE_NAME = "cufep_core_torsions"
 CORE_PROPER_TORSION_FORCE_NAME = "cufep_core_proper_torsions"
 #: the bonded terms of the dummy atoms that cufep.rbfe.junction changes (a mapped atom with unmapped atoms of both
-#: ligands): from the force field's term where the ligand exists to the dummy's term, with the steric lambda of the
-#: ligand (``old`` 1: A, lambda_sterics_delete; 0: B, lambda_sterics_insert)
+#: ligands): from the force field's term where the ligand exists to the dummy's term, with the junction lambda of the
+#: ligand (``old`` 1: A, lambda_junction_delete; 0: B, lambda_junction_insert)
 JUNCTION_ANGLE_FORCE_NAME = "cufep_junction_angles"
 JUNCTION_TORSION_FORCE_NAME = "cufep_junction_torsions"
 JUNCTION_PROPER_TORSION_FORCE_NAME = "cufep_junction_proper_torsions"
-_JUNCTION_LAMBDA = "l = old*lambda_sterics_delete + (1-old)*lambda_sterics_insert"
+_JUNCTION_LAMBDA = "l = old*lambda_junction_delete + (1-old)*lambda_junction_insert"
 
 _E = unit.elementary_charge
 _NM = unit.nanometer
@@ -216,8 +222,10 @@ JUNCTION_TORSION_ENERGY = ("(1-l)*U1 + l*U2; U1 = K1*(1+cos(periodicity1*theta-p
 #: where a mapped atom carries unmapped atoms of both ligands, the dummy atoms there have the bonded terms of Fleck et
 #: al. 2021
 #: (cufep.rbfe.junction); version 2 kept all of them, which can couple a rotation of the physical ligand to the dummy
-#: (ejm_42~ejm_54 of TYK2); a System without such an atom is that of version 2
-HYBRID_VERSION = 3
+#: (ejm_42~ejm_54 of TYK2); a System without such an atom is that of version 2. 4: those terms change in narrow
+#: ranges about the middle of the leg (lambda_junction_delete, lambda_junction_insert), where version 3 changed them
+#: with the steric lambdas, which held the dummy of the other ligand half anchored in most windows
+HYBRID_VERSION = 4
 
 _KNOWN_FORCES = {"HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce", "NonbondedForce",
                  "CMMotionRemover"}
@@ -920,7 +928,7 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             else:
                 junction_impropers.addTorsion(*atoms, values)
         for force in (junction_angles, junction_impropers, junction_propers):
-            for name in (LAMBDA_STERICS_DELETE, LAMBDA_STERICS_INSERT):
+            for name in JUNCTION_LAMBDAS:
                 force.addGlobalParameter(name, 0.0)
         junction_angles.setForceGroup(HYBRID_GROUP)
         junction_impropers.setForceGroup(HYBRID_GROUP)

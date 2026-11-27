@@ -209,9 +209,16 @@ atom other than X are deleted at a dual and a triple junction (terms beyond the 
 triple and a terminal junction that keeps its dihedrals is the atom of the lowest index; the adapted angles of a triple junction are those of the direction of D that fits the
 three angles of the force field best, with X and its neighbours where the other ligand has them (Fleck 2021
 minimises the molecule with the dummy at 0.05 kcal/(mol rad^2)); along lambda each changed term goes linearly
-from the force field's term, where its ligand exists, to the dummy's, with the steric lambda of its ligand
-(`lambda_sterics_delete` for A, `lambda_sterics_insert` for B), so that a group has its own geometry wherever
-it interacts fully. A mapped atom with unmapped atoms of one ligand only keeps OpenFE's rule, and an edge
+from the force field's term, where its ligand exists, to the dummy's in a narrow range about the middle of the
+leg: those of A as x goes from 0.4 to 0.5 (`lambda_junction_delete`), those of B from 0.5 to 0.6
+(`lambda_junction_insert`). From 0 to 0.4 and from 0.6 to 1 each ligand then turns about the bonds of X as it would
+alone, with the dummy atoms of the other on their own terms, next to the hot windows of REST2, and a conformer
+reached in a hot window is carried to the end by the replica exchange. Changed with the steric lambdas (99afe76,
+8e2a945), the two forms of the terms of a group, which anchor it to different neighbours of X, were both partly on in
+most windows: in ejm_42~ejm_54 the urea C-N bond of ejm_54 could not turn in any window but the last (a torsional
+barrier of 220 to 640 kJ/mol in the windows 1-3 and 5-7, the group turned with the bond), and its solvent leg of 5 ns
+never reached the conformer with the hydrogen bond N29-H28...N13; with the junction lambdas the barrier divided by
+the REST2 scale is 44 to 50 kJ/mol in the windows from 0.62 to 0.88, against 53.6 at lambda 1. A mapped atom with unmapped atoms of one ligand only keeps OpenFE's rule, and an edge
 without such an atom has the System of the earlier version. Legs of an earlier version of the hybrid
 (`run.hybrid_version` below 3) at an edge with such an atom are left out of the analysis, and a run refuses to
 continue them, with the command that computes them anew.

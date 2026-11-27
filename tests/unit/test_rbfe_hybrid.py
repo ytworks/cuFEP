@@ -39,8 +39,35 @@ _BONDED = (mm.HarmonicBondForce, mm.HarmonicAngleForce, mm.PeriodicTorsionForce,
            mm.CustomTorsionForce)
 
 
-def _bonded_context(system, x: float):
-    """A Context of the bonded terms of a hybrid ``system`` alone, at lambda ``x``."""
+def _without(force, atoms: set):
+    """A copy of a bonded ``force`` without its terms that have an atom of ``atoms``."""
+    g = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(force))
+    if not atoms:
+        return g
+    kinds = {mm.HarmonicBondForce: ("Bond", 2), mm.HarmonicAngleForce: ("Angle", 3),
+             mm.PeriodicTorsionForce: ("Torsion", 4), mm.CustomBondForce: ("Bond", 2),
+             mm.CustomAngleForce: ("Angle", 3), mm.CustomTorsionForce: ("Torsion", 4)}
+    word, n = next(v for k, v in kinds.items() if isinstance(force, k))
+    count = getattr(force, f"getNum{word}s")()
+    get = getattr(force, f"get{word}Parameters")
+    if isinstance(force, (mm.CustomBondForce, mm.CustomAngleForce, mm.CustomTorsionForce)):
+        out = type(force)(force.getEnergyFunction())
+        for k in range(getattr(force, f"getNumPer{word}Parameters")()):
+            getattr(out, f"addPer{word}Parameter")(getattr(force, f"getPer{word}ParameterName")(k))
+        for k in range(force.getNumGlobalParameters()):
+            out.addGlobalParameter(force.getGlobalParameterName(k), force.getGlobalParameterDefaultValue(k))
+    else:
+        out = type(force)()
+    for k in range(count):
+        row = get(k)
+        if not set(int(a) for a in row[:n]) & atoms:
+            getattr(out, f"add{word}")(*row)
+    return out
+
+
+def _bonded_context(system, x: float, without=()):
+    """A Context of the bonded terms of a hybrid ``system`` alone, at lambda ``x``; ``without``: atoms whose terms are
+    left out."""
     from cufep.rbfe.hybrid import CORE_BOND_FORCE_NAME
     from cufep.rbfe.states import HybridState
 
@@ -49,7 +76,7 @@ def _bonded_context(system, x: float):
         s.addParticle(system.getParticleMass(i))
     for f in system.getForces():
         if isinstance(f, _BONDED) or (isinstance(f, mm.CustomBondForce) and f.getName() == CORE_BOND_FORCE_NAME):
-            g = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(f))
+            g = _without(f, set(int(a) for a in without))
             g.setForceGroup(0)
             s.addForce(g)
     ctx = mm.Context(s, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
@@ -57,7 +84,7 @@ def _bonded_context(system, x: float):
     return ctx
 
 
-def _dummies_at_their_minimum(hybrid, x: float, positions: np.ndarray) -> np.ndarray:
+def _dummies_at_their_minimum(hybrid, x: float, positions: np.ndarray, dummies=None) -> np.ndarray:
     """``positions`` with the dummy atoms of the end ``x`` (the unique atoms of the other ligand) at the minimum of the
     bonded terms, the other atoms held (the dummies interact with nothing at that end): the lowest of the minima from
     where they are and from where the hybrid has them, each also with every dummy group turned by 120 and 240 degrees
@@ -66,7 +93,7 @@ def _dummies_at_their_minimum(hybrid, x: float, positions: np.ndarray) -> np.nda
     from scipy.optimize import minimize
 
     ctx = _bonded_context(hybrid.system, x)
-    dummies = np.array(hybrid.unique_new if x == 0.0 else hybrid.unique_old)
+    dummies = np.array(dummies if dummies is not None else hybrid.unique_new if x == 0.0 else hybrid.unique_old)
     kj, nm = u.kilojoule_per_mole, u.nanometer
     bonds = {}
     for a, b in hybrid.bonds:
@@ -325,6 +352,37 @@ def test_a_mapping_that_changes_a_constrained_length_or_names_other_atoms_is_ref
     with pytest.raises(AlchemyError, match="constraint"):
         make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b,
                            {**core, 0: ligand_b[0], 7: ligand_b[7]})
+
+
+@pytest.mark.parametrize("x", [0.25, 0.75])
+def test_between_the_ends_a_ligand_turns_at_a_mapped_atom_with_unmapped_atoms_of_both_as_at_its_end(x):
+    """The terms of the dummy atoms that cufep.rbfe.junction changes go from one form to the other in narrow ranges
+    about the middle (cufep.rbfe.states), so that from lambda 0 to 0.4 ligand A, and from 0.6 to 1 ligand B, turns about
+    the bonds of such an atom without the unique atoms of the other ligand: at x = 0.25 and 0.75, with those at the
+    minimum of their bonded terms, what their terms add is the same at every angle of the C-N bond of the amide of
+    N-methylpropanamide into 1,3-dimethylurea. With the steric lambdas (version 3) the group of the other ligand had
+    half of each form, anchored to both sides of the bond: on the code before the change it added from 24.24 to 281.30
+    kJ/mol over the angles at x = 0.25 and from 1.55 to 336.31 at x = 0.75 (TYK2 ejm_42~ejm_54: the urea C-N bond of
+    ejm_54 turned in no window but the last)."""
+    smiles_a, smiles_b, mapping, (i, j) = JUNCTIONS["dual"]
+    edge = build_hybrid_edge(smiles_b, mapping, smiles_a=smiles_a)
+    _system_a, _pa, ligand_a, *_rest = edge
+    hybrid = _hybrid(edge)
+    other = list(hybrid.unique_new if x < 0.5 else hybrid.unique_old)
+    bonds = {}
+    for a, b in hybrid.bonds:
+        bonds.setdefault(a, set()).add(b)
+        bonds.setdefault(b, set()).add(a)
+    base = np.asarray(hybrid.positions, dtype=float)
+    full, rest = _bonded_context(hybrid.system, x), _bonded_context(hybrid.system, x, without=other)
+    excess = []
+    for degrees in (0, 60, 90, 120, 180):
+        positions = _dummies_at_their_minimum(hybrid, x, _turned(base, bonds, ligand_a[i], ligand_a[j], degrees),
+                                              dummies=other)
+        full.setPositions(positions)
+        rest.setPositions(positions)
+        excess.append(potential(full) - potential(rest))
+    assert max(excess) - min(excess) < 2e-3, (x, excess)
 
 
 def test_lambda_functions_switch_the_unique_atoms_in_halves():

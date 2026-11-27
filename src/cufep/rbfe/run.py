@@ -924,8 +924,9 @@ def legs_of_an_earlier_version(edge_dir: Path, repeat: int, legs: dict, counted:
     pre-equilibration it cannot use is set aside with it). ``counted`` keeps what was read of an edge between calls.
 
     * Versions 1 and 2 kept every bonded term of the dummy atoms where a mapped atom carries unmapped atoms of both
-      ligands, which version 3 gives the terms of Fleck et al. 2021 (:mod:`cufep.rbfe.junction`; ejm_42~ejm_54 of TYK2):
-      a leg of an edge with such an atom is left out, and so is one whose prepared systems cannot be read to tell.
+      ligands, which version 3 gives the terms of Fleck et al. 2021 (:mod:`cufep.rbfe.junction`; ejm_42~ejm_54 of TYK2)
+      and version 4 changes about the middle of the leg (:mod:`cufep.rbfe.states`): a leg of an earlier version at an
+      edge with such an atom is left out, and so is one whose prepared systems cannot be read to tell.
     * Version 1 also left terms of B in the proper torsions of the core unscaled with REST2: where REST2 heated a window
       and ligand B has such terms, the energies of its states were not those of its Hamiltonian (second review of PR
       #19: such a leg was combined with a leg of this version). Where whether it had such terms cannot be told (its
@@ -948,9 +949,9 @@ def legs_of_an_earlier_version(edge_dir: Path, repeat: int, legs: dict, counted:
             why = ("the prepared systems of its edge cannot be read to tell whether a mapped atom carries unmapped "
                    "atoms of both ligands, whose dummy atoms that version gave every bonded term")
         elif junctions:
-            why = (f"its hybrid (version {version}) kept every bonded term of the dummy atoms at {len(junctions)} "
-                   "mapped atom(s) that carry unmapped atoms of both ligands, which this version gives the terms of "
-                   "Fleck et al. 2021")
+            why = (f"its hybrid (version {version}) gave the dummy atoms at {len(junctions)} mapped atom(s) that carry "
+                   "unmapped atoms of both ligands other bonded terms along lambda than this version (the terms of "
+                   "Fleck et al. 2021, changed about the middle of the leg)")
         else:
             why = _why_version_1(edge_dir, repeat, leg, record, counted, inputs) if version < 2 else None
         if why:

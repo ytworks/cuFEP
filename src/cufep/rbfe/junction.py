@@ -66,9 +66,12 @@ on one atom"):
   deviations of its three angles from those of the force field, with X and the anchors at the prepared positions of
   the other ligand (held there instead of minimised together with the dummy atom, as Fleck 2021 does with a force
   constant of 0.05 kcal/(mol rad^2));
-* along lambda, each term goes linearly from that of the force field (where its ligand exists) to that of the dummy,
-  with the steric lambda of its ligand (``lambda_sterics_delete`` for A, ``lambda_sterics_insert`` for B): a group has
-  its own geometry wherever it interacts fully.
+* along lambda, each term goes linearly from that of the force field (where its ligand exists) to that of the dummy
+  in a narrow range about the middle of the leg (``lambda_junction_delete`` for A from 0.4 to 0.5, ``lambda_junction_
+  insert`` for B from 0.5 to 0.6, :mod:`cufep.rbfe.states`): from 0 to 0.4 and from 0.6 to 1 each ligand turns about
+  the bonds of X as it would alone, with the dummy atoms of the other on their own terms, next to the hot windows of
+  REST2. With the steric lambdas (version 3) the two forms of the terms of a group, which anchor it to different
+  neighbours of X, were both partly on in most windows, and held such a bond still in all but the last.
 """
 from __future__ import annotations
 
