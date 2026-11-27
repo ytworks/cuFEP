@@ -66,8 +66,9 @@ OUTPUT_ROOT_NAMES = frozenset({
     "protein_prepared.pdb", "summary.json", "summary.csv", "timing.json", "timing_rerun.json",
     "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "benchmark_report_ligands.png",
     "frozen_schedules", ".cufep.lock",
-    # the output of a relative run (cufep.rbfe.run)
-    "edges", "network.json", "edges.csv", "ligands.csv"})
+    # the output of a relative run (cufep.rbfe.run) and of its benchmark report (cufep.benchmarks.relative)
+    "edges", "network.json", "edges.csv", "ligands.csv", "rbfe_report.md", "rbfe_report.png",
+    "rbfe_report_edges.csv", "rbfe_report_edges.png", "rbfe_report_ligands.csv"})
 
 
 def ligand_dir_name(name: str) -> str:

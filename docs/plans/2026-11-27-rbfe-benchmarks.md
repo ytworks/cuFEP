@@ -19,7 +19,8 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
 - `cufep benchmark run|plan|report NAME --protocol rbfe`(`src/cufep/benchmarks/relative.py`): 設定は RBFE example から取り、
   入力は set の protein と `ligands.sdf`、実験値は `ligands.csv`。tier は smoke(example の最初の辺、短縮)と full。
 - 比較表(`rbfe_report.md`、`rbfe_report_ligands.csv`、`rbfe_report_edges.csv`、図 2 枚): 化合物の dG と辺の ddG を、
-  cuFEP・FEP+・OpenFE それぞれ同じ化合物・同じ辺の上で実験と比べる(95 % bootstrap)。dG はどれも実験値の平均に合わせた値。
+  cuFEP・FEP+・OpenFE それぞれ同じ化合物・同じ辺の上で実験と比べる(95 % bootstrap)。dG の統計と図は、どの手法も比べる
+  化合物の上で実験値の平均に中心をそろえる。
 - OpenFE の値: IndustryBenchmarks2024 v1.0.0 の `combined_pymbar3_*` から TYK2 の行をそのまま(`benchmarks/tyk2/inputs/`)。
 
 ## Invariants
