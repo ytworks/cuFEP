@@ -93,6 +93,7 @@ from cufep.alchemy.factory import (
     AlchemyError,
     _move_hot_torsions,
 )
+from cufep.rbfe.constraints import constraints_for_shake, shake_clusters
 
 LAMBDA_ELECTROSTATICS_CORE = "lambda_electrostatics_core"
 LAMBDA_ELECTROSTATICS_DELETE = "lambda_electrostatics_delete"
@@ -232,6 +233,9 @@ class HybridSystem:
     rest2_ligand_atoms: tuple[int, ...] = ()
     #: pairs of bonded atoms of the hybrid System (bonds and constraints of both end states)
     bonds: frozenset = field(default_factory=frozenset)
+    #: pairs of atoms whose constraint was taken out so that SHAKE takes every other one (cufep.rbfe.constraints): they
+    #: move on the force field's bond term
+    unconstrained: tuple = ()
 
     @property
     def ligand_atoms(self) -> tuple[int, ...]:
@@ -306,7 +310,7 @@ def terms_version_1_left_unscaled(system: mm.System) -> int:
 
 def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.System, positions_b, ligand_b,
                        core_map: dict[int, int], softcore_alpha: float = SOFTCORE_ALPHA, rest2: bool = False,
-                       rest2_atoms=(), alchemical_water=(), rest2_ligand_atoms=None) -> HybridSystem:
+                       rest2_atoms=(), alchemical_water=(), rest2_ligand_atoms=None, bond_terms=None) -> HybridSystem:
     """The hybrid System of two end states.
 
     ``system_a`` and ``system_b`` hold the same environment, atom for atom in the same order, and the
@@ -322,7 +326,10 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     :mod:`cufep.rbfe.hot_region`); the others are cold: their charges go with electrostatic lambdas that do not carry
     sqrt(s), and every pair or torsion of the ligand carries the factor of its hot atoms (s for two, sqrt(s) for one).
     The charges of the alchemical water are cold too. With the whole ligand hot and no alchemical water the System is
-    the one of before.
+    the one of before. ``bond_terms`` (``"a"`` or ``"b"`` -> {(i, j): (length nm, k kJ/(mol nm^2))} of the bonds of that
+    ligand without constraints, indices of its System; :func:`cufep.rbfe.constraints.ligand_bond_terms`): the
+    constraints that SHAKE cannot take, which the cuPotential plugin cannot run, are taken out and their atoms move on
+    these bond terms (:mod:`cufep.rbfe.constraints`); without it the constraints are those of OpenFE as they are.
     """
     lig_a, lig_b = sorted(int(i) for i in ligand_a), sorted(int(i) for i in ligand_b)
     set_a, set_b = set(lig_a), set(lig_b)
@@ -398,16 +405,44 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
 
     # ---- constraints: those of A, then those of B that A does not have (OpenFE) ----------------
     lengths: dict[tuple[int, int], float] = {}
-    for system, to_h in ((system_a, a_to_h), (system_b, b_to_h)):
+    entries, of_a = [], set()            # (pair, length) in the order OpenFE adds them, and those of A
+    for origin, system, to_h in (("a", system_a, a_to_h), ("b", system_b, b_to_h)):
         for k in range(system.getNumConstraints()):
             i, j, d = system.getConstraintParameters(k)
             key, d = _pair(to_h[i], to_h[j]), d.value_in_unit(_NM)
             if key not in lengths:
-                out.addConstraint(key[0], key[1], d)
+                if origin == "a":
+                    of_a.add(len(entries))
+                entries.append((key, d))
                 lengths[key] = d
             elif abs(lengths[key] - d) > 1e-12:
                 raise AlchemyError(f"the length of the constraint of atoms {key} changes between A and B; "
                                    "the mapping must leave out such atoms (constrained_bond_rule)")
+    # the constraints SHAKE cannot take move on their bond terms (cufep.rbfe.constraints), with the bond terms of the
+    # ligands given; without them the constraints are OpenFE's as they are
+    taken_out = set()
+    if bond_terms is not None:
+        inverse_mass = {i: 1.0 / out.getParticleMass(i).value_in_unit(unit.dalton) for i in range(out.getNumParticles())
+                        if out.getParticleMass(i).value_in_unit(unit.dalton) > 0}
+        mapped = {n for n, (key, _d) in enumerate(entries) if key[0] in core_map and key[1] in core_map}
+        taken_out = constraints_for_shake(entries, inverse_mass, mapped, of_a)
+        kept = [e for n, e in enumerate(entries) if n not in taken_out]
+        _clusters, left = shake_clusters(kept, inverse_mass)
+        if left:
+            raise AlchemyError(f"constraints {sorted(kept[n][0] for n in left)} make no SETTLE or SHAKE cluster "
+                               "after the hydrogens SHAKE cannot take were taken out; the plugin cannot run them")
+    for n, (key, d) in enumerate(entries):
+        if n not in taken_out:
+            out.addConstraint(key[0], key[1], d)
+    unconstrained = sorted(entries[n][0] for n in taken_out)
+    # the mapped atom that carries them gets the larger of its masses in A and B, not their mean: the mean of two masses
+    # lowered by the repartition of the hydrogens of each end (a CH3 onto an NH2: 8.0 amu) left the hydrogens moved
+    # onto their bonds with a sampling too broad at 4 fs (cufep.rbfe.constraints); masses change no free energy
+    for pair in unconstrained:
+        heavy = max(pair, key=lambda a: out.getParticleMass(a).value_in_unit(unit.dalton))
+        if heavy in core_map:
+            out.setParticleMass(heavy, max(system_a.getParticleMass(heavy), system_b.getParticleMass(core_map[heavy]),
+                                           key=lambda m: m.value_in_unit(unit.dalton)))
 
     def kind(atoms) -> str:
         s = set(atoms)
@@ -466,6 +501,20 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
             _same_environment_term("bond", key, env_bonds.pop(key, None), (r0, kk))
     if env_bonds:
         raise AlchemyError(f"the environment bond {next(iter(env_bonds))} is in A but not in B")
+    # the bonds of the constraints taken out for SHAKE: the force field's terms, as the bond of its atoms (a mapped pair
+    # from A's term to B's, a pair with a unique atom on at full strength)
+    if unconstrained:
+        terms = {"a": bond_terms("a"), "b": {_pair(b_to_h[i], b_to_h[j]): v for (i, j), v in bond_terms("b").items()}}
+        for key in unconstrained:
+            which = kind(key)
+            got = {end: terms[end].get(key) for end in ("a", "b")}
+            if which == "core" and got["a"] and got["b"]:
+                core_bonds.addBond(key[0], key[1], [got["a"][0], got["a"][1], got["b"][0], got["b"][1]])
+            elif which in ("old", "new") and got["a" if which == "old" else "b"]:
+                standard_bonds.addBond(key[0], key[1], *got["a" if which == "old" else "b"])
+            else:
+                raise AlchemyError(f"the constraint of atoms {key} was taken out for SHAKE but the force field gives "
+                                   "no bond term for it")
 
     # ---- angles --------------------------------------------------------------------------
     standard_angles = mm.HarmonicAngleForce()
@@ -837,7 +886,8 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
                         parameters_a=params_a, parameters_b=params_b, softcore_alpha=float(softcore_alpha),
                         rest2=bool(rest2), rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions,
                         bonds=frozenset(bonds_hybrid), alchemical_water=tuple(sorted(alchemical)),
-                        rest2_ligand_atoms=tuple(sorted(hot_ligand)) if rest2 else ())
+                        rest2_ligand_atoms=tuple(sorted(hot_ligand)) if rest2 else (),
+                        unconstrained=tuple(unconstrained))
 
 
 def _copy_virtual_site(site):

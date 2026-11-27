@@ -512,6 +512,32 @@ def recorded_form_of_the_system(leg_dir: Path, xml: str, system, cell) -> str:
     return xml
 
 
+def bond_terms_of_the_edge(rcfg, edge_dir: Path, end: dict, inputs=None):
+    """The bond terms of the two ligands of an edge without constraints, for the constraints that SHAKE cannot take
+    (:func:`cufep.rbfe.constraints.ligand_bond_terms`): a function of ``"a"`` or ``"b"`` that makes them the first time
+    it is asked (most edges need none), from the ligands of the records of the edge and the force field of the run."""
+    made = {}
+
+    def terms(which: str) -> dict:
+        if which not in made:
+            from cufep.prep.forcefield import ForceFieldSpec
+            from cufep.rbfe.constraints import ligand_bond_terms
+            from cufep.rbfe.prep import ligands_of_the_edge
+
+            ligands = ligands_of_the_edge(edge_dir, inputs)
+            if ligands is None:
+                raise WorkflowError(f"the ligands of the edge in {edge_dir} are known neither from the records of its "
+                                    "preparation nor from the input of the run, and their bond terms are needed for "
+                                    "the hydrogens SHAKE cannot constrain")
+            spec = ForceFieldSpec(protein=rcfg.forcefield.protein, water=rcfg.forcefield.water,
+                                  lipid=rcfg.forcefield.lipid, ligand=rcfg.forcefield.ligand)
+            made[which] = ligand_bond_terms(ligands[0 if which == "a" else 1], spec,
+                                            dict(enumerate(end[which]["ligand"])))
+        return made[which]
+
+    return terms
+
+
 def build_leg(rcfg, edge_dir: Path, leg: str, leg_dir: Path | None = None, reschedule: bool = False,
               inputs=None) -> HybridLeg:
     """The hybrid System of a leg from its prepared end states, and a prepared system of it. With the directory of the
@@ -538,7 +564,8 @@ def build_leg(rcfg, edge_dir: Path, leg: str, leg_dir: Path | None = None, resch
     hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                 mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
                                 end["core_map"], softcore_alpha=rcfg.alchemy.softcore_alpha, rest2=rest2_on,
-                                rest2_atoms=hot_atoms, alchemical_water=water, rest2_ligand_atoms=hot_ligand)
+                                rest2_atoms=hot_atoms, alchemical_water=water, rest2_ligand_atoms=hot_ligand,
+                                bond_terms=bond_terms_of_the_edge(rcfg, edge_dir, end, inputs))
     topology = hybrid_topology(a["topology"], b["topology"], unique_b, water)
     gcmc = None
     if gcmc_in(rcfg, leg):
@@ -698,6 +725,12 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         + ("" if not hybrid.alchemical_water else
            f"; the net charge changes: water {hybrid.alchemical_water[0]} becomes "
            f"{built.info['legs'][job.leg]['alchemical_water']['ion']['name']} (an alchemical water)"))
+    if hybrid.unconstrained:
+        note = (f"{len(hybrid.unconstrained)} hydrogen(s) of the hybrid move on their force-field bond terms instead "
+                f"of constraints, which SHAKE (the plugin's only constraint method) cannot take: atoms "
+                f"{', '.join(f'{i}-{j}' for i, j in hybrid.unconstrained)}")
+        log(note)
+        run.notes.append(note)
     gcmc = built.gcmc
     if gcmc is not None:
         mu = gcmc.excess_chemical_potential_kj_per_mol / KCAL

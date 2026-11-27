@@ -131,6 +131,21 @@ The rules of the HybridTopologyFactory of OpenFE's relative protocol (openfe 1.1
 - a bonded term that a System has twice counts twice (OpenFE keeps one of them); the bonds, angles and torsions
   of the environment are those of A, and an edge whose B has other ones is refused.
 
+Constraints (cuFEP's own, so that every leg runs on the cuPotential plugin, whose integrator has SETTLE and SHAKE only:
+"only SETTLE and SHAKE constraints are implemented"): the hybrid takes the constraints of A and those of B that A does
+not have (OpenFE). Where Kartograf's mapping puts hydrogens of A and of B that are not mapped on one mapped atom (a
+methyl turned between the poses, a CH3 mapped onto an NH2, a CH2 onto an NH: five TYK2 edges and A2A 4d~4f), that atom
+carries more than three hydrogens or hydrogens of two lengths, which make no SHAKE cluster (OpenMM's rule,
+`ShakeCluster::addAtom`), and before this those legs fell back to stock OpenMM, whose CCMA takes them. Now the largest
+group of one length is kept at that atom (at most three; of equal groups the one with more mapped hydrogens, then of
+A), and the other hydrogens move on the bond term the force field of the preparation gives them without constraints
+(on at full strength at every lambda, as a bond of a unique atom), with the mapping kept as Kartograf makes it. That
+mapped atom gets the larger of its masses in A and B rather than their mean (masses change no free energy): with the
+mean (8.0 amu for a CH3 onto an NH2) MD at 4 fs sampled those N-H bonds with a standard deviation of 0.040 A against
+0.025 A at 0.5 fs; with the larger mass, the bonds at 4 fs are within 7 +- 1.5 % of 0.5 fs (CH2 onto NH, three seeds
+of 500 ps, `src/cufep/rbfe/constraints.py`, `tests/gpu`), where a constraint holds the bond at its length. The log and
+the result of a leg name those hydrogens.
+
 How the energy is carried (cuFEP's own; the energies are those of the rules): the NonbondedForce, which the
 cuPotential plugin replaces, holds only the charges of the ligand, as particle parameter offsets under the
 three electrostatic lambdas and REST2 (`spikes/m36`: the plugin gives the differences between states within

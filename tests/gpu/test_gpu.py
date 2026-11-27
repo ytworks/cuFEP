@@ -1163,3 +1163,89 @@ def test_the_states_of_a_hybrid_hot_in_part_match_setting_each_state(partly_hot_
     direct = np.array(direct)
     error = (red - red[0]) - (direct - direct[0])
     assert np.max(np.abs(error)) < 0.02, error
+
+
+@needs_plugin
+@pytest.mark.parametrize("shape", ["turned methyl", "methyl onto NH2", "CH2 onto NH"])
+def test_the_plugin_runs_a_hybrid_whose_hydrogens_shake_could_not_constrain(shape):
+    """The plugin's integrator has SETTLE and SHAKE only: OpenFE's constraints of a hybrid whose mapped atom carries
+    hydrogens of A and of B that are not mapped (Kartograf's mapping of five TYK2 edges and of A2A 4d~4f) stop it.
+    With those hydrogens on their bond terms (cufep.rbfe.constraints) the hybrid runs at 4 fs at both ends."""
+    import openmm.unit as u
+    from conftest import SHAKE_CASES, build_hybrid_edge, hybrid_edge_ligands
+
+    from cufep.prep.forcefield import ForceFieldSpec
+    from cufep.rbfe.constraints import ligand_bond_terms
+    from cufep.rbfe.hybrid import make_hybrid_system
+    from cufep.rbfe.states import HybridState
+    from cufep.sampling.states import set_state
+
+    smiles_a, smiles_b, mapping, _x, _n = SHAKE_CASES[shape]
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge(
+        smiles_b, mapping, box_nm=3.2, smiles_a=smiles_a)
+    lig_a, lig_b = hybrid_edge_ligands(smiles_b, mapping, smiles_a)
+    terms = {"a": ligand_bond_terms(lig_a, ForceFieldSpec(), dict(enumerate(ligand_a))),
+             "b": ligand_bond_terms(lig_b, ForceFieldSpec(), dict(enumerate(ligand_b)))}
+    be = get_backend("cupotential")
+
+    def run(hybrid):
+        integ = be.make_integrator(298.15 * u.kelvin, 1 / u.picosecond, 4 * u.femtoseconds, seed=7)
+        ctx = be.make_context(be.prepare_system(hybrid.system), integ, 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(hybrid.positions)
+        for x in (0.0, 1.0):
+            set_state(ctx, HybridState(x))
+            mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 200)
+            ctx.setVelocitiesToTemperature(298.15 * u.kelvin, 3)
+            integ.step(500)
+            energy = ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)
+            assert np.isfinite(energy), (shape, x)
+
+    with pytest.raises(Exception, match="SETTLE and SHAKE"):
+        run(make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core))
+    run(make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, bond_terms=terms.get))
+
+
+@needs_plugin
+@pytest.mark.parametrize("shape", ["turned methyl", "methyl onto NH2", "CH2 onto NH"])
+def test_the_hydrogens_on_their_bond_terms_sample_their_bonds_at_4_fs_as_at_half_a_femtosecond(shape):
+    """The hydrogens that SHAKE cannot take move on their bond terms at the run's 4 fs (hydrogens of 3 amu): at lambda
+    1 the standard deviation of each such bond on the plugin is within 15 % of that of stock OpenMM at 0.5 fs (measured,
+    CH2 onto NH, three seeds of 500 ps: +7 % +- 1.5 %; a constraint, as before, holds the bond at 0). With the mean
+    of the masses of A and B for the mapped atom that carries them (8.0 amu for a CH3 onto an NH2) it was +60 %."""
+    import openmm.unit as u
+    from conftest import SHAKE_CASES, build_hybrid_edge, hybrid_edge_ligands
+
+    from cufep.prep.forcefield import ForceFieldSpec
+    from cufep.rbfe.constraints import ligand_bond_terms
+    from cufep.rbfe.hybrid import make_hybrid_system
+    from cufep.rbfe.states import HybridState
+    from cufep.sampling.states import set_state
+
+    smiles_a, smiles_b, mapping, _x, _n = SHAKE_CASES[shape]
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = build_hybrid_edge(
+        smiles_b, mapping, box_nm=3.2, smiles_a=smiles_a)
+    lig_a, lig_b = hybrid_edge_ligands(smiles_b, mapping, smiles_a)
+    terms = {"a": ligand_bond_terms(lig_a, ForceFieldSpec(), dict(enumerate(ligand_a))),
+             "b": ligand_bond_terms(lig_b, ForceFieldSpec(), dict(enumerate(ligand_b)))}
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, bond_terms=terms.get)
+    spread = {}
+    for backend, fs in (("cupotential", 4.0), ("openmm", 0.5)):
+        be = get_backend(backend)
+        integ = be.make_integrator(298.15 * u.kelvin, 1 / u.picosecond, fs * u.femtoseconds, seed=21)
+        ctx = be.make_context(be.prepare_system(hybrid.system), integ, 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(hybrid.positions)
+        set_state(ctx, HybridState(1.0))
+        mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 500)
+        ctx.setVelocitiesToTemperature(298.15 * u.kelvin, 5)
+        integ.step(int(20.0 / (fs * 1e-3)))
+        lengths = {p: [] for p in hybrid.unconstrained}
+        for _ in range(2500):                                # 100 ps, a sample every 40 fs
+            integ.step(int(0.04 / (fs * 1e-3)))
+            x = ctx.getState(getPositions=True).getPositions(asNumpy=True).value_in_unit(u.nanometer)
+            for i, j in hybrid.unconstrained:
+                lengths[(i, j)].append(float(np.linalg.norm(x[i] - x[j])))
+        spread[backend] = {p: float(np.std(v)) for p, v in lengths.items()}
+    for p in hybrid.unconstrained:
+        assert spread["cupotential"][p] == pytest.approx(spread["openmm"][p], rel=0.15), (shape, p, spread)

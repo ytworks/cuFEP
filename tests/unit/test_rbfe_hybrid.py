@@ -12,7 +12,7 @@ import numpy as np
 import openmm as mm
 import openmm.unit as u
 import pytest
-from conftest import TOLUENE, build_hybrid_edge, potential, reference_context, valence_energy
+from conftest import SHAKE_CASES, TOLUENE, build_hybrid_edge, potential, reference_context, valence_energy
 
 pytestmark = pytest.mark.needs("openff.toolkit", "rdkit", "openmmforcefields")
 
@@ -134,6 +134,70 @@ def test_a_group_that_becomes_itself_gives_the_same_energy_forwards_and_backward
         forwards = potential(ctx)
         _set(ctx, HybridState(1.0 - x))
         assert potential(ctx) == pytest.approx(forwards, abs=1e-4), x
+
+
+def _constraints(system):
+    pairs = []
+    for k in range(system.getNumConstraints()):
+        i, j, d = system.getConstraintParameters(k)
+        pairs.append(((min(i, j), max(i, j)), d.value_in_unit(u.nanometer)))
+    masses = {i: system.getParticleMass(i).value_in_unit(u.dalton) for i in range(system.getNumParticles())}
+    return pairs, {i: 1.0 / m for i, m in masses.items() if m > 0}
+
+
+@pytest.mark.parametrize("shape", sorted(SHAKE_CASES))
+def test_the_hydrogens_shake_cannot_constrain_move_on_the_bond_terms_of_the_force_field(shape):
+    """The cuPotential plugin has SETTLE and SHAKE only. Where Kartograf's mapping puts hydrogens of A and of B that are
+    not mapped on one mapped atom, more than three or of two lengths, OpenFE's constraints make no SHAKE cluster
+    (OpenMM's rule) and the leg could not run on the plugin: the five TYK2 edges and A2A 4d~4f of 08d58d5 ran on
+    stock OpenMM. With the bond terms of the ligands, the hybrid keeps the largest group of one length at that atom,
+    at most three, and the other hydrogens move on the bond terms the force field gives them without constraints."""
+    import openmm.app as app
+    from conftest import hybrid_edge_ligands
+
+    from cufep.prep.forcefield import ForceFieldSpec, make_forcefield
+    from cufep.rbfe.constraints import ligand_bond_terms, shake_clusters
+    from cufep.rbfe.hybrid import make_hybrid_system
+
+    smiles_a, smiles_b, mapping, x, n_hydrogens = SHAKE_CASES[shape]
+    edge = build_hybrid_edge(smiles_b, mapping, smiles_a=smiles_a)
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, _box = edge
+    lig_a, lig_b = hybrid_edge_ligands(smiles_b, mapping, smiles_a)
+    spec = ForceFieldSpec()
+    terms = {"a": ligand_bond_terms(lig_a, spec, dict(enumerate(ligand_a))),
+             "b": ligand_bond_terms(lig_b, spec, dict(enumerate(ligand_b)))}
+    plain = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
+    pairs, inverse_mass = _constraints(plain.system)
+    assert len([p for p, _d in pairs if x in p]) == n_hydrogens and shake_clusters(pairs, inverse_mass)[1]
+    hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, bond_terms=terms.get)
+    pairs, inverse_mass = _constraints(hybrid.system)
+    assert not shake_clusters(pairs, inverse_mass)[1]
+    kept = [p for p, _d in pairs if x in p]
+    assert len(kept) == min(3, n_hydrogens - 1) and len(hybrid.unconstrained) == n_hydrogens - len(kept)
+    assert len({round(d, 9) for p, d in pairs if x in p}) == 1
+    # each hydrogen taken out has the bond term of its ligand without constraints (a System of the force field of the
+    # preparation made here with no constraints)
+    flexible = {}
+    for end, lig, atoms in (("a", lig_a, ligand_a), ("b", lig_b, ligand_b)):
+        system = make_forcefield(spec, [lig]).createSystem(lig.offmol.to_topology().to_openmm(),
+                                                           nonbondedMethod=app.NoCutoff, constraints=None)
+        to_h = hybrid.a_to_hybrid if end == "a" else hybrid.b_to_hybrid
+        for f in system.getForces():
+            if isinstance(f, mm.HarmonicBondForce):
+                for k in range(f.getNumBonds()):
+                    i, j, r0, kk = f.getBondParameters(k)
+                    a, b = to_h[atoms[i]], to_h[atoms[j]]
+                    flexible[(end, min(a, b), max(a, b))] = (r0.value_in_unit(u.nanometer),
+                                                             kk.value_in_unit(u.kilojoule_per_mole / u.nanometer ** 2))
+    (bonds,) = [f for f in hybrid.system.getForces() if isinstance(f, mm.HarmonicBondForce)]
+    held = {}
+    for k in range(bonds.getNumBonds()):
+        i, j, r0, kk = bonds.getBondParameters(k)
+        held[(min(i, j), max(i, j))] = (r0.value_in_unit(u.nanometer),
+                                        kk.value_in_unit(u.kilojoule_per_mole / u.nanometer ** 2))
+    for pair in hybrid.unconstrained:
+        end = "a" if all(a in hybrid.atoms_a for a in pair) else "b"
+        assert held[pair] == pytest.approx(flexible[(end, *pair)], rel=1e-9), (shape, pair)
 
 
 def test_a_mapping_that_changes_a_constrained_length_or_names_other_atoms_is_refused(edge):

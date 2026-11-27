@@ -316,12 +316,24 @@ TOLUENE, PHENOL = "Cc1ccccc1", "Oc1ccccc1"
 RING_MAP = {**{i: i for i in range(1, 7)}, **{10 + k: 8 + k for k in range(5)}}
 
 
+#: mappings (RDKit's AddHs order, A onto B) that put hydrogens of A and of B that are not mapped on one mapped atom, as
+#: Kartograf's mapping does in TYK2 and A2A: (A, B, mapping, the mapped atom of A, the hydrogens it carries in the
+#: hybrid). A methyl group turned between the poses (one hydrogen mapped: 1 + 2 + 2 of one length; A2A 4d~4f), a
+#: methyl onto an NH2 (3 + 2 of two lengths) and a CH2 onto an NH (2 + 1 of two lengths; TYK2 ejm_42~ejm_54)
+SHAKE_CASES = {
+    "turned methyl": (TOLUENE, TOLUENE, {**{i: i for i in range(7)}, 7: 7, **{10 + k: 10 + k for k in range(5)}}, 0, 5),
+    "methyl onto NH2": (TOLUENE, "Nc1ccccc1", {**{i: i for i in range(7)}, **{10 + k: 9 + k for k in range(5)}}, 0, 5),
+    "CH2 onto NH": ("CCc1ccccc1", "CNc1ccccc1",
+                    {**{i: i for i in range(8)}, 8: 8, 9: 9, 10: 10, **{13 + k: 12 + k for k in range(5)}}, 1, 3),
+}
+
+
 class _Ligand:
     def __init__(self, offmol):
         self.offmol = offmol
 
 
-def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
+def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None, smiles_a: str = TOLUENE):
     """Two molecules with a 3D pose each, B placed onto A on the mapped atoms, and Gasteiger charges."""
     from openff.toolkit import Molecule
     from rdkit import Chem
@@ -329,7 +341,7 @@ def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
     from rdkit.Geometry import Point3D
 
     core_b = RING_MAP if core_b is None else core_b
-    a = Chem.AddHs(Chem.MolFromSmiles(TOLUENE))
+    a = Chem.AddHs(Chem.MolFromSmiles(smiles_a))
     AllChem.EmbedMolecule(a, randomSeed=11)
     b = Chem.AddHs(Chem.MolFromSmiles(smiles_b))
     xyz_a = a.GetConformer().GetPositions()
@@ -345,9 +357,10 @@ def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
     return out
 
 
-def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4):
-    """A relative transformation for the tests: toluene (A) into phenol (B, or ``smiles_b``) in a box of water,
-    Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
+def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4,
+                      smiles_a: str = TOLUENE):
+    """A relative transformation for the tests: toluene (A, or ``smiles_a``) into phenol (B, or ``smiles_b``) in a box
+    of water, Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
     Returns (system A, positions A, ligand A, system B, positions B, ligand B, core map, box), indices of the
     Systems, positions in nm."""
     import openmm as mm
@@ -356,7 +369,7 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
 
     from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
 
-    lig_a, lig_b = _molecules(smiles_b, core_b)
+    lig_a, lig_b = _molecules(smiles_b, core_b, smiles_a)
     # each end state with its own ligand alone, as cufep.rbfe.prep builds them
     field = make_forcefield(ForceFieldSpec(), [lig_a])
     field_b = make_forcefield(ForceFieldSpec(), [lig_b])
@@ -385,6 +398,11 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
     core = {i: n_b_total - n_b + j for i, j in (RING_MAP if core_b is None else core_b).items()}
     box = np.asarray(modeller.topology.getPeriodicBoxVectors().value_in_unit(u.nanometer))
     return system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box
+
+
+def hybrid_edge_ligands(smiles_b: str, core_b: dict, smiles_a: str = TOLUENE):
+    """The two molecules of :func:`build_hybrid_edge` (its ``_Ligand`` objects, with their charges)."""
+    return _molecules(smiles_b, core_b, smiles_a)
 
 
 def hybrid_edge_topology(n_particles: int, ligand: list[int], system, box=None):
