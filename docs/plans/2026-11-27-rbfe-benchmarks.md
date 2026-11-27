@@ -85,4 +85,14 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
 - 修正: GCMC の脚のセルは前平衡化の最後の配置のセル(grand の例と同じ)。ABFE と共通の関数(`alchemical_box`)なので ABFE
   も同じに(ABFE の GCMC は既定 OFF)。`positions_in_cell` は削除。TYK2 の実行(faa65e0)は平均セル = 最後のセルなので
   修正後と同じ計算で、そのまま続ける。A2A は修正後のイメージで、準備済みの辺と終わった前平衡化を写して最初から。
+- 2026-11-28 TYK2 full、GCMC あり(image cufep:faa65e0、GPU 0〜2、`runs/rbfe_bench_tyk2_faa65e0`、`benchmarks/results/tyk2_rbfe/`):
+  exit 0、22/22 辺、16/16 化合物。セルは平均セル = 最後のセル(自由 MD なし)で cd15025 と同じ計算。complex 脚ごとに受け入れた
+  挿入 690〜1121、球の中の水 17〜24(窓の平均)。5 辺の 10 脚が標準 OpenMM(CCMA)。kcal/mol、95 % bootstrap、16 化合物で
+  各手法を中心合わせ: dG の RMSE 0.65 [0.46, 0.83](FEP+ 0.47、OpenFE 0.59)、MUE 0.55、pairwise 0.95、R² 0.76、τ 0.60
+  (0.81、0.68)。辺の RMSE 22 辺 0.82(OpenFE 0.61)、FEP+ と共通の 11 辺 0.73(FEP+ Bennett 0.58)。
+- GCMC の有無(torsion 修正の影響しない 18 辺、準備は同じ、違いは GCMC だけ): 辺の RMSE GCMC なし(39ee4ac)0.58 [0.44, 0.71]、
+  あり(faa65e0)0.79 [0.58, 0.98]、PR #19 の 08d58d5(GCMC あり)0.76 [0.51, 0.99]。差 / SE の二乗平均 1.84、2 SE 超え 5 本、
+  complex 脚で 1.86。1 辺 1 計算ずつで、同じコードの 2 回でも脚が 0.65〜0.69 動く(PR #19 の記録)。torsion 修正の 4 辺は
+  GCMC と修正の両方が変わる: ejm_42→ejm_54 +1.46 → −0.88(実験 −0.75)、ejm_55→ejm_54 +1.40 → +0.26(−1.32)、
+  ejm_50→ejm_42 −1.52 → −0.11(−0.80)、ejm_50→ejm_55 −0.61 → −0.88(−0.23)。
 

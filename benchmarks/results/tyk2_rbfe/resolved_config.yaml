@@ -56,7 +56,7 @@ sampling:
     inner_fraction: uniform
     radius_margin_nm: 0.3
   gcmc:
-    enabled: false
+    enabled: true
     interval_ps: 4.0
     attempts: 2500
     batch_size: 1000
@@ -91,15 +91,10 @@ resources:
   - 0
   - 1
   - 2
-  - 3
-  - 4
-  - 5
-  - 6
-  - 7
   oversubscription_factor: auto
   cpu_threads_per_worker: 2
 output:
-  dir: runs/rbfe_bench_tyk2_39ee4ac
+  dir: runs/rbfe_bench_tyk2_faa65e0
 system:
   protein: /opt/cufep/benchmarks/tyk2/inputs/tyk2_protein.pdb
   ligands: /opt/cufep/benchmarks/tyk2/ligands.sdf

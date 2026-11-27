@@ -25,50 +25,48 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -0.17992968789185804,
-     "se": 0.3606217077948238,
-     "complex_dg": 13.578486000862643,
-     "complex_se": 0.357989712751687,
-     "solvent_dg": 13.758415688754502,
-     "solvent_se": 0.04349001835846834,
+     "ddg": 0.465225919526056,
+     "se": 0.229824034959249,
+     "complex_dg": 14.196483050033617,
+     "complex_se": 0.2247383164540433,
+     "solvent_dg": 13.73125713050756,
+     "solvent_se": 0.048080933459661586,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.07501385254769839,
-      "solvent": 0.09703124819584175
+      "complex": 0.07599783981984685,
+      "solvent": 0.09714707988311043
      },
      "lowest_overlap_used": {
-      "complex": 0.07775152157563789,
-      "solvent": 0.09703124819584162
+      "complex": 0.07557895717157688,
+      "solvent": 0.09734133995565501
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 39.90436200214653,
+      "complex": 334.0,
       "solvent": 1000.0
      },
      "backend": {
       "complex": "cupotential",
       "solvent": "cupotential"
      },
-     "warnings": [
-      "complex: few independent samples: lambda window 8 (morph stage) has 40 and gives MBAR 40 samples (its energy difference to the previous window is correlated over 50 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)"
-     ]
+     "warnings": []
     }
    ],
-   "ddg": -0.17992968789185804,
-   "complex_dg": 13.578486000862643,
-   "solvent_dg": 13.758415688754502,
-   "se": 0.3606217077948238,
+   "ddg": 0.465225919526056,
+   "complex_dg": 14.196483050033617,
+   "solvent_dg": 13.73125713050756,
+   "se": 0.229824034959249,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.07501385254769839,
-    "solvent": 0.09703124819584175
+    "complex": 0.07599783981984685,
+    "solvent": 0.09714707988311043
    },
    "lowest_overlap_used": {
-    "complex": 0.07775152157563789,
-    "solvent": 0.09703124819584162
+    "complex": 0.07557895717157688,
+    "solvent": 0.09734133995565501
    },
    "windows": {
     "complex": [
@@ -100,51 +98,48 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 2.4164788186354964,
-     "se": 0.6157825270972167,
-     "complex_dg": 35.79512641291681,
-     "complex_se": 0.608440220280384,
-     "solvent_dg": 33.37864759428131,
-     "solvent_se": 0.09480832781666475,
+     "ddg": 3.5541789948134532,
+     "se": 0.30713221898550325,
+     "complex_dg": 36.751803381880116,
+     "complex_se": 0.28801360814626936,
+     "solvent_dg": 33.19762438706666,
+     "solvent_se": 0.10666940264914923,
      "windows": {
       "complex": 10,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.0954137821304658,
-      "solvent": 0.05992627048216338
+      "complex": 0.08037330701556185,
+      "solvent": 0.06441922330750141
      },
      "lowest_overlap_used": {
-      "complex": 0.08996784942276999,
-      "solvent": 0.05992872938832493
+      "complex": 0.09551271637236791,
+      "solvent": 0.06441922330750127
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 26.62330145872617,
+      "complex": 72.0,
       "solvent": 1000.0
      },
      "backend": {
       "complex": "cupotential",
       "solvent": "cupotential"
      },
-     "warnings": [
-      "complex: few independent samples: lambda window 9 (morph stage) has 27 and gives MBAR 27 samples (its energy difference to the previous window is correlated over 75 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)",
-      "complex: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 9 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 9 keeps 3 sample(s) there; 4 are needed for an estimate"
-     ]
+     "warnings": []
     }
    ],
-   "ddg": 2.4164788186354964,
-   "complex_dg": 35.79512641291681,
-   "solvent_dg": 33.37864759428131,
-   "se": 0.6157825270972167,
+   "ddg": 3.5541789948134532,
+   "complex_dg": 36.751803381880116,
+   "solvent_dg": 33.19762438706666,
+   "se": 0.30713221898550325,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.0954137821304658,
-    "solvent": 0.05992627048216338
+    "complex": 0.08037330701556185,
+    "solvent": 0.06441922330750141
    },
    "lowest_overlap_used": {
-    "complex": 0.08996784942276999,
-    "solvent": 0.05992872938832493
+    "complex": 0.09551271637236791,
+    "solvent": 0.06441922330750127
    },
    "windows": {
     "complex": [
@@ -176,29 +171,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 0.7412878980798564,
-     "se": 0.28832552778136267,
-     "complex_dg": 20.97582828741752,
-     "complex_se": 0.269761364367409,
-     "solvent_dg": 20.234540389337663,
-     "solvent_se": 0.10178613002288342,
+     "ddg": -0.534132833540403,
+     "se": 0.25967755592120023,
+     "complex_dg": 19.701442931790854,
+     "complex_se": 0.2416297839762897,
+     "solvent_dg": 20.23557576533126,
+     "solvent_se": 0.09511824506780842,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.02568169318273453,
-      "solvent": 0.07901381125101033
+      "complex": 0.06290584683735122,
+      "solvent": 0.07924952964113051
      },
      "lowest_overlap_used": {
-      "complex": 0.029167764771802194,
-      "solvent": 0.07901381125101059
+      "complex": 0.035808743096004465,
+      "solvent": 0.07928582357788504
      },
-     "not_reliable": [
-      "complex"
-     ],
+     "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 223.0,
+      "complex": 47.73902112287386,
       "solvent": 1000.0
      },
      "backend": {
@@ -207,27 +200,25 @@
      },
      "warnings": [
       "complex: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
-      "complex: NOT RELIABLE: the overlap between lambda windows 1 and 2 (morph stage, lambda 0.12 and 0.25) is 0.026, below 0.03. Give that stage more lambda windows (lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) and run this leg again: cufep rbfe run CONFIG --edge NAME --leg complex --reschedule",
-      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (16; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.20 (iterations 0-400 of the production): lambda windows 1 and 2 overlap by 0.029 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; reverse point 0.20 (iterations 1600-2000 of the production): lambda windows 1 and 2 overlap by 0.026 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; forward point 0.30 (iterations 0-600 of the production): lambda windows 1 and 2 overlap by 0.030 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; ...",
+      "complex: few independent samples: lambda window 7 (morph stage) has 48 and gives MBAR 48 samples (its energy difference to the next window is correlated over 42 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)",
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): block 3 of 5 (iterations 800-1200 of the production): lambda windows 1 and 2 overlap by 0.023 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate",
       "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
       "solvent: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)"
      ]
     }
    ],
-   "ddg": 0.7412878980798564,
-   "complex_dg": 20.97582828741752,
-   "solvent_dg": 20.234540389337663,
-   "se": 0.28832552778136267,
-   "not_reliable": [
-    "complex"
-   ],
+   "ddg": -0.534132833540403,
+   "complex_dg": 19.701442931790854,
+   "solvent_dg": 20.23557576533126,
+   "se": 0.25967755592120023,
+   "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.02568169318273453,
-    "solvent": 0.07901381125101033
+    "complex": 0.06290584683735122,
+    "solvent": 0.07924952964113051
    },
    "lowest_overlap_used": {
-    "complex": 0.029167764771802194,
-    "solvent": 0.07901381125101059
+    "complex": 0.035808743096004465,
+    "solvent": 0.07928582357788504
    },
    "windows": {
     "complex": [
@@ -259,27 +250,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -1.2994599865858574,
-     "se": 0.31072497288978157,
-     "complex_dg": 21.320965074630895,
-     "complex_se": 0.3058060959324185,
-     "solvent_dg": 22.620425061216753,
-     "solvent_se": 0.05506941499533059,
+     "ddg": -1.5125238868649047,
+     "se": 0.2714380639571288,
+     "complex_dg": 21.060250134256083,
+     "complex_se": 0.26613017066765865,
+     "solvent_dg": 22.57277402112099,
+     "solvent_se": 0.053416802835785905,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.06474434096728157,
-      "solvent": 0.09658010665352593
+      "complex": 0.07013308010815822,
+      "solvent": 0.09736107594406589
      },
      "lowest_overlap_used": {
-      "complex": 0.059760496125882585,
-      "solvent": 0.09658010665352566
+      "complex": 0.08136962908257958,
+      "solvent": 0.0964753472118885
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 182.0,
+      "complex": 51.88360749164483,
       "solvent": 1000.0
      },
      "backend": {
@@ -289,18 +280,18 @@
      "warnings": []
     }
    ],
-   "ddg": -1.2994599865858574,
-   "complex_dg": 21.320965074630895,
-   "solvent_dg": 22.620425061216753,
-   "se": 0.31072497288978157,
+   "ddg": -1.5125238868649047,
+   "complex_dg": 21.060250134256083,
+   "solvent_dg": 22.57277402112099,
+   "se": 0.2714380639571288,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.06474434096728157,
-    "solvent": 0.09658010665352593
+    "complex": 0.07013308010815822,
+    "solvent": 0.09736107594406589
    },
    "lowest_overlap_used": {
-    "complex": 0.059760496125882585,
-    "solvent": 0.09658010665352566
+    "complex": 0.08136962908257958,
+    "solvent": 0.0964753472118885
    },
    "windows": {
     "complex": [
@@ -332,27 +323,29 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 0.32685575157458335,
-     "se": 0.39600286396793904,
-     "complex_dg": 24.361624541754598,
-     "complex_se": 0.3722764362797484,
-     "solvent_dg": 24.034768790180014,
-     "solvent_se": 0.1350130484866574,
+     "ddg": 0.9113628582959987,
+     "se": 0.6129310135262331,
+     "complex_dg": 24.979246833400637,
+     "complex_se": 0.60545299178687,
+     "solvent_dg": 24.06788397510464,
+     "solvent_se": 0.09545209310760934,
      "windows": {
       "complex": 10,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.04088272486402457,
-      "solvent": 0.06586061397318467
+      "complex": 0.0278574835933995,
+      "solvent": 0.06714997641768235
      },
      "lowest_overlap_used": {
-      "complex": 0.04150349499398223,
-      "solvent": 0.06586061397318468
+      "complex": 0.023852214996236264,
+      "solvent": 0.06714997641768242
      },
-     "not_reliable": [],
+     "not_reliable": [
+      "complex"
+     ],
      "fewest_independent_samples": {
-      "complex": 38.0,
+      "complex": 182.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -360,22 +353,25 @@
       "solvent": "cupotential"
      },
      "warnings": [
-      "complex: few independent samples: lambda window 9 (morph stage) has 38 and gives MBAR 38 samples (its energy difference to the previous window is correlated over 52 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)"
+      "complex: NOT RELIABLE: the overlap between lambda windows 1 and 2 (morph stage, lambda 0.12 and 0.25) is 0.028, below 0.03. Give that stage more lambda windows (lambda_schedule.adaptive.initial_windows, or lambda_schedule.windows with mode: fixed) and run this leg again: cufep rbfe run CONFIG --edge NAME --leg complex --reschedule",
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (20; their estimates are shown in analysis.png and rest on too little overlap): reverse point 0.10 (iterations 1800-2000 of the production): lambda windows 1 and 2 overlap by 0.027 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; reverse point 0.20 (iterations 1600-2000 of the production): lambda windows 1 and 2 overlap by 0.026 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; reverse point 0.30 (iterations 1400-2000 of the production): lambda windows 1 and 2 overlap by 0.019 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; ..."
      ]
     }
    ],
-   "ddg": 0.32685575157458335,
-   "complex_dg": 24.361624541754598,
-   "solvent_dg": 24.034768790180014,
-   "se": 0.39600286396793904,
-   "not_reliable": [],
+   "ddg": 0.9113628582959987,
+   "complex_dg": 24.979246833400637,
+   "solvent_dg": 24.06788397510464,
+   "se": 0.6129310135262331,
+   "not_reliable": [
+    "complex"
+   ],
    "lowest_overlap": {
-    "complex": 0.04088272486402457,
-    "solvent": 0.06586061397318467
+    "complex": 0.0278574835933995,
+    "solvent": 0.06714997641768235
    },
    "lowest_overlap_used": {
-    "complex": 0.04150349499398223,
-    "solvent": 0.06586061397318468
+    "complex": 0.023852214996236264,
+    "solvent": 0.06714997641768242
    },
    "windows": {
     "complex": [
@@ -407,28 +403,28 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 1.4573214129689576,
-     "se": 0.5422197931086563,
-     "complex_dg": -25.027694116517218,
-     "complex_se": 0.2668485702129025,
-     "solvent_dg": -26.485015529486173,
-     "solvent_se": 0.4720107462909332,
+     "ddg": -0.8847460907501821,
+     "se": 0.5043113830080869,
+     "complex_dg": -26.544195364988248,
+     "complex_se": 0.28933436488855074,
+     "solvent_dg": -25.659449274238064,
+     "solvent_se": 0.41305640816487554,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.09199980521792606,
-      "solvent": 0.1575051080976205
+      "complex": 0.06495816685689594,
+      "solvent": 0.16240319268960257
      },
      "lowest_overlap_used": {
-      "complex": 0.07980625178889796,
-      "solvent": 0.15701039418454207
+      "complex": 0.1124108489859696,
+      "solvent": 0.16250580395422803
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 167.0,
-      "solvent": 22.0
+      "complex": 400.0,
+      "solvent": 24.601383116092702
      },
      "backend": {
       "complex": "openmm",
@@ -438,23 +434,23 @@
       "complex: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
       "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
       "solvent: the cuPotential run failed; the whole leg was repeated on stock OpenMM (samples from the two backends are never mixed; the failed run is kept in hrex_failed_cupotential/)",
-      "solvent: few independent samples: lambda window 6 (morph stage) has 22 and gives MBAR 22 samples (its energy difference to the previous window is correlated over 90 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg solvent --production-ns NS (or sampling.production_ns)",
-      "solvent: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 6 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 6 keeps 2 sample(s) there; 4 are needed for an estimate"
+      "solvent: few independent samples: lambda window 8 (morph stage) has 25 and gives MBAR 25 samples (its energy difference to the previous window is correlated over 81 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg solvent --production-ns NS (or sampling.production_ns)",
+      "solvent: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 7 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 7 keeps 2 sample(s) there; 4 are needed for an estimate"
      ]
     }
    ],
-   "ddg": 1.4573214129689576,
-   "complex_dg": -25.027694116517218,
-   "solvent_dg": -26.485015529486173,
-   "se": 0.5422197931086563,
+   "ddg": -0.8847460907501821,
+   "complex_dg": -26.544195364988248,
+   "solvent_dg": -25.659449274238064,
+   "se": 0.5043113830080869,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.09199980521792606,
-    "solvent": 0.1575051080976205
+    "complex": 0.06495816685689594,
+    "solvent": 0.16240319268960257
    },
    "lowest_overlap_used": {
-    "complex": 0.07980625178889796,
-    "solvent": 0.15701039418454207
+    "complex": 0.1124108489859696,
+    "solvent": 0.16250580395422803
    },
    "windows": {
     "complex": [
@@ -486,27 +482,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -1.6332146526026232,
-     "se": 0.28441010124229016,
-     "complex_dg": -13.235239716585522,
-     "complex_se": 0.27670108363191936,
-     "solvent_dg": -11.602025063982898,
-     "solvent_se": 0.06576941542671093,
+     "ddg": -1.5175718866529682,
+     "se": 0.3673903528350791,
+     "complex_dg": -13.124211824821666,
+     "complex_se": 0.36345996006354325,
+     "solvent_dg": -11.606639938168698,
+     "solvent_se": 0.05359597733870898,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.062120655252208605,
-      "solvent": 0.09959591393813604
+      "complex": 0.07328429197394949,
+      "solvent": 0.10012070403048395
      },
      "lowest_overlap_used": {
-      "complex": 0.060982319683957134,
-      "solvent": 0.09977648895482295
+      "complex": 0.06155948951155746,
+      "solvent": 0.10039222401681988
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 59.0,
+      "complex": 91.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -520,18 +516,18 @@
      ]
     }
    ],
-   "ddg": -1.6332146526026232,
-   "complex_dg": -13.235239716585522,
-   "solvent_dg": -11.602025063982898,
-   "se": 0.28441010124229016,
+   "ddg": -1.5175718866529682,
+   "complex_dg": -13.124211824821666,
+   "solvent_dg": -11.606639938168698,
+   "se": 0.3673903528350791,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.062120655252208605,
-    "solvent": 0.09959591393813604
+    "complex": 0.07328429197394949,
+    "solvent": 0.10012070403048395
    },
    "lowest_overlap_used": {
-    "complex": 0.060982319683957134,
-    "solvent": 0.09977648895482295
+    "complex": 0.06155948951155746,
+    "solvent": 0.10039222401681988
    },
    "windows": {
     "complex": [
@@ -563,50 +559,48 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -1.1487347411521809,
-     "se": 0.39175959481974204,
-     "complex_dg": -8.949872910879987,
-     "complex_se": 0.38779519231490034,
-     "solvent_dg": -7.801138169727808,
-     "solvent_se": 0.055591986389927836,
+     "ddg": -1.7544007523900977,
+     "se": 0.28472595147644647,
+     "complex_dg": -9.645466706522345,
+     "complex_se": 0.2764175795491165,
+     "solvent_dg": -7.891065954132247,
+     "solvent_se": 0.06828022525135383,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.05431187612071433,
-      "solvent": 0.09773669612471286
+      "complex": 0.05118432546603995,
+      "solvent": 0.09780764681597012
      },
      "lowest_overlap_used": {
-      "complex": 0.05358285513155542,
-      "solvent": 0.09689312370102905
+      "complex": 0.055064974549832064,
+      "solvent": 0.0978076468159702
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 96.0,
+      "complex": 154.0,
       "solvent": 1000.0
      },
      "backend": {
       "complex": "cupotential",
       "solvent": "cupotential"
      },
-     "warnings": [
-      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.10 (iterations 0-200 of the production): lambda windows 5 and 6 overlap by 0.024 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
-     ]
+     "warnings": []
     }
    ],
-   "ddg": -1.1487347411521809,
-   "complex_dg": -8.949872910879987,
-   "solvent_dg": -7.801138169727808,
-   "se": 0.39175959481974204,
+   "ddg": -1.7544007523900977,
+   "complex_dg": -9.645466706522345,
+   "solvent_dg": -7.891065954132247,
+   "se": 0.28472595147644647,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.05431187612071433,
-    "solvent": 0.09773669612471286
+    "complex": 0.05118432546603995,
+    "solvent": 0.09780764681597012
    },
    "lowest_overlap_used": {
-    "complex": 0.05358285513155542,
-    "solvent": 0.09689312370102905
+    "complex": 0.055064974549832064,
+    "solvent": 0.0978076468159702
    },
    "windows": {
     "complex": [
@@ -638,51 +632,48 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 1.0334870433538603,
-     "se": 0.33347910365221783,
-     "complex_dg": -22.544183741502483,
-     "complex_se": 0.31763896071548403,
-     "solvent_dg": -23.577670784856345,
-     "solvent_se": 0.10155689640922398,
+     "ddg": -0.34752547115076055,
+     "se": 0.3101778521866738,
+     "complex_dg": -24.026681214394884,
+     "complex_se": 0.2954305136246127,
+     "solvent_dg": -23.67915574324412,
+     "solvent_se": 0.09450455865531358,
      "windows": {
       "complex": 10,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.049477517771318695,
-      "solvent": 0.08856579051504887
+      "complex": 0.0326412859035699,
+      "solvent": 0.08155892628152667
      },
      "lowest_overlap_used": {
-      "complex": 0.04913321540478086,
-      "solvent": 0.0884358042192871
+      "complex": 0.04412670976663267,
+      "solvent": 0.081558926281527
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 20.877409722602412,
+      "complex": 106.0,
       "solvent": 1000.0
      },
      "backend": {
       "complex": "cupotential",
       "solvent": "cupotential"
      },
-     "warnings": [
-      "complex: few independent samples: lambda window 0 (morph stage) has 21 and gives MBAR 21 samples (its energy difference to the next window is correlated over 96 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)",
-      "complex: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 0 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 0 keeps 2 sample(s) there; 4 are needed for an estimate"
-     ]
+     "warnings": []
     }
    ],
-   "ddg": 1.0334870433538603,
-   "complex_dg": -22.544183741502483,
-   "solvent_dg": -23.577670784856345,
-   "se": 0.33347910365221783,
+   "ddg": -0.34752547115076055,
+   "complex_dg": -24.026681214394884,
+   "solvent_dg": -23.67915574324412,
+   "se": 0.3101778521866738,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.049477517771318695,
-    "solvent": 0.08856579051504887
+    "complex": 0.0326412859035699,
+    "solvent": 0.08155892628152667
    },
    "lowest_overlap_used": {
-    "complex": 0.04913321540478086,
-    "solvent": 0.0884358042192871
+    "complex": 0.04412670976663267,
+    "solvent": 0.081558926281527
    },
    "windows": {
     "complex": [
@@ -714,48 +705,50 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 1.5789759475475238,
-     "se": 0.3757780185811089,
-     "complex_dg": 24.965831745435132,
-     "complex_se": 0.35631867047810295,
-     "solvent_dg": 23.38685579788761,
-     "solvent_se": 0.11935712931141272,
+     "ddg": -0.4263000345752769,
+     "se": 0.4197102182229226,
+     "complex_dg": 23.15830729141185,
+     "complex_se": 0.4097045558917586,
+     "solvent_dg": 23.58460732598713,
+     "solvent_se": 0.09109799208692902,
      "windows": {
       "complex": 10,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.04840257602466288,
-      "solvent": 0.0842802589206264
+      "complex": 0.04099388095179205,
+      "solvent": 0.08276127683000016
      },
      "lowest_overlap_used": {
-      "complex": 0.0482105700769083,
-      "solvent": 0.08428025892062659
+      "complex": 0.03799100691897231,
+      "solvent": 0.08276127682999997
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 83.34872856420432,
+      "complex": 96.0,
       "solvent": 1000.0
      },
      "backend": {
       "complex": "cupotential",
       "solvent": "cupotential"
      },
-     "warnings": []
+     "warnings": [
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): block 2 of 5 (iterations 400-800 of the production): lambda windows 5 and 6 overlap by 0.027 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
     }
    ],
-   "ddg": 1.5789759475475238,
-   "complex_dg": 24.965831745435132,
-   "solvent_dg": 23.38685579788761,
-   "se": 0.3757780185811089,
+   "ddg": -0.4263000345752769,
+   "complex_dg": 23.15830729141185,
+   "solvent_dg": 23.58460732598713,
+   "se": 0.4197102182229226,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.04840257602466288,
-    "solvent": 0.0842802589206264
+    "complex": 0.04099388095179205,
+    "solvent": 0.08276127683000016
    },
    "lowest_overlap_used": {
-    "complex": 0.0482105700769083,
-    "solvent": 0.08428025892062659
+    "complex": 0.03799100691897231,
+    "solvent": 0.08276127682999997
    },
    "windows": {
     "complex": [
@@ -787,55 +780,57 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -1.3222456865510726,
-     "se": 0.23516562912633351,
-     "complex_dg": -34.46780871610453,
-     "complex_se": 0.22463797501215688,
-     "solvent_dg": -33.14556302955346,
-     "solvent_se": 0.06957480366355205,
+     "ddg": -1.1116014392447184,
+     "se": 0.46084121249841475,
+     "complex_dg": -34.14040287495686,
+     "complex_se": 0.44612484713420014,
+     "solvent_dg": -33.02880143571215,
+     "solvent_se": 0.11553027268424343,
      "windows": {
       "complex": 10,
-      "solvent": 10
+      "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.04104142650710639,
-      "solvent": 0.08591721165805898
+      "complex": 0.04264089385273781,
+      "solvent": 0.05680347060887428
      },
      "lowest_overlap_used": {
-      "complex": 0.040573829443050824,
-      "solvent": 0.08578794715672461
+      "complex": 0.0458153822840621,
+      "solvent": 0.05677493331461506
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 286.0,
+      "complex": 84.0,
       "solvent": 1000.0
      },
      "backend": {
       "complex": "cupotential",
       "solvent": "cupotential"
      },
-     "warnings": []
+     "warnings": [
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (1; their estimates are shown in analysis.png and rest on too little overlap): block 3 of 5 (iterations 800-1200 of the production): lambda windows 5 and 6 overlap by 0.029 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
     }
    ],
-   "ddg": -1.3222456865510726,
-   "complex_dg": -34.46780871610453,
-   "solvent_dg": -33.14556302955346,
-   "se": 0.23516562912633351,
+   "ddg": -1.1116014392447184,
+   "complex_dg": -34.14040287495686,
+   "solvent_dg": -33.02880143571215,
+   "se": 0.46084121249841475,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.04104142650710639,
-    "solvent": 0.08591721165805898
+    "complex": 0.04264089385273781,
+    "solvent": 0.05680347060887428
    },
    "lowest_overlap_used": {
-    "complex": 0.040573829443050824,
-    "solvent": 0.08578794715672461
+    "complex": 0.0458153822840621,
+    "solvent": 0.05677493331461506
    },
    "windows": {
     "complex": [
      10
     ],
     "solvent": [
-     10
+     9
     ]
    },
    "backend": {
@@ -860,48 +855,52 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -0.25491595536798806,
-     "se": 0.7244474714891108,
-     "complex_dg": 13.548767233494594,
-     "complex_se": 0.7158227201147249,
-     "solvent_dg": 13.803683188862582,
-     "solvent_se": 0.11145390219513289,
+     "ddg": -1.1168859147971366,
+     "se": 0.37174552582279063,
+     "complex_dg": 12.737237630882124,
+     "complex_se": 0.3583008704027679,
+     "solvent_dg": 13.854123545679261,
+     "solvent_se": 0.09907180344518816,
      "windows": {
       "complex": 10,
       "solvent": 10
      },
      "lowest_overlap": {
-      "complex": 0.07490699524964206,
-      "solvent": 0.089328001709836
+      "complex": 0.04694646492588125,
+      "solvent": 0.08791799391218418
      },
      "lowest_overlap_used": {
-      "complex": 0.06425464086482392,
-      "solvent": 0.08932800170983685
+      "complex": 0.03594740136883125,
+      "solvent": 0.0879029499851602
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 53.0,
+      "complex": 36.0,
       "solvent": 1000.0
      },
      "backend": {
       "complex": "cupotential",
       "solvent": "cupotential"
      },
-     "warnings": []
+     "warnings": [
+      "complex: few independent samples: lambda window 1 (morph stage) has 36 and gives MBAR 36 samples (its energy difference to the next window is correlated over 55 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)",
+      "complex: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 1 keeps 3 sample(s) there; 4 are needed for an estimate",
+      "complex: parts of the production whose lambda windows overlap below the level of a reliable estimate (3; their estimates are shown in analysis.png and rest on too little overlap): forward point 0.10 (iterations 0-200 of the production): lambda windows 5 and 6 overlap by 0.022 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; forward point 0.20 (iterations 0-400 of the production): lambda windows 5 and 6 overlap by 0.019 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate; block 1 of 5 (iterations 0-400 of the production): lambda windows 5 and 6 overlap by 0.019 among these samples, below analysis.min_overlap (0.03), the level of a reliable estimate"
+     ]
     }
    ],
-   "ddg": -0.25491595536798806,
-   "complex_dg": 13.548767233494594,
-   "solvent_dg": 13.803683188862582,
-   "se": 0.7244474714891108,
+   "ddg": -1.1168859147971366,
+   "complex_dg": 12.737237630882124,
+   "solvent_dg": 13.854123545679261,
+   "se": 0.37174552582279063,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.07490699524964206,
-    "solvent": 0.089328001709836
+    "complex": 0.04694646492588125,
+    "solvent": 0.08791799391218418
    },
    "lowest_overlap_used": {
-    "complex": 0.06425464086482392,
-    "solvent": 0.08932800170983685
+    "complex": 0.03594740136883125,
+    "solvent": 0.0879029499851602
    },
    "windows": {
     "complex": [
@@ -933,27 +932,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -1.5187331024202482,
-     "se": 0.43961746056851086,
-     "complex_dg": -34.6305797762319,
-     "complex_se": 0.43324769476730324,
-     "solvent_dg": -33.11184667381165,
-     "solvent_se": 0.0745650495575768,
+     "ddg": -0.10922693780236696,
+     "se": 0.19413111781608597,
+     "complex_dg": -33.47589639219085,
+     "complex_se": 0.18084126606645126,
+     "solvent_dg": -33.36666945438848,
+     "solvent_se": 0.07059268653342238,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.09533949802303392,
-      "solvent": 0.12418318495207518
+      "complex": 0.10125731010426056,
+      "solvent": 0.13208943663185974
      },
      "lowest_overlap_used": {
-      "complex": 0.09365429257393691,
-      "solvent": 0.12418318495207499
+      "complex": 0.09645714149132553,
+      "solvent": 0.13146278726531926
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 60.63495154472092,
+      "complex": 182.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -967,18 +966,18 @@
      ]
     }
    ],
-   "ddg": -1.5187331024202482,
-   "complex_dg": -34.6305797762319,
-   "solvent_dg": -33.11184667381165,
-   "se": 0.43961746056851086,
+   "ddg": -0.10922693780236696,
+   "complex_dg": -33.47589639219085,
+   "solvent_dg": -33.36666945438848,
+   "se": 0.19413111781608597,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.09533949802303392,
-    "solvent": 0.12418318495207518
+    "complex": 0.10125731010426056,
+    "solvent": 0.13208943663185974
    },
    "lowest_overlap_used": {
-    "complex": 0.09365429257393691,
-    "solvent": 0.12418318495207499
+    "complex": 0.09645714149132553,
+    "solvent": 0.13146278726531926
    },
    "windows": {
     "complex": [
@@ -1010,27 +1009,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 0.3009201234889444,
-     "se": 0.431022134810199,
-     "complex_dg": -22.621713120134263,
-     "complex_se": 0.4056349462232864,
-     "solvent_dg": -22.922633243623206,
-     "solvent_se": 0.14574076677022435,
+     "ddg": 1.2279225003444296,
+     "se": 0.44183502611440784,
+     "complex_dg": -21.796294547831668,
+     "complex_se": 0.4229095705469257,
+     "solvent_dg": -23.024217048176098,
+     "solvent_se": 0.12792843875125773,
      "windows": {
       "complex": 10,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.0773513319291966,
-      "solvent": 0.05324620621261671
+      "complex": 0.07632130100199057,
+      "solvent": 0.05195092958988853
      },
      "lowest_overlap_used": {
-      "complex": 0.06626805242125501,
-      "solvent": 0.053246206212616616
+      "complex": 0.07600611472905452,
+      "solvent": 0.05195092958988855
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 143.0,
+      "complex": 182.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -1040,18 +1039,18 @@
      "warnings": []
     }
    ],
-   "ddg": 0.3009201234889444,
-   "complex_dg": -22.621713120134263,
-   "solvent_dg": -22.922633243623206,
-   "se": 0.431022134810199,
+   "ddg": 1.2279225003444296,
+   "complex_dg": -21.796294547831668,
+   "solvent_dg": -23.024217048176098,
+   "se": 0.44183502611440784,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.0773513319291966,
-    "solvent": 0.05324620621261671
+    "complex": 0.07632130100199057,
+    "solvent": 0.05195092958988853
    },
    "lowest_overlap_used": {
-    "complex": 0.06626805242125501,
-    "solvent": 0.053246206212616616
+    "complex": 0.07600611472905452,
+    "solvent": 0.05195092958988855
    },
    "windows": {
     "complex": [
@@ -1083,27 +1082,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -0.6148585295250888,
-     "se": 0.4050790686889195,
-     "complex_dg": -49.08009808244619,
-     "complex_se": 0.3866556309360544,
-     "solvent_dg": -48.465239552921105,
-     "solvent_se": 0.12077447973526552,
+     "ddg": -0.8813940561439694,
+     "se": 0.29379164855049617,
+     "complex_dg": -48.86215110737275,
+     "complex_se": 0.27397694056204275,
+     "solvent_dg": -47.980757051228785,
+     "solvent_se": 0.10606681289772571,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.07969568334717393,
-      "solvent": 0.14800169234326704
+      "complex": 0.08913830702315294,
+      "solvent": 0.14890672004159622
      },
      "lowest_overlap_used": {
-      "complex": 0.08913109354859612,
-      "solvent": 0.14800169234326727
+      "complex": 0.09200318588145305,
+      "solvent": 0.14890672004159683
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 87.0,
+      "complex": 167.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -1117,18 +1116,18 @@
      ]
     }
    ],
-   "ddg": -0.6148585295250888,
-   "complex_dg": -49.08009808244619,
-   "solvent_dg": -48.465239552921105,
-   "se": 0.4050790686889195,
+   "ddg": -0.8813940561439694,
+   "complex_dg": -48.86215110737275,
+   "solvent_dg": -47.980757051228785,
+   "se": 0.29379164855049617,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.07969568334717393,
-    "solvent": 0.14800169234326704
+    "complex": 0.08913830702315294,
+    "solvent": 0.14890672004159622
    },
    "lowest_overlap_used": {
-    "complex": 0.08913109354859612,
-    "solvent": 0.14800169234326727
+    "complex": 0.09200318588145305,
+    "solvent": 0.14890672004159683
    },
    "windows": {
     "complex": [
@@ -1160,28 +1159,28 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 1.396479840289191,
-     "se": 0.42028366072762335,
-     "complex_dg": -10.525146825832882,
-     "complex_se": 0.3771211083373623,
-     "solvent_dg": -11.921626666122073,
-     "solvent_se": 0.1855209560157868,
+     "ddg": 0.25533145358204073,
+     "se": 0.3739143917748067,
+     "complex_dg": -11.553234676117258,
+     "complex_se": 0.2474977437643273,
+     "solvent_dg": -11.808566129699297,
+     "solvent_se": 0.2802799300839983,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.07960791913397637,
-      "solvent": 0.1441855189923608
+      "complex": 0.08878168161635094,
+      "solvent": 0.14270785130886454
      },
      "lowest_overlap_used": {
-      "complex": 0.07844255766855096,
-      "solvent": 0.14346438757364596
+      "complex": 0.08798968805556077,
+      "solvent": 0.14270032705385463
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 58.0,
-      "solvent": 200.0
+      "complex": 154.0,
+      "solvent": 80.0
      },
      "backend": {
       "complex": "cupotential",
@@ -1190,18 +1189,18 @@
      "warnings": []
     }
    ],
-   "ddg": 1.396479840289191,
-   "complex_dg": -10.525146825832882,
-   "solvent_dg": -11.921626666122073,
-   "se": 0.42028366072762335,
+   "ddg": 0.25533145358204073,
+   "complex_dg": -11.553234676117258,
+   "solvent_dg": -11.808566129699297,
+   "se": 0.3739143917748067,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.07960791913397637,
-    "solvent": 0.1441855189923608
+    "complex": 0.08878168161635094,
+    "solvent": 0.14270785130886454
    },
    "lowest_overlap_used": {
-    "complex": 0.07844255766855096,
-    "solvent": 0.14346438757364596
+    "complex": 0.08798968805556077,
+    "solvent": 0.14270032705385463
    },
    "windows": {
     "complex": [
@@ -1233,27 +1232,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 2.1358662234209866,
-     "se": 0.34889201156413757,
-     "complex_dg": -3.2468679578843007,
-     "complex_se": 0.34241562851152463,
-     "solvent_dg": -5.382734181305287,
-     "solvent_se": 0.06691168122478959,
+     "ddg": 0.8135474352746176,
+     "se": 0.32433026189391007,
+     "complex_dg": -4.515212545916833,
+     "complex_se": 0.31399580373582603,
+     "solvent_dg": -5.328759981191451,
+     "solvent_se": 0.08122040394177402,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.058938506070272255,
-      "solvent": 0.08614439800419833
+      "complex": 0.06107154539142845,
+      "solvent": 0.08607393323235808
      },
      "lowest_overlap_used": {
-      "complex": 0.057845624053416346,
-      "solvent": 0.09016295611774386
+      "complex": 0.06020023883976998,
+      "solvent": 0.08607393323235804
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 200.0,
+      "complex": 118.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -1263,18 +1262,18 @@
      "warnings": []
     }
    ],
-   "ddg": 2.1358662234209866,
-   "complex_dg": -3.2468679578843007,
-   "solvent_dg": -5.382734181305287,
-   "se": 0.34889201156413757,
+   "ddg": 0.8135474352746176,
+   "complex_dg": -4.515212545916833,
+   "solvent_dg": -5.328759981191451,
+   "se": 0.32433026189391007,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.058938506070272255,
-    "solvent": 0.08614439800419833
+    "complex": 0.06107154539142845,
+    "solvent": 0.08607393323235808
    },
    "lowest_overlap_used": {
-    "complex": 0.057845624053416346,
-    "solvent": 0.09016295611774386
+    "complex": 0.06020023883976998,
+    "solvent": 0.08607393323235804
    },
    "windows": {
     "complex": [
@@ -1306,27 +1305,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 0.7501815112956844,
-     "se": 0.4305101210669112,
-     "complex_dg": 11.021031780764124,
-     "complex_se": 0.4072413690648904,
-     "solvent_dg": 10.27085026946844,
-     "solvent_se": 0.13961888003848288,
+     "ddg": 0.006942453609166914,
+     "se": 0.24005429937859027,
+     "complex_dg": 10.458358903932218,
+     "complex_se": 0.22512651077207543,
+     "solvent_dg": 10.451416450323052,
+     "solvent_se": 0.08333139143045944,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.09750106299672841,
-      "solvent": 0.21982932101453015
+      "complex": 0.11261486210888322,
+      "solvent": 0.21073179205208234
      },
      "lowest_overlap_used": {
-      "complex": 0.09359985118409266,
-      "solvent": 0.21832241373111255
+      "complex": 0.11087727934899583,
+      "solvent": 0.21073179205208245
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 200.0,
+      "complex": 286.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -1336,18 +1335,18 @@
      "warnings": []
     }
    ],
-   "ddg": 0.7501815112956844,
-   "complex_dg": 11.021031780764124,
-   "solvent_dg": 10.27085026946844,
-   "se": 0.4305101210669112,
+   "ddg": 0.006942453609166914,
+   "complex_dg": 10.458358903932218,
+   "solvent_dg": 10.451416450323052,
+   "se": 0.24005429937859027,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.09750106299672841,
-    "solvent": 0.21982932101453015
+    "complex": 0.11261486210888322,
+    "solvent": 0.21073179205208234
    },
    "lowest_overlap_used": {
-    "complex": 0.09359985118409266,
-    "solvent": 0.21832241373111255
+    "complex": 0.11087727934899583,
+    "solvent": 0.21073179205208245
    },
    "windows": {
     "complex": [
@@ -1379,27 +1378,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 1.451840751397967,
-     "se": 0.33449430105690514,
-     "complex_dg": 17.665887691364578,
-     "complex_se": 0.32960483746420005,
-     "solvent_dg": 16.21404693996661,
-     "solvent_se": 0.056983230513421516,
+     "ddg": 0.5309719280804881,
+     "se": 0.19255416477741577,
+     "complex_dg": 16.733259942523787,
+     "complex_se": 0.18522171602555412,
+     "solvent_dg": 16.202288014443297,
+     "solvent_se": 0.052631001184446156,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.10087127517094757,
-      "solvent": 0.14739055236763116
+      "complex": 0.09619029749115789,
+      "solvent": 0.15206277168014484
      },
      "lowest_overlap_used": {
-      "complex": 0.0928795050054959,
-      "solvent": 0.14776321468520628
+      "complex": 0.09091122540316504,
+      "solvent": 0.1520243129011423
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 67.0,
+      "complex": 286.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -1409,18 +1408,18 @@
      "warnings": []
     }
    ],
-   "ddg": 1.451840751397967,
-   "complex_dg": 17.665887691364578,
-   "solvent_dg": 16.21404693996661,
-   "se": 0.33449430105690514,
+   "ddg": 0.5309719280804881,
+   "complex_dg": 16.733259942523787,
+   "solvent_dg": 16.202288014443297,
+   "se": 0.19255416477741577,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.10087127517094757,
-    "solvent": 0.14739055236763116
+    "complex": 0.09619029749115789,
+    "solvent": 0.15206277168014484
    },
    "lowest_overlap_used": {
-    "complex": 0.0928795050054959,
-    "solvent": 0.14776321468520628
+    "complex": 0.09091122540316504,
+    "solvent": 0.1520243129011423
    },
    "windows": {
     "complex": [
@@ -1452,27 +1451,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -0.08374529199116956,
-     "se": 0.22882192315807767,
-     "complex_dg": 6.220621965791634,
-     "complex_se": 0.22566296316925497,
-     "solvent_dg": 6.304367257782803,
-     "solvent_se": 0.03789062643230749,
+     "ddg": -0.19094998339919164,
+     "se": 0.13888291440534112,
+     "complex_dg": 6.090769782330303,
+     "complex_se": 0.12526476452397922,
+     "solvent_dg": 6.281719765729495,
+     "solvent_se": 0.05997668449050307,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.0762263121297129,
-      "solvent": 0.12619216796399582
+      "complex": 0.07904125149578752,
+      "solvent": 0.12418553399472983
      },
      "lowest_overlap_used": {
-      "complex": 0.08098385960500298,
-      "solvent": 0.12607967451742721
+      "complex": 0.0757156922904786,
+      "solvent": 0.12416790049035831
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 154.0,
+      "complex": 200.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -1482,18 +1481,18 @@
      "warnings": []
     }
    ],
-   "ddg": -0.08374529199116956,
-   "complex_dg": 6.220621965791634,
-   "solvent_dg": 6.304367257782803,
-   "se": 0.22882192315807767,
+   "ddg": -0.19094998339919164,
+   "complex_dg": 6.090769782330303,
+   "solvent_dg": 6.281719765729495,
+   "se": 0.13888291440534112,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.0762263121297129,
-    "solvent": 0.12619216796399582
+    "complex": 0.07904125149578752,
+    "solvent": 0.12418553399472983
    },
    "lowest_overlap_used": {
-    "complex": 0.08098385960500298,
-    "solvent": 0.12607967451742721
+    "complex": 0.0757156922904786,
+    "solvent": 0.12416790049035831
    },
    "windows": {
     "complex": [
@@ -1525,27 +1524,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": -0.997267798282167,
-     "se": 0.21909350187663498,
-     "complex_dg": -4.813394858785643,
-     "complex_se": 0.21136040930516908,
-     "solvent_dg": -3.816127060503476,
-     "solvent_se": 0.05769523327726866,
+     "ddg": -1.2084764010222326,
+     "se": 0.24334254263281282,
+     "complex_dg": -4.955063513273993,
+     "complex_se": 0.23896689603277815,
+     "solvent_dg": -3.7465871122517607,
+     "solvent_se": 0.045939260501903036,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.10884748845221445,
-      "solvent": 0.15994087757475026
+      "complex": 0.11956471131265745,
+      "solvent": 0.16106125146168115
      },
      "lowest_overlap_used": {
-      "complex": 0.10718926922980147,
-      "solvent": 0.1599408775747502
+      "complex": 0.11787811921243482,
+      "solvent": 0.16106125146168035
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 134.0,
+      "complex": 133.91096345529562,
       "solvent": 1000.0
      },
      "backend": {
@@ -1555,18 +1554,18 @@
      "warnings": []
     }
    ],
-   "ddg": -0.997267798282167,
-   "complex_dg": -4.813394858785643,
-   "solvent_dg": -3.816127060503476,
-   "se": 0.21909350187663498,
+   "ddg": -1.2084764010222326,
+   "complex_dg": -4.955063513273993,
+   "solvent_dg": -3.7465871122517607,
+   "se": 0.24334254263281282,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.10884748845221445,
-    "solvent": 0.15994087757475026
+    "complex": 0.11956471131265745,
+    "solvent": 0.16106125146168115
    },
    "lowest_overlap_used": {
-    "complex": 0.10718926922980147,
-    "solvent": 0.1599408775747502
+    "complex": 0.11787811921243482,
+    "solvent": 0.16106125146168035
    },
    "windows": {
     "complex": [
@@ -1598,27 +1597,27 @@
    "repeats": [
     {
      "repeat": 0,
-     "ddg": 0.3542340196774183,
-     "se": 0.1745751745342592,
-     "complex_dg": 4.910023851589974,
-     "complex_se": 0.16736727192086204,
-     "solvent_dg": 4.555789831912556,
-     "solvent_se": 0.049645622701657045,
+     "ddg": 0.09699551935622021,
+     "se": 0.24522655121733092,
+     "complex_dg": 4.7211897614709795,
+     "complex_se": 0.2362740845998083,
+     "solvent_dg": 4.624194242114759,
+     "solvent_se": 0.06565529962210856,
      "windows": {
       "complex": 9,
       "solvent": 9
      },
      "lowest_overlap": {
-      "complex": 0.07949175930143411,
-      "solvent": 0.13961892704792966
+      "complex": 0.073296434264676,
+      "solvent": 0.13786597971377954
      },
      "lowest_overlap_used": {
-      "complex": 0.08041733447820874,
-      "solvent": 0.14167572935142925
+      "complex": 0.07292901844039945,
+      "solvent": 0.13786597971378037
      },
      "not_reliable": [],
      "fewest_independent_samples": {
-      "complex": 250.0,
+      "complex": 286.0,
       "solvent": 1000.0
      },
      "backend": {
@@ -1628,18 +1627,18 @@
      "warnings": []
     }
    ],
-   "ddg": 0.3542340196774183,
-   "complex_dg": 4.910023851589974,
-   "solvent_dg": 4.555789831912556,
-   "se": 0.1745751745342592,
+   "ddg": 0.09699551935622021,
+   "complex_dg": 4.7211897614709795,
+   "solvent_dg": 4.624194242114759,
+   "se": 0.24522655121733092,
    "not_reliable": [],
    "lowest_overlap": {
-    "complex": 0.07949175930143411,
-    "solvent": 0.13961892704792966
+    "complex": 0.073296434264676,
+    "solvent": 0.13786597971377954
    },
    "lowest_overlap_used": {
-    "complex": 0.08041733447820874,
-    "solvent": 0.14167572935142925
+    "complex": 0.07292901844039945,
+    "solvent": 0.13786597971378037
    },
    "windows": {
     "complex": [
@@ -1691,8 +1690,8 @@
     "jmc_27",
     "ejm_46"
    ],
-   "sum_kcal_mol": -0.16997001753061447,
-   "se_kcal_mol": 0.6752585292829951
+   "sum_kcal_mol": 0.5149689218002623,
+   "se_kcal_mol": 0.5057502070279692
   },
   {
    "ligands": [
@@ -1702,8 +1701,8 @@
     "ejm_46",
     "jmc_30"
    ],
-   "sum_kcal_mol": -0.14237075348870343,
-   "se_kcal_mol": 0.6542654877238974
+   "sum_kcal_mol": 0.3965014237954996,
+   "se_kcal_mol": 0.48305619902237446
   },
   {
    "ligands": [
@@ -1712,8 +1711,8 @@
     "ejm_49",
     "ejm_31"
    ],
-   "sum_kcal_mol": -0.521840826989421,
-   "se_kcal_mol": 0.912438734321807
+   "sum_kcal_mol": -0.07349008787209815,
+   "se_kcal_mol": 0.7892631540710257
   },
   {
    "ligands": [
@@ -1722,8 +1721,8 @@
     "ejm_49",
     "ejm_31"
    ],
-   "sum_kcal_mol": 0.27147368334530564,
-   "se_kcal_mol": 0.9504938399794666
+   "sum_kcal_mol": 0.5797373328808411,
+   "se_kcal_mol": 0.6641350292340747
   },
   {
    "ligands": [
@@ -1732,8 +1731,8 @@
     "ejm_49",
     "ejm_31"
    ],
-   "sum_kcal_mol": -1.0413941030974456,
-   "se_kcal_mol": 0.9605859467202826
+   "sum_kcal_mol": -0.3112751664960127,
+   "se_kcal_mol": 0.959933318908187
   },
   {
    "ligands": [
@@ -1742,8 +1741,8 @@
     "ejm_55",
     "ejm_50"
    ],
-   "sum_kcal_mol": -0.8430330002153927,
-   "se_kcal_mol": 0.9099413294493193
+   "sum_kcal_mol": -0.36791042599062046,
+   "se_kcal_mol": 0.7198210660090424
   },
   {
    "ligands": [
@@ -1752,8 +1751,8 @@
     "ejm_44",
     "ejm_31"
    ],
-   "sum_kcal_mol": 0.18554088722744944,
-   "se_kcal_mol": 0.8623229224791997
+   "sum_kcal_mol": 0.1830195637556687,
+   "se_kcal_mol": 0.6026556444474414
   }
  ],
  "dg": {
@@ -1778,68 +1777,68 @@
   ],
   "values": {
    "jmc_23": {
-    "dg": -11.832104211355414,
-    "se": 0.25193519497515005
+    "dg": -10.850528449356737,
+    "se": 0.20742620121693467
    },
    "ejm_47": {
-    "dg": -10.70788458846563,
-    "se": 0.2624110811591275
+    "dg": -9.390122245401246,
+    "se": 0.2508628822266398
    },
    "ejm_49": {
-    "dg": -8.445779828960195,
-    "se": 0.24330682713613386
+    "dg": -8.58196883015038,
+    "se": 0.29191405928256037
    },
    "ejm_31": {
-    "dg": -9.7303955605797,
-    "se": 0.13802749771694817
+    "dg": -9.861562330186233,
+    "se": 0.11803057953269926
    },
    "ejm_45": {
-    "dg": -8.989107662499842,
-    "se": 0.3029715314185531
+    "dg": -10.395695163726634,
+    "se": 0.27006406022068513
    },
    "ejm_44": {
-    "dg": -7.3327439731487285,
-    "se": 0.375570106589771
+    "dg": -6.302512116288603,
+    "se": 0.2490961756649476
    },
    "ejm_43": {
-    "dg": -8.489098995828318,
-    "se": 0.30487775413985263
+    "dg": -8.052726465867286,
+    "se": 0.26997742866665747
    },
    "ejm_50": {
-    "dg": -9.057803970224217,
-    "se": 0.23072288877387082
+    "dg": -9.5895402791086,
+    "se": 0.17223228739226054
    },
    "ejm_42": {
-    "dg": -10.126329907938235,
-    "se": 0.22506648344393046
+    "dg": -9.563328198034899,
+    "se": 0.15635420099874028
    },
    "ejm_55": {
-    "dg": -9.77421504683906,
-    "se": 0.3639332652137707
+    "dg": -10.512697681511854,
+    "se": 0.2841081557444579
    },
    "ejm_48": {
-    "dg": -9.107544605070627,
-    "se": 0.29879460739989977
+    "dg": -8.562881268237888,
+    "se": 0.3547569572602213
    },
    "ejm_54": {
-    "dg": -8.4870543518895,
-    "se": 0.39785584680600694
+    "dg": -10.325015131027266,
+    "se": 0.3450254454866883
    },
    "jmc_28": {
-    "dg": -10.400041929555162,
-    "se": 0.2780569831362445
+    "dg": -10.27693512011069,
+    "se": 0.2397685800808528
    },
    "jmc_27": {
-    "dg": -10.997151644678663,
-    "se": 0.2786550455261281
+    "dg": -11.005928353002009,
+    "se": 0.21008773155644517
    },
    "jmc_30": {
-    "dg": -11.405795165205257,
-    "se": 0.2530247005563757
+    "dg": -11.417341172776853,
+    "se": 0.24670928222583058
    },
    "ejm_46": {
-    "dg": -11.05694855776145,
-    "se": 0.22699536937532866
+    "dg": -11.25121719521281,
+    "se": 0.19408401608362177
    }
   }
  },
