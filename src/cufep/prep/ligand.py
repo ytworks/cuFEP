@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -96,10 +99,35 @@ def load_ligands(sdf_path: str | Path) -> list[Ligand]:
     return ligands
 
 
+#: the one thread AmberTools' sqm runs AM1 with: its OpenMP sums are not done in a fixed order with more, and the
+#: charges of one input then change from one calculation to the next (TYK2, 2026-11-28: jmc_23, ejm_44, ejm_49 and
+#: jmc_30 by 5e-4 to 1e-3 e per atom between two preparations, and among three calculations on 128 threads; on one
+#: thread the same in every calculation)
+SQM_THREADS = "1"
+_sqm_environment = threading.Lock()
+
+
+@contextmanager
+def _sqm_threads():
+    """``OMP_NUM_THREADS`` of this process set to :data:`SQM_THREADS` while AmberTools runs (OpenFF starts antechamber
+    and sqm with the environment of this process), then put back; one charge calculation at a time."""
+    with _sqm_environment:
+        before = os.environ.get("OMP_NUM_THREADS")
+        os.environ["OMP_NUM_THREADS"] = SQM_THREADS
+        try:
+            yield
+        finally:
+            if before is None:
+                os.environ.pop("OMP_NUM_THREADS", None)
+            else:
+                os.environ["OMP_NUM_THREADS"] = before
+
+
 def assign_partial_charges(ligand: Ligand, method: str = "am1bcc", cache_dir: str | Path | None = None) -> None:
     """Assign partial charges in place.
 
-    ``am1bcc``       AM1-BCC with AmberTools sqm on the input conformer (OpenFE's default).
+    ``am1bcc``       AM1-BCC with AmberTools sqm on the input conformer (OpenFE's default), sqm on one thread
+                     (:data:`SQM_THREADS`), so that one input always gives the same charges.
     ``am1bcc-nagl``  the OpenFF NAGL graph network trained to reproduce AM1-BCC (fast).
     """
     from openff.units import unit as off_unit
@@ -118,8 +146,9 @@ def assign_partial_charges(ligand: Ligand, method: str = "am1bcc", cache_dir: st
     mol = ligand.offmol
     if method == "am1bcc":
         from openff.toolkit.utils import AmberToolsToolkitWrapper
-        mol.assign_partial_charges("am1bcc", use_conformers=mol.conformers,
-                                   toolkit_registry=AmberToolsToolkitWrapper())
+        with _sqm_threads():
+            mol.assign_partial_charges("am1bcc", use_conformers=mol.conformers,
+                                       toolkit_registry=AmberToolsToolkitWrapper())
     elif method == "am1bcc-nagl":
         from openff.toolkit.utils.nagl_wrapper import NAGLToolkitWrapper
         mol.assign_partial_charges(NAGL_DEFAULT_MODEL, toolkit_registry=NAGLToolkitWrapper())

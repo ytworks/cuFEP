@@ -56,7 +56,7 @@ covalent contact or a metal ion within 3 A of the ligand, and warned of a metal 
 | | default |
 |---|---|
 | protein / water / lipids | AMBER ff14SB / TIP3P / Lipid21 |
-| ligand | OpenFF Sage 2.2.1, AM1-BCC charges (AmberTools sqm) on the input conformer |
+| ligand | OpenFF Sage 2.2.1, AM1-BCC charges (AmberTools sqm, on one OpenMP thread so that one input always gives the same charges: on more, sqm sums in no fixed order) on the input conformer |
 | nonbonded | PME, 0.9 nm cutoff, Ewald tolerance 5e-4 |
 | dynamics | Langevin middle integrator, 4 fs, hydrogen mass 3 amu, bonds to hydrogen constrained |
 | ensemble | 298.15 K, 1 bar (isotropic; semi-isotropic with zero surface tension for bilayers) |
