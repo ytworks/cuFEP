@@ -147,7 +147,7 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
         (leg_dir / "result.json").write_text(json.dumps({
             "delta_g": dg, "delta_g_error": 0.3 * 4.184, "n_states": 9, "backend": "openmm", "notes": [],
             "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}},
-            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "run": {"hybrid_version": 2},
+            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "run": {"hybrid_version": _version()},
             "edge": "a~b", "leg": leg, "repeat": 0}))
     summary = analyse_directory(tmp_path)
     edge = summary["edges"][0]
@@ -194,6 +194,13 @@ def _digest_of_the_record(record: dict) -> str:
     return record_digest(record["made_from"])
 
 
+def _version() -> int:
+    """The version of the hybrid of a leg of this version."""
+    from cufep.rbfe.hybrid import HYBRID_VERSION
+
+    return HYBRID_VERSION
+
+
 def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float = 298.15, pressure: float = 1.0,
                 overlap: float = 0.1):
     return {"delta_g": dg_kcal * 4.184, "delta_g_error": None if se_kcal is None else se_kcal * 4.184,
@@ -201,7 +208,7 @@ def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float 
             "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "n_states": 9, "backend": "openmm",
             "notes": [],
             "quality": {"overlap": {"lowest": overlap, "ok": overlap >= 0.03}, "samples": {"counted": 100.0}},
-            "run": {"hybrid_version": 2}}
+            "run": {"hybrid_version": _version()}}
 
 
 def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:

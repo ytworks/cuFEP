@@ -448,6 +448,49 @@ def end_states_heavy(a: dict, b: dict) -> tuple[list, list]:
     return points, bonds
 
 
+def dummy_junctions_of(edge_dir: Path, leg: str) -> list | None:
+    """The mapped atoms of the hybrid of a leg of a prepared edge that carry unmapped atoms of both ligands, whose
+    dummy atoms version 3 of the hybrid gives the terms of Fleck et al. 2021 (:mod:`cufep.rbfe.junction`): a list of
+    their indices in ligand A; None where the prepared systems of the edge cannot be read. They follow from the two
+    ligands and the mapping of the leg: read on the end states of the solvent leg where the leg has its mapping."""
+    import zipfile
+
+    import openmm as mm
+
+    from cufep.rbfe.junction import JunctionError, find_junctions
+    from cufep.rbfe.prep import load_end_states
+
+    try:
+        info = json.loads((Path(edge_dir) / "prep" / "prep.json").read_text())
+        of = "solvent" if info["legs"]["solvent"]["mapping"] == info["legs"][leg]["mapping"] else leg
+        end = load_end_states(edge_dir, of)
+    except (OSError, EOFError, zipfile.BadZipFile, KeyError, ValueError, mm.OpenMMException, WorkflowError):
+        return None
+    a, b, core_map = end["a"], end["b"], end["core_map"]
+    set_a, set_b = set(a["ligand"]), set(b["ligand"])
+    of_b = {j: i for i, j in core_map.items()}
+    # B's atoms in A's numbers where mapped, its unmapped atoms after them (as the hybrid numbers them)
+    n = max(set_a) + 1
+    to_h = {j: of_b.get(j, n + k) for k, j in enumerate(sorted(set_b))}
+
+    def graph(topology, atoms, number):
+        out = {number(i): set() for i in atoms}
+        for x, y in topology.bonds():
+            if x.index in atoms and y.index in atoms:
+                out[number(x.index)].add(number(y.index))
+                out[number(y.index)].add(number(x.index))
+        return out
+
+    graph_a, graph_b = graph(a["topology"], set_a, int), graph(b["topology"], set_b, to_h.__getitem__)
+    core = set(core_map)
+    unique_a, unique_b = set_a - core, {to_h[j] for j in set_b - set(core_map.values())}
+    try:
+        atoms = {j.atom for j in find_junctions(graph_a, core, unique_a, graph_b, unique_b)}
+    except JunctionError:
+        return None
+    return sorted(atoms)
+
+
 def terms_left_unscaled_by_version_1(edge_dir: Path, leg: str, region: str, inputs=None) -> int | None:
     """The terms of B of the proper torsions of the core of the hybrid of a leg of a prepared edge that version 1 of
     the hybrid left unscaled with REST2 (:func:`cufep.rbfe.hybrid.terms_version_1_left_unscaled`), the hot region of
@@ -888,7 +931,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
 
     run_record = {"edge": job.edge, "leg": job.leg, "repeat": job.repeat, "backend": backend_name,
                   "timestep_fs": timestep_fs, "notes": list(run.notes), "origin_not_recorded": [],
-                  # which hybrid System the leg ran (cufep.rbfe.run.legs_of_version_1; second review of PR #19)
+                  # which hybrid System the leg ran (cufep.rbfe.run.legs_of_an_earlier_version; second review of PR #19)
                   "hybrid_version": HYBRID_VERSION,
                   # the prepared systems of the edge, which the legs of one ddG must share (edge_result)
                   "prepared_systems_sha256": record_digest(built.info.get("made_from")),

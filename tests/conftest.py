@@ -321,7 +321,7 @@ class _Ligand:
         self.offmol = offmol
 
 
-def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
+def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None, smiles_a: str = TOLUENE):
     """Two molecules with a 3D pose each, B placed onto A on the mapped atoms, and Gasteiger charges."""
     from openff.toolkit import Molecule
     from rdkit import Chem
@@ -329,7 +329,7 @@ def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
     from rdkit.Geometry import Point3D
 
     core_b = RING_MAP if core_b is None else core_b
-    a = Chem.AddHs(Chem.MolFromSmiles(TOLUENE))
+    a = Chem.AddHs(Chem.MolFromSmiles(smiles_a))
     AllChem.EmbedMolecule(a, randomSeed=11)
     b = Chem.AddHs(Chem.MolFromSmiles(smiles_b))
     xyz_a = a.GetConformer().GetPositions()
@@ -345,9 +345,10 @@ def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
     return out
 
 
-def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4):
-    """A relative transformation for the tests: toluene (A) into phenol (B, or ``smiles_b``) in a box of water,
-    Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
+def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4,
+                      smiles_a: str = TOLUENE):
+    """A relative transformation for the tests: toluene (A, or ``smiles_a``) into phenol (B, or ``smiles_b``) in a box
+    of water, Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
     Returns (system A, positions A, ligand A, system B, positions B, ligand B, core map, box), indices of the
     Systems, positions in nm."""
     import openmm as mm
@@ -356,7 +357,7 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
 
     from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
 
-    lig_a, lig_b = _molecules(smiles_b, core_b)
+    lig_a, lig_b = _molecules(smiles_b, core_b, smiles_a)
     # each end state with its own ligand alone, as cufep.rbfe.prep builds them
     field = make_forcefield(ForceFieldSpec(), [lig_a])
     field_b = make_forcefield(ForceFieldSpec(), [lig_b])

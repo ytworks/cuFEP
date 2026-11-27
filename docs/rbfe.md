@@ -151,7 +151,8 @@ The rules of the HybridTopologyFactory of OpenFE's relative protocol (openfe 1.1
   default lambda functions); the Lennard-Jones of a unique atom goes with the soft-core of Gapsys, Seeliger
   and de Groot (J. Chem. Theory Comput. 2012, 8, 2373), alpha 0.85; charges have no soft-core;
 - a unique atom keeps all its bonded terms at full strength at both ends (a dummy), in both legs alike; the
-  atoms unique to A and those unique to B never interact;
+  atoms unique to A and those unique to B never interact; where a mapped atom carries unique atoms of both
+  ligands, the dummy atoms there have the terms of the next section instead (cuFEP's departure from OpenFE);
 - a pair of core atoms that is an exception of the force field (1-2, 1-3 or 1-4) at one end only, which happens
   only where the atoms between them change (a linker of another length, a ring opened or closed), has its
   charge product and Lennard-Jones interpolated linearly between the exception at that end and the normal pair
@@ -165,6 +166,50 @@ three electrostatic lambdas and REST2 (`spikes/m36`: the plugin gives the differ
 0.037 kT of a System with the charges written in). The Lennard-Jones of the ligand with its surroundings is a
 CustomNonbondedForce on the stock kernels, as in the ABFE, and every pair inside the ligand is computed
 explicitly, without cutoff, as the ABFE computes them (`docs/protocol.md`, "Interactions inside the ligand").
+
+### Dummy atoms where both ligands have unmapped atoms on one atom
+
+The problem. In ejm_42~ejm_54 of TYK2 the carbonyl carbon C17 is mapped and carries the unmapped ethyl of
+ejm_42 (C19) and the unmapped NH-ethyl of ejm_54 (N29). With every term of a dummy kept, the dummy C19 keeps at
+lambda 1 its angle to O18 and its dihedrals X-N16-C17-C19 across the urea C-N bond of ejm_54: when ejm_54 turns
+about that bond, the dummy turns with it against its dihedrals. The torsional barrier of that bond rose from
+53.6 kJ/mol (ejm_54 alone) to 88.4, and the solvent leg (5 ns) never reached the conformer of ejm_54 with the
+hydrogen bond N29-H28...N13 (1.8 to 2.2 A) that the leg of the earlier mapping, and the ABFE of ejm_54, reached
+(`spikes/out/m44`, not tracked). Such an atom is common: 57 of them in the prepared edges of TYK2 and A2A (a ring
+C-H against C-F, C-Cl or C-O, CH3 against CF3, the amide carbonyl, sp3 carbons with another substituent).
+
+The rules, from M. Fleck, M. Wieder and S. Boresch, "Dummy atoms in alchemical free energy calculations",
+J. Chem. Theory Comput. 17, 4403-4419 (2021), quoted in `src/cufep/rbfe/junction.py`. At the end where a ligand
+is absent, its unmapped atoms bonded to the mapped atom X (through one atom each, the dummy bridge atom D) are
+anchored to the mapped neighbours of X alone (the unmapped atoms of the other ligand have no term with them, sec.
+2.4), and the number of those neighbours is the type of the junction:
+
+| mapped neighbours of X | junction (Fleck 2021) | terms of the dummy atoms with mapped atoms other than X |
+|---|---|---|
+| 1 | terminal (sec. 2.3.1) | every angle kept; of the dihedrals Z-P-X-D, those from one atom Z kept, the others deleted |
+| 2 | dual, bond and two angles (sec. 2.3.2) | the two angles P-X-D at 90 degrees with 100 kcal/(mol rad^2); every dihedral D-X-P-Z deleted; dihedrals D'-D-X-P of the deeper dummy atoms to one P only; terms with dummy atoms of two groups at X deleted |
+| 3 | nonplanar triple (sec. 2.3.3) | the three angles P-X-D with 3.55 kcal/(mol rad^2) (the value of its calculations) and equilibrium values adapted to the ligand of that end; every dihedral D-X-P-Z deleted; D'-D-X-P to one P only |
+
+The force constants are CHARMM's, whose angle energy is K (theta - theta0)^2: in OpenMM's (k/2)(theta - theta0)^2
+they are k = 2K. With them the dummy atoms have three nonredundant terms each ("The derivation of eq 2 relies
+crucially on using exactly three, nonredundant degrees of freedom (three bonded energy terms) per dummy atom",
+sec. 2.1.1) and add the same factor to the free energy of both legs. Checked
+(`tests/unit/test_rbfe_hybrid.py`): with the dummy atoms at their minimum, what the hybrid adds to the ligand of
+an end is the same wherever that ligand's atoms are and at every angle of the bonds of X; the earlier hybrid
+added from 24.97 to 59.74 kJ/mol over the angles of the amide C-N bond of N-methylpropanamide into
+1,3-dimethylurea, and 4.6 to 39.4 kJ/mol on ejm_42~ejm_54.
+
+cuFEP's own choices, where the source is silent: improper torsions with D and a mapped atom other than X are
+deleted at a dual and a triple junction (terms beyond the three); the one P or Z that keeps its dihedrals is the
+atom of the lowest index; the adapted angles of a triple junction are those of the direction of D that fits the
+three angles of the force field best, with X and its neighbours where the other ligand has them (Fleck 2021
+minimises the molecule with the dummy at 0.05 kcal/(mol rad^2)); along lambda each changed term goes linearly
+from the force field's term, where its ligand exists, to the dummy's, with the steric lambda of its ligand
+(`lambda_sterics_delete` for A, `lambda_sterics_insert` for B), so that a group has its own geometry wherever
+it interacts fully. A mapped atom with unmapped atoms of one ligand only keeps OpenFE's rule, and an edge
+without such an atom has the System of the earlier version. Legs of an earlier version of the hybrid
+(`run.hybrid_version` below 3) at an edge with such an atom are left out of the analysis, and a run refuses to
+continue them, with the command that computes them anew.
 
 ### Lambda windows
 
