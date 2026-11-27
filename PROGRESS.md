@@ -111,6 +111,16 @@ Open items:
 
 ## Change Log
 
+### 2026-11-28 — [amendment] Why TYK2 moved from 0.86 to 1.10; sqm on one thread; start minimised in the cell
+- What: the hybrids of 08d58d5 and d3e66d1 from one preparation differ only in the intended bond terms of 5 edges;
+  analysing the 08d58d5 samples again gives the same numbers; the default box changes no window energy. The two
+  runs part at the end windows of single legs (jmc_23~jmc_27 complex: pair 0-1 0.50 kcal/mol, stable in each run),
+  spread over side chains 0.4 to 1.2 nm from the ligand (outside REST2's 18 residues). sqm now runs on one thread
+  (4b68109: its charges varied by up to 1e-3 e; effect < 0.01 kcal/mol). d3e66d1: a start moved into the fixed
+  cell of the moves of water is minimised before the walk (A2A 4g~4kU stopped the plugin without it).
+- Why: the owner's requirement that the plugin change speed, not accuracy; remedies for the scatter wait for the owner.
+- Refs: `docs/plans/2026-11-26-rbfe-features-and-benchmarks.md` (2026-11-28), `spikes/out/m48`, `spikes/out/m49`
+
 ### 2026-11-28 — [progress] RBFE: all 22 TYK2 edges on cuPotential (05d3ff0)
 - What: 44 legs on cuPotential, no fallback; pairwise ddG RMSE 1.10 [0.71, 1.36] (08d58d5 0.86 [0.57, 1.03]). With
   only the five changed edges from 05d3ff0: 0.90; only the 17 unchanged: 0.98 (`spikes/out/m47/mix.py`). Solvent legs
