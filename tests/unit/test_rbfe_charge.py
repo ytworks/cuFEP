@@ -7,7 +7,7 @@ import numpy as np
 import openmm as mm
 import openmm.unit as u
 import pytest
-from conftest import build_hybrid_edge, hybrid_edge_topology, potential, reference_context
+from conftest import build_hybrid_edge, hybrid_edge_topology, potential, reference_context, valence_energy
 
 pytestmark = pytest.mark.needs("openff.toolkit", "rdkit", "openmmforcefields", "mdtraj")
 
@@ -62,13 +62,10 @@ def test_the_water_is_the_first_one_far_from_the_solutes_and_becomes_the_ion_of_
 
 
 def test_the_ends_of_a_hybrid_that_changes_the_charge_are_a_and_b_with_the_ion(charged_edge):
-    """At lambda 0 the hybrid with the alchemical water has the energy of System A (with the water) plus that of the
-    dummy atoms (the unique atoms of B), at lambda 1 that of System B with the ion plus that of the unique atoms of A:
-    with the dummies at their minimum, what the hybrid adds is the same wherever the atoms of the end are; its total
-    charge is that of both ends at every lambda; the NonbondedForce, which the plugin replaces, holds only charges of
-    the water (offsets under lambda_electrostatics_core, no Lennard-Jones)."""
-    from test_rbfe_hybrid import _excess_at_the_end, _moved_at_random
-
+    """At lambda 0 the hybrid with the alchemical water has the energy of System A (with the water) plus the bonded
+    terms of the unique atoms of B, at lambda 1 that of System B with the ion plus those of the unique atoms of A; its
+    total charge is that of both ends at every lambda; the NonbondedForce, which the plugin replaces, holds only
+    charges of the water (offsets under lambda_electrostatics_core, no Lennard-Jones)."""
     from cufep.rbfe.hybrid import LAMBDA_ELECTROSTATICS_CORE, make_hybrid_system
     from cufep.rbfe.states import HybridState
 
@@ -76,13 +73,22 @@ def test_the_ends_of_a_hybrid_that_changes_the_charge_are_a_and_b_with_the_ion(c
     hybrid = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, alchemical_water=water)
     assert hybrid.alchemical_water == tuple(sorted(water))
     positions = hybrid.positions
+    h_to_b = {h: j for j, h in hybrid.b_to_hybrid.items()}
     positions_b = np.array([positions[hybrid.b_to_hybrid[j]] for j in range(system_b.getNumParticles())])
-    for x in (0.0, 1.0):
-        excess = _excess_at_the_end(charged_edge[:8], hybrid, x, _moved_at_random(hybrid, x))
-        assert max(excess) - min(excess) < 2e-3, (x, excess)
-    energy_a = potential(reference_context(system_a, positions[: system_a.getNumParticles()], box))
-    energy_b = potential(reference_context(system_b, positions_b, box))
-    assert abs(energy_a - energy_b) > 10.0                                   # kJ/mol: a water is not an ion
+    ctx = reference_context(hybrid.system, positions, box)
+
+    def at(lam: float) -> float:
+        for name, value in HybridState(lam).as_parameters().items():
+            if name in ctx.getParameters():
+                ctx.setParameter(name, value)
+        return potential(ctx)
+
+    expected_a = potential(reference_context(system_a, positions[: system_a.getNumParticles()], box)) \
+        + valence_energy(system_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
+    expected_b = potential(reference_context(system_b, positions_b, box)) \
+        + valence_energy(system_a, hybrid.unique_old, positions[: system_a.getNumParticles()], box)
+    assert at(0.0) == pytest.approx(expected_a, abs=2e-3) and at(1.0) == pytest.approx(expected_b, abs=2e-3)
+    assert abs(expected_a - expected_b) > 10.0                               # kJ/mol: a water is not an ion
     (nb,) = [f for f in hybrid.system.getForces() if isinstance(f, mm.NonbondedForce)]
     assert nb.getParticleParameters(water[0])[2].value_in_unit(u.kilojoule_per_mole) == 0.0
     offsets = [nb.getParticleParameterOffset(k) for k in range(nb.getNumParticleParameterOffsets())]

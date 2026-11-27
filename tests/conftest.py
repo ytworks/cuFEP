@@ -321,7 +321,7 @@ class _Ligand:
         self.offmol = offmol
 
 
-def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None, smiles_a: str = TOLUENE):
+def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
     """Two molecules with a 3D pose each, B placed onto A on the mapped atoms, and Gasteiger charges."""
     from openff.toolkit import Molecule
     from rdkit import Chem
@@ -329,7 +329,7 @@ def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None, smiles_a: str
     from rdkit.Geometry import Point3D
 
     core_b = RING_MAP if core_b is None else core_b
-    a = Chem.AddHs(Chem.MolFromSmiles(smiles_a))
+    a = Chem.AddHs(Chem.MolFromSmiles(TOLUENE))
     AllChem.EmbedMolecule(a, randomSeed=11)
     b = Chem.AddHs(Chem.MolFromSmiles(smiles_b))
     xyz_a = a.GetConformer().GetPositions()
@@ -345,10 +345,9 @@ def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None, smiles_a: str
     return out
 
 
-def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4,
-                      smiles_a: str = TOLUENE):
-    """A relative transformation for the tests: toluene (A, or ``smiles_a``) into phenol (B, or ``smiles_b``) in a box
-    of water, Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
+def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4):
+    """A relative transformation for the tests: toluene (A) into phenol (B, or ``smiles_b``) in a box of water,
+    Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
     Returns (system A, positions A, ligand A, system B, positions B, ligand B, core map, box), indices of the
     Systems, positions in nm."""
     import openmm as mm
@@ -357,7 +356,7 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
 
     from cufep.prep.forcefield import ForceFieldSpec, SystemSpec, create_system, make_forcefield
 
-    lig_a, lig_b = _molecules(smiles_b, core_b, smiles_a)
+    lig_a, lig_b = _molecules(smiles_b, core_b)
     # each end state with its own ligand alone, as cufep.rbfe.prep builds them
     field = make_forcefield(ForceFieldSpec(), [lig_a])
     field_b = make_forcefield(ForceFieldSpec(), [lig_b])
@@ -415,3 +414,37 @@ def hybrid_edge_topology(n_particles: int, ligand: list[int], system, box=None):
             top.addBond(water[0], water[1]), top.addBond(water[0], water[2])
             water = []
     return top
+
+
+def valence_energy(system, atoms, positions, box) -> float:
+    """Energy of the bonds, angles and torsions of ``system`` that have an atom of ``atoms``."""
+    import openmm as mm
+
+    keep = mm.System()
+    for i in range(system.getNumParticles()):
+        keep.addParticle(system.getParticleMass(i))
+    keep.setDefaultPeriodicBoxVectors(*system.getDefaultPeriodicBoxVectors())
+    atoms = set(atoms)
+    for f in system.getForces():
+        if isinstance(f, mm.HarmonicBondForce):
+            g = mm.HarmonicBondForce()
+            for k in range(f.getNumBonds()):
+                i, j, r, kk = f.getBondParameters(k)
+                if {i, j} & atoms:
+                    g.addBond(i, j, r, kk)
+        elif isinstance(f, mm.HarmonicAngleForce):
+            g = mm.HarmonicAngleForce()
+            for k in range(f.getNumAngles()):
+                i, j, m, t, kk = f.getAngleParameters(k)
+                if {i, j, m} & atoms:
+                    g.addAngle(i, j, m, t, kk)
+        elif isinstance(f, mm.PeriodicTorsionForce):
+            g = mm.PeriodicTorsionForce()
+            for k in range(f.getNumTorsions()):
+                i, j, m, n, p, ph, kk = f.getTorsionParameters(k)
+                if {i, j, m, n} & atoms:
+                    g.addTorsion(i, j, m, n, p, ph, kk)
+        else:
+            continue
+        keep.addForce(g)
+    return potential(reference_context(keep, positions, box))

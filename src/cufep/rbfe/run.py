@@ -682,7 +682,7 @@ def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=No
 def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None,
          only_repeats=None) -> dict:
     from cufep.rbfe.leg import EdgeLegJob
-    from cufep.rbfe.prep import hydrogens_the_plugin_cannot_constrain_in, prepare_edge, prepared_edge, set_aside_edge
+    from cufep.rbfe.prep import prepare_edge, prepared_edge
     from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
     from cufep.workflow import record_digest
 
@@ -724,39 +724,21 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     # of the run whose results the directory holds (review of PR #17)
     # (every edge, so that the refusal names all the edges to prepare again: one at a time, the run that prepared the
     # first was refused for the next; fifth review of PR #19)
-    refused, anew = [], set()
+    refused = []
     for a, b in edges:
         try:
-            info = prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
+            prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
         except WorkflowError as exc:
             refused.append((edge_name(a, b), str(exc)))
-            continue
-        # a prepared edge whose mapping leaves hydrogens the integrator of the cuPotential plugin cannot constrain
-        # (prepared before the mapping for the plugin; the owner, 2026-11-26: every leg on the plugin) is prepared
-        # again where none of its legs has a result; one with results is refused, with the way to prepare it again
-        if info is not None and rcfg.backend.name == "cupotential" and (a, b) in selected:
-            problems = hydrogens_the_plugin_cannot_constrain_in(out_dir / "edges" / edge_name(a, b), info,
-                                                                by_name[a], by_name[b])
-            if problems and any((out_dir / "edges" / edge_name(a, b)).glob("repeat_*/*/result.json")):
-                refused.append((edge_name(a, b), f"{edge_name(a, b)}: its prepared systems are of a mapping whose "
-                                "hybrid has hydrogens the cuPotential plugin cannot constrain "
-                                f"({'; '.join(problems)}); its legs ran on stock OpenMM and hold results"))
-            elif problems:
-                anew.add(edge_name(a, b))
-                log(f"{edge_name(a, b)}: its prepared systems are of a mapping whose hybrid has hydrogens the "
-                    "cuPotential plugin cannot constrain, and no leg has a result: it is prepared again with the "
-                    "mapping for the plugin (what it has is kept in edges/" + edge_name(a, b) + ".earlier_mapping_<n>)")
     if refused:
         raise WorkflowError("; ".join(message for _edge, message in refused) + ". Nothing was changed. "
                             + prepare_again_command([edge for edge, _message in refused], out_dir))
-    # the edges prepared again are checked as edges without anything: what their directories hold is set aside
-    selected_checked = [(a, b) for a, b in selected if edge_name(a, b) not in anew]
     if not reschedule:
-        check_legs_have_their_windows(out_dir, selected_checked, repeats_run, only_legs)
-    check_pre_equilibrations_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule, ligands)
-    check_results_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule, ligands)
-    check_samples_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule)
-    check_windows_of_the_run(rcfg, out_dir, selected_checked, repeats_run, only_legs, reschedule)
+        check_legs_have_their_windows(out_dir, selected, repeats_run, only_legs)
+    check_pre_equilibrations_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
+    check_results_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule, ligands)
+    check_samples_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
+    check_windows_of_the_run(rcfg, out_dir, selected, repeats_run, only_legs, reschedule)
     states = states_of(rcfg, ligands)
     experiment = experiment_of(rcfg, ligands, states)
     if states is not None:
@@ -794,8 +776,6 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         # one job at a time in this process: every edge is prepared first
         jobs = []
         for a, b in selected:
-            if edge_name(a, b) in anew:
-                set_aside_edge(out_dir / "edges" / edge_name(a, b), log)
             jobs += jobs_of(edge_name(a, b), prepare_edge(rcfg, by_name[a], by_name[b], protein,
                                                          out_dir / "edges" / edge_name(a, b), box_shape, log))
         write_record()
@@ -808,9 +788,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         # the others go on
         jobs, (results, monitor, mps_used), t_prepared = _run_while_edges_are_prepared(
             [(edge_name(a, b), by_name[a], by_name[b]) for a, b in selected],
-            lambda lig_a, lig_b, edge: (set_aside_edge(out_dir / "edges" / edge, log) if edge in anew else None,
-                                        prepare_edge(rcfg, lig_a, lig_b, protein, out_dir / "edges" / edge,
-                                                     box_shape, log))[1],
+            lambda lig_a, lig_b, edge: prepare_edge(rcfg, lig_a, lig_b, protein, out_dir / "edges" / edge,
+                                                    box_shape, log),
             jobs_of, write_record, lambda jobs, more: execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor,
                                                                    log, more),
             unprepared, log)
@@ -915,83 +894,58 @@ def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, 
     publish_text(out_dir / "network.json", json.dumps(record, indent=1))
 
 
-def legs_of_an_earlier_version(edge_dir: Path, repeat: int, legs: dict, counted: dict | None = None,
-                               inputs=None) -> list[dict]:
-    """The legs of a repeat whose hybrid System was of an earlier version (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`)
-    and differs from that of this version. A leg records its version; one without the record is of version 1 unless it
-    records ``grand_canonical``, which came with version 2. Each is ``{"leg", "repeat", "why"}``;
+def legs_of_version_1(edge_dir: Path, repeat: int, legs: dict, counted: dict | None = None,
+                      inputs=None) -> list[dict]:
+    """The legs of a repeat whose hybrid System was of version 1 (:data:`cufep.rbfe.hybrid.HYBRID_VERSION`) and may
+    differ from that of this version: REST2 heated a window, and ligand B has terms in the proper torsions of the
+    core, which version 1 left unscaled, so that the energies of its states were not those of its Hamiltonian (second
+    review of PR #19: such a leg was combined with a leg of this version). A leg records its version; one without the
+    record is of version 1 unless it records ``grand_canonical``, which came with the fix. Where whether it had such
+    terms cannot be told (its prepared systems cannot be read, or its hot region was ``perturbed``, which version 1
+    chose by an earlier rule), the leg is left out too (third review of PR #19). Each is ``{"leg", "repeat", "why"}``;
     `--edge E --repeat R --leg L --reschedule` computes it anew, and no other leg (:func:`rerun_command`; a
-    pre-equilibration it cannot use is set aside with it). ``counted`` keeps what was read of an edge between calls.
-
-    * Versions 1 and 2 kept every bonded term of the dummy atoms where a mapped atom carries unmapped atoms of both
-      ligands, which version 3 gives the terms of Fleck et al. 2021 (:mod:`cufep.rbfe.junction`; ejm_42~ejm_54 of TYK2)
-      and version 4 changes about the middle of the leg (:mod:`cufep.rbfe.states`): a leg of an earlier version at an
-      edge with such an atom is left out, and so is one whose prepared systems cannot be read to tell.
-    * Version 1 also left terms of B in the proper torsions of the core unscaled with REST2: where REST2 heated a window
-      and ligand B has such terms, the energies of its states were not those of its Hamiltonian (second review of PR
-      #19: such a leg was combined with a leg of this version). Where whether it had such terms cannot be told (its
-      prepared systems cannot be read, or its hot region was ``perturbed``, which version 1 chose by an earlier rule),
-      the leg is left out too (third review of PR #19)."""
+    pre-equilibration it cannot use is set aside with it). ``counted`` keeps the counts of an edge between calls."""
     from cufep.rbfe.hybrid import HYBRID_VERSION
-    from cufep.rbfe.leg import dummy_junctions_of
+    from cufep.rbfe.leg import terms_left_unscaled_by_version_1
+    from cufep.sampling.storage import stored_conditions
 
     counted = {} if counted is None else counted
     out = []
     for leg, result in legs.items():
         record = result.get("run") or {}
-        version = int(record.get("hybrid_version", 2 if "grand_canonical" in record else 1))
-        if version >= HYBRID_VERSION:
+        if record.get("hybrid_version", HYBRID_VERSION if "grand_canonical" in record else 1) >= HYBRID_VERSION:
             continue
-        if ("junctions", leg) not in counted:
-            counted[("junctions", leg)] = dummy_junctions_of(edge_dir, leg)
-        junctions = counted[("junctions", leg)]
-        if junctions is None:
-            why = ("the prepared systems of its edge cannot be read to tell whether a mapped atom carries unmapped "
-                   "atoms of both ligands, whose dummy atoms that version gave every bonded term")
-        elif junctions:
-            why = (f"its hybrid (version {version}) gave the dummy atoms at {len(junctions)} mapped atom(s) that carry "
-                   "unmapped atoms of both ligands other bonded terms along lambda than this version (the terms of "
-                   "Fleck et al. 2021, changed about the middle of the leg)")
+        leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
+        _n, conditions = stored_conditions(leg_dir / "hrex")
+        rest2 = ((conditions or {}).get("settings") or {}).get("sampling.rest2") or {}
+        rest2_record = record.get("rest2") or {}
+        windows = rest2_record.get("scale_of_window")
+        # the scale of every window: where none is heated, version 1 is this version (third review of PR #19)
+        if windows:
+            if all(float(s) <= 1.0 for s in windows):
+                continue
         else:
-            why = _why_version_1(edge_dir, repeat, leg, record, counted, inputs) if version < 2 else None
-        if why:
-            out.append({"leg": leg, "repeat": repeat,
-                        "why": f"the {leg} leg of repeat {repeat} is of an earlier version: " + why})
+            scale = rest2_record.get("scale", rest2.get("scale"))
+            if scale is not None and float(scale) <= 1.0:
+                continue
+        region = rest2.get("region", "pocket")
+        if region == "perturbed":
+            why = ("its hot region (sampling.rest2.region: perturbed) was chosen by the rule of an earlier version, "
+                   "so whether ligand B had terms in its hot proper torsions of the core, which that version left "
+                   "unscaled, is not known")
+        else:
+            if (leg, region) not in counted:
+                counted[(leg, region)] = terms_left_unscaled_by_version_1(edge_dir, leg, region, inputs)
+            n = counted[(leg, region)]
+            if n == 0:
+                continue
+            why = ("the prepared systems of its edge cannot be read to tell whether ligand B had terms in the proper "
+                   "torsions of the core, which that version left unscaled with REST2" if n is None else
+                   f"its REST2 left {n} terms of ligand B in the proper torsions of the core unscaled (the energies of "
+                   "its states were not those of its Hamiltonian)")
+        out.append({"leg": leg, "repeat": repeat, "why": f"the {leg} leg of repeat {repeat} is of an earlier version: "
+                    + why})
     return out
-
-
-def _why_version_1(edge_dir: Path, repeat: int, leg: str, record: dict, counted: dict, inputs) -> str | None:
-    """Why a leg of version 1 differs from this version by its REST2 (:func:`legs_of_an_earlier_version`), or None."""
-    from cufep.rbfe.leg import terms_left_unscaled_by_version_1
-    from cufep.sampling.storage import stored_conditions
-
-    leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
-    _n, conditions = stored_conditions(leg_dir / "hrex")
-    rest2 = ((conditions or {}).get("settings") or {}).get("sampling.rest2") or {}
-    rest2_record = record.get("rest2") or {}
-    windows = rest2_record.get("scale_of_window")
-    # the scale of every window: where none is heated, version 1 is this version (third review of PR #19)
-    if windows:
-        if all(float(s) <= 1.0 for s in windows):
-            return None
-    else:
-        scale = rest2_record.get("scale", rest2.get("scale"))
-        if scale is not None and float(scale) <= 1.0:
-            return None
-    region = rest2.get("region", "pocket")
-    if region == "perturbed":
-        return ("its hot region (sampling.rest2.region: perturbed) was chosen by the rule of an earlier version, so "
-                "whether ligand B had terms in its hot proper torsions of the core, which that version left unscaled, "
-                "is not known")
-    if (leg, region) not in counted:
-        counted[(leg, region)] = terms_left_unscaled_by_version_1(edge_dir, leg, region, inputs)
-    n = counted[(leg, region)]
-    if n == 0:
-        return None
-    return ("the prepared systems of its edge cannot be read to tell whether ligand B had terms in the proper torsions "
-            "of the core, which that version left unscaled with REST2" if n is None else
-            f"its REST2 left {n} terms of ligand B in the proper torsions of the core unscaled (the energies of its "
-            "states were not those of its Hamiltonian)")
 
 
 def edge_result(edge_dir: Path, a: str, b: str, repeats: int, inputs=None) -> dict:
@@ -1075,7 +1029,7 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int, inputs=None) -> di
             out["repeats"].append({"repeat": r, "missing": [leg for leg in legs if not legs[leg]
                                                              or legs[leg].get("delta_g") is None]})
             continue
-        earlier = legs_of_an_earlier_version(Path(edge_dir), r, legs, counted, inputs)
+        earlier = legs_of_version_1(Path(edge_dir), r, legs, counted, inputs)
         if earlier:
             # left out, as a leg that is missing: it is computed again (result_lines says how)
             out["repeats"].append({"repeat": r, "earlier_version": earlier})
@@ -1276,7 +1230,7 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
             if compound_of:
                 r["exp_compounds"] = [compound_of[r["ligand_a"]], compound_of[r["ligand_b"]]]
     differing = network_differences(out_dir, results)
-    # legs of an earlier version that are left out (legs_of_an_earlier_version), in the notes of every entry point
+    # legs of an earlier version that are left out (legs_of_version_1), in the notes of every entry point
     left_out = [r["edge"] for r in results if r.get("earlier_version") or r.get("left_out")]
     left_note = ([f"legs are left out of {len(left_out)} edge(s) ({', '.join(left_out)}); their RESULT lines say why "
                   "and how to compute them again"] if left_out else [])

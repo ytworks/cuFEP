@@ -86,34 +86,6 @@ which are those of OpenFE's relative protocol. Then OpenFE's rule from perses: w
 between two mapped atoms changes its length, or is constrained at one end only, its hydrogen leaves the
 mapping (with `map_hydrogens_on_hydrogens_only: false`, the atom mapped onto a hydrogen).
 
-The hybrid keeps the unmapped hydrogens of both ligands on a mapped atom, and the integrator of the cuPotential plugin
-constrains three hydrogens of one length on an atom at most (SHAKE: "only SETTLE and SHAKE constraints are
-implemented"; OpenMM's own integrators take the rest with CCMA). Where Kartograf's mapping would put more on one
-atom, it is changed before the systems are built (cuFEP's own choice, made of the two published steps below; OpenFE
-and perses, whose integrators have CCMA, need neither):
-
-- a mapped pair of heavy atoms that both carry hydrogens constrained to other lengths in the end states (the O of a
-  hydroxyl onto the C of a methyl in TYK2, a CH2 onto an NH; a carbon of four bonds onto one of three, C-H 1.0940
-  and 1.0859 A in OpenFF 2.2.1): such hydrogens cannot be mapped onto each other (their constrained bond would
-  change). Kartograf maps again without that pair, passed to it as a filter of its own kind, as its own
-  `filter_element_changes` ("Forces a mapping to exclude any alchemical element changes in the core") leaves out
-  every pair of other elements, and keeps whole rings and the largest connected part as after its filters (the ethyl
-  beyond that CH2 leaves the mapping too; an NH of a ring onto a CH2 takes the ring out);
-- a mapped heavy atom on which the hybrid would carry more than three hydrogens (a methyl group turned between the
-  poses, its hydrogens farther apart than 0.95 A): its unmapped hydrogens of A and B are mapped onto each other, the
-  closest pair first, as LOMAP maps the hydrogens of its mapped heavy atoms (lomap2, `MCS.all_atom_match_list`: "In
-  3D mode, ensure that maps happen to the closest atom in 3D coordinates").
-
-The other edges keep Kartograf's mapping, which `prep.json` records as `mapping_kartograf` beside the mapping of
-each leg. A mapping only chooses the path between the two end states: the end states and the treatment of the
-atoms unique to one ligand are those of every edge, and what changes is which atoms are unique (fewer in the first
-case, more in the second). An edge whose hybrid would still have such hydrogens on the plugin is refused before
-anything of it is written. In TYK2 these were 5 of the 22 edges, in A2A 1 of 37; before, their legs ran on stock
-OpenMM. A run on the plugin checks the edges prepared before this (their `prep.json` holds a mapping of such a
-hybrid): one none of whose legs has a result is prepared again, what its directory held kept in
-`edges/<edge>.earlier_mapping_<n>/`; one with results is refused before the run writes anything, with the way to
-prepare it again (its results, computed on stock OpenMM, stay as they are for the analysis).
-
 A custom core (`mapping.core_smarts`, a SMARTS pattern; none by default) restricts the mapping to the atoms in a
 match of the pattern in both ligands: the other atoms are unique to each ligand and change with the soft-core, as a
 group that is "decoupled in the intermediate lambda windows" to sample it better (the custom cores of Ross et al.
@@ -151,8 +123,7 @@ The rules of the HybridTopologyFactory of OpenFE's relative protocol (openfe 1.1
   default lambda functions); the Lennard-Jones of a unique atom goes with the soft-core of Gapsys, Seeliger
   and de Groot (J. Chem. Theory Comput. 2012, 8, 2373), alpha 0.85; charges have no soft-core;
 - a unique atom keeps all its bonded terms at full strength at both ends (a dummy), in both legs alike; the
-  atoms unique to A and those unique to B never interact; where a mapped atom carries unique atoms of both
-  ligands, the dummy atoms there have the terms of the next section instead (cuFEP's departure from OpenFE);
+  atoms unique to A and those unique to B never interact;
 - a pair of core atoms that is an exception of the force field (1-2, 1-3 or 1-4) at one end only, which happens
   only where the atoms between them change (a linker of another length, a ring opened or closed), has its
   charge product and Lennard-Jones interpolated linearly between the exception at that end and the normal pair
@@ -166,62 +137,6 @@ three electrostatic lambdas and REST2 (`spikes/m36`: the plugin gives the differ
 0.037 kT of a System with the charges written in). The Lennard-Jones of the ligand with its surroundings is a
 CustomNonbondedForce on the stock kernels, as in the ABFE, and every pair inside the ligand is computed
 explicitly, without cutoff, as the ABFE computes them (`docs/protocol.md`, "Interactions inside the ligand").
-
-### Dummy atoms where both ligands have unmapped atoms on one atom
-
-The problem. In ejm_42~ejm_54 of TYK2 the carbonyl carbon C17 is mapped and carries the unmapped ethyl of
-ejm_42 (C19) and the unmapped NH-ethyl of ejm_54 (N29). With every term of a dummy kept, the dummy C19 keeps at
-lambda 1 its angle to O18 and its dihedrals X-N16-C17-C19 across the urea C-N bond of ejm_54: when ejm_54 turns
-about that bond, the dummy turns with it against its dihedrals. The torsional barrier of that bond rose from
-53.6 kJ/mol (ejm_54 alone) to 88.4, and the solvent leg (5 ns) never reached the conformer of ejm_54 with the
-hydrogen bond N29-H28...N13 (1.8 to 2.2 A) that the leg of the earlier mapping, and the ABFE of ejm_54, reached
-(`spikes/out/m44`, not tracked). Such an atom is common: 57 of them in the prepared edges of TYK2 and A2A (a ring
-C-H against C-F, C-Cl or C-O, CH3 against CF3, the amide carbonyl, sp3 carbons with another substituent).
-
-The rules, from M. Fleck, M. Wieder and S. Boresch, "Dummy atoms in alchemical free energy calculations",
-J. Chem. Theory Comput. 17, 4403-4419 (2021), quoted in `src/cufep/rbfe/junction.py`. At the end where a ligand
-is absent, its unmapped atoms bonded to the mapped atom X (through one atom each, the dummy bridge atom D) are
-anchored to the mapped neighbours of X alone (the unmapped atoms of the other ligand have no term with them, sec.
-2.4), and the number of those neighbours is the type of the junction:
-
-| mapped neighbours of X | junction (Fleck 2021) | terms of the dummy atoms with mapped atoms other than X |
-|---|---|---|
-| 1 | terminal (sec. 2.3.1) | every angle kept; of the dihedrals Z-P-X-D, those from one atom Z kept, the others deleted |
-| 2 | dual, bond, angle and dihedral (sec. 2.3.2, TOL2PYR-2) | the angle P-X-D kept and the other deleted; one dihedral D-X-P-Z with periodicity 1 and 100 kcal/mol, its minimum where the dummy is, every other dihedral D-X-P-Z deleted; dihedrals D'-D-X-P of the deeper dummy atoms to that P only; terms with dummy atoms of two groups at X deleted; where no anchor has a mapped neighbour other than X, the two angles P-X-D at 90 degrees with 100 kcal/(mol rad^2) instead |
-| 3 | nonplanar triple (sec. 2.3.3) | the three angles P-X-D with 3.55 kcal/(mol rad^2) (the value of its calculations) and equilibrium values adapted to the ligand of that end; every dihedral D-X-P-Z deleted; D'-D-X-P to one P only |
-
-The force constants are CHARMM's, whose angle energy is K (theta - theta0)^2: in OpenMM's (k/2)(theta - theta0)^2
-they are k = 2K (its dihedral energy is OpenMM's). With them the dummy atoms have three nonredundant terms each ("The derivation of eq 2 relies
-crucially on using exactly three, nonredundant degrees of freedom (three bonded energy terms) per dummy atom",
-sec. 2.1.1) and add the same factor to the free energy of both legs. Checked
-(`tests/unit/test_rbfe_hybrid.py`): with the dummy atoms at their minimum, what the hybrid adds to the ligand of
-an end is the same wherever that ligand's atoms are and at every angle of the bonds of X; the earlier hybrid
-added from 24.97 to 59.74 kJ/mol over the angles of the amide C-N bond of N-methylpropanamide into
-1,3-dimethylurea, and 4.6 to 39.4 kJ/mol on ejm_42~ejm_54.
-
-cuFEP's own choices, where the source is silent: of the two anchorings the source gives a dual junction, the
-bond, angle and dihedral, which leaves the dummy where it is (the two angles at 90 degrees move a group out of
-the plane of X along lambda, which "may reduce phase-space overlap and necessitate additional λ-states", sec.
-2.1.2: on 99afe76 the windows of short legs of toluene into phenol no longer overlapped); its P and Z are the
-first, by the index of the hybrid, with a Z bonded to more than one atom ("problems may arise if the 'anchor'
-of the dihedral angle term is itself a rotamer, such as a methyl group"); improper torsions with D and a mapped
-atom other than X are deleted at a dual and a triple junction (terms beyond the three); the one P or Z of a
-triple and a terminal junction that keeps its dihedrals is the atom of the lowest index; the adapted angles of a triple junction are those of the direction of D that fits the
-three angles of the force field best, with X and its neighbours where the other ligand has them (Fleck 2021
-minimises the molecule with the dummy at 0.05 kcal/(mol rad^2)); along lambda each changed term goes linearly
-from the force field's term, where its ligand exists, to the dummy's in a narrow range about the middle of the
-leg: those of A as x goes from 0.4 to 0.5 (`lambda_junction_delete`), those of B from 0.5 to 0.6
-(`lambda_junction_insert`). From 0 to 0.4 and from 0.6 to 1 each ligand then turns about the bonds of X as it would
-alone, with the dummy atoms of the other on their own terms, next to the hot windows of REST2, and a conformer
-reached in a hot window is carried to the end by the replica exchange. Changed with the steric lambdas (99afe76,
-8e2a945), the two forms of the terms of a group, which anchor it to different neighbours of X, were both partly on in
-most windows: in ejm_42~ejm_54 the urea C-N bond of ejm_54 could not turn in any window but the last (a torsional
-barrier of 220 to 640 kJ/mol in the windows 1-3 and 5-7, the group turned with the bond), and its solvent leg of 5 ns
-never reached the conformer with the hydrogen bond N29-H28...N13; with the junction lambdas the barrier divided by
-the REST2 scale is 44 to 50 kJ/mol in the windows from 0.62 to 0.88, against 53.6 at lambda 1. A mapped atom with unmapped atoms of one ligand only keeps OpenFE's rule, and an edge
-without such an atom has the System of the earlier version. Legs of an earlier version of the hybrid
-(`run.hybrid_version` below 3) at an edge with such an atom are left out of the analysis, and a run refuses to
-continue them, with the command that computes them anew.
 
 ### Lambda windows
 

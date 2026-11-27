@@ -175,16 +175,14 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     from cufep.rbfe.run import analyse_directory, combine_network, edge_result, write_results, write_run_files
 
     out_dir = tmp_path / "run"
-    # chlorobenzene: a change of one atom without hydrogens, small enough for three windows of these short legs
-    # (toluene -> phenol now takes the methyl and the hydroxyl out of the mapping for the plugin)
-    ligands = _ligands(tmp_path, out_dir, "Clc1ccccc1", "chlorobenzene", 7)
+    ligands = _ligands(tmp_path, out_dir)
     rcfg = _config(tmp_path, out_dir, mode, legs)
-    edge_dir = out_dir / "edges" / "toluene~chlorobenzene"
+    edge_dir = out_dir / "edges" / "toluene~phenol"
     info = prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
     assert info["legs"]["complex"]["core_atoms"] == info["legs"]["solvent"]["core_atoms"] >= 11
     # (seventeenth review) the windows of the solvent leg are those of this run where the complex leg takes them
     token = "this run" if (mode, legs) == ("adaptive", "solvent") else None
-    jobs = [EdgeLegJob(edge="toluene~chlorobenzene", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
+    jobs = [EdgeLegJob(edge="toluene~phenol", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
                          config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True,
                          windows_token=token)
             for leg in ("solvent", "complex")]
@@ -208,26 +206,26 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
         assert len(solvent["lambda_windows"]["morph"]) == 3
     assert all(np.isfinite(r["delta_g"]) and r["delta_g_error"] > 0 for r in results)
     h = solvent["hybrid"]
-    assert h["core_atoms"] + h["unique_old_atoms"] == 15 and h["core_atoms"] + h["unique_new_atoms"] == 12
-    edge = edge_result(edge_dir, "toluene", "chlorobenzene", 1)
+    assert h["core_atoms"] + h["unique_old_atoms"] == 15 and h["core_atoms"] + h["unique_new_atoms"] == 13
+    edge = edge_result(edge_dir, "toluene", "phenol", 1)
     assert edge["ddg"] == pytest.approx((complex_["delta_g"] - solvent["delta_g"]) / 4.184)
-    summary = combine_network(out_dir, ["toluene", "chlorobenzene"], [("toluene", "chlorobenzene")], 1,
-                              {"toluene": -5.0, "chlorobenzene": -5.6})
+    summary = combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
+                              {"toluene": -5.0, "phenol": -5.6})
     dg = summary["dg"]["values"]
     assert summary["dg"]["reference"] == "mean of the experimental values"
-    assert dg["chlorobenzene"]["dg"] - dg["toluene"]["dg"] == pytest.approx(edge["ddg"])
-    assert dg["chlorobenzene"]["dg"] + dg["toluene"]["dg"] == pytest.approx(-10.6)
+    assert dg["phenol"]["dg"] - dg["toluene"]["dg"] == pytest.approx(edge["ddg"])
+    assert dg["phenol"]["dg"] + dg["toluene"]["dg"] == pytest.approx(-10.6)
     write_results(out_dir, summary)
     first = (out_dir / "edges.csv").read_text()
     # `cufep rbfe analyze` makes the same results from the files of the run
-    write_run_files(out_dir, rcfg, ["toluene", "chlorobenzene"], [("toluene", "chlorobenzene")], "given",
-                    {"toluene": -5.0, "chlorobenzene": -5.6})
+    write_run_files(out_dir, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given",
+                    {"toluene": -5.0, "phenol": -5.6})
     assert analyse_directory(out_dir) == summary
     # called again: the legs are complete, their results are made again from the same samples
     again = [run_hybrid_leg_safe(job) for job in jobs]
     assert [r["delta_g"] for r in again] == [r["delta_g"] for r in results]
-    write_results(out_dir, combine_network(out_dir, ["toluene", "chlorobenzene"], [("toluene", "chlorobenzene")], 1,
-                                           {"toluene": -5.0, "chlorobenzene": -5.6}))
+    write_results(out_dir, combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
+                                           {"toluene": -5.0, "phenol": -5.6}))
     assert (out_dir / "edges.csv").read_text() == first
 
 
@@ -245,16 +243,14 @@ def test_a_leg_with_samples_keeps_its_windows_when_their_start_configurations_ar
     monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
     monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
     out_dir = tmp_path / "run"
-    # chlorobenzene: a change of one atom without hydrogens, small enough for three windows of these short legs
-    # (toluene -> phenol now takes the methyl and the hydroxyl out of the mapping for the plugin)
-    ligands = _ligands(tmp_path, out_dir, "Clc1ccccc1", "chlorobenzene", 7)
+    ligands = _ligands(tmp_path, out_dir)
     # windows that adaptive lambda scheduling chose, started by its walk (the start the review names)
     rcfg = _config(tmp_path, out_dir, "adaptive")
-    edge_dir = out_dir / "edges" / "toluene~chlorobenzene"
+    edge_dir = out_dir / "edges" / "toluene~phenol"
     prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
 
     def job(cfg) -> EdgeLegJob:
-        return EdgeLegJob(edge="toluene~chlorobenzene", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+        return EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
                           config=cfg.model_dump(mode="json"), production_ns=cfg.sampling.production_ns, inline=True)
 
     first = run_hybrid_leg_safe(job(rcfg))
@@ -382,156 +378,6 @@ def _same_graph_ligands(tmp_path, out_dir):
         (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
             json.dumps({"charges": charges[lig.name].tolist()}))
     return ligands, charges
-
-
-def test_every_hydrogen_of_the_hybrid_is_one_the_plugin_constrains(tmp_path):
-    """The owner, 2026-11-26: six edges of TYK2 and A2A ran on stock OpenMM, as the integrator of the cuPotential
-    plugin constrains three hydrogens of one length on an atom at most (SHAKE) and their hybrids put more on one atom:
-    a methyl group turned between the poses (Kartograf maps atoms within 0.95 A only), and atoms of other elements
-    mapped onto each other with their hydrogens (CH3 and NH2, CH2 and NH). Their hydrogens are mapped onto each other
-    as LOMAP does; a pair whose hydrogens are constrained to other lengths is not mapped, as Kartograf's
-    filter_element_changes leaves out pairs of other elements, and Kartograf keeps whole rings and the largest
-    connected part (the methyl beyond the CH2 too): other elements, carbons of four bonds and of three (ethylbenzene
-    and styrene, 1.0940 and 1.0859 A), the NH of a ring onto a CH2 (the ring leaves). Kartograf's mapping of them has
-    hydrogens the plugin cannot constrain, the mapping the preparation keeps has none; an edge that needs neither
-    keeps Kartograf's."""
-    import openmm as mm
-    from rdkit import Chem
-    from rdkit.Chem import AllChem
-    from scipy.spatial.transform import Rotation
-
-    from cufep.prep.ligand import load_ligands
-    from cufep.rbfe.mapping import hydrogens_the_plugin_cannot_constrain
-    from cufep.rbfe.prep import load_end_states, prepare_edge
-
-    out_dir = tmp_path / "run"
-    (out_dir / "cache").mkdir(parents=True)
-
-    def write(directory, molecules) -> list:
-        directory.mkdir(parents=True, exist_ok=True)
-        writer = Chem.SDWriter(str(directory / "ligands.sdf"))
-        for name, mol in molecules:
-            mol.SetProp("_Name", name)
-            writer.write(mol)
-        writer.close()
-        ligands = load_ligands(directory / "ligands.sdf")
-        for lig in ligands:
-            lig.offmol.assign_partial_charges("gasteiger")
-            q = np.array([float(x) for x in lig.offmol.partial_charges.m_as("elementary_charge")])
-            (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
-                json.dumps({"charges": (q - q.mean()).tolist()}))
-        return ligands
-
-    def placed(smiles: str, seed: int):
-        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
-        AllChem.EmbedMolecule(mol, randomSeed=seed)
-        conf = mol.GetConformer()
-        for k in range(mol.GetNumAtoms()):
-            conf.SetAtomPosition(k, (np.array(conf.GetAtomPosition(k)) + [16.0, 14.0, 16.0]).tolist())
-        return mol
-
-    toluene = placed("Cc1ccccc1", 11)            # 0 the methyl carbon, 1 the ring carbon, 7-9 its hydrogens
-    turned, shifted = Chem.Mol(toluene), Chem.Mol(toluene)
-    xyz = toluene.GetConformer().GetPositions()
-    axis = (xyz[0] - xyz[1]) / np.linalg.norm(xyz[0] - xyz[1])
-    for k, row in enumerate(Rotation.from_rotvec(np.radians(60.0) * axis).apply(xyz[7:10] - xyz[0]) + xyz[0]):
-        turned.GetConformer().SetAtomPosition(7 + k, row.tolist())
-    for k, row in enumerate(xyz + 0.05):
-        shifted.GetConformer().SetAtomPosition(k, row.tolist())
-    ethyl = placed("CCc1ccccc1", 7)              # 0 the methyl, 1 the CH2, 2-7 the ring
-    amine = Chem.RWMol(ethyl)                    # the CH2 turned into an NH, in the same place
-    amine.RemoveAtom(max(nb.GetIdx() for nb in amine.GetAtomWithIdx(1).GetNeighbors() if nb.GetAtomicNum() == 1))
-    amine.GetAtomWithIdx(1).SetAtomicNum(7)
-    amine = amine.GetMol()
-    Chem.SanitizeMol(amine)
-    vinyl = Chem.RWMol(ethyl)                    # the same carbons with three bonds each: C-H 1.0859 against 1.0940 A
-    for k in (0, 1):
-        vinyl.RemoveAtom(max(nb.GetIdx() for nb in vinyl.GetAtomWithIdx(k).GetNeighbors() if nb.GetAtomicNum() == 1))
-    vinyl.GetBondBetweenAtoms(0, 1).SetBondType(Chem.BondType.DOUBLE)
-    vinyl = vinyl.GetMol()
-    Chem.SanitizeMol(vinyl)
-    piperidine = placed("c1ccc(cc1)C1CCNCC1", 5)  # 9 the NH of the ring
-    cyclohexane = Chem.RWMol(Chem.RemoveHs(piperidine))
-    cyclohexane.GetAtomWithIdx(9).SetAtomicNum(6)
-    cyclohexane = cyclohexane.GetMol()
-    Chem.SanitizeMol(cyclohexane)
-    cyclohexane = Chem.AddHs(cyclohexane, addCoords=True)
-    tol, tol_turned, tol_shifted = write(tmp_path / "toluene", [("toluene", toluene), ("toluene_turned", turned),
-                                                                ("toluene_shifted", shifted)])
-    ethylbenzene, methylaniline, styrene = write(tmp_path / "chain", [("ethylbenzene", ethyl), ("methylaniline", amine),
-                                                                      ("styrene", vinyl)])
-    phenylpiperidine, phenylcyclohexane = write(tmp_path / "ring", [("phenylpiperidine", piperidine),
-                                                                    ("phenylcyclohexane", cyclohexane)])
-    (tmp_path / "aniline").mkdir()
-    _tol, aniline = _ligands(tmp_path / "aniline", out_dir, "Nc1ccccc1", "aniline", 9)
-    rcfg = _config(tmp_path, out_dir, "fixed")
-    protein = _protein()
-    for lig_a, lig_b, left_out, changed in ((tol, tol_turned, set(), True), (tol, aniline, {0}, True),
-                                            (ethylbenzene, methylaniline, {0, 1}, True),
-                                            (ethylbenzene, styrene, {0, 1}, True),
-                                            (phenylpiperidine, phenylcyclohexane, {9}, True),
-                                            (tol, tol_shifted, set(), False)):
-        edge_dir = out_dir / "edges" / f"{lig_a.name}~{lig_b.name}"
-        info = prepare_edge(rcfg, lig_a, lig_b, protein, edge_dir, "cube", print)
-        kartograf = {int(i): j for i, j in info["mapping_kartograf"].items()}
-        for leg in ("complex", "solvent"):
-            end = load_end_states(edge_dir, leg)
-            systems = [mm.XmlSerializer.deserialize(end[x]["system_xml"]) for x in ("a", "b")]
-            check = [systems[0], systems[1], dict(enumerate(end["a"]["ligand"])), dict(enumerate(end["b"]["ligand"])),
-                     lig_a.to_rdkit(), lig_b.to_rdkit()]
-            kept = {int(i): j for i, j in info["legs"][leg]["mapping"].items()}
-            assert hydrogens_the_plugin_cannot_constrain(kept, *check) == [], (lig_b.name, leg)
-            assert bool(hydrogens_the_plugin_cannot_constrain(kartograf, *check)) == changed, (lig_b.name, leg)
-            assert left_out <= set(kartograf) and left_out.isdisjoint(kept)
-        if lig_b is tol_turned:
-            assert all(info["legs"][leg]["core_atoms"] == 15 > len(kartograf) for leg in ("complex", "solvent"))
-        if not changed:
-            assert info["legs"]["solvent"]["mapping"] == info["mapping_kartograf"]
-            assert not any("Kartograf mapped again" in n or "the closest first" in n for n in info["notes"])
-
-
-def test_an_edge_prepared_with_a_mapping_the_plugin_cannot_run_is_prepared_again_or_refused(tmp_path, monkeypatch):
-    """The owner, 2026-11-26: every leg on the plugin; an edge prepared before the mapping for the plugin (its hybrid
-    has hydrogens the plugin cannot constrain, as 4d~4f of A2A) is prepared again by a run on the plugin where none of
-    its legs has a result, what its directory held kept beside it; with a result the run is refused before it writes
-    anything, with the way to prepare the edge again."""
-    from cufep import run as run_module
-    from cufep.config.auto import AutoReport
-    from cufep.rbfe import mapping as mapping_module
-    from cufep.rbfe.config import RbfeConfig
-    from cufep.rbfe.prep import hydrogens_the_plugin_cannot_constrain_in, prepare_edge
-    from cufep.rbfe.run import run_rbfe
-    from cufep.workflow import WorkflowError
-
-    out_dir = tmp_path / "run"
-    ligands = _ligands(tmp_path, out_dir)
-    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
-    rcfg = RbfeConfig.model_validate({**data, "backend": {**data["backend"], "name": "cupotential", "platform": "CUDA"},
-                                      "network": {"edges": [["toluene", "phenol"]]}})
-    edge_dir = out_dir / "edges" / "toluene~phenol"
-    protein = _protein()
-    with monkeypatch.context() as earlier:            # the preparation before the mapping for the plugin
-        earlier.setattr(mapping_module, "mapping_for_the_plugin", lambda a, b, mapping, *rest: (dict(mapping), []))
-        earlier.setattr(mapping_module, "hydrogens_the_plugin_cannot_constrain", lambda *args: [])
-        info = prepare_edge(rcfg, ligands[0], ligands[1], protein, edge_dir, "cube", print)
-    assert hydrogens_the_plugin_cannot_constrain_in(edge_dir, info, *ligands)
-    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
-    monkeypatch.setattr(run_module, "execute_jobs", lambda jobs, gpus, factor, log, more=None: ([], None, False))
-    monkeypatch.setattr(run_module, "write_timing", lambda *args, **kwargs: None)
-    leg_dir = edge_dir / "repeat_0" / "solvent"
-    leg_dir.mkdir(parents=True)
-    (leg_dir / "result.json").write_text("{}")
-    with pytest.raises(WorkflowError, match="cannot constrain .* hold results.* remove") as refused:
-        run_rbfe(rcfg, log=lambda line: None)
-    assert "toluene~phenol" in str(refused.value)
-    assert not (out_dir / "network.json").exists() and (leg_dir / "result.json").exists()
-    (leg_dir / "result.json").unlink()
-    run_rbfe(rcfg, log=lambda line: None)
-    kept = out_dir / "edges" / "toluene~phenol.earlier_mapping_1"
-    assert json.loads((kept / "prep" / "prep.json").read_text())["legs"] == info["legs"]
-    again = json.loads((edge_dir / "prep" / "prep.json").read_text())
-    assert again["legs"]["solvent"]["mapping"] != info["legs"]["solvent"]["mapping"]
-    assert hydrogens_the_plugin_cannot_constrain_in(edge_dir, again, *ligands) == []
 
 
 def test_each_end_state_has_the_charges_of_its_own_ligand(tmp_path):
@@ -1100,10 +946,9 @@ def test_legs_of_the_hybrid_before_its_torsion_fix_are_left_out_and_named_to_run
     from cufep.rbfe.run import combine_network, result_lines
 
     out_dir = tmp_path / "run"
-    # an edge without a mapped atom that carries unmapped atoms of both ligands, which version 2 differs at too
-    ligands = _ligands(tmp_path, out_dir, "Clc1ccccc1", "chlorobenzene", 7)
+    ligands = _ligands(tmp_path, out_dir)
     rcfg = _config(tmp_path, out_dir, "fixed")
-    prep = out_dir / "edges" / "toluene~chlorobenzene" / "prep"
+    prep = out_dir / "edges" / "toluene~phenol" / "prep"
     prepare_edge(rcfg, ligands[0], ligands[1], _protein(), prep.parent, "cube", print)
     plain = terms_left_unscaled_by_version_1(prep.parent, "complex", "pocket")
     changed = tmp_path / "changed"
@@ -1120,10 +965,9 @@ def test_legs_of_the_hybrid_before_its_torsion_fix_are_left_out_and_named_to_run
 
     def edge_of(name: str, complex_, solvent, prepared=changed) -> tuple[dict, list[str]]:
         root = tmp_path / name
-        shutil.copytree(prepared, root / "edges" / "toluene~chlorobenzene" / "prep")
-        _write_legs(root, "toluene~chlorobenzene", 0, _of_the_record(complex_, prepared),
-                    _of_the_record(solvent, prepared))
-        summary = combine_network(root, ["toluene", "chlorobenzene"], [("toluene", "chlorobenzene")], 1, {})
+        shutil.copytree(prepared, root / "edges" / "toluene~phenol" / "prep")
+        _write_legs(root, "toluene~phenol", 0, _of_the_record(complex_, prepared), _of_the_record(solvent, prepared))
+        summary = combine_network(root, ["toluene", "phenol"], [("toluene", "phenol")], 1, {})
         return summary["edges"][0], result_lines(summary)
 
     shutil.copytree(changed, tmp_path / "count" / "prep")
@@ -1132,9 +976,8 @@ def test_legs_of_the_hybrid_before_its_torsion_fix_are_left_out_and_named_to_run
     edge, lines = edge_of("both", version_1(-12.0), version_1(-10.5))
     assert "ddg" not in edge and [item["leg"] for item in edge["earlier_version"]] == ["complex", "solvent"]
     assert f"REST2 left {n} terms of ligand B" in edge["earlier_version"][0]["why"]
-    assert any("--edge 'toluene~chlorobenzene' --repeat 0 --leg complex --leg solvent --reschedule" in x
-               for x in lines)
-    current = {**_leg_result(-12.0)}                                       # this version
+    assert any("--edge 'toluene~phenol' --repeat 0 --leg complex --leg solvent --reschedule" in x for x in lines)
+    current = {**_leg_result(-12.0)}                                       # this version (hybrid_version 2)
     edge, lines = edge_of("solvent", current, version_1(-10.5))
     assert "ddg" not in edge and any("--repeat 0 --leg solvent --reschedule" in x and "--leg complex" not in x
                                      for x in lines)
@@ -1160,36 +1003,6 @@ def edges_of_version_1(tmp_path_factory):
     ligands = _ligands(tmp_path, out_dir)
     edge0 = tmp_path / "prepared"
     prepare_edge(_config(tmp_path, out_dir, "fixed"), ligands[0], ligands[1], _protein(), edge0, "cube", print)
-    changed = tmp_path / "changed"
-    shutil.copytree(edge0 / "prep", changed)
-    for leg in ("complex", "solvent"):
-        end = load_end_states(edge0, leg)
-        xml = changed / f"{leg}_b_system.xml"
-        system = mm.XmlSerializer.deserialize(xml.read_text())
-        assert _change_a_core_torsion(system, end["b"]["ligand"], end["core_map"]) == 1
-        xml.write_text(mm.XmlSerializer.serialize(system))
-    return {"prep": edge0 / "prep", "changed": changed}
-
-
-@pytest.fixture(scope="module")
-def plain_edges_of_version_1(tmp_path_factory):
-    """As ``edges_of_version_1``, of toluene -> chlorobenzene: no mapped atom carries unmapped atoms of both ligands
-    (the methyl carbon is mapped onto the chlorine), so that version 2 is version 3 there and version 1 differs only
-    by its REST2."""
-    import shutil
-
-    import openmm as mm
-    from test_rbfe_rest2_region import _change_a_core_torsion
-
-    from cufep.rbfe.leg import dummy_junctions_of
-    from cufep.rbfe.prep import load_end_states, prepare_edge
-
-    tmp_path = tmp_path_factory.mktemp("version_1_plain")
-    out_dir = tmp_path / "run"
-    ligands = _ligands(tmp_path, out_dir, "Clc1ccccc1", "chlorobenzene", 7)
-    edge0 = tmp_path / "prepared"
-    prepare_edge(_config(tmp_path, out_dir, "fixed"), ligands[0], ligands[1], _protein(), edge0, "cube", print)
-    assert dummy_junctions_of(edge0, "complex") == [] and dummy_junctions_of(edge0, "solvent") == []
     changed = tmp_path / "changed"
     shutil.copytree(edge0 / "prep", changed)
     for leg in ("complex", "solvent"):
@@ -1297,17 +1110,17 @@ def test_the_line_of_a_left_out_leg_runs_that_leg_alone_again(tmp_path, edges_of
     assert words[words.index("-o") + 1] == str(root)
 
 
-def test_a_leg_of_version_1_without_a_heated_window_keeps_its_ddg(tmp_path, plain_edges_of_version_1):
+def test_a_leg_of_version_1_without_a_heated_window_keeps_its_ddg(tmp_path, edges_of_version_1):
     """Third review of PR #19 (P2): `sampling.rest2.scale: 1.5` with the windows [0, 1] heats no window (both at scale
     1): version 1 left nothing unscaled there, and the leg is the leg of this version (``scale_of_window``)."""
     from cufep.rbfe.run import analyse_directory
 
-    root = _run_dir(tmp_path / "run", {"toluene~chlorobenzene": (
-        plain_edges_of_version_1["changed"], _version_1(-12.0, (1.0, 1.0)), _version_1(-10.5, (1.0, 1.0)))})
+    root = _run_dir(tmp_path / "run", {"toluene~phenol": (edges_of_version_1["changed"], _version_1(-12.0, (1.0, 1.0)),
+                                                          _version_1(-10.5, (1.0, 1.0)))})
     assert analyse_directory(root)["edges"][0]["ddg"] == pytest.approx(-1.5)
 
 
-def test_a_leg_of_version_1_with_a_perturbed_hot_region_is_left_out(tmp_path, monkeypatch, plain_edges_of_version_1):
+def test_a_leg_of_version_1_with_a_perturbed_hot_region_is_left_out(tmp_path, monkeypatch, edges_of_version_1):
     """Third review of PR #19 (P2): the hot region `perturbed` of version 1 was chosen by an earlier rule (a ring of a
     long chain was heated that the present rule leaves cold), so the terms of B it left unscaled cannot be counted by
     the present rule (0 for terms in that ring): such a leg is left out, on an edge without such terms too."""
@@ -1316,36 +1129,10 @@ def test_a_leg_of_version_1_with_a_perturbed_hot_region_is_left_out(tmp_path, mo
 
     monkeypatch.setattr(storage, "stored_conditions", lambda directory: (
         10, {"settings": {"sampling.rest2": {"scale": 2.0, "region": "perturbed"}}}))
-    root = _run_dir(tmp_path / "run", {"toluene~chlorobenzene": (plain_edges_of_version_1["prep"], _version_1(-12.0),
-                                                                 _version_1(-10.5))})
+    root = _run_dir(tmp_path / "run", {"toluene~phenol": (edges_of_version_1["prep"], _version_1(-12.0),
+                                                          _version_1(-10.5))})
     edge = analyse_directory(root)["edges"][0]
     assert "ddg" not in edge and "sampling.rest2.region: perturbed" in edge["earlier_version"][0]["why"]
-
-
-def test_a_leg_of_version_2_is_left_out_where_a_mapped_atom_carries_unmapped_atoms_of_both(
-        tmp_path, edges_of_version_1, plain_edges_of_version_1):
-    """Hybrid version 3 (cufep.rbfe.junction): where a mapped atom carries unmapped atoms of both ligands, the dummy
-    atoms there have the bonded terms of Fleck et al. 2021, which version 2 did not give them (TYK2 ejm_42~ejm_54). A
-    leg of version 2 at such an edge (toluene -> phenol) is left out of the ddG and its RESULT line names it to be
-    computed again; at an edge without such an atom (toluene -> chlorobenzene) version 2 is this version, and the leg
-    keeps its ddG."""
-    from test_rbfe_network import _leg_result
-
-    from cufep.rbfe.run import analyse_directory, result_lines
-
-    def of_version_2(dg: float) -> dict:
-        return {**_leg_result(dg), "run": {"hybrid_version": 2}}
-
-    root = _run_dir(tmp_path / "shared", {"toluene~phenol": (edges_of_version_1["prep"], of_version_2(-12.0),
-                                                             of_version_2(-10.5))})
-    summary = analyse_directory(root)
-    edge = summary["edges"][0]
-    assert "ddg" not in edge and "Fleck et al. 2021" in edge["earlier_version"][0]["why"]
-    assert any("--edge 'toluene~phenol' --repeat 0 --leg complex --leg solvent --reschedule" in x
-               for x in result_lines(summary))
-    plain = _run_dir(tmp_path / "plain", {"toluene~chlorobenzene": (plain_edges_of_version_1["prep"],
-                                                                    of_version_2(-12.0), of_version_2(-10.5))})
-    assert analyse_directory(plain)["edges"][0]["ddg"] == pytest.approx(-1.5)
 
 
 def test_a_leg_whose_prepared_systems_cannot_be_read_is_left_out_alone(tmp_path, edges_of_version_1):

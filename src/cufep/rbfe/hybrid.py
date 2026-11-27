@@ -93,7 +93,6 @@ from cufep.alchemy.factory import (
     AlchemyError,
     _move_hot_torsions,
 )
-from cufep.rbfe.junction import DummyTerms, JunctionError
 
 LAMBDA_ELECTROSTATICS_CORE = "lambda_electrostatics_core"
 LAMBDA_ELECTROSTATICS_DELETE = "lambda_electrostatics_delete"
@@ -110,12 +109,6 @@ ELECTROSTATIC_LAMBDAS = (LAMBDA_ELECTROSTATICS_CORE, LAMBDA_ELECTROSTATICS_DELET
 COLD_ELECTROSTATIC_LAMBDAS = tuple(name + "_cold" for name in ELECTROSTATIC_LAMBDAS)
 STERIC_LAMBDAS = (LAMBDA_STERICS_CORE, LAMBDA_STERICS_INSERT, LAMBDA_STERICS_DELETE)
 BONDED_LAMBDAS = (LAMBDA_BONDS, LAMBDA_ANGLES, LAMBDA_TORSIONS)
-#: the lambdas of the bonded terms of the dummy atoms that cufep.rbfe.junction changes: those of A go from the force
-#: field's to the dummy's with LAMBDA_JUNCTION_DELETE, those of B from the dummy's to the force field's with
-#: LAMBDA_JUNCTION_INSERT (cufep.rbfe.states: in narrow ranges about the middle of the leg)
-LAMBDA_JUNCTION_DELETE = "lambda_junction_delete"
-LAMBDA_JUNCTION_INSERT = "lambda_junction_insert"
-JUNCTION_LAMBDAS = (LAMBDA_JUNCTION_DELETE, LAMBDA_JUNCTION_INSERT)
 
 #: OpenFE's default (``softcore_alpha``, Gapsys et al. 2012)
 SOFTCORE_ALPHA = 0.85
@@ -130,13 +123,6 @@ CORE_BOND_FORCE_NAME = "cufep_core_bonds"
 CORE_ANGLE_FORCE_NAME = "cufep_core_angles"
 CORE_TORSION_FORCE_NAME = "cufep_core_torsions"
 CORE_PROPER_TORSION_FORCE_NAME = "cufep_core_proper_torsions"
-#: the bonded terms of the dummy atoms that cufep.rbfe.junction changes (a mapped atom with unmapped atoms of both
-#: ligands): from the force field's term where the ligand exists to the dummy's term, with the junction lambda of the
-#: ligand (``old`` 1: A, lambda_junction_delete; 0: B, lambda_junction_insert)
-JUNCTION_ANGLE_FORCE_NAME = "cufep_junction_angles"
-JUNCTION_TORSION_FORCE_NAME = "cufep_junction_torsions"
-JUNCTION_PROPER_TORSION_FORCE_NAME = "cufep_junction_proper_torsions"
-_JUNCTION_LAMBDA = "l = old*lambda_junction_delete + (1-old)*lambda_junction_insert"
 
 _E = unit.elementary_charge
 _NM = unit.nanometer
@@ -210,22 +196,12 @@ CORE_ANGLE_ENERGY = ("(K/2)*(theta-theta0)^2; K = (1.0-lambda_angles)*K_1 + lamb
                      "theta0 = (1.0-lambda_angles)*theta0_1 + lambda_angles*theta0_2")
 CORE_TORSION_ENERGY = ("(1-lambda_torsions)*U1 + lambda_torsions*U2; U1 = K1*(1+cos(periodicity1*theta-phase1));"
                        "U2 = K2*(1+cos(periodicity2*theta-phase2))")
-JUNCTION_ANGLE_ENERGY = ("(K/2)*(theta-theta0)^2; K = (1.0-l)*K_1 + l*K_2; theta0 = (1.0-l)*theta0_1 + l*theta0_2; "
-                         + _JUNCTION_LAMBDA)
-JUNCTION_TORSION_ENERGY = ("(1-l)*U1 + l*U2; U1 = K1*(1+cos(periodicity1*theta-phase1));"
-                           "U2 = K2*(1+cos(periodicity2*theta-phase2)); " + _JUNCTION_LAMBDA)
 
 #: the version of the hybrid System, recorded by every leg (``run.hybrid_version``). 2: the REST2 factor of the proper
 #: torsions of the core multiplies their term of B too; version 1 (every leg whose record has neither this key nor
 #: ``grand_canonical``, which came with the fix) multiplied the term of A alone, so that the energies of the states
-#: of a leg with REST2 and a term of B in those torsions were not those of its Hamiltonian (review of PR #19). 3:
-#: where a mapped atom carries unmapped atoms of both ligands, the dummy atoms there have the bonded terms of Fleck et
-#: al. 2021
-#: (cufep.rbfe.junction); version 2 kept all of them, which can couple a rotation of the physical ligand to the dummy
-#: (ejm_42~ejm_54 of TYK2); a System without such an atom is that of version 2. 4: those terms change in narrow
-#: ranges about the middle of the leg (lambda_junction_delete, lambda_junction_insert), where version 3 changed them
-#: with the steric lambdas, which held the dummy of the other ligand half anchored in most windows
-HYBRID_VERSION = 4
+#: of a leg with REST2 and a term of B in those torsions were not those of its Hamiltonian (review of PR #19)
+HYBRID_VERSION = 2
 
 _KNOWN_FORCES = {"HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce", "NonbondedForce",
                  "CMMotionRemover"}
@@ -256,9 +232,6 @@ class HybridSystem:
     rest2_ligand_atoms: tuple[int, ...] = ()
     #: pairs of bonded atoms of the hybrid System (bonds and constraints of both end states)
     bonds: frozenset = field(default_factory=frozenset)
-    #: the mapped atoms with unmapped atoms of both ligands and the junction their dummy atoms have
-    #: (cufep.rbfe.junction), in words
-    dummy_junctions: tuple[str, ...] = ()
 
     @property
     def ligand_atoms(self) -> tuple[int, ...]:
@@ -494,48 +467,6 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     if env_bonds:
         raise AlchemyError(f"the environment bond {next(iter(env_bonds))} is in A but not in B")
 
-    def angle_key(a, b, c):
-        return (a, b, c) if a < c else (c, b, a)
-
-    # ---- dummy atoms on a mapped atom with unmapped atoms of both ligands (cufep.rbfe.junction) -------------------
-    def graph(system, forces, to_h, atoms):
-        out = {to_h[i]: set() for i in atoms}
-        pairs = []
-        if "HarmonicBondForce" in forces:
-            f = forces["HarmonicBondForce"]
-            pairs += [f.getBondParameters(k)[:2] for k in range(f.getNumBonds())]
-        pairs += [system.getConstraintParameters(k)[:2] for k in range(system.getNumConstraints())]
-        for i, j in pairs:
-            if i in atoms and j in atoms:
-                out[to_h[i]].add(to_h[j])
-                out[to_h[j]].add(to_h[i])
-        return out
-
-    def angle_table(forces, to_h):
-        table = {}
-        if "HarmonicAngleForce" in forces:
-            f = forces["HarmonicAngleForce"]
-            for k in range(f.getNumAngles()):
-                i, j, m, t0, kk = f.getAngleParameters(k)
-                table[angle_key(to_h[i], to_h[j], to_h[m])] = (t0.value_in_unit(_RAD),
-                                                               kk.value_in_unit(_KJ / _RAD ** 2))
-        return table
-
-    graph_a, graph_b = graph(system_a, forces_a, a_to_h, set_a), graph(system_b, forces_b, b_to_h, set_b)
-    xyz_a, xyz_b = np.asarray(positions_a, dtype=float), np.asarray(positions_b, dtype=float)
-    at_a = {h: xyz_a[h] for h in core_set | old_set}
-    at_b = {h: xyz_b[h_to_b[h]] for h in core_set | new_set}
-    try:
-        dummies_a = DummyTerms(graph_a, core_set, old_set, graph_b, new_set, angle_table(forces_a, a_to_h), at_a, at_b)
-        dummies_b = DummyTerms(graph_b, core_set, new_set, graph_a, old_set, angle_table(forces_b, b_to_h), at_b, at_a)
-    except JunctionError as e:
-        raise AlchemyError(str(e)) from None
-    junction_angles = mm.CustomAngleForce(JUNCTION_ANGLE_ENERGY)
-    junction_angles.setName(JUNCTION_ANGLE_FORCE_NAME)
-    for p in ("theta0_1", "K_1", "theta0_2", "K_2", "old"):
-        junction_angles.addPerAngleParameter(p)
-    junction_torsions = []       # (atoms, [periodicity1, phase1, K1, periodicity2, phase2, K2, old])
-
     # ---- angles --------------------------------------------------------------------------
     standard_angles = mm.HarmonicAngleForce()
     core_angles = mm.CustomAngleForce(CORE_ANGLE_ENERGY)
@@ -543,6 +474,9 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     for p in ("theta0_1", "K_1", "theta0_2", "K_2"):
         core_angles.addPerAngleParameter(p)
     core_angles.addGlobalParameter(LAMBDA_ANGLES, 0.0)
+
+    def angle_key(a, b, c):
+        return (a, b, c) if a < c else (c, b, a)
 
     angles_b = {}
     if "HarmonicAngleForce" in forces_b:
@@ -563,17 +497,13 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
                 t0_b, k_b = angles_b.get(key, (t0, 0.0))
                 core_angles.addAngle(*key, [t0, kk, t0_b, k_b])
                 done.add(key)
-            elif which == "old" and (dummy := dummies_a.angle(key, t0, kk)) is not None:
-                junction_angles.addAngle(*key, [t0, kk, dummy[0], dummy[1], 1.0])
             else:
                 standard_angles.addAngle(*key, t0, kk)
                 if which == "env":
                     env_angles[key] = (t0, kk)
     for key, (t0, kk) in angles_b.items():
         which = kind(key)
-        if which == "new" and (dummy := dummies_b.angle(key, t0, kk)) is not None:
-            junction_angles.addAngle(*key, [dummy[0], dummy[1], t0, kk, 0.0])
-        elif which == "new":
+        if which == "new":
             standard_angles.addAngle(*key, t0, kk)
         elif which == "core" and key not in done:
             core_angles.addAngle(*key, [t0, 0.0, t0, kk])
@@ -606,21 +536,8 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
         if "PeriodicTorsionForce" in forces_a else ([], {})
     new_unique, new_terms = torsion_terms(forces_b["PeriodicTorsionForce"], b_to_h, "new") \
         if "PeriodicTorsionForce" in forces_b else ([], {})
-    for atoms, per, phase, kk in old_unique:
-        if dummies_a.torsion(atoms) is False:
-            junction_torsions.append((atoms, [per, phase, kk, 0.0, 0.0, 0.0, 1.0]))
-        else:
-            standard_torsions.addTorsion(*atoms, per, phase, kk)
-    for atoms, per, phase, kk in new_unique:
-        if dummies_b.torsion(atoms) is False:
-            junction_torsions.append((atoms, [0.0, 0.0, 0.0, per, phase, kk, 0.0]))
-        else:
-            standard_torsions.addTorsion(*atoms, per, phase, kk)
-    # the dihedrals that anchor the dummy bridge atoms of dual junctions, at the dummy end only
-    for atoms, phase, kk in dummies_a.anchor_torsions():
-        junction_torsions.append((atoms, [1.0, 0.0, 0.0, 1.0, phase, kk, 1.0]))
-    for atoms, phase, kk in dummies_b.anchor_torsions():
-        junction_torsions.append((atoms, [1.0, phase, kk, 1.0, 0.0, 0.0, 0.0]))
+    for atoms, per, phase, kk in old_unique + new_unique:
+        standard_torsions.addTorsion(*atoms, per, phase, kk)
     # a term both ends have (as many times as both have it) is standard; the others go from one end to the other
     for key in sorted(old_terms.keys() & new_terms.keys()):
         for atoms, per, phase, kk in new_terms[key][:len(old_terms[key])]:
@@ -905,44 +822,12 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
     propers.setForceGroup(HYBRID_HOT_GROUP)
     out.addForce(impropers)
     out.addForce(propers)
-    junction_propers = None
-    if junction_angles.getNumAngles() or junction_torsions:
-        # only where a mapped atom carries unmapped atoms of both ligands: every other System is that of version 2
-        junction_impropers = mm.CustomTorsionForce(JUNCTION_TORSION_ENERGY)
-        junction_impropers.setName(JUNCTION_TORSION_FORCE_NAME)
-        # the proper torsions carry the REST2 factor of the core proper torsions (and its rule for a ligand hot in part)
-        junction_propers = mm.CustomTorsionForce(JUNCTION_TORSION_ENERGY if factor is None
-                                                 else f"{factor}*U_torsion; U_torsion = {JUNCTION_TORSION_ENERGY}")
-        junction_propers.setName(JUNCTION_PROPER_TORSION_FORCE_NAME)
-        for force in (junction_impropers, junction_propers):
-            for p in ("periodicity1", "phase1", "K1", "periodicity2", "phase2", "K2", "old"):
-                force.addPerTorsionParameter(p)
-        if cold_ligand:
-            junction_propers.addPerTorsionParameter("hot")
-        if rest2:
-            junction_propers.addGlobalParameter(REST2_DS, 0.0)
-        for atoms, values in junction_torsions:
-            if proper(atoms):
-                junction_propers.addTorsion(*atoms, values + ([float(all(x in hot_ligand for x in atoms))]
-                                                              if cold_ligand else []))
-            else:
-                junction_impropers.addTorsion(*atoms, values)
-        for force in (junction_angles, junction_impropers, junction_propers):
-            for name in JUNCTION_LAMBDAS:
-                force.addGlobalParameter(name, 0.0)
-        junction_angles.setForceGroup(HYBRID_GROUP)
-        junction_impropers.setForceGroup(HYBRID_GROUP)
-        junction_propers.setForceGroup(HYBRID_HOT_GROUP)
-        for force in (junction_angles, junction_impropers, junction_propers):
-            out.addForce(force)
     if "CMMotionRemover" in forces_a:
         out.addForce(mm.CMMotionRemover(forces_a["CMMotionRemover"].getFrequency()))
     n_rest2_torsions = _move_hot_torsions(out, region, bonds_hybrid) if rest2 else 0
     if not rest2:
         # without REST2 the core proper torsions are a part of the hybrid group like the impropers
         propers.setForceGroup(HYBRID_GROUP)
-        if junction_propers is not None:
-            junction_propers.setForceGroup(HYBRID_GROUP)
 
     pos_a = np.asarray(positions_a, dtype=float)
     pos_b = np.asarray(positions_b, dtype=float)
@@ -952,8 +837,7 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
                         parameters_a=params_a, parameters_b=params_b, softcore_alpha=float(softcore_alpha),
                         rest2=bool(rest2), rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions,
                         bonds=frozenset(bonds_hybrid), alchemical_water=tuple(sorted(alchemical)),
-                        rest2_ligand_atoms=tuple(sorted(hot_ligand)) if rest2 else (),
-                        dummy_junctions=tuple(dummies_a.notes("A") + dummies_b.notes("B")))
+                        rest2_ligand_atoms=tuple(sorted(hot_ligand)) if rest2 else ())
 
 
 def _copy_virtual_site(site):

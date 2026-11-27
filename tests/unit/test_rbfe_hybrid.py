@@ -12,7 +12,7 @@ import numpy as np
 import openmm as mm
 import openmm.unit as u
 import pytest
-from conftest import TOLUENE, build_hybrid_edge, potential, reference_context
+from conftest import TOLUENE, build_hybrid_edge, potential, reference_context, valence_energy
 
 pytestmark = pytest.mark.needs("openff.toolkit", "rdkit", "openmmforcefields")
 
@@ -35,234 +35,31 @@ def _set(ctx, state):
             ctx.setParameter(name, value)
 
 
-_BONDED = (mm.HarmonicBondForce, mm.HarmonicAngleForce, mm.PeriodicTorsionForce, mm.CustomAngleForce,
-           mm.CustomTorsionForce)
-
-
-def _without(force, atoms: set):
-    """A copy of a bonded ``force`` without its terms that have an atom of ``atoms``."""
-    g = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(force))
-    if not atoms:
-        return g
-    kinds = {mm.HarmonicBondForce: ("Bond", 2), mm.HarmonicAngleForce: ("Angle", 3),
-             mm.PeriodicTorsionForce: ("Torsion", 4), mm.CustomBondForce: ("Bond", 2),
-             mm.CustomAngleForce: ("Angle", 3), mm.CustomTorsionForce: ("Torsion", 4)}
-    word, n = next(v for k, v in kinds.items() if isinstance(force, k))
-    count = getattr(force, f"getNum{word}s")()
-    get = getattr(force, f"get{word}Parameters")
-    if isinstance(force, (mm.CustomBondForce, mm.CustomAngleForce, mm.CustomTorsionForce)):
-        out = type(force)(force.getEnergyFunction())
-        for k in range(getattr(force, f"getNumPer{word}Parameters")()):
-            getattr(out, f"addPer{word}Parameter")(getattr(force, f"getPer{word}ParameterName")(k))
-        for k in range(force.getNumGlobalParameters()):
-            out.addGlobalParameter(force.getGlobalParameterName(k), force.getGlobalParameterDefaultValue(k))
-    else:
-        out = type(force)()
-    for k in range(count):
-        row = get(k)
-        if not set(int(a) for a in row[:n]) & atoms:
-            getattr(out, f"add{word}")(*row)
-    return out
-
-
-def _bonded_context(system, x: float, without=()):
-    """A Context of the bonded terms of a hybrid ``system`` alone, at lambda ``x``; ``without``: atoms whose terms are
-    left out."""
-    from cufep.rbfe.hybrid import CORE_BOND_FORCE_NAME
-    from cufep.rbfe.states import HybridState
-
-    s = mm.System()
-    for i in range(system.getNumParticles()):
-        s.addParticle(system.getParticleMass(i))
-    for f in system.getForces():
-        if isinstance(f, _BONDED) or (isinstance(f, mm.CustomBondForce) and f.getName() == CORE_BOND_FORCE_NAME):
-            g = _without(f, set(int(a) for a in without))
-            g.setForceGroup(0)
-            s.addForce(g)
-    ctx = mm.Context(s, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
-    _set(ctx, HybridState(x))
-    return ctx
-
-
-def _dummies_at_their_minimum(hybrid, x: float, positions: np.ndarray, dummies=None) -> np.ndarray:
-    """``positions`` with the dummy atoms of the end ``x`` (the unique atoms of the other ligand) at the minimum of the
-    bonded terms, the other atoms held (the dummies interact with nothing at that end): the lowest of the minima from
-    where they are and from where the hybrid has them, each also with every dummy group turned by 120 and 240 degrees
-    about its bond to the mapped atom X and about each bond of X to a mapped atom (a dummy group has minima of its own,
-    its rotamers and the sites about X, and a start in one of them is not a coupling to the other atoms)."""
-    from scipy.optimize import minimize
-
-    ctx = _bonded_context(hybrid.system, x)
-    dummies = np.array(dummies if dummies is not None else hybrid.unique_new if x == 0.0 else hybrid.unique_old)
-    kj, nm = u.kilojoule_per_mole, u.nanometer
-    bonds = {}
-    for a, b in hybrid.bonds:
-        bonds.setdefault(a, set()).add(b)
-        bonds.setdefault(b, set()).add(a)
-    dummy_set, core = set(int(d) for d in dummies), set(hybrid.core)
-    groups = []                                    # (X, bridge D, atoms of the group)
-    for d in sorted(dummy_set):
-        for xa in sorted(bonds.get(d, ())):
-            if xa in core:
-                group, todo = {d}, [d]
-                while todo:
-                    a = todo.pop()
-                    for b in bonds.get(a, ()):
-                        if b in dummy_set and b not in group:
-                            group.add(b)
-                            todo.append(b)
-                groups.append((xa, d, sorted(group)))
-
-    def turned(y, axis_from, axis_to, atoms, degrees):
-        k = (y[axis_to] - y[axis_from]) / np.linalg.norm(y[axis_to] - y[axis_from])
-        t = math.radians(degrees)
-        v = y[atoms] - y[axis_from]
-        out = y.copy()
-        out[atoms] = y[axis_from] + v * math.cos(t) + np.cross(k, v) * math.sin(t) \
-            + np.outer(v @ k, k) * (1 - math.cos(t))
-        return out
-
-    def energy(flat):
-        y = positions.copy()
-        y[dummies] = flat.reshape(-1, 3)
-        ctx.setPositions(y)
-        st = ctx.getState(getEnergy=True, getForces=True)
-        return st.getPotentialEnergy().value_in_unit(kj), \
-            -np.asarray(st.getForces(asNumpy=True).value_in_unit(kj / nm))[dummies].reshape(-1)
-
-    bases = [positions.copy(), positions.copy()]
-    bases[1][dummies] = np.asarray(hybrid.positions, dtype=float)[dummies]
-    starts = []
-    for base in bases:
-        starts.append(base[dummies])
-        for xa, d, group in groups:
-            for a, b in [(xa, d)] + [(xa, p) for p in sorted(bonds.get(xa, ())) if p in core]:
-                for degrees in (120.0, 240.0):
-                    starts.append(turned(base, a, b, group, degrees)[dummies])
-    best = min((minimize(energy, s.reshape(-1), jac=True, method="L-BFGS-B",
-                         options={"maxiter": 5000, "gtol": 1e-7}) for s in starts), key=lambda r: r.fun)
-    out = positions.copy()
-    out[dummies] = best.x.reshape(-1, 3)
-    return out
-
-
-def _ligand_bonds(system, atoms) -> dict:
-    atoms, out = set(atoms), {}
-    pairs = [system.getConstraintParameters(k)[:2] for k in range(system.getNumConstraints())]
-    for f in system.getForces():
-        if isinstance(f, mm.HarmonicBondForce):
-            pairs += [f.getBondParameters(k)[:2] for k in range(f.getNumBonds())]
-    for i, j in pairs:
-        if i in atoms and j in atoms:
-            out.setdefault(i, set()).add(j)
-            out.setdefault(j, set()).add(i)
-    return out
-
-
-def _turned(positions: np.ndarray, bonds: dict, i: int, j: int, degrees: float) -> np.ndarray:
-    """``positions`` with the atoms on the side of j of the bond i-j turned about it."""
-    side, todo = {j}, [j]
-    while todo:
-        a = todo.pop()
-        for b in bonds.get(a, ()):
-            if b != i and b not in side:
-                side.add(b)
-                todo.append(b)
-    side = sorted(side - {j})
-    k = (positions[j] - positions[i]) / np.linalg.norm(positions[j] - positions[i])
-    t = math.radians(degrees)
-    v = positions[side] - positions[j]
-    out = positions.copy()
-    out[side] = positions[j] + v * math.cos(t) + np.cross(k, v) * math.sin(t) + np.outer(v @ k, k) * (1 - math.cos(t))
-    return out
-
-
-def _excess_at_the_end(edge, hybrid, x: float, configurations) -> list[float]:
-    """E(hybrid at the end x) - E(the System of the ligand of that end) for each configuration of the hybrid (nm; the
-    dummy atoms where their minimisation starts), the dummy atoms at their minimum: what the hybrid adds to the ligand
-    of the end."""
-    from cufep.rbfe.states import HybridState
-
-    system_a, _pa, _la, system_b, _pb, _lb, _core, box = edge
-    system, to_h = (system_a, hybrid.a_to_hybrid) if x == 0.0 else (system_b, hybrid.b_to_hybrid)
-    out = []
-    for config in configurations:
-        positions = _dummies_at_their_minimum(hybrid, x, np.asarray(config, dtype=float))
-        own = np.array([positions[to_h[k]] for k in range(system.getNumParticles())])
-        ctx = reference_context(hybrid.system, positions, box)
-        _set(ctx, HybridState(x))
-        out.append(potential(ctx) - potential(reference_context(system, own, box)))
-    return out
-
-
-def _moved_at_random(hybrid, x: float, seed: int = 3):
-    """The prepared hybrid configuration and three with the atoms of the ligand of the end ``x`` moved at random."""
-    base = np.asarray(hybrid.positions, dtype=float)
-    atoms = list(hybrid.atoms_a if x == 0.0 else hybrid.atoms_b)
-    rng = np.random.default_rng(seed)
-    out = [base]
-    for _ in range(3):
-        moved = base.copy()
-        moved[atoms] += rng.normal(0.0, 0.004, (len(atoms), 3))
-        out.append(moved)
-    return out
-
-
 @pytest.mark.parametrize("rest2", [False, True])
-def test_the_ends_of_the_hybrid_are_the_two_ligands(edge, rest2):
-    """At lambda 0 the hybrid System has the energy of System A plus that of the dummy atoms (the unique atoms of B,
-    which interact with nothing), at lambda 1 that of System B plus that of the unique atoms of A: with the dummies at
-    their minimum, what the hybrid adds is the same wherever the atoms of the ligand of the end are (the ligand's atoms
-    moved at random). Toluene into phenol: the methyl group and the hydroxyl are on one ring carbon, a dual junction of
-    cufep.rbfe.junction; version 2 of the hybrid, which kept every term of the dummies, added from 0.37 to 1.05 kJ/mol
-    at lambda 0 over these configurations. With REST2 (the ends are not scaled) the same, with water molecules in the
-    hot region."""
-    _system_a, _pa, ligand_a, *_rest = edge
+def test_the_ends_of_the_hybrid_are_the_two_ligands_and_the_dummies_keep_their_bonded_terms(edge, rest2):
+    """At lambda 0 the hybrid System has the energy of System A plus the bonded terms of the unique atoms of B
+    (dummies that do not interact), at lambda 1 that of System B plus the bonded terms of the unique atoms of
+    A: the rules of OpenFE's hybrid topology, in cuFEP's layout. With REST2 (the ends are not scaled) the
+    same, with water molecules in the hot region."""
+    from cufep.rbfe.states import HybridState
+
+    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = edge
     hot = list(range(len(ligand_a), len(ligand_a) + 9)) if rest2 else []
     hybrid = _hybrid(edge, rest2=rest2, rest2_atoms=hot)
-    for x in (0.0, 1.0):
-        excess = _excess_at_the_end(edge, hybrid, x, _moved_at_random(hybrid, x))
-        assert max(excess) - min(excess) < 2e-3, (x, excess)
+    positions = hybrid.positions
+    h_to_b = {h: j for j, h in hybrid.b_to_hybrid.items()}
+    positions_b = np.array([positions[hybrid.b_to_hybrid[j]] for j in range(system_b.getNumParticles())])
+    ctx = reference_context(hybrid.system, positions, box)
 
+    _set(ctx, HybridState(0.0))
+    expected = potential(reference_context(system_a, positions[: system_a.getNumParticles()], box)) \
+        + valence_energy(system_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
+    assert potential(ctx) == pytest.approx(expected, abs=2e-3)
 
-#: three shapes of a mapped atom with unmapped atoms of both ligands (RDKit's AddHs order of the atoms; the mapping of
-#: A onto B), and the bond of that atom turned: N-methylpropanamide into 1,3-dimethylurea (the carbonyl carbon carries
-#: the ethyl of A and the NH-CH3 of B: dual junction, the C-N bond of the amide turned, as ejm_42~ejm_54 of TYK2),
-#: chloroethane into ethane (the CH2Cl carbon carries Cl and an H of B: triple junction, the C-C bond turned) and
-#: toluene into (trifluoromethyl)benzene (the methyl carbon carries the hydrogens of A and the fluorines of B: terminal
-#: junction, the bond to the ring turned)
-JUNCTIONS = {
-    "dual": ("CCC(=O)NC", "CNC(=O)NC", {2: 2, 3: 3, 4: 4, 5: 5, 11: 10, 12: 11, 13: 12, 14: 13}, (4, 2)),
-    "triple": ("CCCl", "CC", {0: 0, 1: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6}, (0, 1)),
-    "terminal": ("Cc1ccccc1", "FC(F)(F)c1ccccc1",
-                 {0: 1, 1: 4, 2: 5, 3: 6, 4: 7, 5: 8, 6: 9, 10: 10, 11: 11, 12: 12, 13: 13, 14: 14}, (1, 0)),
-}
-
-
-@pytest.mark.parametrize("shape", sorted(JUNCTIONS))
-def test_a_rotation_of_a_ligand_at_a_mapped_atom_with_unmapped_atoms_of_both_does_not_turn_the_dummies(shape):
-    """Where a mapped atom carries unmapped atoms of both ligands, the ligand of an end turns about the bonds of that
-    atom as it would alone: with the dummy atoms at their minimum, what the hybrid adds is the same at every angle
-    (Fleck, Wieder and Boresch 2021: three nonredundant bonded terms per dummy atom). Version 2 of the hybrid kept every
-    term of the dummies, whose dihedrals into the other ligand made the dummy follow the turn against them (TYK2
-    ejm_42~ejm_54: 34.9 kJ/mol more at 90 degrees than at 0 on the urea C-N bond of ejm_54; here, on the code before
-    the change, at lambda 0 from 24.97 to 59.74 kJ/mol over the angles for the dual junction, from 3.22 to 6.31 for
-    the triple); the terminal junction turned no dummy before either."""
-    smiles_a, smiles_b, mapping, (i, j) = JUNCTIONS[shape]
-    edge = build_hybrid_edge(smiles_b, mapping, smiles_a=smiles_a)
-    system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box = edge
-    hybrid = _hybrid(edge)
-    assert any(shape in note for note in hybrid.dummy_junctions), hybrid.dummy_junctions
-    bonds = {}
-    for a, b in hybrid.bonds:
-        bonds.setdefault(a, set()).add(b)
-        bonds.setdefault(b, set()).add(a)
-    base = np.asarray(hybrid.positions, dtype=float)
-    for x in (0.0, 1.0):
-        # the atoms of both ligands on the side of j turn, the dummy atoms as the start of their minimisation
-        turned = [_turned(base, bonds, ligand_a[i], ligand_a[j], d) for d in (0, 60, 90, 120, 180)]
-        excess = _excess_at_the_end(edge, hybrid, x, turned)
-        assert max(excess) - min(excess) < 2e-3, (shape, x, excess)
+    _set(ctx, HybridState(1.0))
+    expected = potential(reference_context(system_b, positions_b, box)) \
+        + valence_energy(system_a, hybrid.unique_old, positions[: system_a.getNumParticles()], box)
+    assert potential(ctx) == pytest.approx(expected, abs=2e-3)
 
 
 def test_the_plugin_gets_only_charges_of_the_ligand(edge):
@@ -354,37 +151,6 @@ def test_a_mapping_that_changes_a_constrained_length_or_names_other_atoms_is_ref
                            {**core, 0: ligand_b[0], 7: ligand_b[7]})
 
 
-@pytest.mark.parametrize("x", [0.25, 0.75])
-def test_between_the_ends_a_ligand_turns_at_a_mapped_atom_with_unmapped_atoms_of_both_as_at_its_end(x):
-    """The terms of the dummy atoms that cufep.rbfe.junction changes go from one form to the other in narrow ranges
-    about the middle (cufep.rbfe.states), so that from lambda 0 to 0.4 ligand A, and from 0.6 to 1 ligand B, turns about
-    the bonds of such an atom without the unique atoms of the other ligand: at x = 0.25 and 0.75, with those at the
-    minimum of their bonded terms, what their terms add is the same at every angle of the C-N bond of the amide of
-    N-methylpropanamide into 1,3-dimethylurea. With the steric lambdas (version 3) the group of the other ligand had
-    half of each form, anchored to both sides of the bond: on the code before the change it added from 24.24 to 281.30
-    kJ/mol over the angles at x = 0.25 and from 1.55 to 336.31 at x = 0.75 (TYK2 ejm_42~ejm_54: the urea C-N bond of
-    ejm_54 turned in no window but the last)."""
-    smiles_a, smiles_b, mapping, (i, j) = JUNCTIONS["dual"]
-    edge = build_hybrid_edge(smiles_b, mapping, smiles_a=smiles_a)
-    _system_a, _pa, ligand_a, *_rest = edge
-    hybrid = _hybrid(edge)
-    other = list(hybrid.unique_new if x < 0.5 else hybrid.unique_old)
-    bonds = {}
-    for a, b in hybrid.bonds:
-        bonds.setdefault(a, set()).add(b)
-        bonds.setdefault(b, set()).add(a)
-    base = np.asarray(hybrid.positions, dtype=float)
-    full, rest = _bonded_context(hybrid.system, x), _bonded_context(hybrid.system, x, without=other)
-    excess = []
-    for degrees in (0, 60, 90, 120, 180):
-        positions = _dummies_at_their_minimum(hybrid, x, _turned(base, bonds, ligand_a[i], ligand_a[j], degrees),
-                                              dummies=other)
-        full.setPositions(positions)
-        rest.setPositions(positions)
-        excess.append(potential(full) - potential(rest))
-    assert max(excess) - min(excess) < 2e-3, (x, excess)
-
-
 def test_lambda_functions_switch_the_unique_atoms_in_halves():
     from cufep.rbfe.states import lambda_functions
 
@@ -465,20 +231,19 @@ def test_a_torsion_that_a_system_has_twice_counts_twice_at_its_end(edge):
 
     sys_a = _copy_with(system_a, mm.PeriodicTorsionForce, twice_in_a)
     sys_b = _copy_with(system_b, mm.PeriodicTorsionForce, twice_in_b)
-    # at each end the hybrid gains what its System gains (the hybrid of the plain Systems is the reference, so that
-    # the dummy atoms, whose terms cufep.rbfe.junction sets, count the same on both sides)
-    plain = make_hybrid_system(system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core)
     hybrid = make_hybrid_system(sys_a, pos_a, ligand_a, sys_b, pos_b, ligand_b, core)
     positions = hybrid.positions
+    h_to_b = {h: j for j, h in hybrid.b_to_hybrid.items()}
     positions_b = np.array([positions[hybrid.b_to_hybrid[j]] for j in range(sys_b.getNumParticles())])
-    ends = {0.0: (sys_a, system_a, positions[: sys_a.getNumParticles()]), 1.0: (sys_b, system_b, positions_b)}
-    for x, (doubled, alone, own) in ends.items():
-        ctx, ref = reference_context(hybrid.system, positions, box), reference_context(plain.system, positions, box)
-        _set(ctx, HybridState(x))
-        _set(ref, HybridState(x))
-        gained = potential(reference_context(doubled, own, box)) - potential(reference_context(alone, own, box))
-        assert abs(gained) > 1.0
-        assert potential(ctx) - potential(ref) == pytest.approx(gained, abs=2e-3), x
+    ctx = reference_context(hybrid.system, positions, box)
+    _set(ctx, HybridState(0.0))
+    expected = potential(reference_context(sys_a, positions[: sys_a.getNumParticles()], box)) \
+        + valence_energy(sys_b, [h_to_b[h] for h in hybrid.unique_new], positions_b, box)
+    assert potential(ctx) == pytest.approx(expected, abs=2e-3)
+    _set(ctx, HybridState(1.0))
+    expected = potential(reference_context(sys_b, positions_b, box)) \
+        + valence_energy(sys_a, hybrid.unique_old, positions[: sys_a.getNumParticles()], box)
+    assert potential(ctx) == pytest.approx(expected, abs=2e-3)
 
 
 def test_bonds_and_angles_of_the_environment_that_differ_between_a_and_b_are_refused(edge):

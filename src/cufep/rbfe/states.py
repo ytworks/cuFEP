@@ -12,21 +12,6 @@ transformations). Each lambda of the hybrid System is OpenFE's default function 
     lambda_sterics_delete        = 0 for x < 0.5, else 2(x - 0.5)
     lambda_electrostatics_insert = 0 for x < 0.5, else 2(x - 0.5)
 
-and, cuFEP's own, the lambdas of the bonded terms of the dummy atoms that ``cufep.rbfe.junction`` changes (a mapped
-atom with unmapped atoms of both ligands):
-
-    lambda_junction_delete = 0 for x <= 0.4, 10 (x - 0.4) up to 0.5, then 1   (those of A: the force field's -> dummy's)
-    lambda_junction_insert = 0 for x <= 0.5, 10 (x - 0.5) up to 0.6, then 1   (those of B: dummy's -> force field's)
-
-so that from 0 to 0.4 ligand A has its own terms and the dummy atoms of B theirs (A turns about the bonds of such an
-atom as it would alone), and from 0.6 to 1 the same of B, with the hot windows of REST2 next to the middle: a
-conformer that A or B reaches only in a hot window is carried to its end by the replica exchange. The two kinds of
-terms of a group, which anchor it to different neighbours, are both partly on only in 0.4-0.5 and 0.5-0.6 (where they
-change with the steric lambdas, as version 3 did, they were in most windows, and the urea C-N bond of ejm_54 in
-ejm_42~ejm_54 could not turn in any window but the last: a torsional barrier of 220 to 640 kJ/mol with the group
-turned with it, against 44 to 50 kJ/mol divided by the REST2 scale in the windows from 0.62 to 0.88 with the terms
-of this rule, spikes/out/m44).
-
 The three electrostatic lambdas of the System carry sqrt(s) with REST2 (``cufep.rbfe.hybrid``).
 
 Energy of all states (``cufep.rbfe.hybrid`` for the groups):
@@ -63,8 +48,6 @@ from cufep.rbfe.hybrid import (
     LAMBDA_ELECTROSTATICS_CORE,
     LAMBDA_ELECTROSTATICS_DELETE,
     LAMBDA_ELECTROSTATICS_INSERT,
-    LAMBDA_JUNCTION_DELETE,
-    LAMBDA_JUNCTION_INSERT,
     LAMBDA_STERICS_CORE,
     LAMBDA_STERICS_DELETE,
     LAMBDA_STERICS_INSERT,
@@ -78,17 +61,8 @@ _KJ = unit.kilojoule_per_mole
 MORPH = "morph"
 
 
-#: the ranges of x in which the bonded terms of the dummy atoms of A and of B change (module docstring)
-JUNCTION_DELETE_RANGE = (0.4, 0.5)
-JUNCTION_INSERT_RANGE = (0.5, 0.6)
-
-
-def _ramp(x: float, lo: float, hi: float) -> float:
-    return min(1.0, max(0.0, (x - lo) / (hi - lo)))
-
-
 def lambda_functions(x: float) -> dict[str, float]:
-    """OpenFE's default lambda functions at ``x``, and the lambdas of the bonded terms of the dummy atoms."""
+    """OpenFE's default lambda functions at ``x``."""
     x = float(x)
     first = x < 0.5
     return {LAMBDA_STERICS_CORE: x, LAMBDA_ELECTROSTATICS_CORE: x,
@@ -96,9 +70,7 @@ def lambda_functions(x: float) -> dict[str, float]:
             LAMBDA_STERICS_DELETE: 0.0 if first else 2.0 * (x - 0.5),
             LAMBDA_ELECTROSTATICS_INSERT: 0.0 if first else 2.0 * (x - 0.5),
             LAMBDA_ELECTROSTATICS_DELETE: 2.0 * x if first else 1.0,
-            LAMBDA_BONDS: x, LAMBDA_ANGLES: x, LAMBDA_TORSIONS: x,
-            LAMBDA_JUNCTION_DELETE: _ramp(x, *JUNCTION_DELETE_RANGE),
-            LAMBDA_JUNCTION_INSERT: _ramp(x, *JUNCTION_INSERT_RANGE)}
+            LAMBDA_BONDS: x, LAMBDA_ANGLES: x, LAMBDA_TORSIONS: x}
 
 
 @dataclass(frozen=True)
@@ -185,7 +157,6 @@ class HybridEnergyEvaluator:
         self.beta = 1.0 / (R_GAS * temperature_K)
         self.pressure_bar = pressure_bar
         params = context.getParameters()
-        self._known = set(params)
         self.has_rest2 = REST2_DS in params
         self._x = np.array([s.lambda_hybrid for s in self.states])
         self._s = np.array([s.rest2_energy_scale for s in self.states])
@@ -216,10 +187,8 @@ class HybridEnergyEvaluator:
         return self.context.getState(getEnergy=True, groups={group}).getPotentialEnergy().value_in_unit(_KJ)
 
     def _set(self, values: dict[str, float]) -> None:
-        # a System has the lambdas of its forces only (the junction lambdas where cufep.rbfe.junction changed terms)
         for name, value in values.items():
-            if name in self._known:
-                self.context.setParameter(name, float(value))
+            self.context.setParameter(name, float(value))
 
     def _set_rest2(self, a: float) -> None:
         if self.has_rest2:

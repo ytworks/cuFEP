@@ -147,7 +147,7 @@ def test_a_run_directory_is_analysed_from_its_results_whatever_its_configuration
         (leg_dir / "result.json").write_text(json.dumps({
             "delta_g": dg, "delta_g_error": 0.3 * 4.184, "n_states": 9, "backend": "openmm", "notes": [],
             "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}},
-            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "run": {"hybrid_version": _version()},
+            "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "run": {"hybrid_version": 2},
             "edge": "a~b", "leg": leg, "repeat": 0}))
     summary = analyse_directory(tmp_path)
     edge = summary["edges"][0]
@@ -194,13 +194,6 @@ def _digest_of_the_record(record: dict) -> str:
     return record_digest(record["made_from"])
 
 
-def _version() -> int:
-    """The version of the hybrid of a leg of this version."""
-    from cufep.rbfe.hybrid import HYBRID_VERSION
-
-    return HYBRID_VERSION
-
-
 def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float = 298.15, pressure: float = 1.0,
                 overlap: float = 0.1):
     return {"delta_g": dg_kcal * 4.184, "delta_g_error": None if se_kcal is None else se_kcal * 4.184,
@@ -208,7 +201,7 @@ def _leg_result(dg_kcal: float, se_kcal: float | None = 0.3, temperature: float 
             "prepared_systems_sha256": _digest_of_the_record(_prepared_record()), "n_states": 9, "backend": "openmm",
             "notes": [],
             "quality": {"overlap": {"lowest": overlap, "ok": overlap >= 0.03}, "samples": {"counted": 100.0}},
-            "run": {"hybrid_version": _version()}}
+            "run": {"hybrid_version": 2}}
 
 
 def _write_legs(out_dir, edge: str, repeat: int, complex_, solvent) -> None:
@@ -619,8 +612,7 @@ def _with_moves(result: dict, mu: float | None) -> dict:
     """A complex leg with grand canonical moves of water at the excess chemical potential ``mu`` (None: without)."""
     moves = {"enabled": False} if mu is None else {"enabled": True, "excess_chemical_potential_kcal_per_mol": mu,
                                                    "standard_volume_nm3": 0.0303}
-    return {**result, "run": {**(result.get("run") or {}), "grand_canonical": moves},
-            "gcmc": None if mu is None else {"insertions_attempted": [1]}}
+    return {**result, "run": {"grand_canonical": moves}, "gcmc": None if mu is None else {"insertions_attempted": [1]}}
 
 
 def test_complex_legs_in_other_grand_canonical_ensembles_of_water_are_not_combined(tmp_path):
@@ -653,13 +645,10 @@ def test_a_first_repeat_of_an_earlier_version_does_not_let_others_of_other_ensem
     repeats 1 and 2 at -6 and -4 kcal/mol: the first state was unknown, so neither was compared and the three were
     averaged. All known states are compared with each other; a result of an earlier version has the settings its
     samples recorded, else at least whether it made moves."""
-    from cufep.rbfe import leg as rbfe_leg
     from cufep.rbfe.run import combine_network, water_moves_of
     from cufep.sampling import storage
 
-    # (an earlier version without REST2 at an edge without a mapped atom that carries unmapped atoms of both ligands,
-    # so that its hybrid is that of this version; the prepared systems of this edge are a record without Systems)
-    monkeypatch.setattr(rbfe_leg, "dummy_junctions_of", lambda edge_dir, leg: [])
+    # (an earlier version without REST2, so that its hybrid is that of this version)
     old = {**_leg_result(-12.0), "run": {"rest2": {"scale": 1.0}}, "gcmc": {"insertions_attempted": [1]}}
     _write_legs(tmp_path, "a~b", 0, old, _leg_result(-10.5))
     _write_legs(tmp_path, "a~b", 1, _with_moves(_leg_result(-11.0), -6.0), _leg_result(-10.5))
