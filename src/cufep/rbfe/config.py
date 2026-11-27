@@ -76,6 +76,16 @@ class MappingConfig(_Section):
     allow_partial_fused_rings: bool = True
     allow_bond_breaks: bool = False
 
+    def settings(self):
+        """The settings of the mapper, for the network, the plan and the preparation alike."""
+        from cufep.rbfe.mapping import MappingSettings
+
+        return MappingSettings(atom_max_distance=self.atom_max_distance_A,
+                               map_hydrogens_on_hydrogens_only=self.map_hydrogens_on_hydrogens_only,
+                               map_exact_ring_matches_only=self.map_exact_ring_matches_only,
+                               allow_partial_fused_rings=self.allow_partial_fused_rings,
+                               allow_bond_breaks=self.allow_bond_breaks)
+
 
 class HybridAlchemyConfig(_Section):
     #: alpha of the soft-core Lennard-Jones of Gapsys et al. 2012 (OpenFE's softcore_alpha)

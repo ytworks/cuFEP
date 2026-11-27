@@ -66,16 +66,11 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
             raise WorkflowError(f"network.edges names ligands that are not ligands of the run: {', '.join(unknown)}")
         how = "given (network.edges)"
     else:
-        from cufep.rbfe.mapping import MappingSettings, plan_network
+        from cufep.rbfe.mapping import plan_network
 
-        m = rcfg.mapping
-        settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
-                                   map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
-                                   map_exact_ring_matches_only=m.map_exact_ring_matches_only,
-                                   allow_partial_fused_rings=m.allow_partial_fused_rings,
-                                   allow_bond_breaks=m.allow_bond_breaks)
         n = rcfg.network
-        edges = plan_network(ligands, settings, n.distance_cutoff, n.max_path_length, n.require_cycle_covering)
+        edges = plan_network(ligands, rcfg.mapping.settings(), n.distance_cutoff, n.max_path_length,
+                             n.require_cycle_covering)
         how = "planned by LOMAP"
     import networkx as nx
 
@@ -86,6 +81,21 @@ def edges_of(rcfg: RbfeConfig, ligands, log=print) -> tuple[list[tuple[str, str]
                             + "; ".join(", ".join(sorted(c)) for c in nx.connected_components(graph)))
     log(f"{len(edges)} edge(s) ({how}): " + ", ".join(f"{a} -> {b}" for a, b in edges))
     return edges, how
+
+
+def mapped_edges(rcfg: RbfeConfig, ligands, edges) -> list[dict]:
+    """The atom mapping of every edge as the preparation makes it (Kartograf with the settings of the run), its
+    counts and its LOMAP score: what `cufep rbfe plan` and `cufep benchmark plan` show before anything runs."""
+    from cufep.rbfe.mapping import kartograf_mapping, lomap_score
+
+    by_name = {lig.name: lig for lig in ligands}
+    out = []
+    for a, b in edges:
+        mapping = kartograf_mapping(by_name[a], by_name[b], rcfg.mapping.settings())
+        out.append({"ligand_a": a, "ligand_b": b, "mapped": len(mapping),
+                    "unique_a": by_name[a].n_atoms - len(mapping), "unique_b": by_name[b].n_atoms - len(mapping),
+                    "lomap_score": lomap_score(by_name[a], by_name[b], mapping)})
+    return out
 
 
 def check_windows_of_the_solvent_leg(rcfg: RbfeConfig, out_dir: Path, edges, only_legs) -> None:
@@ -121,20 +131,23 @@ def check_legs_have_their_windows(out_dir: Path, edges, repeats: int, only_legs)
                     leg_dir, [state.to_dict() for state in Schedule.load(sched).states] if sched.exists() else None)
 
 
-def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None) -> dict:
-    """Run the whole relative calculation. Safe to call again to resume."""
+def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None,
+             experiment: dict[str, float] | None = None) -> dict:
+    """Run the whole relative calculation. Safe to call again to resume. ``experiment`` (kcal/mol by ligand) takes
+    the place of ``system.experiment`` and the tags of the SDF: a benchmark gives the values of its table."""
     from cufep.run import lock_output_directory
 
     out_dir = Path(rcfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_output_directory(out_dir)
     try:
-        return _run(rcfg, out_dir, reschedule, log or _Log(out_dir / "cufep.log"), only_edges, only_legs)
+        return _run(rcfg, out_dir, reschedule, log or _Log(out_dir / "cufep.log"), only_edges, only_legs, experiment)
     finally:
         lock.close()
 
 
-def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None) -> dict:
+def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None, only_legs=None,
+         experiment: dict[str, float] | None = None) -> dict:
     from cufep.rbfe.leg import EdgeLegJob
     from cufep.rbfe.prep import prepare_edge, prepared_edge
     from cufep.run import execute_jobs, prepare_protein_and_settings, write_timing
@@ -167,7 +180,8 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, rcfg.sampling.repeats, only_legs)
-    experiment = experiment_of(rcfg, ligands)
+    experiment = (experiment_of(rcfg, ligands) if experiment is None
+                  else {lig.name: float(experiment[lig.name]) for lig in ligands if lig.name in experiment})
     write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
     publish_text(out_dir / "auto_report.md", report.to_markdown())
     protein.write_pdb(out_dir / "protein_prepared.pdb")
