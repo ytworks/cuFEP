@@ -95,7 +95,7 @@ def test_the_published_map_is_read_in_the_direction_it_was_computed():
     from cufep.benchmarks.relative import oriented
 
     assert oriented(edge["ccc_ddg"], edge, "jmc_30", "jmc_23") == pytest.approx(-0.14)
-    assert len(published_edges("a2a")) == 46
+    assert len(published_edges("a2a")) == 19                # the edges between the records of the set's compounds
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "kartograf", "lomap")
@@ -142,7 +142,7 @@ def test_the_report_compares_every_method_on_the_same_compounds_and_edges_in_the
     a published ddG computed the other way round is turned to the direction of the run (OpenFE and FEP+ computed
     ejm_49 -> ejm_31, the run ejm_31 -> ejm_49); an edge without a ddG is listed with the reason, a leg on stock
     OpenMM is named, and the dG differences of the network are given next to the ddG of each edge."""
-    from cufep.benchmarks.relative import report
+    from cufep.benchmarks.relative import centred, report
     from cufep.benchmarks.stats import metrics
 
     ref = read_reference("tyk2")
@@ -157,7 +157,7 @@ def test_the_report_compares_every_method_on_the_same_compounds_and_edges_in_the
               "jmc_23": -11.096362322919733}
     for column, values in ((1, [dg[n] for n in names]), (2, [ref[n]["fepplus"] for n in names]),
                            (3, [openfe[n] for n in names])):
-        m = metrics(values, exp)
+        m = metrics(centred(values, exp), exp)
         row = next(line for line in text.splitlines() if line.startswith("| RMSE (kcal/mol) |"))
         assert row.split("|")[column + 1].strip().startswith(f"{m['rmse']:.2f} [")
     row = next(line for line in text.splitlines() if line.startswith("| ejm_31 -> ejm_49 |"))
@@ -199,3 +199,72 @@ def test_a_set_without_published_openfe_results_says_so(tmp_path):
     text = report("a2a", tmp_path)
     assert "the OpenFE benchmark published no result for this set; its columns are empty" in text
     assert "| statistic | cuFEP | FEP+ |" in text and "OpenFE's network" not in text
+
+
+def test_the_published_map_of_a2a_is_read_by_compound(tmp_path):
+    """Review of PR #21: the FEP+ map of A2A names its records ("4e D", 4jS ...), the run its compounds; the edge
+    4e -> 4b of the smoke tier (published "4e D" -> "4b D": experiment +2.11, Bennett +1.03, cycle closure +1.02) was
+    not found, and 8 of the 19 published edges between the records of the set were left out."""
+    from cufep.benchmarks.relative import report
+
+    a2a = published_edges("a2a")
+    edge = a2a[frozenset(("4e", "4b"))]
+    assert (edge["ligand_a"], edge["ligand_b"]) == ("4e", "4b") and edge["bennett_ddg"] == pytest.approx(1.03, abs=5e-3)
+    compounds = set(read_reference("a2a"))
+    assert sum(1 for key in a2a if key <= compounds) == 19
+    assert frozenset(("4j", "4k")) in a2a and frozenset(("4m", "4n")) in a2a
+    import json
+
+    (tmp_path / "summary.json").write_text(json.dumps({
+        "ligands": ["4e", "4b"], "edges": [_edge("4e", "4b", 1.5)], "experiment_kcal_mol": experiment("a2a"),
+        "cycle_closures": [], "notes": [],
+        "dg": {"reference": "mean of the experimental values", "reference_ligands": ["4e", "4b"],
+               "values": {"4e": {"dg": -11.8, "se": 0.2}, "4b": {"dg": -10.3, "se": 0.2}}}}))
+    row = next(line for line in report("a2a", tmp_path).splitlines() if line.startswith("| 4e -> 4b |"))
+    cells = [c.strip() for c in row.split("|")[1:-1]]
+    assert cells[6] == "+1.03" and cells[7] == "+1.02"
+
+
+def test_without_dg_the_edges_are_still_compared(tmp_path):
+    """Review of PR #21: a run without dG (edges that do not connect the compounds) gave an empty row for all its
+    edges, because the row also asked for the ddG of the network."""
+    import json
+
+    from cufep.benchmarks.relative import report
+    from cufep.benchmarks.stats import metrics
+
+    ref = read_reference("tyk2")
+    edges = [_edge("ejm_31", "ejm_46", -1.5), _edge("ejm_46", "jmc_23", -0.5), _edge("ejm_31", "ejm_49")]
+    (tmp_path / "summary.json").write_text(json.dumps({
+        "ligands": ["ejm_31", "ejm_46", "ejm_49", "jmc_23"], "edges": edges, "experiment_kcal_mol": experiment("tyk2"),
+        "cycle_closures": [], "dg": None, "notes": ["the edges with a ddG do not connect all ligands: no dG"]}))
+    text = report("tyk2", tmp_path)
+    rmse = metrics([-1.5, -0.5], [ref["ejm_46"]["exp"] - ref["ejm_31"]["exp"],
+                                  ref["jmc_23"]["exp"] - ref["ejm_46"]["exp"]])["rmse"]
+    assert f"| all 2 edges of the run | 2 | RMSE (kcal/mol) | {rmse:.2f} |" in text
+
+
+def test_every_method_is_centred_on_the_compounds_it_is_compared_on(tmp_path):
+    """Review of PR #21: only cuFEP was on the experimental mean of the compounds compared; FEP+ as published has a
+    mean signed error of -0.156 over the 17 compounds of A2A (MUE 0.841 published, 0.793 centred). Every method is
+    centred on the compounds compared (cinnabar's centralizing), so that RMSE and MUE compare like with like."""
+    import json
+
+    import numpy as np
+
+    from cufep.benchmarks.relative import report
+
+    ref = read_reference("a2a")
+    names = list(ref)
+    exp = np.array([ref[n]["exp"] for n in names])
+    fep = np.array([ref[n]["fepplus"] for n in names])
+    assert np.mean(fep - exp) == pytest.approx(-0.156, abs=1e-3)
+    centred = fep - fep.mean() + exp.mean()
+    mue = float(np.mean(np.abs(centred - exp)))
+    assert mue == pytest.approx(0.793, abs=1e-3)
+    (tmp_path / "summary.json").write_text(json.dumps({
+        "ligands": names, "edges": [], "experiment_kcal_mol": experiment("a2a"), "cycle_closures": [], "notes": [],
+        "dg": {"reference": "mean of the experimental values", "reference_ligands": names,
+               "values": {n: {"dg": ref[n]["exp"] + 0.4 * (i % 3 - 1), "se": 0.2} for i, n in enumerate(names)}}}))
+    row = next(line for line in report("a2a", tmp_path).splitlines() if line.startswith("| MUE (kcal/mol) |"))
+    assert row.split("|")[3].strip().startswith(f"{mue:.2f} [")

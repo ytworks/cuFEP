@@ -67,14 +67,23 @@ def experiment(name: str) -> dict[str, float]:
 
 def published_edges(name: str) -> dict[frozenset, dict]:
     """The edges of the published map of the set with their FEP+ predictions (``edge_predictions_*_out.csv`` of the
-    public benchmark), keyed by the pair of compounds; each with the direction it was computed in."""
-    path = data_root() / _entry(name)["fepplus_edges"]
+    public benchmark), keyed by the pair of compounds; each with the direction it was computed in.
+
+    The map names its records (A2A: "4e D", 4jS ...), the set its compounds: a record is the compound whose record
+    it is in the set's table (``sdf_record``), and an edge of another state of a compound (its other rotamer, its
+    deprotonated form) is not an edge of the set (review of PR #21: the A2A edges were looked up by record names)."""
+    root = data_root()
+    with open(root / _entry(name)["reference"], newline="") as fh:
+        compound_of = {r["sdf_record"].strip(): r["compound"].strip() for r in csv.DictReader(fh)}
     out = {}
-    with open(path, newline="") as fh:
+    with open(root / _entry(name)["fepplus_edges"], newline="") as fh:
         for row in csv.DictReader(fh):
-            a, b = row["Lig 1"].strip(), row["Lig 2"].strip()
+            records = row["Lig 1"].strip(), row["Lig 2"].strip()
+            if not all(r in compound_of for r in records):
+                continue
+            a, b = (compound_of[r] for r in records)
             out[frozenset((a, b))] = {
-                "ligand_a": a, "ligand_b": b, "exp_ddg": float(row["Exp. ddG (kcal/mol)"]),
+                "ligand_a": a, "ligand_b": b, "records": list(records), "exp_ddg": float(row["Exp. ddG (kcal/mol)"]),
                 "bennett_ddg": float(row["Bennett ddG (kcal/mol)"]),
                 "bennett_se": float(row["Bennett std. error (kcal/mol)"]),
                 "ccc_ddg": float(row["CCC ddG (kcal/mol)"]), "ccc_se": float(row["CCC std. error (kcal/mol)"])}
@@ -247,6 +256,12 @@ def _statistics(series: dict[str, list], exp: list, keys) -> dict[str, dict[str,
     return out
 
 
+def centred(values: list[float], exp: list[float]) -> list[float]:
+    """The values shifted so that their mean is the mean of the experimental values of the same compounds."""
+    shift = sum(exp) / len(exp) - sum(values) / len(values)
+    return [v + shift for v in values]
+
+
 def _f(value, fmt: str = ".2f", missing: str = "") -> str:
     return missing if value is None else format(value, fmt)
 
@@ -286,9 +301,10 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
              "Compared with:", "", f"- {_cufep_settings(run_dir)}", f"- FEP+: {FEPPLUS_SETTINGS}",
              f"- OpenFE: {OPENFE_SETTINGS}" if of_dg else
              "- OpenFE: the OpenFE benchmark published no result for this set; its columns are empty", "",
-             "The dG of every method are referenced to the mean of the experimental values: cuFEP's maximum "
-             "likelihood estimate from its edges over the compounds of this run, FEP+ and OpenFE as published. The "
-             "numbers are given without a verdict.", ""]
+             "The table of the compounds gives the dG as estimated and as published: cuFEP's maximum likelihood "
+             "estimate from its edges referenced to the mean of the experimental values of the compounds of this run, "
+             "FEP+ and OpenFE referenced to that of their own sets. The statistics and the figure of the dG centre "
+             "every method on the compounds compared. The numbers are given without a verdict.", ""]
     for note in summary.get("notes") or []:
         lines.append(f"Note of the run: {note}")
     if not shifted:
@@ -296,16 +312,22 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                       "by their ddG alone.", ""]
     compared = [r for r in ligands if r["cufep"] is not None and (not of_dg or r["openfe"] is not None)]
     if compared:
-        series = {"cuFEP": [r["cufep"] for r in compared], "FEP+": [r["fepplus"] for r in compared]}
+        exp = [r["exp"] for r in compared]
+        series = {"cuFEP": centred([r["cufep"] for r in compared], exp),
+                  "FEP+": centred([r["fepplus"] for r in compared], exp)}
         if of_dg:
-            series["OpenFE"] = [r["openfe"] for r in compared]
-        stats = _statistics(series, [r["exp"] for r in compared], DG_STATISTICS)
+            series["OpenFE"] = centred([r["openfe"] for r in compared], exp)
+        stats = _statistics(series, exp, DG_STATISTICS)
         lines += ["## dG of the compounds against experiment", "",
-                  f"The same {len(compared)} compounds for every method; 95 % bootstrap intervals over compounds in "
-                  "brackets.", "", "| statistic | " + " | ".join(series) + " |", "|---|" + "---|" * len(series)]
+                  f"The same {len(compared)} compounds for every method, each method centred on them (its mean set to "
+                  "the mean of their experimental values, as cinnabar's plots of dG centre them), so that RMSE and MUE "
+                  "compare like with like; pairwise RMSE, R^2 and Kendall tau do not depend on it. 95 % bootstrap "
+                  "intervals over compounds in brackets.", "",
+                  "| statistic | " + " | ".join(series) + " |", "|---|" + "---|" * len(series)]
         lines += [f"| {label} | " + " | ".join(stats[m][key] for m in series) + " |" for key, label in DG_STATISTICS]
         lines.append("")
-    groups = [(f"all {len(done)} edges of the run", done, ("cuFEP", "cuFEP from the network"))]
+    network = ("cuFEP from the network",) if any(e["cufep_network_ddg"] is not None for e in done) else ()
+    groups = [(f"all {len(done)} edges of the run", done, ("cuFEP", *network))]
     in_map = [e for e in done if e["in_published_map"]]
     groups.append((f"the {len(in_map)} edges also in the published map", in_map,
                    ("cuFEP", "FEP+ Bennett", "FEP+ cycle closure")))
@@ -317,8 +339,9 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     lines += ["## ddG of the edges against experiment", "",
               "cuFEP: the ddG of the edge itself; from the network: the difference of the two dG of the estimate. "
               "FEP+ Bennett: the ddG of the edge as published; cycle closure: the published ddG after the correction "
-              "of the cycles. OpenFE: the mean of its three repeats. Every ddG in the direction of the edge of this "
-              "run; 95 % bootstrap intervals over edges in brackets.", "",
+              "of the cycles. OpenFE: the mean of its three repeats (± their standard deviation, as published). "
+              "Every ddG in the direction of the edge of this run; 95 % bootstrap intervals over edges in brackets.",
+              "",
               "| edges | n | statistic | " + " | ".join(column) + " |", "|---|---|---|" + "---|" * len(column)]
     for label, members, methods in groups:
         members = [e for e in members if e["exp_ddg"] is not None and all(e[column[m]] is not None for m in methods)]
@@ -339,7 +362,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                      f"{r['fepplus_minus_exp']:+.2f} | {_f(r['openfe_minus_exp'], '+.2f', '-')} |")
     lines += ["", "## Edges (kcal/mol)", "",
               "Windows, lowest overlap of neighbouring windows (all iterations) and backend of the complex and the "
-              "solvent leg; NOT RELIABLE names a leg whose overlap is below the level of the analysis (Klimovich et "
+              "solvent leg; SE: standard error of cuFEP's ddG; OpenFE: mean ± standard deviation of its three "
+              "repeats; NOT RELIABLE names a leg whose overlap is below the level of the analysis (Klimovich et "
               "al. 2015). `-`: the edge is not in that network.", "",
               "| edge | LOMAP score | experiment | cuFEP | SE | from the network | FEP+ Bennett | FEP+ cycle closure | "
               "OpenFE | windows | lowest overlap | backend | NOT RELIABLE |",
@@ -428,13 +452,21 @@ def _scatter(rows: list[dict], path: Path, title: str, exp_key: str, series: lis
 
 
 def _plot_dg(rows: list[dict], path: Path, name: str, with_openfe: bool) -> None:
+    """The dG of every method, each centred on the compounds it is shown for, as the statistics centre them."""
     from cufep.benchmarks.runner import CUFEP_COLOUR, FEPPLUS_COLOUR
 
+    rows = [dict(r) for r in rows]
+    for key in ("cufep", "fepplus", "openfe"):
+        shown = [r for r in rows if r.get(key) is not None]
+        if shown:
+            for r, v in zip(shown, centred([r[key] for r in shown], [r["exp"] for r in shown])):
+                r[key] = v
     series = [("cufep", "cufep_error", "cuFEP (relative; standard error)", CUFEP_COLOUR, "o", True),
               ("fepplus", None, "FEP+ (published)", FEPPLUS_COLOUR, "s", False)]
     if with_openfe:
         series.append(("openfe", "openfe_error", "OpenFE (published)", OPENFE_COLOUR, "^", False))
-    _scatter(rows, path, f"{name}: dG of the compounds", "exp", series, "experiment dG (kcal/mol)")
+    _scatter(rows, path, f"{name}: dG of the compounds (each method centred)", "exp", series,
+             "experiment dG (kcal/mol)")
 
 
 def _plot_edges(rows: list[dict], path: Path, name: str, with_openfe: bool) -> None:
@@ -444,5 +476,6 @@ def _plot_edges(rows: list[dict], path: Path, name: str, with_openfe: bool) -> N
               ("fepplus_bennett_ddg", "fepplus_bennett_error", "FEP+ Bennett (published map)", FEPPLUS_COLOUR, "s",
                False)]
     if with_openfe:
-        series.append(("openfe_ddg", "openfe_error", "OpenFE (published, mean of 3)", OPENFE_COLOUR, "^", False))
+        series.append(("openfe_ddg", "openfe_error", "OpenFE (published; mean ± SD of 3 repeats)", OPENFE_COLOUR,
+                       "^", False))
     _scatter(rows, path, f"{name}: ddG of the edges", "exp_ddg", series, "experiment ddG (kcal/mol)")

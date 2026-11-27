@@ -15,7 +15,7 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
 ## Approach
 - 経路: `cufep rbfe` の LOMAP(lomap2 の既定、Kartograf、score 0.4、全化合物を cycle に、経路長 6 以下)。TYK2 16 化合物で
   22 辺。OpenFE の公開ベンチマークの 22 辺と同じで、向きも同じ(テストで固定)。公開 FEP+ map(24 辺)と共通なのは 11 辺。
-  A2A 17 化合物で 21 辺。公開 map のうちこの 17 化合物どうしの 11 辺と共通なのは 6 辺。
+  A2A 17 化合物で 21 辺。公開 map のうちこの 17 化合物(`ligands.csv` の記録)どうしの 19 辺と共通なのは 10 辺。
 - `cufep benchmark run|plan|report NAME --protocol rbfe`(`src/cufep/benchmarks/relative.py`): 設定は RBFE example から取り、
   入力は set の protein と `ligands.sdf`、実験値は `ligands.csv`。tier は smoke(example の最初の辺、短縮)と full。
 - 比較表(`rbfe_report.md`、`rbfe_report_ligands.csv`、`rbfe_report_edges.csv`、図 2 枚): 化合物の dG と辺の ddG を、
@@ -36,3 +36,8 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
 - 2026-11-27 TYK2 smoke(image cufep:39ee4ac、`runs/rbfe_bench_tyk2_smoke_39ee4ac`): exit 0、ejm_31→ejm_46 ddG
   −1.21 ± 0.88 kcal/mol(実験 −1.77。0.1 ns/窓の短縮)、2 脚とも cuPotential、窓 9 と 9。
 - 2026-11-27 TYK2 full を image cufep:39ee4ac で開始(`runs/rbfe_bench_tyk2_39ee4ac`、8 GPU)。
+- 2026-11-27 差分の独立レビュー(3 件、各々を修正前のコードで失敗するテストに): (1) A2A の公開 map は記録名("4e D"、4jS …)で
+  書かれ、化合物名で引いていた → `ligands.csv` の `sdf_record` で化合物に直し、他の状態の辺は使わない(19 辺のうち 8 辺が
+  抜けていた)。(2) dG のない実行で「全辺」の行が空 → ネットワークの ddG が無ければその列を比べない。(3) dG の統計で cuFEP
+  だけが比べる化合物の実験平均に合っていた(A2A の FEP+ は公開値のままで平均誤差 −0.156、MUE 0.841、揃えると 0.793)→
+  どの手法も比べる化合物の上で中心をそろえる(cinnabar の図の centralizing)。あわせて OpenFE の ± が 3 反復の標準偏差だと明記。
