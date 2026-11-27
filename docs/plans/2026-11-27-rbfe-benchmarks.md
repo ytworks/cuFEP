@@ -42,3 +42,17 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   抜けていた)。(2) dG のない実行で「全辺」の行が空 → ネットワークの ddG が無ければその列を比べない。(3) dG の統計で cuFEP
   だけが比べる化合物の実験平均に合っていた(A2A の FEP+ は公開値のままで平均誤差 −0.156、MUE 0.841、揃えると 0.793)→
   どの手法も比べる化合物の上で中心をそろえる(cinnabar の図の centralizing)。あわせて OpenFE の ± が 3 反復の標準偏差だと明記。
+- 2026-11-27 全体の単体テスト(383758f、cufep:dev): 816 passed。最初の回(39ee4ac)の 1 件の失敗は、報告の 5 ファイルが出力の
+  ルートの予約名に無かったこと(383758f で追加)。CI(harness、unit)通過。
+- 2026-11-27 TYK2 full(image cufep:39ee4ac、8 GPU、`runs/rbfe_bench_tyk2_39ee4ac`): exit 0、22 辺すべてに ddG、16 化合物
+  すべてに dG。報告は 383758f のコードで実行のファイルから作った(`benchmarks/results/tyk2_rbfe/`)。kcal/mol、95 % bootstrap、
+  各手法を同じ 16 化合物の上で中心をそろえて: dG の RMSE cuFEP 0.67 [0.34, 1.00]、FEP+ 0.47 [0.29, 0.65]、OpenFE 0.59
+  [0.42, 0.74]; MUE 0.48、0.37、0.48; pairwise ddG RMSE 0.98、0.69、0.86; R² 0.73、0.86、0.80; Kendall τ 0.70、0.81、0.68。
+  辺の ddG の RMSE: 22 辺で cuFEP 0.93 [0.51, 1.29]、OpenFE(同じ 22 辺)0.61 [0.48, 0.72]; 公開 map と共通の 11 辺で
+  cuFEP 1.23 [0.64, 1.73]、FEP+ Bennett 0.58 [0.27, 0.81]。
+- 5 辺の 10 脚が標準 OpenMM(ejm_31~ejm_45、ejm_42~ejm_54、ejm_43~ejm_42、ejm_50~ejm_42、ejm_50~ejm_55。CCMA の要る拘束 4 本)。
+  NOT RELIABLE は ejm_31~ejm_45 の complex 脚だけ(最小の重なり 0.026)。最も外れた化合物は ejm_54(+2.04): ejm_42→ejm_54
+  +1.46(実験 −0.75)、ejm_55→ejm_54 +1.40(実験 −1.32)。窓は 9 か 10 で、最小の重なりは 0.026 から 0.22。
+  サイクルの閉じ −1.04 から +0.27(7 個)。
+- 2026-11-27 A2A full を image cufep:383758f で開始(`runs/rbfe_bench_a2a_383758f`、8 GPU)。
+
