@@ -619,7 +619,8 @@ def _with_moves(result: dict, mu: float | None) -> dict:
     """A complex leg with grand canonical moves of water at the excess chemical potential ``mu`` (None: without)."""
     moves = {"enabled": False} if mu is None else {"enabled": True, "excess_chemical_potential_kcal_per_mol": mu,
                                                    "standard_volume_nm3": 0.0303}
-    return {**result, "run": {"grand_canonical": moves}, "gcmc": None if mu is None else {"insertions_attempted": [1]}}
+    return {**result, "run": {**(result.get("run") or {}), "grand_canonical": moves},
+            "gcmc": None if mu is None else {"insertions_attempted": [1]}}
 
 
 def test_complex_legs_in_other_grand_canonical_ensembles_of_water_are_not_combined(tmp_path):
@@ -652,10 +653,13 @@ def test_a_first_repeat_of_an_earlier_version_does_not_let_others_of_other_ensem
     repeats 1 and 2 at -6 and -4 kcal/mol: the first state was unknown, so neither was compared and the three were
     averaged. All known states are compared with each other; a result of an earlier version has the settings its
     samples recorded, else at least whether it made moves."""
+    from cufep.rbfe import leg as rbfe_leg
     from cufep.rbfe.run import combine_network, water_moves_of
     from cufep.sampling import storage
 
-    # (an earlier version without REST2, so that its hybrid is that of this version)
+    # (an earlier version without REST2 at an edge without a mapped atom that carries unmapped atoms of both ligands,
+    # so that its hybrid is that of this version; the prepared systems of this edge are a record without Systems)
+    monkeypatch.setattr(rbfe_leg, "dummy_junctions_of", lambda edge_dir, leg: [])
     old = {**_leg_result(-12.0), "run": {"rest2": {"scale": 1.0}}, "gcmc": {"insertions_attempted": [1]}}
     _write_legs(tmp_path, "a~b", 0, old, _leg_result(-10.5))
     _write_legs(tmp_path, "a~b", 1, _with_moves(_leg_result(-11.0), -6.0), _leg_result(-10.5))
