@@ -25,6 +25,7 @@ NOWHERE = re.compile(r"Flare|Cresset|Desmond", re.IGNORECASE)
 FOR_ACCURACY_AND_SOURCES = re.compile(r"FEP\+|Schr(?:ö|oe?)dinger", re.IGNORECASE)
 ACCURACY_AND_SOURCE_FILES = (
     "benchmarks/*", "src/cufep/benchmarks/*", "src/cufep/cli.py", "tests/unit/test_benchmarks.py",
+    "tests/unit/test_benchmarks_rbfe.py",
     "examples/*", "README.md", "README.ja.md", "CLAUDE.md", "PROGRESS.md", "docs/plans/*",
     "docs/LICENSING.md", "docs/wiki/*", "spikes/wiki_tables.py", "spikes/benchmark_progress.py",
     # entries of PROGRESS.md, moved there unchanged (docs/progress/archiving.md): results against the

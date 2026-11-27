@@ -64,11 +64,11 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
+- Plan `docs/plans/2026-11-27-rbfe-benchmarks.md` (in progress, branch `feat/rbfe-benchmark-tables`): `cufep benchmark run|plan|report NAME --protocol rbfe` on the LOMAP network (TYK2 22 edges, those of the OpenFE benchmark; A2A 21, 17 neutral compounds), reported against experiment, FEP+ and OpenFE (published for TYK2 only); legs the plugin's integrator cannot constrain run on stock OpenMM (the owner's decision of 2026-11-27). TYK2 smoke done (image 39ee4ac); TYK2 full running; A2A full not run.
 - Plan `docs/plans/2026-11-25-rbfe.md` (done: PR #17 with PR #18 merged into main on 2026-11-26): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment. A2A example in the bilayer (image f6ac3b4): ddG +0.91 ± 0.30, +3.26 ± 0.12, +1.38 ± 0.26 (experiment +2.12, +0.72, -1.40), cycle closure -0.97 ± 0.41, dG RMSE 1.35 (FEP+ 0.83); both in the plan's record. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends. Plan `docs/plans/2026-11-25-leg-engine.md` (done, PR #18): one engine of a leg for both (`src/cufep/engine/`), steps 1-6 done; ABFE fingerprint and analysis of a stored run unchanged; the TYK2 relative example on its image agrees with image f6ac3b4 within the errors (the plan's record).
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
-- The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
-  the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
+- The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22; the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
   one way of starting the windows (below). Not adopted, defaults unchanged: longer production,
   `alchemy.annihilate_electrostatics`, `alchemy.softcore_b` 2, `analysis.detect_equilibration`,
@@ -111,6 +111,13 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-27 — [design] Plan: relative benchmarks of TYK2 and A2A, compared with experiment, FEP+ and OpenFE
+- What: `cufep benchmark run|plan|report NAME --protocol rbfe` (`src/cufep/benchmarks/relative.py`); the OpenFE results
+  of TYK2 (IndustryBenchmarks2024 v1.0.0, MIT) in `benchmarks/tyk2/inputs/`; no change of the calculation.
+- Why: the owner's request of 2026-11-27; the owner's decisions: stock OpenMM for legs the plugin cannot constrain, A2A
+  with the 17 neutral compounds, no OpenFE column for A2A (nothing published). Fresh from main; PR #19 is not used.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md`; `docs/rbfe.md` ("Benchmarks"); `benchmarks/README.md`
 
 ### 2026-11-26 — [progress] RBFE and the engine of a leg merged (PR #17 with PR #18)
 - What: the reviews of PR #17 (four rounds, 18 findings) and PR #18 (eight rounds, 20 findings) were each

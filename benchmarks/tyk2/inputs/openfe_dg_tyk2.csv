@@ -1,0 +1,17 @@
+ligand name,DG (kcal/mol),uncertainty (kcal/mol),Exp DG (kcal/mol),Exp dDG (kcal/mol),partner_id,dataset_name,system group,system name,DG MMGBSA
+ejm_31,-9.82880464210406,0.044157691046708,-9.539999961853027,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-62.5
+ejm_42,-9.343486482680229,0.0538815030701502,-9.779999732971191,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-64.3
+ejm_43,-7.617974083676883,0.1248661853577919,-8.260000228881836,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-60.2
+ejm_44,-6.446270841193229,0.1378193182100025,-7.420000076293945,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-56.0
+ejm_45,-9.557738605441164,0.1135398889014505,-9.5600004196167,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-64.7
+ejm_46,-11.022554899425682,0.0793784950381246,-11.3100004196167,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-65.7
+ejm_47,-9.7674757341319,0.1818186758931092,-9.699999809265137,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-65.7
+ejm_48,-9.129267360786429,0.1207449278394543,-9.0,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-63.6
+ejm_49,-8.786546351803489,0.1002002221495906,-7.75,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-58.1
+ejm_50,-9.662893592841572,0.0925964463067408,-8.979999542236328,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-62.9
+ejm_54,-10.332850747419034,0.1030111966677115,-10.529999732971191,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-64.9
+ejm_55,-10.32628791163948,0.1430520678696504,-9.210000038146973,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-61.7
+jmc_23,-11.096362322919733,0.0533232519899835,-11.699999809265137,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-67.0
+jmc_27,-11.193739863740436,0.0857573578122642,-11.279999732971191,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-69.2
+jmc_28,-10.399710829396293,0.0785785698110356,-10.979999542236328,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-66.6
+jmc_30,-11.428034357509382,0.0839632162990774,-10.9399995803833,0.0,Genentech,tyk2_genentech/jacs_set_tyk2/results_data,jacs_set,tyk2,-67.9

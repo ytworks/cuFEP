@@ -481,11 +481,13 @@ def benchmark_plan(name: str, tier: str, protocol: str) -> None:
 
 def _benchmark_run_rbfe(name: str, tier: str, output, gpus) -> None:
     from cufep.benchmarks.relative import experiment
+    from cufep.benchmarks.relative import report as relative_report
     from cufep.rbfe.run import failed_edges, run_rbfe
 
     rcfg = _rbfe_benchmark_config(name, tier, output, gpus)
     try:
         summary = run_rbfe(rcfg, experiment=experiment(name))
+        click.echo(relative_report(name, rcfg.output.dir))
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
     missing = failed_edges(summary)
@@ -538,10 +540,15 @@ def benchmark_run(name: str, tier: str, output, gpus, repeats, protocol: str) ->
 @benchmark.command("report")
 @click.argument("name")
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
-def benchmark_report(name: str, directory: str) -> None:
-    """Compare a benchmark run in DIRECTORY with experiment and FEP+."""
+@_PROTOCOL
+def benchmark_report(name: str, directory: str, protocol: str) -> None:
+    """Compare a benchmark run in DIRECTORY with experiment and FEP+ (and, for a relative run, OpenFE)."""
+    from cufep.benchmarks.relative import report as relative_report
     from cufep.benchmarks.runner import report
-    click.echo(report(name, directory))
+    try:
+        click.echo(relative_report(name, directory) if protocol == "rbfe" else report(name, directory))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
 
 
 @benchmark.command("freeze")

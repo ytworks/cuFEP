@@ -142,6 +142,20 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   - without any: the mean of all estimates is 0 (cinnabar's output), dG relative to the mean of the network;
     the result says so.
 
+## Benchmarks
+
+`cufep benchmark run tyk2|a2a --protocol rbfe --tier smoke|full` runs a built-in benchmark set (`benchmarks/`) by
+relative calculations: the settings of the set's relative example (`examples/rbfe_tyk2`,
+`examples/rbfe_a2a_membrane`), the protein and every compound of the set (TYK2 16, A2A 17 in the bilayer) on the
+LOMAP network above (the edges of the example are not used), and the experimental values of the set's table;
+`smoke` runs the first edge of the example with shortened sampling. `cufep benchmark plan NAME` shows the network
+before anything runs: for TYK2 the 22 edges with which the OpenFE benchmark (IndustryBenchmarks2024, Baumann et
+al.) computed this set, in the same directions. `cufep benchmark report NAME DIR --protocol rbfe` compares a run
+with experiment and the published results (`rbfe_report.md`, `rbfe_report_ligands.csv`, `rbfe_report_edges.csv`,
+two figures): the dG of the compounds and the ddG of the edges of every method on the same compounds and edges,
+with 95 % bootstrap intervals, and for every edge its windows, lowest overlap and the backend of its legs
+(`benchmarks/README.md`).
+
 ## Not in this version
 
 - An edge that changes the net charge (refused before anything is written).

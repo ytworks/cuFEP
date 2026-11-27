@@ -116,3 +116,333 @@ def plan_lines(name: str, tier: str, rcfg) -> list[str]:
     lines += [f"| {r['ligand_a']} -> {r['ligand_b']} | {r['mapped']} | {r['unique_a']} | {r['unique_b']} | "
               f"{r['lomap_score']:.2f} | {'yes' if r['in_published_map'] else 'no'} |" for r in rows]
     return lines
+
+
+# ---- the report: the run against experiment, FEP+ and OpenFE -------------------------------------------------
+
+#: the statistics of the dG of the compounds against experiment, in the order of the report
+DG_STATISTICS = (("rmse", "RMSE (kcal/mol)"), ("mue", "MUE (kcal/mol)"),
+                 ("pairwise_rmse", "pairwise ddG RMSE (kcal/mol)"), ("pearson_r2", "Pearson R^2"),
+                 ("kendall_tau", "Kendall tau"))
+#: those of the ddG of the edges against the experimental ddG
+EDGE_STATISTICS = (("rmse", "RMSE (kcal/mol)"), ("mue", "MUE (kcal/mol)"))
+#: how the published values that the report compares with were computed
+FEPPLUS_SETTINGS = ("the published FEP+ predictions of the public benchmark (Ross et al., Commun. Chem. 2023; "
+                    "`ligands.csv` and `edge_predictions_*_out.csv` of the set)")
+OPENFE_SETTINGS = ("the published results of the OpenFE benchmark (IndustryBenchmarks2024 v1.0.0, Baumann et al.): "
+                   "OpenFE 1.0.1, relative hybrid topology protocol, 11 lambda windows of 5 ns, three repeats per edge "
+                   "averaged, the LOMAP network of the set")
+OPENFE_COLOUR = "#1baf7a"                              # categorical slot 3 of the palette of the ABFE figures
+LIGAND_COLUMNS = ("ligand", "exp", "cufep", "cufep_error", "fepplus", "openfe", "openfe_error", "cufep_minus_exp",
+                  "fepplus_minus_exp", "openfe_minus_exp")
+EDGE_COLUMNS = ("edge", "ligand_a", "ligand_b", "lomap_score", "exp_ddg", "cufep_ddg", "cufep_error",
+                "cufep_network_ddg", "in_published_map", "fepplus_bennett_ddg", "fepplus_bennett_error",
+                "fepplus_ccc_ddg", "in_openfe_network", "openfe_ddg", "openfe_error", "windows_complex",
+                "windows_solvent", "lowest_overlap_complex", "lowest_overlap_solvent", "backend_complex",
+                "backend_solvent", "not_reliable", "why_no_ddg")
+
+
+def openfe_results(name: str) -> tuple[dict[str, dict], dict[frozenset, dict]]:
+    """The published OpenFE results of the set: the dG of every compound and the ddG of every edge (in the direction
+    it was computed in, B - A), each with its published uncertainty; empty where the project published none."""
+    entry, root = _entry(name), data_root()
+    if not entry.get("openfe_dg"):
+        return {}, {}
+    dg, edges = {}, {}
+    with open(root / entry["openfe_dg"], newline="") as fh:
+        for row in csv.DictReader(fh):
+            dg[row["ligand name"].strip()] = {"dg": float(row["DG (kcal/mol)"]),
+                                              "error": float(row["uncertainty (kcal/mol)"])}
+    with open(root / entry["openfe_edges"], newline="") as fh:
+        for row in csv.DictReader(fh):
+            a, b = row["ligand_A"].strip(), row["ligand_B"].strip()
+            edges[frozenset((a, b))] = {"ligand_a": a, "ligand_b": b, "ddg": float(row["DDG_bind (kcal/mol)"]),
+                                        "error": float(row["stdev DDG_bind (kcal/mol)"])}
+    return dg, edges
+
+
+def _lomap_score(run_dir: Path, edge: str) -> float | None:
+    import json
+
+    f = run_dir / "edges" / edge / "prep" / "prep.json"
+    if not f.exists():
+        return None
+    score = json.loads(f.read_text()).get("lomap_score")
+    return None if score is None else float(score)
+
+
+def _why_no_ddg(e: dict) -> str:
+    if e.get("inconsistent_legs"):
+        return "legs made under different conditions: " + "; ".join(e["inconsistent_legs"])
+    for r in e.get("repeats", []):
+        if r.get("no_standard_error"):
+            return "no standard error of the " + " and ".join(r["no_standard_error"]) + " leg"
+        if r.get("missing"):
+            return "no result of the " + " and ".join(r["missing"]) + " leg"
+    return "no result"
+
+
+def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dict], bool]:
+    reference = read_reference(name)
+    fep_edges = published_edges(name)
+    of_dg, of_edges = openfe_results(name)
+    dg = summary.get("dg") or {}
+    shifted = dg.get("reference") == "mean of the experimental values"
+    values = dg.get("values") or {}
+    ligands = []
+    for compound in summary["ligands"]:
+        ref = reference.get(compound)
+        if ref is None:
+            continue
+        mine = values.get(compound) if shifted else None
+        of = of_dg.get(compound)
+        ligands.append({
+            "ligand": compound, "exp": ref["exp"], "cufep": None if mine is None else mine["dg"],
+            "cufep_error": None if mine is None else mine["se"], "fepplus": ref["fepplus"],
+            "openfe": None if of is None else of["dg"], "openfe_error": None if of is None else of["error"],
+            "cufep_minus_exp": None if mine is None else mine["dg"] - ref["exp"],
+            "fepplus_minus_exp": ref["fepplus"] - ref["exp"],
+            "openfe_minus_exp": None if of is None else of["dg"] - ref["exp"]})
+    edges = []
+    for e in summary["edges"]:
+        a, b, key = e["ligand_a"], e["ligand_b"], frozenset((e["ligand_a"], e["ligand_b"]))
+        fep, of = fep_edges.get(key), of_edges.get(key)
+        windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
+        exp = None if a not in reference or b not in reference else reference[b]["exp"] - reference[a]["exp"]
+        network = values[b]["dg"] - values[a]["dg"] if a in values and b in values else None
+        edges.append({
+            "edge": e["edge"], "ligand_a": a, "ligand_b": b, "lomap_score": _lomap_score(run_dir, e["edge"]),
+            "exp_ddg": exp, "cufep_ddg": e.get("ddg"), "cufep_error": e.get("se"), "cufep_network_ddg": network,
+            "in_published_map": fep is not None,
+            "fepplus_bennett_ddg": None if fep is None else oriented(fep["bennett_ddg"], fep, a, b),
+            "fepplus_bennett_error": None if fep is None else fep["bennett_se"],
+            "fepplus_ccc_ddg": None if fep is None else oriented(fep["ccc_ddg"], fep, a, b),
+            "in_openfe_network": of is not None if of_edges else None,
+            "openfe_ddg": None if of is None else oriented(of["ddg"], of, a, b),
+            "openfe_error": None if of is None else of["error"],
+            "windows_complex": "/".join(str(n) for n in windows.get("complex") or []),
+            "windows_solvent": "/".join(str(n) for n in windows.get("solvent") or []),
+            "lowest_overlap_complex": overlap.get("complex"), "lowest_overlap_solvent": overlap.get("solvent"),
+            "backend_complex": "/".join(backend.get("complex") or []),
+            "backend_solvent": "/".join(backend.get("solvent") or []),
+            "not_reliable": "; ".join(e.get("not_reliable") or []),
+            "why_no_ddg": "" if e.get("ddg") is not None else _why_no_ddg(e)})
+    return ligands, edges, shifted
+
+
+def _statistics(series: dict[str, list], exp: list, keys) -> dict[str, dict[str, str]]:
+    """Each method's statistics against experiment, with 95 % bootstrap intervals (four or more values), as text."""
+    from cufep.benchmarks.stats import bootstrap, metrics
+
+    out = {}
+    for method, pred in series.items():
+        m = metrics(pred, exp)
+        ci = bootstrap(pred, exp) if len(pred) >= 4 else {}
+        out[method] = {}
+        for key, _label in keys:
+            if m[key] is None:
+                out[method][key] = "N/A"
+            else:
+                out[method][key] = f"{m[key]:.2f}" + (f" [{ci[key][0]:.2f}, {ci[key][1]:.2f}]" if key in ci else "")
+    return out
+
+
+def _f(value, fmt: str = ".2f", missing: str = "") -> str:
+    return missing if value is None else format(value, fmt)
+
+
+def _cufep_settings(run_dir: Path) -> str:
+    import yaml
+
+    f = run_dir / "resolved_config.yaml"
+    if not f.exists():
+        return "cuFEP: the settings of the run are not in this directory"
+    cfg = yaml.safe_load(f.read_text()) or {}
+    sampling, schedule = cfg.get("sampling") or {}, cfg.get("lambda_schedule") or {}
+    membrane = " in a POPC bilayer" if (cfg.get("membrane") or {}).get("enabled") else ""
+    return (f"cuFEP: `cufep rbfe` with the settings of the set's relative example{membrane}, "
+            f"{sampling.get('production_ns')} ns of production per lambda window, "
+            f"calculations per edge: {sampling.get('repeats', 1)}, lambda windows {schedule.get('mode')}, "
+            f"backend {(cfg.get('backend') or {}).get('name')} (`resolved_config.yaml`)")
+
+
+def report(name: str, run_dir: str | Path, write: bool = True) -> str:
+    """Compare a relative benchmark run with experiment, FEP+ and OpenFE; returns Markdown. Written as the run is
+    now: edges without a ddG are listed with the reason, and the files of an earlier state are replaced."""
+    import json
+
+    run_dir = Path(run_dir)
+    summary = json.loads((run_dir / "summary.json").read_text())
+    network = run_dir / "network.json"
+    edges_from = json.loads(network.read_text()).get("edges_from") if network.exists() else None
+    ligands, edges, shifted = _rows(name, run_dir, summary)
+    of_dg, of_edges = openfe_results(name)
+    entry = _entry(name)
+    done = [e for e in edges if e["cufep_ddg"] is not None]
+    how = edges_from or "how the edges were obtained is not recorded"
+    lines = [f"# cuFEP relative benchmark report: {name}", "", entry["title"], "",
+             f"Edges with a ddG: {len(done)} of {len(edges)} ({how}); "
+             f"compounds with a dG: {sum(r['cufep'] is not None for r in ligands)} of {len(ligands)}.", "",
+             "Compared with:", "", f"- {_cufep_settings(run_dir)}", f"- FEP+: {FEPPLUS_SETTINGS}",
+             f"- OpenFE: {OPENFE_SETTINGS}" if of_dg else
+             "- OpenFE: the OpenFE benchmark published no result for this set; its columns are empty", "",
+             "The dG of every method are referenced to the mean of the experimental values: cuFEP's maximum "
+             "likelihood estimate from its edges over the compounds of this run, FEP+ and OpenFE as published. The "
+             "numbers are given without a verdict.", ""]
+    for note in summary.get("notes") or []:
+        lines.append(f"Note of the run: {note}")
+    if not shifted:
+        lines += ["", "The run has no dG referenced to the mean of the experimental values: the compounds are compared "
+                      "by their ddG alone.", ""]
+    compared = [r for r in ligands if r["cufep"] is not None and (not of_dg or r["openfe"] is not None)]
+    if compared:
+        series = {"cuFEP": [r["cufep"] for r in compared], "FEP+": [r["fepplus"] for r in compared]}
+        if of_dg:
+            series["OpenFE"] = [r["openfe"] for r in compared]
+        stats = _statistics(series, [r["exp"] for r in compared], DG_STATISTICS)
+        lines += ["## dG of the compounds against experiment", "",
+                  f"The same {len(compared)} compounds for every method; 95 % bootstrap intervals over compounds in "
+                  "brackets.", "", "| statistic | " + " | ".join(series) + " |", "|---|" + "---|" * len(series)]
+        lines += [f"| {label} | " + " | ".join(stats[m][key] for m in series) + " |" for key, label in DG_STATISTICS]
+        lines.append("")
+    groups = [(f"all {len(done)} edges of the run", done, ("cuFEP", "cuFEP from the network"))]
+    in_map = [e for e in done if e["in_published_map"]]
+    groups.append((f"the {len(in_map)} edges also in the published map", in_map,
+                   ("cuFEP", "FEP+ Bennett", "FEP+ cycle closure")))
+    if of_edges:
+        in_of = [e for e in done if e["in_openfe_network"]]
+        groups.append((f"the {len(in_of)} edges also in OpenFE's network", in_of, ("cuFEP", "OpenFE")))
+    column = {"cuFEP": "cufep_ddg", "cuFEP from the network": "cufep_network_ddg",
+              "FEP+ Bennett": "fepplus_bennett_ddg", "FEP+ cycle closure": "fepplus_ccc_ddg", "OpenFE": "openfe_ddg"}
+    lines += ["## ddG of the edges against experiment", "",
+              "cuFEP: the ddG of the edge itself; from the network: the difference of the two dG of the estimate. "
+              "FEP+ Bennett: the ddG of the edge as published; cycle closure: the published ddG after the correction "
+              "of the cycles. OpenFE: the mean of its three repeats. Every ddG in the direction of the edge of this "
+              "run; 95 % bootstrap intervals over edges in brackets.", "",
+              "| edges | n | statistic | " + " | ".join(column) + " |", "|---|---|---|" + "---|" * len(column)]
+    for label, members, methods in groups:
+        members = [e for e in members if e["exp_ddg"] is not None and all(e[column[m]] is not None for m in methods)]
+        if not members:
+            lines.append(f"| {label} | 0 | | " + " | ".join("" for _ in column) + " |")
+            continue
+        stats = _statistics({m: [e[column[m]] for e in members] for m in methods}, [e["exp_ddg"] for e in members],
+                            EDGE_STATISTICS)
+        for key, stat in EDGE_STATISTICS:
+            lines.append(f"| {label} | {len(members)} | {stat} | "
+                         + " | ".join(stats[m][key] if m in methods else "" for m in column) + " |")
+    lines += ["", "## Compounds (kcal/mol)", "",
+              "| compound | experiment | cuFEP | SE | FEP+ | OpenFE | cuFEP - exp | FEP+ - exp | OpenFE - exp |",
+              "|---|---|---|---|---|---|---|---|---|"]
+    for r in sorted(ligands, key=lambda r: r["exp"]):
+        lines.append(f"| {r['ligand']} | {r['exp']:.2f} | {_f(r['cufep'], '.2f', 'no dG')} | {_f(r['cufep_error'])} | "
+                     f"{r['fepplus']:.2f} | {_f(r['openfe'], '.2f', '-')} | {_f(r['cufep_minus_exp'], '+.2f')} | "
+                     f"{r['fepplus_minus_exp']:+.2f} | {_f(r['openfe_minus_exp'], '+.2f', '-')} |")
+    lines += ["", "## Edges (kcal/mol)", "",
+              "Windows, lowest overlap of neighbouring windows (all iterations) and backend of the complex and the "
+              "solvent leg; NOT RELIABLE names a leg whose overlap is below the level of the analysis (Klimovich et "
+              "al. 2015). `-`: the edge is not in that network.", "",
+              "| edge | LOMAP score | experiment | cuFEP | SE | from the network | FEP+ Bennett | FEP+ cycle closure | "
+              "OpenFE | windows | lowest overlap | backend | NOT RELIABLE |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for e in edges:
+        ddg = _f(e["cufep_ddg"], '+.2f') if e["cufep_ddg"] is not None else f"no ddG ({e['why_no_ddg']})"
+        of = "" if not of_edges else _f(e["openfe_ddg"], "+.2f", "-") + (
+            f" ± {e['openfe_error']:.2f}" if e["openfe_error"] is not None else "")
+        lines.append(
+            f"| {e['ligand_a']} -> {e['ligand_b']} | {_f(e['lomap_score'])} | {_f(e['exp_ddg'], '+.2f')} | {ddg} | "
+            f"{_f(e['cufep_error'])} | {_f(e['cufep_network_ddg'], '+.2f')} | "
+            f"{_f(e['fepplus_bennett_ddg'], '+.2f', '-')} | {_f(e['fepplus_ccc_ddg'], '+.2f', '-')} | {of} | "
+            f"{e['windows_complex']}, {e['windows_solvent']} | "
+            f"{_f(e['lowest_overlap_complex'], '.3f')}, {_f(e['lowest_overlap_solvent'], '.3f')} | "
+            f"{e['backend_complex']}, {e['backend_solvent']} | {e['not_reliable']} |")
+    stock = [e["edge"] for e in edges if any(b and b != "cupotential" for b in
+                                              (e["backend_complex"], e["backend_solvent"]))]
+    lines += ["", "Legs on another backend than the cuPotential plugin (the fallback to stock OpenMM, whose reason "
+                  f"the log of the leg gives): {', '.join(stock) if stock else 'none'}."]
+    closures = summary.get("cycle_closures") or []
+    if closures:
+        lines += ["", "## Cycle closures (kcal/mol)", "", "| cycle | sum of ddG | standard error |", "|---|---|---|"]
+        lines += [f"| {' -> '.join(c['ligands'])} | {c['sum_kcal_mol']:+.2f} | {c['se_kcal_mol']:.2f} |"
+                  for c in closures]
+    text = "\n".join(lines) + "\n"
+    if write:
+        _save(run_dir, name, text, ligands, edges, bool(of_dg))
+    return text
+
+
+def _save(run_dir: Path, name: str, text: str, ligands: list[dict], edges: list[dict], with_openfe: bool) -> None:
+    from cufep.files import publish_text, publish_with
+
+    publish_text(run_dir / "rbfe_report.md", text)
+    for path, rows, columns in ((run_dir / "rbfe_report_ligands.csv", ligands, LIGAND_COLUMNS),
+                                (run_dir / "rbfe_report_edges.csv", edges, EDGE_COLUMNS)):
+        def table(fh, rows=rows, columns=columns) -> None:
+            w = csv.DictWriter(fh, fieldnames=list(columns), restval="")
+            w.writeheader()
+            w.writerows(rows)
+
+        publish_with(path, table, newline="")
+    dg_rows = [r for r in ligands if r["cufep"] is not None]
+    edge_rows = [e for e in edges if e["cufep_ddg"] is not None and e["exp_ddg"] is not None]
+    for path, rows, plot in ((run_dir / "rbfe_report.png", dg_rows, _plot_dg),
+                             (run_dir / "rbfe_report_edges.png", edge_rows, _plot_edges)):
+        path.unlink(missing_ok=True)                   # never the figure of an earlier state of the run
+        if rows:
+            plot(rows, path, name, with_openfe)
+
+
+def _scatter(rows: list[dict], path: Path, title: str, exp_key: str, series: list[tuple], xlabel: str) -> None:
+    """Calculated against experiment: one series per method (key, error key, label, colour, marker, filled), the
+    diagonal and a band of 1 kcal/mol, the axes holding every value with its whole error bar."""
+    from cufep.benchmarks.runner import GUIDE_COLOUR, _pyplot, _save_figure
+    from cufep.benchmarks.stats import metrics
+
+    plt = _pyplot()
+    if plt is None:
+        return
+    values = [r[exp_key] for r in rows]
+    for key, err, *_ in series:
+        values += [r[key] + s * (r.get(err) or 0.0) for r in rows if r.get(key) is not None for s in (-1.0, 1.0)]
+    lo, hi = min(values) - 1.0, max(values) + 1.0
+    fig, ax = plt.subplots(figsize=(5.2, 5.0), dpi=150)
+    ax.plot([lo, hi], [lo, hi], color=GUIDE_COLOUR, lw=1)
+    ax.fill_between([lo, hi], [lo - 1, hi - 1], [lo + 1, hi + 1], color="0.92", zorder=0)
+    for key, err, label, colour, marker, filled in series:
+        part = [r for r in rows if r.get(key) is not None]
+        if not part:
+            continue
+        m = metrics([r[key] for r in part], [r[exp_key] for r in part])
+        stat = (f"{label}, {len(part)}: RMSE {m['rmse']:.2f}, Kendall τ "
+                + ("N/A" if m["kendall_tau"] is None else f"{m['kendall_tau']:.2f}"))
+        ax.errorbar([r[exp_key] for r in part], [r[key] for r in part],
+                    yerr=[r.get(err) or 0.0 for r in part] if err else None, fmt=marker, ms=6, color=colour,
+                    mfc=colour if filled else "white", capsize=2, elinewidth=1, label=stat, zorder=3 if filled else 2)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(xlabel.replace("experiment", "calculated"))
+    ax.set_title(title)
+    ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(0.0, -0.12))
+    _save_figure(fig, path)
+    plt.close(fig)
+
+
+def _plot_dg(rows: list[dict], path: Path, name: str, with_openfe: bool) -> None:
+    from cufep.benchmarks.runner import CUFEP_COLOUR, FEPPLUS_COLOUR
+
+    series = [("cufep", "cufep_error", "cuFEP (relative; standard error)", CUFEP_COLOUR, "o", True),
+              ("fepplus", None, "FEP+ (published)", FEPPLUS_COLOUR, "s", False)]
+    if with_openfe:
+        series.append(("openfe", "openfe_error", "OpenFE (published)", OPENFE_COLOUR, "^", False))
+    _scatter(rows, path, f"{name}: dG of the compounds", "exp", series, "experiment dG (kcal/mol)")
+
+
+def _plot_edges(rows: list[dict], path: Path, name: str, with_openfe: bool) -> None:
+    from cufep.benchmarks.runner import CUFEP_COLOUR, FEPPLUS_COLOUR
+
+    series = [("cufep_ddg", "cufep_error", "cuFEP (the edge; standard error)", CUFEP_COLOUR, "o", True),
+              ("fepplus_bennett_ddg", "fepplus_bennett_error", "FEP+ Bennett (published map)", FEPPLUS_COLOUR, "s",
+               False)]
+    if with_openfe:
+        series.append(("openfe_ddg", "openfe_error", "OpenFE (published, mean of 3)", OPENFE_COLOUR, "^", False))
+    _scatter(rows, path, f"{name}: ddG of the edges", "exp_ddg", series, "experiment ddG (kcal/mol)")

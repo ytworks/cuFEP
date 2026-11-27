@@ -7,12 +7,15 @@
 # benchmark calculation was run.
 # `rbfe_example` is the configuration of `cufep rbfe` whose settings the set runs with by relative
 # calculations (`--protocol rbfe`, src/cufep/benchmarks/relative.py); `fepplus_edges` the edges of the
-# published map with their FEP+ predictions.
+# published map with their FEP+ predictions; `openfe_dg`, `openfe_edges` the published results of the
+# OpenFE benchmark on the set (benchmarks/README.md), where there are any.
 tyk2:
   title: TYK2 kinase (PDB 4GIH), Schrödinger public benchmark jacs_set/tyk2
   example: examples/kinase_tyk2/config.yaml
   rbfe_example: examples/rbfe_tyk2/config.yaml
   fepplus_edges: benchmarks/tyk2/inputs/edge_predictions_tyk2_out.csv
+  openfe_dg: benchmarks/tyk2/inputs/openfe_dg_tyk2.csv
+  openfe_edges: benchmarks/tyk2/inputs/openfe_edges_tyk2.csv
   protein: benchmarks/tyk2/inputs/tyk2_protein.pdb
   ligands: benchmarks/tyk2/ligands.sdf
   reference: benchmarks/tyk2/ligands.csv
