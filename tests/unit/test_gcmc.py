@@ -469,11 +469,11 @@ def test_the_system_of_a_leg_with_the_moves_has_its_ghosts_off_and_its_alchemica
     without them, and the specification of the moves from the System with every water. Without the moves,
     and for the solvent leg, the prepared System as it is. The tail correction of the leg is set up with
     every water (the worker leaves out the ghosts of each configuration). The alchemical run starts in the
-    mean cell of the pre-equilibration, every molecule shifted whole into it; without the moves in the last
-    cell, as it was."""
+    cell of the last configuration of the pre-equilibration, with or without the moves (until 2026-11-28 in
+    its mean cell, into which the molecules of a drifting bilayer were shifted until they overlapped)."""
     from cufep.alchemy.lrc import TailEnergy
     from cufep.config.schema import Config
-    from cufep.workflow import WorkflowError, alchemical_box, alchemical_leg, leg_spec, leg_system, positions_in_cell
+    from cufep.workflow import WorkflowError, alchemical_box, alchemical_leg, leg_spec, leg_system
 
     forcefield, topology, positions, box = water_box("amber14/opc.xml")
     system = forcefield.createSystem(topology, nonbondedMethod=app.PME, nonbondedCutoff=0.9 * u.nanometer,
@@ -526,18 +526,7 @@ def test_the_system_of_a_leg_with_the_moves_has_its_ghosts_off_and_its_alchemica
         files = property(lambda self: list(self))
 
     assert np.array_equal(alchemical_box(Arrays(eq), None), eq["box"])
-    assert np.array_equal(alchemical_box(Arrays(eq), moves), eq["mean_box"])
-    with pytest.raises(WorkflowError, match="does not record its mean cell"):
-        alchemical_box(Arrays(box=eq["box"]), moves)
-    molecules = [tuple(a.index for a in residue.atoms()) for residue in residues]
-    moved = positions_in_cell(positions, eq["box"], eq["mean_box"], molecules)
-    for atoms in molecules[:50]:
-        index = list(atoms)
-        shift = moved[index] - positions[index]
-        assert np.allclose(shift, shift[0], atol=1e-12)            # the molecule as one body
-        centre = positions[index].mean(axis=0)
-        assert np.allclose(moved[index].mean(axis=0) @ np.linalg.inv(eq["mean_box"]),
-                           centre @ np.linalg.inv(eq["box"]), atol=1e-12)
+    assert np.array_equal(alchemical_box(Arrays(eq), moves), eq["box"])
 
 
 def test_a_leg_whose_ghosts_run_out_stops_with_the_reason(tmp_path, water_ligand_system):

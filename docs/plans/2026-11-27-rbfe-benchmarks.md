@@ -77,4 +77,12 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   共通の関数(`gcmc_problems`)。YAML が `sampling.gcmc` の一部だけを書くと既定 OFF の型で読まれて切れていた → RBFE 用の型
   (`RbfeGcmcConfig`、既定 ON)。CPU テスト(幽霊が両方の力で無いこと、Context での切り替え、stand-in の端と中間、hybrid での
   移動)と GPU テスト(両 backend での切り替え、GPU の stand-in、hybrid の replica exchange と移動): 23 passed。
+- 2026-11-28 A2A(GCMC あり、faa65e0)が 2 回とも約 20 分で CUDA の失敗(プラグインのカーネル、MPS で同じ GPU の全プロセスが
+  落ちる)。原因: GCMC の脚はセルを前平衡化の後半の平均セルに固定し、最後の配置の分子を丸ごとそのセルへ移していた。膜の
+  平衡化(溶質を保持した 10 ns)でセルがまだ流れていて(4b~4m の z: 五分割の平均 10.37 → 10.73 nm)、平均セルが最後の
+  セルより z で 2.3 % 短く、分子が重なった(1 プロセス・1 GPU で再現: 最初の MD でプラグインが失敗、標準 OpenMM は NaN;
+  最後のセルからなら正常)。4b~4e 1.3 %、4a~4o 0.9 %、4a~4q 0.05 %。TYK2 は前平衡化に自由 MD が無く平均セル = 最後のセル。
+- 修正: GCMC の脚のセルは前平衡化の最後の配置のセル(grand の例と同じ)。ABFE と共通の関数(`alchemical_box`)なので ABFE
+  も同じに(ABFE の GCMC は既定 OFF)。`positions_in_cell` は削除。TYK2 の実行(faa65e0)は平均セル = 最後のセルなので
+  修正後と同じ計算で、そのまま続ける。A2A は修正後のイメージで、準備済みの辺と終わった前平衡化を写して最初から。
 

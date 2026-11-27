@@ -17,8 +17,8 @@ The lambda windows (``lambda_schedule``)
 
 Grand canonical moves of water (``sampling.gcmc``, on by default in the complex leg)
     As in the ABFE (:mod:`cufep.sampling.gcmc`): the waters farthest from the ligand are ghosts from the start, the
-    pre-equilibration with its barostat settles the cell without them, and the windows and the replica exchange run
-    in the mean cell of its second half, without a barostat, with the moves in a sphere around the heavy atoms of the
+    pre-equilibration with its barostat settles the cell without them, and the windows and the replica exchange keep
+    the cell of its last configuration, without a barostat, with the moves in a sphere around the heavy atoms of the
     hybrid ligand (those of A and of B).
 """
 from __future__ import annotations
@@ -204,47 +204,6 @@ def hybrid_gcmc(rcfg, built: HybridLeg, leg: str, log=print):
     return spec
 
 
-def system_molecules(system) -> list[list[int]]:
-    """The molecules of a System as OpenMM groups them (``Context.getMolecules``): the particles joined by
-    constraints, by the bonds of its bonded forces of two particles and by virtual sites; without a Context."""
-    import openmm as mm
-
-    parent = list(range(system.getNumParticles()))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def join(i: int, j: int) -> None:
-        ri, rj = find(int(i)), find(int(j))
-        if ri != rj:
-            parent[ri] = rj
-
-    for k in range(system.getNumConstraints()):
-        i, j, _d = system.getConstraintParameters(k)
-        join(i, j)
-    for force in system.getForces():
-        if isinstance(force, mm.HarmonicBondForce):
-            for k in range(force.getNumBonds()):
-                i, j, *_ = force.getBondParameters(k)
-                join(i, j)
-        elif isinstance(force, mm.CustomBondForce):
-            for k in range(force.getNumBonds()):
-                i, j, _p = force.getBondParameters(k)
-                join(i, j)
-    for i in range(system.getNumParticles()):
-        if system.isVirtualSite(i):
-            site = system.getVirtualSite(i)
-            for k in range(site.getNumParticles()):
-                join(i, site.getParticle(k))
-    groups: dict[int, list[int]] = {}
-    for i in range(len(parent)):
-        groups.setdefault(find(i), []).append(i)
-    return list(groups.values())
-
-
 def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None):
     """The windows of the solvent leg of the edge, when it has them; waits for them."""
     from cufep.alchemy.schedule import Schedule
@@ -320,13 +279,8 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
-    if gcmc is not None:
-        # with grand canonical moves of water the windows and the replica exchange have no barostat: they stay in
-        # the mean cell of the pre-equilibration, into which its last configuration is moved (as in the ABFE)
-        from cufep.workflow import alchemical_box, positions_in_cell
-
-        cell = alchemical_box(eq, gcmc)
-        start = (positions_in_cell(start[0], start[1], cell, system_molecules(hybrid.system)), cell, start[2])
+    # (with grand canonical moves of water the windows and the replica exchange have no barostat: they keep the cell
+    # of this last configuration, cufep.workflow.alchemical_box)
 
     # ---- 2. backend -------------------------------------------------------------------------------
     backend_name = chosen_backend(run, hybrid.system)

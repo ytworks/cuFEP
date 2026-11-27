@@ -117,7 +117,7 @@ Grand canonical moves of water (`sampling.gcmc`, on by default in the complex le
 deleted from a sphere around the heavy atoms of the hybrid ligand (those of A and of B, so that the sphere is one
 whichever way the edge is run), in equilibrium with bulk water. The waters farthest from the ligand are ghosts from
 the start; the pre-equilibration, with its barostat, settles the cell without them, and the windows and the replica
-exchange run in the mean cell of its second half without a barostat. A ghost has no charge and no Lennard-Jones in
+exchange keep the cell of its last configuration, without a barostat. A ghost has no charge and no Lennard-Jones in
 the NonbondedForce and in the Lennard-Jones of the hybrid ligand with its environment. The trials are first
 evaluated with a stand-in energy in which each atom of the hybrid ligand has its charge and Lennard-Jones at the
 lambda of the window; the one that passes is tested with the full potential of the replica. The solvent leg has no

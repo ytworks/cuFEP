@@ -760,7 +760,9 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
 - **Constant volume.** The grand canonical ensemble has a fixed volume, so the alchemical run of
   the leg (the precalculation of the lambda windows and the replica exchange) has no barostat.
   The pre-equilibration and the MD for the restraint keep theirs; the cell is then fixed at the
-  mean cell of the second half of the pre-equilibration, every molecule shifted whole into it.
+  cell of the last configuration of the pre-equilibration (grand's examples go on from the last frame
+  of an MD at constant pressure). Until 2026-11-28 it was the mean cell of the second half, every
+  molecule shifted whole into it; in a bilayer whose cell still drifted the molecules then overlapped.
   The solvent leg is as without the moves, at constant pressure. The free energy of the complex
   leg is then one at constant volume and constant chemical potential of the water in the sphere,
   that of the solvent leg one at constant pressure; the result records the pressure at which the

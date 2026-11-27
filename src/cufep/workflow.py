@@ -764,32 +764,15 @@ def electrostatics_annihilated(conditions: dict | None) -> bool:
     return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
 
 
-def alchemical_box(eq, gcmc) -> np.ndarray:
+def alchemical_box(eq, gcmc=None) -> np.ndarray:
     """The cell in which the alchemical run of a leg starts, from its pre-equilibration (the arrays
-    of ``equil.npz``): the cell of its last configuration. A leg with grand canonical moves of water
-    has no barostat after that and stays in one cell: the mean cell of the second half of the
-    pre-equilibration (``mean_box``; cuFEP's own choice: grand's examples go on from the last frame
-    of an MD at constant pressure, whose volume is one value of a fluctuating one)."""
-    if gcmc is None:
-        return np.asarray(eq["box"], dtype=float)
-    if "mean_box" not in eq.files:
-        raise WorkflowError("the pre-equilibration of this leg does not record its mean cell, which a leg with "
-                            "sampling.gcmc is fixed in: it was written by a version without it. Nothing was "
-                            "changed; run the calculation in a new output.dir")
-    return np.asarray(eq["mean_box"], dtype=float)
-
-
-def positions_in_cell(positions, box, new_box, molecules) -> np.ndarray:
-    """A configuration moved into another cell as a barostat moves it: every molecule is shifted as
-    a whole, so that its centre keeps its fractional coordinates. No distance within a molecule
-    changes (constraints, virtual sites)."""
-    x = np.array(positions, dtype=float)
-    transform = np.linalg.inv(np.asarray(box, dtype=float)) @ np.asarray(new_box, dtype=float)
-    for atoms in molecules:
-        index = np.fromiter(atoms, dtype=np.int64)
-        centre = x[index].mean(axis=0)
-        x[index] += centre @ transform - centre
-    return x
+    of ``equil.npz``): the cell of its last configuration, which a leg with grand canonical moves of
+    water (``gcmc``), without a barostat after that, keeps (grand's examples go on from the last frame
+    of an MD at constant pressure). Before 2026-11-28 such a leg was fixed in the mean cell of the second
+    half of the pre-equilibration, every molecule of the last configuration shifted whole into it: in a
+    bilayer whose cell still drifted the molecules then overlapped (A2A 4b~4m, the mean cell 2.3 % shorter in
+    z than the last one: a CUDA failure on the plugin, NaN on stock OpenMM)."""
+    return np.asarray(eq["box"], dtype=float)
 
 
 def samples_settings(cfg: Config, leg: str | None = None) -> dict:
@@ -2936,11 +2919,8 @@ def run_leg(job: LegJob) -> dict:
             )
             # (with grand canonical moves the cell is fixed, alchemical_box, and the spec has no barostat)
             start_box = alchemical_box(eq, gcmc)
-            ctx, integ = leg_context(
-                pool_spec, alch.system, start_box,
-                eq["positions"] if gcmc is None else
-                (lambda c: positions_in_cell(eq["positions"], eq["box"], start_box, c.getMolecules())),
-                eq["velocities"], device0, seed)
+            ctx, integ = leg_context(pool_spec, alch.system, start_box, eq["positions"], eq["velocities"], device0,
+                                     seed)
             t0 = time.perf_counter()
             # a replica exchange that goes on from samples (or the checkpoint of their start) keeps their windows:
             # checked before anything is written, as the replica exchange would refuse them only afterwards
