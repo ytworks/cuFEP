@@ -71,8 +71,8 @@ def test_benchmark_run_with_the_relative_protocol_runs_the_relative_calculation_
 
     seen = {}
 
-    def fake(rcfg, experiment=None, **_kw):
-        seen.update(rcfg=rcfg, experiment=experiment)
+    def fake(rcfg, experiment=None, only_edges=None, **_kw):
+        seen.update(rcfg=rcfg, experiment=experiment, only_edges=only_edges)
         return {"edges": [], "failed_in_this_run": ["ejm_31~ejm_46/r0/complex: no free energy"]}
 
     monkeypatch.setattr(rbfe_run, "run_rbfe", fake)
@@ -81,6 +81,13 @@ def test_benchmark_run_with_the_relative_protocol_runs_the_relative_calculation_
     assert result.exit_code == 1, result.output
     assert seen["rcfg"].network.edges is None and seen["rcfg"].resources.gpus == [0, 1]
     assert str(seen["rcfg"].output.dir) == str(tmp_path / "out") and seen["experiment"] == experiment("tyk2")
+    seen.clear()
+    result = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--protocol", "rbfe", "--tier", "full",
+                                           "-o", str(tmp_path / "out"), "--edge", "ejm_42~ejm_54",
+                                           "--edge", "ejm_55~ejm_54"])
+    assert seen["only_edges"] == ["ejm_42~ejm_54", "ejm_55~ejm_54"]
+    refused = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--edge", "ejm_42~ejm_54"])
+    assert refused.exit_code != 0 and "--edge is an option of a relative benchmark" in refused.output
     for args in (["--tier", "subset"], ["--repeats", "3"]):
         refused = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--protocol", "rbfe", *args])
         assert refused.exit_code != 0 and "Error" in refused.output

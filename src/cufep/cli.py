@@ -479,14 +479,14 @@ def benchmark_plan(name: str, tier: str, protocol: str) -> None:
         click.echo(line)
 
 
-def _benchmark_run_rbfe(name: str, tier: str, output, gpus) -> None:
+def _benchmark_run_rbfe(name: str, tier: str, output, gpus, edges=None) -> None:
     from cufep.benchmarks.relative import experiment
     from cufep.benchmarks.relative import report as relative_report
     from cufep.rbfe.run import failed_edges, run_rbfe
 
     rcfg = _rbfe_benchmark_config(name, tier, output, gpus)
     try:
-        summary = run_rbfe(rcfg, experiment=experiment(name))
+        summary = run_rbfe(rcfg, experiment=experiment(name), only_edges=list(edges) or None)
         click.echo(relative_report(name, rcfg.output.dir))
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
@@ -508,8 +508,11 @@ def _benchmark_run_rbfe(name: str, tier: str, output, gpus) -> None:
                                      "runs/benchmark_rbfe_<name>_<tier> with --protocol rbfe).")
 @click.option("--gpus", help="'auto' or a comma separated list of CUDA device numbers.")
 @click.option("--repeats", type=int, help="Override the number of repeats.")
+@click.option("--edge", "edges", multiple=True,
+              help="rbfe: run only this edge (A~B) of the network; repeat for several. The results of the other "
+                   "edges in the output directory are combined with it.")
 @_PROTOCOL
-def benchmark_run(name: str, tier: str, output, gpus, repeats, protocol: str) -> None:
+def benchmark_run(name: str, tier: str, output, gpus, repeats, edges, protocol: str) -> None:
     """Run benchmark NAME (resumable)."""
     from cufep import run as driver
     from cufep.benchmarks.runner import benchmark_config, example_notices, report
@@ -518,8 +521,10 @@ def benchmark_run(name: str, tier: str, output, gpus, repeats, protocol: str) ->
         if repeats is not None:
             raise click.ClickException("--repeats is a setting of the absolute benchmark; a relative benchmark runs "
                                        "the repeats of its example")
-        _benchmark_run_rbfe(name, tier, output, gpus)
+        _benchmark_run_rbfe(name, tier, output, gpus, edges)
         return
+    if edges:
+        raise click.ClickException("--edge is an option of a relative benchmark (--protocol rbfe)")
     try:
         example, notices = example_notices(name)
         for notice in notices:
