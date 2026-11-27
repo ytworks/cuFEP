@@ -43,12 +43,16 @@ TYK2 only); `cufep benchmark report <set> <run directory> --protocol rbfe` gives
 | set | directory | edges with a ddG | compounds with a dG | calculation | report |
 |---|---|---|---|---|---|
 | TYK2 (`tyk2`) | [tyk2_rbfe](tyk2_rbfe) | 22 of 22 | 16 of 16 | 2026-11-28, commit faa65e0 (grand canonical moves of water in the complex leg) | the one the run wrote |
+| A2A (`a2a`) | [a2a_rbfe](a2a_rbfe) | 21 of 21 | 17 of 17 | 2026-11-28, commit cd15025 (grand canonical moves of water in the complex leg; started on five GPUs, resumed from its checkpoints on eight with the same image) | the one the run wrote |
 
 - Files: `rbfe_report.md` (statistics and tables), `rbfe_report_ligands.csv`, `rbfe_report_edges.csv`,
   `rbfe_report.png` (dG of the compounds), `rbfe_report_edges.png` (ddG of the edges), and the run's `summary.json`,
   `edges.csv`, `ligands.csv`, `network.json`, `resolved_config.yaml`.
 - The run of commit 39ee4ac (2026-11-27, without the moves of water; its 4 edges with core proper torsions of B before the
   fix of d61c215) is in the tree of commit d9afc69.
+- TYK2 (faa65e0) and A2A (cd15025) compute the same: they differ only in the cell of a leg with the moves, which for TYK2's
+  legs (no free MD in their pre-equilibration) is the same cell.
+- A2A: both legs of 4d~4f ran on stock OpenMM (as below). OpenFE published no result for this set.
 - TYK2: the legs of 5 edges ran on stock OpenMM (their hybrid has hydrogens the plugin's integrator cannot constrain;
   the owner's decision of 2026-11-27 to keep the fallback); the report names them.
 

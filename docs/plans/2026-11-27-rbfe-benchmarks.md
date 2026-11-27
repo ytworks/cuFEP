@@ -95,4 +95,10 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   complex 脚で 1.86。1 辺 1 計算ずつで、同じコードの 2 回でも脚が 0.65〜0.69 動く(PR #19 の記録)。torsion 修正の 4 辺は
   GCMC と修正の両方が変わる: ejm_42→ejm_54 +1.46 → −0.88(実験 −0.75)、ejm_55→ejm_54 +1.40 → +0.26(−1.32)、
   ejm_50→ejm_42 −1.52 → −0.11(−0.80)、ejm_50→ejm_55 −0.61 → −0.88(−0.23)。
+- 2026-11-28 A2A full、GCMC あり(image cufep:cd15025、GPU 3〜7 で開始し、TYK2 の終了後に同じイメージでチェックポイントから 8 GPU で
+  再開、`runs/rbfe_bench_a2a_cd15025`、`benchmarks/results/a2a_rbfe/`): exit 0、21/21 辺、17/17 化合物、CUDA の失敗なし。complex 脚
+  ごとに受け入れた挿入 2700〜4500、球の中の水 5〜9(窓の平均)。4d~4f の両脚が標準 OpenMM(CCMA)。NOT RELIABLE なし(最小の重なり
+  0.084)。kcal/mol、95 % bootstrap、17 化合物で中心合わせ: dG の RMSE 1.59 [0.95, 2.14](FEP+ 1.08)、MUE 1.22(0.79)、pairwise 2.33
+  (1.58)、R² 0.51(0.50)、τ 0.57(0.59)。辺の RMSE 21 辺 1.57、FEP+ と共通の 10 辺 1.97(FEP+ Bennett 1.42)。外れの大きい化合物:
+  4a +3.78、4o +3.38(4o→4e −4.34、実験 −0.72)、4r −2.14、4n −1.71。GCMC なしの A2A(RBFE)は止めたので比べる相手がない。
 
