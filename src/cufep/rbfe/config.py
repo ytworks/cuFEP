@@ -21,6 +21,7 @@ from cufep.config.schema import (
     AnalysisConfig,
     CommonConfig,
     GcmcConfig,
+    LegLengths,
     OutputConfig,
     PrecalculationLengths,
     SamplingConfig,
@@ -92,6 +93,11 @@ class MappingConfig(_Section):
 class HybridAlchemyConfig(_Section):
     #: alpha of the soft-core Lennard-Jones of Gapsys et al. 2012 (OpenFE's softcore_alpha)
     softcore_alpha: float = Field(default=0.85, gt=0.0, le=1.0)
+    #: the bonded terms between the atoms that are dummies at an end and the physical atoms. all: every term is kept
+    #: (OpenFE's hybrid topology). separated: at the junctions the rule treats, those that would make the dummies'
+    #: contribution depend on physical coordinates go to zero towards that end (Fleck, Wieder and Boresch 2021;
+    #: cufep.rbfe.junctions)
+    dummy_bonded_terms: Literal["all", "separated"] = "all"
 
 
 class HybridAdaptiveConfig(_Section):
@@ -126,11 +132,36 @@ class HybridAdaptiveConfig(_Section):
         return float(_of_leg(self.equilibration_ps, leg))
 
 
+class LegWindows(_Section):
+    """The lambda windows of each leg: a number of evenly spaced windows or the lambda values."""
+
+    complex: int | list[float]
+    solvent: int | list[float]
+
+    @field_validator("complex", "solvent")
+    @classmethod
+    def _windows(cls, v):
+        from cufep.config.schema import _check_stage
+
+        return _check_stage(v)
+
+
 class HybridLambdaSchedule(_Section):
     #: adaptive: adaptive lambda scheduling; fixed: the windows below
     mode: Literal["adaptive", "fixed"] = "adaptive"
-    #: fixed mode: a number of evenly spaced windows (OpenFE's 11) or the lambda values
-    windows: int | list[float] = 11
+    #: fixed mode: a number of evenly spaced windows (OpenFE's 11) or the lambda values, for both legs or
+    #: {complex: ..., solvent: ...}
+    windows: int | list[float] | LegWindows = 11
+    #: what the replicas of windows start from that a leg does not choose itself: the windows of fixed mode, those
+    #: the complex leg takes from the solvent leg (``adaptive.legs: solvent``), and windows a leg keeps whose start
+    #: configurations are made again. pre_equilibration: the end of the
+    #: pre-equilibration, minimised in each window, and 10 ps of MD in it. precalculation: what the windows of the
+    #: first iteration of adaptive lambda scheduling start from (a walk through the windows with
+    #: ``adaptive.walk_ps`` in each, then in each window the MD of a window of the precalculation,
+    #: ``adaptive.equilibration_ps`` and ``adaptive.window_ps``), so that given windows and windows that the
+    #: precalculation chose differ in their lambda values alone (with ``adaptive.start_configurations: walk``, the
+    #: start this is made as)
+    start_configurations: Literal["pre_equilibration", "precalculation"] = "pre_equilibration"
     adaptive: HybridAdaptiveConfig = Field(default_factory=HybridAdaptiveConfig)
 
     def precalculated_legs(self) -> list[str]:
@@ -139,12 +170,22 @@ class HybridLambdaSchedule(_Section):
             return []
         return ["complex", "solvent"] if self.adaptive.legs == "each" else ["solvent"]
 
+    def windows_of(self, leg: str) -> int | list[float]:
+        """The windows of ``leg`` in fixed mode."""
+        return getattr(self.windows, leg) if isinstance(self.windows, LegWindows) else self.windows
+
+    def windows_text(self) -> str:
+        """The windows of fixed mode as a run says them: one value, or that of each leg."""
+        if isinstance(self.windows, LegWindows):
+            return f"{self.windows.complex} (complex leg) and {self.windows.solvent} (solvent leg)"
+        return str(self.windows)
+
     @field_validator("windows")
     @classmethod
     def _windows(cls, v):
         from cufep.config.schema import _check_stage
 
-        return _check_stage(v)
+        return v if isinstance(v, LegWindows) else _check_stage(v)
 
 
 def initial_window_problems(schedule: HybridLambdaSchedule) -> list[str]:
@@ -176,10 +217,23 @@ class RbfeGcmcConfig(GcmcConfig):
     enabled: bool = True
 
 
+class TerminalFlipConfig(_Section):
+    """Terminal flip Monte Carlo (:mod:`cufep.sampling.terminal_flip`): half a turn of a terminal aromatic group of
+    the hybrid ligand whose two orientations differ, accepted with the potential energy of the replica's state;
+    in both legs. Off by default (the owner decides the default, plan of 2026-11-28)."""
+
+    enabled: bool = False
+    #: MD of a replica for which one move is attempted: 2.5 ps, one move per iteration of the default length
+    #: (SOMD2 attempts one move per cycle of its replica exchange)
+    interval_ps: float = Field(default=2.5, gt=0.0)
+
+
 class RbfeSampling(SamplingConfig):
-    #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol
-    production_ns: float = 5.0
+    #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol; one number or
+    #: {complex: ..., solvent: ...}
+    production_ns: float | LegLengths = 5.0
     gcmc: RbfeGcmcConfig = Field(default_factory=RbfeGcmcConfig)
+    terminal_flip: TerminalFlipConfig = Field(default_factory=TerminalFlipConfig)
 
     @model_validator(mode="after")
     def _no_water_moves(self):
@@ -189,6 +243,12 @@ class RbfeSampling(SamplingConfig):
         if not isinstance(self.equilibration_ns, (int, float)):
             raise ValueError("sampling.equilibration_ns is one value for both legs")
         return self
+
+    def production_text(self) -> str:
+        """The production per lambda window (ns) as a run says it: one length, or that of each leg."""
+        if isinstance(self.production_ns, LegLengths):
+            return f"{self.production('complex'):g} (complex leg) and {self.production('solvent'):g} (solvent leg)"
+        return f"{float(self.production_ns):g}"
 
 
 class RbfeAnalysis(AnalysisConfig):
@@ -222,6 +282,13 @@ class RbfeConfig(CommonConfig):
             problems.append("membrane.complex_leg: water is a setting of the ABFE; a relative calculation runs the "
                             "complex leg in the bilayer")
         problems += initial_window_problems(self.lambda_schedule)
+        schedule = self.lambda_schedule
+        if schedule.start_configurations == "precalculation" and schedule.adaptive.start_configurations != "walk":
+            # (review of 3367749: such windows were started by the walk whatever the precalculation was set to)
+            problems.append("lambda_schedule.start_configurations: precalculation starts the windows as a "
+                            "precalculation with lambda_schedule.adaptive.start_configurations: walk starts "
+                            f"its first windows; with {schedule.adaptive.start_configurations} there is no such "
+                            "start for given windows")
         problems += gcmc_problems(self)
         if problems:
             raise ValueError("; ".join(problems))

@@ -588,6 +588,72 @@ def test_the_two_ways_of_starting_the_first_windows(water_ligand_system):
         adaptive_schedule(None, None, ["vanish"], 300.0, 2.0, AlsSettings(start_configurations="chain"))
 
 
+def test_given_windows_started_as_a_precalculation_start_as_its_first_iteration_does(water_ligand_system):
+    """Given lambda windows whose replicas are started as a precalculation starts them (``cufep rbfe``,
+    ``lambda_schedule.start_configurations: precalculation``) get what the first iteration of adaptive lambda
+    scheduling gives the same windows: every window is handed the configuration the same walk left it, in the same
+    state, and integrates as many steps; the configurations they end with are the same to the bit (CPU platform,
+    one thread, deterministic forces, the same seeds), with or without a pool. So a calculation with given windows
+    and one whose precalculation chose the same windows differ in nothing but who chose them."""
+    import cufep.alchemy.schedule as module
+    from cufep.alchemy.schedule import precalculation_md_ps, precalculation_starts
+
+    system, pos, box, ligand = water_ligand_system
+    alch = make_alchemical_system(system, ligand)
+
+    def make():
+        integ = mm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
+        integ.setRandomNumberSeed(51)
+        ctx = mm.Context(alch.system, integ, mm.Platform.getPlatformByName("CPU"),
+                         {"Threads": "1", "DeterministicForces": "true"})
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(pos)
+        ctx.setVelocitiesToTemperature(300.0, 52)
+        return ctx, integ
+
+    # a precalculation that adds no window: its four windows are those of its first iteration
+    settings = AlsSettings(overlap_threshold=0.001, candidates=21, initial_windows={"vanish": 4}, window_ps=0.1,
+                           equilibration_ps=0.04, sample_interval_ps=0.02, walk_ps=0.02, max_windows=4)
+    original = module.run_window
+    handed: list[dict] = []
+
+    def recording(context, integrator, task, **moves):
+        handed.append(task)
+        return original(context, integrator, task, **moves)
+
+    module.run_window = recording
+    try:
+        schedule, chosen = adaptive_schedule(*make(), ["vanish"], 300.0, 2.0, settings, lambda m: None)
+        of_the_precalculation, handed[:] = list(handed), []
+        given = precalculation_starts(*make(), list(schedule.states), 300.0, 2.0, settings)
+        of_the_given = list(handed)
+    finally:
+        module.run_window = original
+    assert len(schedule.states) == len(of_the_precalculation) == len(of_the_given) == 4
+
+    def md_steps_of(task) -> int:
+        return int(task["equilibration_steps"]) + int(task["n_samples"]) * int(task["steps_per_sample"])
+
+    for a, b in zip(of_the_precalculation, of_the_given):
+        assert a["state"] == b["state"]
+        assert all(np.array_equal(x, y) for x, y in zip(a["config"], b["config"]))        # the same walk
+        assert md_steps_of(a) == md_steps_of(b) == 70                                    # 0.04 + 0.1 ps at 2 fs
+        assert b["stages"] == [] and b["n_samples"] == 0 and not b.get("minimize_steps")  # nothing recorded
+    for (pa, ba, va), (pb, bb, vb) in zip(chosen, given):
+        assert np.array_equal(pa, pb) and np.array_equal(ba, bb) and np.array_equal(va, vb)
+
+    leg = make()
+
+    class Pool:
+        def run(self, tasks):
+            return [run_window(*leg, t) for t in tasks]
+
+    pooled = precalculation_starts(*leg, list(schedule.states), 300.0, 2.0, settings, pool=Pool())
+    for (pa, ba, va), (pb, bb, vb) in zip(given, pooled):
+        assert np.array_equal(pa, pb) and np.array_equal(ba, bb) and np.array_equal(va, vb)
+    assert precalculation_md_ps(settings, 2.0) == pytest.approx({"walk_ps": 0.02, "window_md_ps": 0.14})
+
+
 def test_a_schedule_is_accepted_only_for_its_own_leg(tmp_path):
     """Review of PR 1: a complex leg took the frozen schedule of a solvent leg and lost its restrain stage."""
     from dataclasses import replace

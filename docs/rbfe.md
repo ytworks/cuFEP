@@ -108,6 +108,34 @@ The rules of the HybridTopologyFactory of OpenFE's relative protocol (openfe 1.1
 - a bonded term that a System has twice counts twice (OpenFE keeps one of them); the bonds, angles and torsions
   of the environment are those of A, and an edge whose B has other ones is refused.
 
+Junctions (`alchemy.dummy_bonded_terms`, default `all`; `src/cufep/rbfe/junctions.py`): at an end the atoms unique
+to the other ligand are dummies that keep their bonded terms. The free energy is that of the physical ligand only
+if the dummies contribute a constant to the partition function whatever the physical atoms do, and redundant terms
+between dummies and physical atoms break that (Fleck, Wieder and Boresch, J. Chem. Theory Comput. 2021, 17, 4403:
+a naive treatment gave errors of up to 0.6 kcal/mol in relative solvation free energies at triple junctions, and
+none that was apparent at terminal and dual ones). With `separated` the rule of the paper is applied where it
+gives an exact separation and this version implements it:
+
+- what a junction is in this hybrid (cuFEP's reading): no term joins atoms unique to A with atoms unique to B, and
+  the terms of a dummy are those of its own ligand, so the physical groups on the bridge atom that the rule counts
+  are the core atoms bonded to it in the ligand of the dummies;
+- terminal junction (one core atom R on the bridge X): "one can always keep all bond angle terms"; of the dihedrals
+  Q-R-X-D, "for one of them [the physical atoms two bonds away from the bridge], all dihedral angles reaching into
+  the dummy group(s) can be kept. Any dihedral angle terms that originate from the respective other physical atoms
+  and reach into the dummy group(s) have to be deleted." The torsions through the other atoms go to zero towards
+  the end at which D is a dummy, as a core torsion of one end does. Which atom is kept is cuFEP's choice where the
+  paper leaves it free: the one with the most bonds, then the lowest number;
+- dual and triple junctions and dummies bonded to more than one core atom are left as they are and named in the
+  result of the leg (`hybrid.junctions`). A dual junction needs two angles moved to 90 degrees (or a dihedral of
+  periodicity 1), a planar triple junction the same; a triple junction that is not planar has no exact separation
+  in the paper.
+
+In the recorded benchmarks (`spikes/m40_rbfe_edge_classes.py`) the 63 groups of dummies of the 22 TYK2 edges are at
+15 terminal, 36 dual and 12 non-planar triple junctions (the last in 6 edges), the 79 of the 21 A2A edges at 45
+terminal and 34 dual ones. A unit test holds the rule to its known answer: the integral over the turn of a dummy
+about the bridge bond is the analytic constant with `separated` and changes by 2.0 kT with the angle between two
+physical atoms with `all`.
+
 How the energy is carried (cuFEP's own; the energies are those of the rules): the NonbondedForce, which the
 cuPotential plugin replaces, holds only the charges of the ligand, as particle parameter offsets under the
 three electrostatic lambdas and REST2 (`spikes/m36`: the plugin gives the differences between states within
@@ -125,11 +153,25 @@ solvent leg (the paper's), 500 ps after 500 ps in the complex leg (the values of
 iteration at the same time on the GPUs of the leg. The paper decides the windows of both legs from the ligand
 in solution (`legs: solvent`); in the TYK2 example that left a pair of windows of a complex leg at an overlap of
 0.013. `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
-number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, minimised
+number; a number or the lambda values, for both legs or `{complex: ..., solvent: ...}`). Windows that a leg does
+not choose itself all start from the end of its pre-equilibration, minimised
 in their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all at the same time on
 the GPUs of the leg; the equilibration of the replica exchange then relaxes them further. (At lambda 0 the atoms
 unique to B do not interact, so water can move where they are; a window in which they interact must not start
 from that without a minimisation: cuFEP's first version did, and those windows went to NaN.)
+
+With `lambda_schedule.start_configurations: precalculation` such windows start as a precalculation of adaptive
+lambda scheduling starts the windows of its first iteration instead: a walk through the windows in order from the
+end of the pre-equilibration (`adaptive.walk_ps` in each), then in each window the MD of a window of the
+precalculation (`adaptive.equilibration_ps` and `adaptive.window_ps`), on the backend of the leg and with its water
+moves, without a minimisation and without recording energies. Given windows and windows that a precalculation
+chose then differ in their lambda values alone, which is what a comparison of the two needs (cuFEP's own; a unit
+test holds the two starts equal to the bit). The result of a leg gives its MD after the pre-equilibration in ps
+(`md_ps`: what made its windows, and its replica exchange), so that a leg with given windows can be given the MD
+of one whose precalculation chose them, with `sampling.production_ns` (one number, or one for each leg); where the
+record of the start configurations does not tell what made the windows (a leg that kept windows it had), the
+number is not given. The start is that of a precalculation that walks (`adaptive.start_configurations: walk`, the
+default); with `sequential` the setting is refused.
 
 ### Sampling
 
@@ -156,6 +198,36 @@ the conditions they were determined at (298.15 K, 1 bar, a cutoff of 0.9 nm; `do
 others gives its own numbers or switches the moves off. A directory of a version before the moves, run again with
 its YAML, is refused before anything is written (the pre-equilibration of its complex legs was made without
 ghosts), and says that `sampling.gcmc.enabled: false` continues it as it was made.
+
+Terminal flip moves (`sampling.terminal_flip`, off by default; `src/cufep/sampling/terminal_flip.py`): a terminal
+aromatic group of the hybrid ligand is turned by half a turn about the bond that joins it to the rest of the
+ligand, and the move is accepted with the potential energy of the replica's state (lambda and REST2 as set), so
+each window keeps its distribution. A ring whose two orientations differ (a substituent in one ortho or meta
+position, a ring atom of another element) is rarely turned by MD in a pocket; the move proposes the other
+orientation directly. The method is terminal flip Monte Carlo as SOMD2 implements it (OpenBioSim/somd2,
+`runner/_samplers/_terminal_flip.py`: an anchor outside rings, a ring atom as pivot, everything beyond the pivot
+turned by a multiple of 360/n degrees taken from the ring, the Metropolis criterion on the potential energy of the
+Context, one attempt per cycle; its papers, doi:10.1021/acs.jctc.6c00177 and doi:10.1021/acs.jctc.6c00593, were
+not read). cuFEP's rule is narrower, and where it differs it is cuFEP's own (the first scope of issue #27):
+
+- the axis is a bond in no ring and the pivot an atom of an aromatic ring (the anchor may be an atom of another
+  ring, as in a biaryl);
+- beyond the axis lies one ring system and atoms in no ring, with fewer heavy atoms than on the side of the anchor
+  (the terminal side of the bond is the smaller one; with as many on both sides neither is turned);
+- the two ring neighbours of the pivot are not equivalent atoms (a phenyl or a 2,6-dichlorophenyl ring is not
+  turned: half a turn gives the configuration it had);
+- in the hybrid the anchor and the whole ring system of each ligand are core atoms, the group is terminal in both
+  ligands and its orientations
+  differ in at least one; the unique atoms of both ligands beyond the pivot turn with the ring;
+- the angle is half a turn for every group, fixed when the leg is set up (the exocyclic bond of an aromatic atom
+  lies in the plane of its ring); the velocities of the turned atoms are turned with them.
+
+One move per replica is attempted for every `interval_ps` of its MD (2.5 ps: one per iteration), in both legs,
+by the replica exchange (the windows of a precalculation and the start of given windows make none). The moves and
+their acceptance are in the result of a leg by lambda window (`terminal_flip`), and the samples record the rule,
+the interval and the groups. A leg whose hybrid ligand has no such group is sampled as without the setting, and
+its samples are those of a calculation without it. In the recorded benchmarks no edge of TYK2 has such a group
+and 13 of the 21 edges of A2A have one (`spikes/m40_rbfe_edge_classes.py`).
 
 ### Membrane proteins
 
@@ -249,9 +321,11 @@ mapping:
   allow_bond_breaks: false
 alchemy:
   softcore_alpha: 0.85
+  dummy_bonded_terms: all
 lambda_schedule:
   mode: adaptive
   windows: 11
+  start_configurations: pre_equilibration
   adaptive:
     overlap_threshold: 0.04
     overlap_matrix: stage
@@ -280,6 +354,9 @@ sampling:
     ghost_waters: auto
     excess_chemical_potential_kcal_per_mol: auto
     standard_volume_nm3: auto
+  terminal_flip:
+    enabled: false
+    interval_ps: 2.5
 analysis:
   lrc: none
 output:
@@ -292,13 +369,16 @@ output:
 |---|---|---|
 | `mapping.*` | Kartograf's defaults | Kartograf (Ries et al. 2024); the defaults of OpenFE's relative protocol (since openfe 1.7) |
 | `alchemy.softcore_alpha` | 0.85 | Gapsys et al. 2012; OpenFE's `softcore_alpha` |
+| `alchemy.dummy_bonded_terms` | all | every bonded term of a dummy kept, as OpenFE's hybrid topology keeps them; `separated` (the rule of Fleck, Wieder and Boresch 2021 at terminal junctions) is off until the owner decides (plan of 2026-11-28, issue #27) |
 | `network.*` | LOMAP, score 0.4, every ligand in a cycle, paths of at most 6 edges | lomap2's defaults of `generate_lomap_network`, with which the OpenFE benchmark (Baumann et al. 2026) planned its networks |
 | `lambda_schedule.adaptive.*` | 9 windows, 0.04, 101 candidates, the matrix of the stage | Midgley et al. 2025: the values and the rule of the paper, which is about relative transformations |
 | `lambda_schedule.adaptive.legs` | each | the owner's choice of 2026-11-25: the paper's (`solvent`, the windows of the ligand in solution for both legs) left a pair of windows of the ejm_31 -> ejm_49 complex leg of TYK2 at an overlap of 0.013 (where a precalculation of the solvent leg of another run had added a window); each leg its own precalculation, as the ABFE |
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent 50 ps and 0; complex 500 ps after 500 ps | the solvent leg: the paper's; the complex leg: the values of the ABFE, measured on TYK2 (`docs/protocol.md`, "What was measured on TYK2") |
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
+| `lambda_schedule.start_configurations` | pre_equilibration | windows a leg does not choose start from the end of its pre-equilibration, minimised in their own state, as OpenFE minimises every replica; `precalculation` (the start of the windows of the first iteration of adaptive lambda scheduling, Midgley et al. 2025, for given windows) is cuFEP's own, for comparisons of given windows with chosen ones |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
 | `sampling.gcmc.enabled` | true (the complex leg) | the owner's decision of 2026-11-28; the moves and their other settings are those of the ABFE, with their basis (`docs/configuration.md`), where they are off by default |
+| `sampling.terminal_flip.enabled`, `interval_ps` | false; 2.5 ps | off until the owner decides (plan of 2026-11-28, issue #27); one attempt per replica and iteration of the default length, as SOMD2 attempts one move per cycle of its replica exchange |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |
 | `analysis.lrc` | none | OpenFE's `use_dispersion_correction: False` for the hybrid |
 | the constant of the dG (no setting) | the mean of the experimental values, else the mean of the network | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; cinnabar gives estimates of mean 0 |

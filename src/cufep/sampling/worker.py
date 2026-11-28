@@ -66,6 +66,8 @@ class LegSpec:
     gcmc: object | None = None
     #: water relocation moves (:class:`cufep.sampling.relocation_mc.RelocationSpec`), or None
     relocation: object | None = None
+    #: terminal flip moves of the ligand (:class:`cufep.sampling.terminal_flip.FlipSpec`), or None
+    flip: object | None = None
 
     def __post_init__(self) -> None:
         self.check_segment(self.steps_per_iteration, "the MD of one replica in one iteration")
@@ -276,7 +278,7 @@ def tail_summary(lrc: dict) -> dict:
 
 
 #: what a random stream of a worker is for
-INTEGRATOR_STREAM, BAROSTAT_STREAM, RELOCATION_STREAM, GCMC_STREAM = 0, 1, 2, 3
+INTEGRATOR_STREAM, BAROSTAT_STREAM, RELOCATION_STREAM, GCMC_STREAM, FLIP_STREAM = 0, 1, 2, 3, 4
 
 
 def water_movers(spec, context, start: int = 0, worker_id: int = 0) -> tuple:
@@ -300,6 +302,19 @@ def water_movers(spec, context, start: int = 0, worker_id: int = 0) -> tuple:
         gcmc = GcmcMover(spec.gcmc, context, stream_seed(spec.seed, start, worker_id, GCMC_STREAM))
         gcmc_steps = md_steps(spec.gcmc.interval_ps, spec.timestep_fs)
     return mover, relocation_steps, gcmc, gcmc_steps
+
+
+def flip_mover(spec, context, start: int = 0, worker_id: int = 0) -> tuple:
+    """The terminal flip moves of a leg on one Context: ``(mover, MD steps of a replica for which one move is
+    attempted)``, (None, 0) for a leg without them; the mover has a random stream of its own. The moves are made
+    by the replica exchange; the windows of a precalculation and the start of given windows make none."""
+    if spec.flip is None:
+        return None, 0
+    from cufep.sampling.terminal_flip import FlipMover
+    from cufep.steps import md_steps
+
+    return (FlipMover(spec.flip, context, stream_seed(spec.seed, start, worker_id, FLIP_STREAM)),
+            md_steps(spec.flip.interval_ps, spec.timestep_fs))
 
 
 def window_mover_on(spec, context) -> tuple:
@@ -383,6 +398,8 @@ class ReplicaWorker:
         # the water moves of the leg on this Context (water_movers)
         self.mover, self.relocation_steps, self.gcmc, self.gcmc_steps = water_movers(spec, self.context, start,
                                                                                      worker_id)
+        # and its terminal flip moves (flip_mover)
+        self.flip, self.flip_steps = flip_mover(spec, self.context, start, worker_id)
 
     def window_mover(self) -> tuple:
         """(mover, MD steps between its moves) for a window of the precalculation in this Context."""
@@ -442,6 +459,11 @@ class ReplicaWorker:
                 for _ in range(attempts_due(iteration, n_steps, self.gcmc_steps)):
                     counts = self.gcmc.attempt(state)
                     out.setdefault("gcmc", []).append((int(state_index), [int(counts[key]) for key in COUNTS]))
+            if self.flip is not None and n_steps > 0:
+                # the terminal flip moves in the state the replica is simulated in (cufep.sampling.terminal_flip)
+                for _ in range(attempts_due(iteration, n_steps, self.flip_steps)):
+                    move = self.flip.attempt(state)
+                    out.setdefault("flip", []).append((int(state_index), int(move["group"]), bool(move["accepted"])))
             st = self.context.getState(getPositions=True, getVelocities=True)
             pos = st.getPositions(asNumpy=True).value_in_unit(u.nanometer)
             new_box = st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(u.nanometer)

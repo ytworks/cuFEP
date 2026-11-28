@@ -84,7 +84,8 @@ ROW_DATASETS = ("u", "states", "volume")
 #: [attempted into the sphere, accepted, attempted out of it, accepted]); of a leg with grand canonical
 #: moves of water (``gcmc``): states x :data:`cufep.sampling.gcmc.COUNTS`, the last -1 in an iteration
 #: without a move in that state
-OPTIONAL_ROW_DATASETS = ("swaps", "relocations", "gcmc")
+#: of a leg with terminal flip moves (``flips``): states x [attempted, accepted]
+OPTIONAL_ROW_DATASETS = ("swaps", "relocations", "gcmc", "flips")
 TAIL_DATASETS = ("lrc_iter", "lrc_du")
 FRAME_DATASETS = ("frame_iter", "frames", "frame_box")
 #: the dataset in which samples of the previous version say how much of every dataset is stored
@@ -651,12 +652,14 @@ class LegStorage:
 
     # -- appending ------------------------------------------------------------------
     def append(self, u: np.ndarray, states: np.ndarray, volume: np.ndarray, swaps: np.ndarray | None = None,
-               relocations: np.ndarray | None = None, gcmc: np.ndarray | None = None) -> int:
+               relocations: np.ndarray | None = None, gcmc: np.ndarray | None = None,
+               flips: np.ndarray | None = None) -> int:
         n = self.n_iterations
         self._mem.rows.append((np.array(u, dtype="f8"), np.array(states, dtype="i4"), np.array(volume, dtype="f8"),
                                None if swaps is None else np.array(swaps, dtype="i8"),
                                None if relocations is None else np.array(relocations, dtype="i8"),
-                               None if gcmc is None else np.array(gcmc, dtype="i8")))
+                               None if gcmc is None else np.array(gcmc, dtype="i8"),
+                               None if flips is None else np.array(flips, dtype="i8")))
         return n
 
     def append_record(self, iteration: int, record: dict) -> None:
@@ -708,6 +711,8 @@ class LegStorage:
                 h5.create_dataset("relocations", data=np.stack([row[4] for row in self._rows]))
             if m and all(len(row) > 5 and row[5] is not None for row in self._rows):
                 h5.create_dataset("gcmc", data=np.stack([row[5] for row in self._rows]))
+            if m and all(len(row) > 6 and row[6] is not None for row in self._rows):
+                h5.create_dataset("flips", data=np.stack([row[6] for row in self._rows]))
             h5.create_dataset("lrc_iter", data=np.array([it for it, _ in tail], dtype="i8"))
             h5.create_dataset("lrc_du", data=np.array([du for _, du in tail], dtype="f8"))
             h5.create_dataset("frame_iter", data=np.array([it for it, _ in frames], dtype="i8"))

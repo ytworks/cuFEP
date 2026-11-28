@@ -945,6 +945,78 @@ def test_replica_exchange_of_a_hybrid_leg(tmp_path, hybrid_leg, backend):
     assert data["swaps"][:, :, 1].sum() > 0
 
 
+@needs_cuda
+@pytest.mark.parametrize("backend", ["openmm", pytest.param("cupotential", marks=needs_plugin)])
+@pytest.mark.parametrize("anchor, pivot", [(0, 1), (1, 0)], ids=["ring", "methyl"])
+def test_a_terminal_flip_on_a_backend_has_the_energy_change_of_a_tight_ewald_sum(hybrid_leg, backend, anchor, pivot):
+    """A half turn of a group of the hybrid ligand (toluene into phenol: the ring, whose turn changes the energy
+    little, or the methyl and hydroxyl hydrogens about the same bond, the dummies with them) in a Context of each
+    backend, in a state in the middle of the leg (with REST2: scaled), after MD in it: the energy change the move is
+    decided with is the one a tight Ewald sum of stock OpenMM in double precision gives for the two configurations
+    in that state; the Context then holds
+    the turned atoms and velocities if the move was accepted and what it held if not, and the MD goes on."""
+    import openmm.unit as u
+
+    from cufep.sampling.states import set_state
+    from cufep.sampling.terminal_flip import FlipGroup, FlipMover, FlipSpec, _beyond, half_turn
+
+    hybrid, schedule, box = hybrid_leg
+    ligand, neighbours = set(hybrid.ligand_atoms), {}
+    for i, j in hybrid.bonds:
+        if i in ligand and j in ligand:
+            neighbours.setdefault(i, set()).add(j)
+            neighbours.setdefault(j, set()).add(i)
+    # atom 0 is the methyl carbon of toluene (the oxygen of phenol), atom 1 the ring atom it is bonded to
+    group = FlipGroup(anchor=anchor, pivot=pivot, mobile=tuple(sorted(_beyond(neighbours, pivot, anchor))))
+    assert len(group.mobile) >= (10 if pivot == 1 else 3)
+    state = schedule.states[len(schedule.states) // 2]
+
+    def context(be, system):
+        integ = be.make_integrator(300 * u.kelvin, 1 / u.picosecond, 2 * u.femtoseconds, seed=3)
+        ctx = be.make_context(be.prepare_system(system), integ, 0)
+        ctx.setPeriodicBoxVectors(*[mm.Vec3(*r) for r in box])
+        ctx.setPositions(hybrid.positions)
+        set_state(ctx, state)
+        return ctx, integ
+
+    def arrays(ctx):
+        st = ctx.getState(getPositions=True, getVelocities=True)
+        return (np.asarray(st.getPositions(asNumpy=True).value_in_unit(u.nanometer), dtype=float),
+                np.asarray(st.getVelocities(asNumpy=True).value_in_unit(u.nanometer / u.picosecond), dtype=float))
+
+    ctx, integ = context(get_backend(backend), hybrid.system)
+    mm.LocalEnergyMinimizer.minimize(ctx, 10.0, 100)
+    ctx.setVelocitiesToTemperature(300 * u.kelvin, 5)
+    integ.step(250)
+    x, v = arrays(ctx)
+    y, rotation = half_turn(x, np.asarray(box, dtype=float), group)
+
+    tight = mm.XmlSerializer.deserialize(mm.XmlSerializer.serialize(hybrid.system))
+    for force in tight.getForces():
+        if isinstance(force, mm.NonbondedForce):
+            force.setEwaldErrorTolerance(1e-6)
+    reference, _integ = context(get_backend("openmm", precision="double"), tight)
+
+    def energy(positions) -> float:
+        reference.setPositions(positions)
+        return reference.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole)
+
+    kt = 8.31446261815324e-3 * 300.0
+    expected = -(energy(y) - energy(x)) / kt
+    move = FlipMover(FlipSpec(groups=[group], temperature_K=300.0, interval_ps=1.0), ctx, seed=11).attempt(state)
+    # measured 2026-11-28 on 12 configurations (both backends, with and without REST2, both groups; changes of
+    # 0.0 to 10.0 kT, accepted and not): at most 0.006 kT from the reference; the level is about ten times that
+    assert abs(move["log_r"] - expected) < 0.05, (move["log_r"], expected)
+    now, w = arrays(ctx)
+    mobile = list(group.mobile)
+    if move["accepted"]:
+        assert np.allclose(now, y, atol=2e-6) and np.allclose(w[mobile], v[mobile] @ rotation.T, atol=1e-5)
+    else:
+        assert np.allclose(now, x, atol=2e-6) and np.allclose(w, v, atol=1e-5)
+    integ.step(50)
+    assert np.isfinite(ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(u.kilojoule_per_mole))
+
+
 @pytest.fixture(scope="module")
 def hybrid_gcmc_leg():
     """Toluene into phenol in a 3.2 nm box of water with REST2, as a relative leg with grand canonical moves of water

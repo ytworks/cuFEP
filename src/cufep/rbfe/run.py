@@ -455,14 +455,14 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     cfg_dict = rcfg.model_dump(mode="json")
     repeats = rcfg.sampling.repeats
     jobs = [EdgeLegJob(edge=edge_name(a, b), leg=leg, repeat=r, edge_dir=str(out_dir / "edges" / edge_name(a, b)),
-                         devices=[], config=cfg_dict, production_ns=float(rcfg.sampling.production_ns),
+                         devices=[], config=cfg_dict, production_ns=rcfg.sampling.production(leg),
                          reschedule=reschedule, n_atoms=int(infos[edge_name(a, b)]["legs"][leg]["n_atoms_a"]))
             for a, b in selected for r in range(repeats) for leg in ("solvent", "complex")
             if not only_legs or leg in only_legs]
     t_prepared = time.time()
     log(f"{len(jobs)} job(s) of {len(selected)} edge(s) x 2 legs x {repeats} repeat(s); per lambda window "
         f"{rcfg.sampling.equilibration('complex'):g} ns equilibration and "
-        f"{rcfg.sampling.production_ns:g} ns production")
+        f"{rcfg.sampling.production_text()} ns production")
     gpus = list(rcfg.resources.gpus) if rcfg.resources.gpus else [None]
     results, monitor, mps_used = execute_jobs(jobs, gpus, rcfg.resources.oversubscription_factor, log)
     failed_now = failed_jobs(results)

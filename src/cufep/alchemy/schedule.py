@@ -443,6 +443,56 @@ def run_window(context, integrator, task: dict, mover=None, interval_steps: int 
     return {"energies": energies, "config": _snapshot(context, mover)}
 
 
+def walk_starts(context, integrator, states: list, walk_steps: int, start, mover=None) -> list:
+    """The configurations a walk through windows gives them to start from: from ``start`` (positions, box,
+    velocities), ``walk_steps`` of MD in the state of each window in order, in ``context``; the configuration after
+    each. The one walk of the first iteration of adaptive lambda scheduling and of given windows that are started
+    as it starts them (:func:`precalculation_starts`)."""
+    starts = []
+    _load(context, start, mover)
+    for state in states:
+        set_state(context, state)
+        integrator.step(int(walk_steps))
+        starts.append(_snapshot(context, mover))
+    return starts
+
+
+def precalculation_starts(context, integrator, states: list, temperature_K: float, timestep_fs: float,
+                          settings: AlsSettings, pool=None, mover=None, interval_steps: int = 0) -> list:
+    """Start configurations of given lambda windows (``states``, in order), made as the first iteration of adaptive
+    lambda scheduling makes those of its windows (:func:`adaptive_schedule` with ``start_configurations: walk``):
+    a walk through the windows from the Context's current configuration (``settings.walk_ps`` in each), then in each
+    window the MD of a window of the precalculation (``settings.equilibration_ps`` and ``settings.window_ps``, as
+    many steps as the precalculation integrates, :func:`cufep.steps.precalculation_steps`), with the water moves a
+    window of the precalculation makes; the last configuration of each. No energies are recorded and no window is
+    added: given windows and windows the precalculation chose then differ in their lambda values alone. With
+    ``pool`` the windows run at the same time, else one after another in ``context``."""
+    from cufep.steps import md_steps, precalculation_steps
+
+    equilibration_steps, n_samples, steps_per_sample = precalculation_steps(
+        settings.window_ps, settings.equilibration_ps, settings.sample_interval_ps, timestep_fs)
+    start = _snapshot(context, mover)
+    starts = walk_starts(context, integrator, states, md_steps(settings.walk_ps, timestep_fs), start, mover)
+    tasks = [{"state": state.to_dict(), "protocol": state.protocol, "config": config, "stages": [], "candidates": 2,
+              "temperature_K": temperature_K, "equilibration_steps": equilibration_steps + n_samples * steps_per_sample,
+              "n_samples": 0, "steps_per_sample": 1} for state, config in zip(states, starts)]
+    moves = {} if mover is None else {"mover": mover, "interval_steps": interval_steps}
+    done = pool.run(tasks) if pool is not None else [run_window(context, integrator, t, **moves) for t in tasks]
+    return [d["config"] for d in done]
+
+
+def precalculation_md_ps(settings: AlsSettings, timestep_fs: float) -> dict:
+    """The MD one window gets where its start configuration is made by :func:`precalculation_starts`, as
+    integrated (ps): its part of the walk and the MD of a window of the precalculation."""
+    from cufep.steps import md_steps, precalculation_steps
+
+    equilibration_steps, n_samples, steps_per_sample = precalculation_steps(
+        settings.window_ps, settings.equilibration_ps, settings.sample_interval_ps, timestep_fs)
+    ps = float(timestep_fs) / 1000.0
+    return {"walk_ps": md_steps(settings.walk_ps, timestep_fs) * ps,
+            "window_md_ps": (equilibration_steps + n_samples * steps_per_sample) * ps}
+
+
 def adaptive_schedule(context, integrator, stages: list[str], temperature_K: float, timestep_fs: float,
                       settings: AlsSettings | None = None, log=print, pool=None, mover=None,
                       interval_steps: int = 0):
@@ -525,13 +575,8 @@ def adaptive_schedule(context, integrator, stages: list[str], temperature_K: flo
         if runs:                                          # a later iteration: from what had been run before it
             run_from(todo, [nearest(nd) for nd in todo])
         elif s.start_configurations == "walk":            # first iteration: a short walk gives the starts
-            starts, walk_steps = [], md_steps(s.walk_ps, timestep_fs)
-            _load(context, start, mover)
-            for nd in todo:
-                set_state(context, state_of(nd))
-                integrator.step(walk_steps)
-                starts.append(_snapshot(context, mover))
-            run_from(todo, starts)
+            run_from(todo, walk_starts(context, integrator, [state_of(nd) for nd in todo],
+                                       md_steps(s.walk_ps, timestep_fs), start, mover))
         else:                                             # first iteration: each from the end of the one before
             # run where every other window is run (a pool, if there is one): its workers make the
             # water relocation moves of a window (review of 723b12f: these windows ran in the

@@ -64,17 +64,13 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
+- Plan `docs/plans/2026-11-28-rbfe-accuracy.md` (in progress, issue #27; the owner's request of 2026-11-28): four changes of the relative calculations, each a setting whose default stays the present behaviour: the start of given lambda windows as a precalculation makes it (with a control of 11 fixed windows), terminal flip Monte Carlo, the bonded terms of dummy atoms by the rule of Fleck et al. 2021, REST2 on the atoms a transformation changes. Verification: control and change on one image with the windows of the record of 957a9cf, two calculations each, one edge at a time on six GPUs; 16 runs without a condition; the held-out target is decided when a change is a candidate for a default. Implemented (CPU tests; GPU tests of item 1): item 1 (f80b132: `lambda_schedule.start_configurations`, windows and `sampling.production_ns` per leg, `md_ps`; this tree builds the Systems and conditions of all 86 legs of the two records) and item 2 (3367749: `sampling.terminal_flip`, off by default). From the records, without experimental values: no TYK2 edge and 13 of the 21 A2A edges have a terminal group the moves turn, and in all 13 the stored frames of the complex leg at lambda 0 never show the other orientation (the solvent leg: 6.7 to 44.2 %). Item 3, first part (fcd3fc7: `alchemy.dummy_bonded_terms: separated`, the rule of Fleck et al. 2021 at terminal junctions; dual and triple junctions left as they are). Verification runs started on the owner's word of 2026-11-28 (GPUs 0-5, one at a time). Item 1, TYK2 ejm_55~ejm_54 (experiment -1.32 kcal/mol; image f80b132, two calculations each, the same MD per leg): the windows of the record (9 and 9) +0.72 ± 0.28 and +0.68 ± 0.23, 11 evenly spaced windows +0.54 ± 0.34 and +0.49 ± 0.30 (lowest overlap 0.086 to 0.089 against 0.119 to 0.139 in the complex leg); the record of 957a9cf +0.99 ± 0.28. Item 2 (A2A 4m~4n, four runs): running.
 - Plan `docs/plans/2026-11-27-rbfe-benchmarks.md` (done: PR #21 merged into main on the owner's order of 2026-11-28; eight reviews answered, every thread resolved; head of the code 957a9cf: unit 860 and GPU 70 passed): `cufep benchmark run|plan|report NAME --protocol rbfe` on the LOMAP network (TYK2 22 edges, those of the OpenFE benchmark; A2A 21, 17 neutral compounds), reported against experiment, FEP+ and OpenFE (published for TYK2 only); legs the plugin's integrator cannot constrain run on stock OpenMM (the owner's decision of 2026-11-27); grand canonical moves of water are on by default in the RBFE complex leg (the owner's decision of 2026-11-28). Both full sets run with the image of 957a9cf, one calculation per edge (the owner's decision of 2026-11-28 to run them again: the records before were sampled before the fix of the velocities of an inserted water). TYK2 (`benchmarks/results/tyk2_rbfe/`): 22/22 edges, dG RMSE after centring each method on the 16 compounds 0.72 [0.42, 0.89] kcal/mol (FEP+ 0.47, OpenFE 0.59), Kendall tau 0.65 (0.81, 0.68), edge RMSE 0.89 (OpenFE on the same 22 edges 0.61); no leg NOT RELIABLE, two edges with a window below 50 independent samples, 5 edges on stock OpenMM. A2A (`benchmarks/results/a2a_rbfe/`): 21/21 edges, dG RMSE after centring on the 17 compounds 1.51 [0.79, 1.98] (FEP+ 1.08), Kendall tau 0.69 (0.59), edge RMSE 1.66, on the 10 edges of the published map 2.16 (FEP+ 1.42); no leg NOT RELIABLE, two edges below 50 independent samples, one edge on stock OpenMM. Against the runs before the fix (TYK2 faa65e0: dG RMSE 0.65, edge RMSE 0.82; A2A cd15025: 1.59, 1.57) the ddG of the edges differ by 0.44 RMS (at most 1.08) and 0.59 RMS (at most 1.70), one calculation each. There is no A2A relative run without the moves (stopped).
 - Plan `docs/plans/2026-11-25-rbfe.md` (done: PR #17 with PR #18 merged into main on 2026-11-26): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment. A2A example in the bilayer (image f6ac3b4): ddG +0.91 ± 0.30, +3.26 ± 0.12, +1.38 ± 0.26 (experiment +2.12, +0.72, -1.40), cycle closure -0.97 ± 0.41, dG RMSE 1.35 (FEP+ 0.83); both in the plan's record. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends. Plan `docs/plans/2026-11-25-leg-engine.md` (done, PR #18): one engine of a leg for both (`src/cufep/engine/`), steps 1-6 done; ABFE fingerprint and analysis of a stored run unchanged; the TYK2 relative example on its image agrees with image f6ac3b4 within the errors (the plan's record).
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
 - The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22; the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
-- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
-  one way of starting the windows (below). Not adopted, defaults unchanged: longer production,
-  `alchemy.annihilate_electrostatics`, `alchemy.softcore_b` 2, `analysis.detect_equilibration`,
-  REST2 off, a longer bilayer equilibration, water relocation moves (PR #10 closed; in the branch of PR #15, off). One
-  calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied:
-  the decoupled-side windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
+- Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the one way of starting the windows (below). Not adopted, defaults unchanged: longer production, `alchemy.annihilate_electrostatics`, `alchemy.softcore_b` 2, `analysis.detect_equilibration`, REST2 off, a longer bilayer equilibration, water relocation moves (PR #10 closed; in the branch of PR #15, off). One calculation varies by a standard deviation of 1.57 kcal/mol (ejm_49) and 1.72 (4k). Not remedied: the decoupled-side windows of ejm_49 give 5.65 less from a relaxed decoupled end (4k: +0.47 ± 0.63).
 - The complex leg differs between runs of one protocol by more than its standard error (TYK2,
   four runs with the same anchors: standard deviation 2.1 kcal/mol where a run reports 0.3 to
   0.9; the restraint does not explain it and no cause is established). Plan
@@ -111,6 +107,24 @@ Open items:
   ProLIF 2.2.3 and MDAnalysis 2.11 only); a rebuild of the image can change other packages.
 
 ## Change Log
+
+### 2026-11-28 — [progress] RBFE: terminal flip Monte Carlo, and the start of given lambda windows (issue #27)
+- What: `sampling.terminal_flip` (off by default): half a turn of a terminal aromatic group of the hybrid ligand
+  whose two orientations differ, accepted with the potential energy of the replica's state; the rule is narrower
+  than SOMD2's and cuFEP's own where it differs. `lambda_schedule.start_configurations: precalculation` starts given
+  windows as the first iteration of adaptive lambda scheduling starts them; windows and production per leg.
+- Verified: unit tests against known answers (the two starts equal to the bit; flips alone give exp(-1)/(1+exp(-1)));
+  GPU tests 70 passed on f80b132; the Systems of all 86 recorded legs are built again. No verification run yet.
+- Refs: `docs/plans/2026-11-28-rbfe-accuracy.md` (record); `docs/rbfe.md` ("Lambda windows", "Sampling")
+
+### 2026-11-28 — [design] Plan: accuracy of the relative calculations (issue #27)
+- What: four changes, each a setting whose default stays the present behaviour: given lambda windows started as a
+  precalculation starts them (and a control of 11 fixed windows), terminal flip Monte Carlo, the bonded terms of
+  dummy atoms by the rule of Fleck et al. 2021, REST2 on the atoms a transformation changes. Verification: control
+  and change on one image with the windows of the record, two calculations each, one edge at a time (GPUs 0-5).
+- Why: the owner's request of 2026-11-28 (issue #27): a lower error of the raw ddG of an edge without a longer
+  calculation; a default changes only on the owner's decision, the held-out target is chosen then.
+- Refs: `docs/plans/2026-11-28-rbfe-accuracy.md`; issue #27
 
 ### 2026-11-28 — [progress] Relative benchmarks of TYK2 and A2A merged (PR #21)
 - What: `cufep benchmark run|plan|report NAME --protocol rbfe` with the tables against experiment, FEP+ and OpenFE,
@@ -152,44 +166,3 @@ Open items:
   `rbfe analyze --write` and by a run: a mean of two repeats was replaced by the value of one.
 - Why: the owner's review 6095905516; each reproduced as a test that failed before the fix.
 - Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
-
-### 2026-11-28 — [amendment] Sixth review of PR #21: four findings fixed (one P1)
-- What: the check of a run on the results it combines without sampling them holds each leg to the summary by
-  itself (with --leg solvent a complex leg whose record was gone was combined once the solvent leg had finished),
-  takes a leg as being run by its `started.json` or `error.json` (not by `result.previous.json`), and asks only
-  for the repeats of `sampling.repeats`; `rbfe analyze --write` with a summary that cannot be read is refused
-  where the legs do not give what the two tables hold.
-- Why: the owner's review 6095856567; each reproduced as a test that failed before the fix.
-- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
-
-### 2026-11-28 — [amendment] Fifth review of PR #21: one finding fixed (P1)
-- What: `cufep rbfe analyze --write` holds an edge that the summary refused a ddG for its repeats (other values of
-  the water) to the files of those repeats, like an edge with a ddG: with the record of the samples of one repeat
-  set aside, the refusal was lifted and the mean of the two repeats went into the dG of the network. A run holds
-  the results it combines without sampling them to the summary in the same way, before it writes.
-- Why: the owner's review 6095731095; reproduced as a test that failed before the fix.
-- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
-
-### 2026-11-28 — [amendment] Fourth review of PR #21: three findings fixed (all P2)
-- What: a pre-equilibration made again for a leg whose samples (or start checkpoint) record 2 fs is made at 2 fs,
-  and the check before a run takes that time step; what a result says of its samples (the rule of the mover) is
-  read from their record alone, so results whose HDF5 parts were set aside are combined; an edge without a
-  recorded rule is named as one of which the rule cannot be told, not as one of another rule.
-- Why: the owner's review 6095477333; each reproduced as a test that failed before the fix.
-- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`, `docs/protocol.md`
-
-### 2026-11-28 — [amendment] Third review of PR #21: four findings fixed (all P2)
-- What: a leg stopped at the checkpoint of its start is held to the run before the run writes (RBFE, and the ABFE
-  alike); a report of an earlier summary takes the legs with few samples from the notes of its repeats; `rbfe
-  analyze --write` needs both legs of every repeat of a stored ddG; the rule of the mover is in the result of a
-  complex leg, of the repeat and of the edge, and a network of edges of two rules names them in a note.
-- Why: the owner's review 6095212888; each reproduced as a test that failed before the fix.
-- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`, `docs/protocol.md`
-
-### 2026-11-28 — [amendment] Second review of PR #21: seven findings fixed (two P1)
-- What: GCMC samples record the rule of the mover and samples of the earlier rule are not extended; whether a complex
-  leg made the moves is compared for every edge, apart from the values of the water; a relative run checks the
-  windows, samples and System checksum of its legs before it writes; a GCMC leg's cell is that of its checkpoint;
-  reports of earlier summaries read the repeats; `rbfe analyze --write` holds the lock and refuses results without legs.
-- Why: the owner's review 6095000582; each reproduced as a test that failed before the fix.
-- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`, `docs/protocol.md`

@@ -371,8 +371,11 @@ def _cufep_settings(run_dir: Path) -> str:
     cfg = yaml.safe_load(f.read_text()) or {}
     sampling, schedule = cfg.get("sampling") or {}, cfg.get("lambda_schedule") or {}
     membrane = " in a POPC bilayer" if (cfg.get("membrane") or {}).get("enabled") else ""
+    production = sampling.get("production_ns")
+    if isinstance(production, dict):                       # one length for each leg
+        production = f"{production.get('complex')} (complex leg) and {production.get('solvent')} (solvent leg)"
     return (f"cuFEP: `cufep rbfe` with the settings of the set's relative example{membrane}, "
-            f"{sampling.get('production_ns')} ns of production per lambda window, "
+            f"{production} ns of production per lambda window, "
             f"calculations per edge: {sampling.get('repeats', 1)}, lambda windows {schedule.get('mode')}, "
             f"backend {(cfg.get('backend') or {}).get('name')} (`resolved_config.yaml`)")
 

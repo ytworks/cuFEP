@@ -3942,7 +3942,9 @@ def start_configurations_of(leg_dir: Path) -> str | None:
             made = start_record_of(file)
             if "start_configurations" in made:
                 walk = f", {made['walk_ps']:g} ps in each window" if "walk_ps" in made else ""
-                return f"{made['start_configurations']}{walk}"
+                # windows started as a precalculation starts them: the MD each window then had
+                more = f", then {made['window_md_ps']:g} ps in each window" if "window_md_ps" in made else ""
+                return f"{made['start_configurations']}{walk}{more}"
         except (OSError, ValueError, KeyError):
             pass
     return None

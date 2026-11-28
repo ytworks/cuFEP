@@ -665,8 +665,16 @@ class ReplicaExchangeSampler:
                             gcmc[state_index, 4] = int(counts[4])
                 # records carry the row of their iteration: iterations that are not stored (a warm-up
                 # with store=False) have no row
+                # the terminal flip moves of this iteration, by the state they were made in: attempted, accepted
+                flips = None
+                if self.spec.flip is not None:
+                    flips = np.zeros((len(sampled_states), 2), dtype="i8")
+                    for res in results:
+                        for state_index, _group, accepted in (res or {}).get("flip", ()):
+                            flips[state_index, 0] += 1
+                            flips[state_index, 1] += int(accepted)
                 row = self.storage.append(u, sampled_states, self.arrays.vol.copy(), swaps=swaps,
-                                          relocations=relocations, gcmc=gcmc)
+                                          relocations=relocations, gcmc=gcmc, flips=flips)
                 for res in results:
                     if res.get("recorded"):
                         self.storage.append_record(row, res["recorded"])

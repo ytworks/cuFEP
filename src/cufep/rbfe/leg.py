@@ -24,7 +24,7 @@ Grand canonical moves of water (``sampling.gcmc``, on by default in the complex 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
@@ -42,6 +42,9 @@ WAIT_SECONDS = 20.0
 PRE_EQUILIBRATION_START = "the end of the pre-equilibration, minimised in each window"
 MINIMIZE_STEPS = 5000
 START_MD_PS = 10.0
+#: and with lambda_schedule.start_configurations: precalculation, as a precalculation of adaptive lambda scheduling
+#: starts the windows of its first iteration (cufep.alchemy.schedule.precalculation_starts)
+PRECALCULATION_START = "walk, then the MD of a window of a precalculation"
 #: how the result of a leg tells the user to run it again
 RBFE_COMMAND = "cufep rbfe run CONFIG --edge NAME"
 
@@ -122,10 +125,19 @@ class HybridLeg:
     barostat: str
     membrane_info: dict
     info: dict
+    #: the atoms of ligand A and of ligand B in their end-state Systems, in the order of the atoms of the ligands
+    ligand_a: list = field(default_factory=list)
+    ligand_b: list = field(default_factory=list)
+    #: the directory of the edge the leg is of, and its terminal flip moves (a FlipSpec of
+    #: cufep.sampling.terminal_flip; None: none)
+    edge_dir: Path | None = None
+    flip: object | None = None
 
 
-def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
-    """The hybrid System of a leg from its prepared end states, and a prepared system of it."""
+def build_leg(rcfg, edge_dir: Path, leg: str, log=None) -> HybridLeg:
+    """The hybrid System of a leg from its prepared end states, and a prepared system of it; with
+    ``sampling.terminal_flip`` also the terminal flip moves of the leg (``log``: where to say which groups they
+    turn)."""
     import openmm as mm
 
     from cufep.rbfe.hybrid import make_hybrid_system
@@ -143,7 +155,7 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
     hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                 mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
                                 end["core_map"], softcore_alpha=rcfg.alchemy.softcore_alpha, rest2=rest2_on,
-                                rest2_atoms=hot_atoms)
+                                rest2_atoms=hot_atoms, dummy_bonded_terms=rcfg.alchemy.dummy_bonded_terms)
     unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
     topology = hybrid_topology(a["topology"], b["topology"], unique_b)
     xml = mm.XmlSerializer.serialize(hybrid.system)
@@ -151,21 +163,124 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
             "positions": hybrid.positions, "box": a["box"], "ligand": list(hybrid.ligand_atoms),
             "solute": sorted(set(a["solute"]) | set(hybrid.unique_new)), "protein": list(a["protein"])}
     leg_info = info["legs"][leg]
-    return HybridLeg(hybrid=hybrid, xml=xml, prep=prep, hot_atoms=hot_atoms, hot_residues=hot_residues,
-                     barostat=leg_info["barostat"], membrane_info=leg_info.get("membrane_info") or {}, info=info)
+    built = HybridLeg(hybrid=hybrid, xml=xml, prep=prep, hot_atoms=hot_atoms, hot_residues=hot_residues,
+                     barostat=leg_info["barostat"], membrane_info=leg_info.get("membrane_info") or {}, info=info,
+                     ligand_a=[int(i) for i in a["ligand"]], ligand_b=[int(j) for j in b["ligand"]],
+                     edge_dir=Path(edge_dir))
+    built.flip = hybrid_flip_spec(rcfg, Path(edge_dir), built, leg, log or (lambda _line: None))
+    return built
 
 
-def hybrid_settings(rcfg, leg: str | None = None) -> dict:
+def edge_ligands(edge_dir: Path, leg: str) -> tuple:
+    """The two ligands of a prepared edge as RDKit molecules with their hydrogens, and the atom mapping of ``leg``
+    (atom of A -> atom of B)."""
+    from openff.toolkit import Molecule
+
+    from cufep.rbfe.prep import prep_record
+
+    prep_dir = Path(edge_dir) / "prep"
+    mol_a = Molecule.from_json((prep_dir / "ligand_a.json").read_text()).to_rdkit()
+    mol_b = Molecule.from_json((prep_dir / "ligand_b.json").read_text()).to_rdkit()
+    mapping = {int(i): int(j) for i, j in prep_record(edge_dir)["legs"][leg]["mapping"].items()}
+    return mol_a, mol_b, mapping
+
+
+def ligand_flip_groups(edge_dir: Path, leg: str) -> tuple[list, list]:
+    """The terminal groups that terminal flip moves turn in a leg of a prepared edge, from its two ligands and its
+    atom mapping alone (no System is built): ``(groups, record)`` of
+    :func:`cufep.sampling.terminal_flip.hybrid_flip_groups` on the graph of the two ligands
+    (:func:`cufep.sampling.terminal_flip.ligand_graph`; the bonds to hydrogen are the constraints). Whether a leg
+    has such groups is asked before its System is built (:func:`hybrid_settings`); the groups the moves turn are
+    those of the System (:func:`hybrid_flips`), which a leg holds against these."""
+    from cufep.sampling.terminal_flip import hybrid_flip_groups, ligand_graph
+
+    mol_a, mol_b, mapping = edge_ligands(edge_dir, leg)
+    to_a, to_b, bonds, with_hydrogen = ligand_graph(mol_a, mol_b, mapping)
+    return hybrid_flip_groups(mol_a, mol_b, mapping, to_a, to_b, bonds, with_hydrogen)
+
+
+def hybrid_flips(edge_dir: Path, built: HybridLeg, leg: str) -> tuple[list, list]:
+    """The terminal groups of the hybrid ligand of a leg that terminal flip moves turn
+    (:class:`cufep.sampling.terminal_flip.FlipGroup`, atoms of the hybrid System), and the record of every terminal
+    group of either ligand with what was decided of it (:func:`cufep.sampling.terminal_flip.hybrid_flip_groups`):
+    from the two ligands as they were prepared, the atom mapping of the leg, and the bonds and constraints of the
+    hybrid System."""
+    from cufep.sampling.terminal_flip import hybrid_flip_groups
+
+    mol_a, mol_b, mapping = edge_ligands(edge_dir, leg)
+    hybrid = built.hybrid
+    to_a = {k: hybrid.a_to_hybrid[i] for k, i in enumerate(built.ligand_a)}
+    to_b = {k: hybrid.b_to_hybrid[j] for k, j in enumerate(built.ligand_b)}
+    ligand = set(hybrid.ligand_atoms)
+    system = hybrid.system
+    constraints = [(i, j) for i, j, _d in (system.getConstraintParameters(k) for k in range(system.getNumConstraints()))
+                   if i in ligand or j in ligand]
+    bonds = [(i, j) for i, j in hybrid.bonds if i in ligand and j in ligand]
+    return hybrid_flip_groups(mol_a, mol_b, mapping, to_a, to_b, bonds, constraints)
+
+
+def flip_settings(rcfg, edge_dir: Path | None, leg: str | None) -> dict | None:
+    """What the settings of the samples of a leg say of terminal flip moves (``sampling.terminal_flip``): the rule
+    and the interval, where the moves are on and the hybrid ligand of the leg has a group they turn; None where
+    they are off or there is no such group. A leg without a group is sampled as without the setting, so its samples
+    are those of a calculation without it and are kept as such."""
+    from cufep.sampling.terminal_flip import FLIP_RULE
+
+    flip = rcfg.sampling.terminal_flip
+    if not flip.enabled or edge_dir is None or leg is None:
+        return None
+    groups = ligand_flip_groups(edge_dir, leg)[0]
+    if not groups:
+        return None
+    # the groups in the numbers of the ligands: the atoms of A as its record has them, the unique atoms of B after them
+    return {"rule": FLIP_RULE, "interval_ps": float(flip.interval_ps), "groups": [g.to_dict() for g in groups]}
+
+
+def hybrid_flip_spec(rcfg, edge_dir: Path, built: HybridLeg, leg: str, log=print):
+    """The terminal flip moves of a leg (:class:`cufep.sampling.terminal_flip.FlipSpec`, atoms of its hybrid
+    System), or None for a leg without them: the setting is off, or the hybrid ligand has no group that the moves
+    turn (the log says which terminal groups it has and why they are left)."""
+    from cufep.sampling.terminal_flip import FlipSpec
+
+    if not rcfg.sampling.terminal_flip.enabled:
+        return None
+    groups, record = hybrid_flips(edge_dir, built, leg)
+    if len(groups) != len(ligand_flip_groups(edge_dir, leg)[0]):
+        raise WorkflowError("the terminal groups of the hybrid System are not those of the two ligands (a constraint "
+                            "of the System holds an atom of a group to one that does not turn with it); "
+                            "sampling.terminal_flip cannot be used with this edge")
+    left = sorted({r["why_not"] for r in record if not r["used"]})
+    if not groups:
+        log("terminal flip moves: no terminal aromatic group of the hybrid ligand is turned"
+            + (f" ({'; '.join(left)})" if left else " (it has none)") + "; the leg is sampled without the moves")
+        return None
+    log(f"terminal flip moves: {len(groups)} group(s) of {[len(g.mobile) for g in groups]} atoms, half a turn about "
+        f"the bond of atoms {[(g.anchor, g.pivot) for g in groups]}, one attempt per replica every "
+        f"{rcfg.sampling.terminal_flip.interval_ps:g} ps" + (f"; left: {'; '.join(left)}" if left else ""))
+    return FlipSpec(groups=groups, temperature_K=rcfg.thermodynamics.temperature_K,
+                    interval_ps=rcfg.sampling.terminal_flip.interval_ps)
+
+
+def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None) -> dict:
     """The settings of a relative run that the samples of a leg depend on beyond its System; for the leg that makes
     grand canonical moves of water (the complex leg) also those of the moves, as the ABFE records them
-    (:func:`cufep.workflow.gcmc_record`; the pressure of the samples is that of the cell they are fixed in)."""
+    (:func:`cufep.workflow.gcmc_record`; the pressure of the samples is that of the cell they are fixed in), and
+    for a leg of ``edge_dir`` with terminal flip moves those (:func:`flip_settings`). Settings that came after the
+    first records are in the record only where they change the samples, so that the samples made before them are
+    those of their defaults."""
     from cufep.workflow import gcmc_in, gcmc_record
 
-    settings = {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"),
+    alchemy = rcfg.alchemy.model_dump(mode="json")
+    if alchemy.get("dummy_bonded_terms") == "all":
+        del alchemy["dummy_bonded_terms"]               # the default, which the records before the setting are of
+    settings = {"rbfe": {"alchemy": alchemy,
                          "mapping": rcfg.mapping.model_dump(mode="json")},
                 "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
     if gcmc_in(rcfg, leg):
         settings["gcmc"] = gcmc_record(rcfg)
+    flips = flip_settings(rcfg, edge_dir, leg)
+    if flips is not None:
+        settings["terminal_flip"] = flips
     return settings
 
 
@@ -225,7 +340,7 @@ def hybrid_leg_spec(rcfg, built: HybridLeg, gcmc, leg: str, name: str, states: l
                    friction_per_ps=rcfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
                    steps_per_iteration=steps_per_iteration, cpu_threads=rcfg.resources.cpu_threads_per_worker,
                    box_safety=1.3 if barostat == "membrane" and gcmc is None else None,
-                   settings=hybrid_settings(rcfg, leg), gcmc=gcmc, **more)
+                   settings=hybrid_settings(rcfg, leg, built.edge_dir), gcmc=gcmc, flip=built.flip, **more)
 
 
 def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
@@ -257,7 +372,7 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
     if not sched_file.exists():
         return                 # no windows yet (samples without their windows: check_samples_have_their_windows)
     quiet = lambda _message: None                                    # noqa: E731  the leg logs it when it runs
-    settings = hybrid_settings(rcfg, leg)
+    settings = hybrid_settings(rcfg, leg, edge_dir)
     schedule = _schedule_of_this_leg(sched_file, leg, STAGES)
     rest2_scale = rcfg.sampling.rest2.scale if rcfg.sampling.rest2.scale > 1.0 else 1.0
     if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -267,7 +382,9 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
     if start_file.exists():
         made = start_record_of(start_file)
         if starts_are_of(made, schedule):                  # start configurations of other windows are made again
-            check_windows_settings(made, settings, start_file, quiet)
+            # (the windows and their start configurations are made without terminal flip moves: their record
+            # holds the settings without them)
+            check_windows_settings(made, hybrid_settings(rcfg, leg), start_file, quiet)
     n_stored, conditions = stored_conditions(hrex)
     if n_stored == 0:
         # no samples. A leg stopped at the checkpoint of the start of its replica exchange, whose start
@@ -301,7 +418,7 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
     built = build_leg(rcfg, Path(edge_dir), leg)
     gcmc = hybrid_gcmc(rcfg, built, leg, quiet)
     plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
-                              rcfg.sampling.production_ns)
+                              rcfg.sampling.production(leg))
     # the samples of a leg stay on the backend they were made with; a leg without samples runs on the one this
     # run chooses for its System (cufep.engine.leg.chosen_backend)
     backend = (str(conditions.get("backend") or rcfg.backend.name) if n_stored else
@@ -349,7 +466,7 @@ def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None)
 
 def run_hybrid_leg(job: EdgeLegJob) -> dict:
     """Run (or resume, or extend) one leg of an edge and return its result."""
-    from cufep.alchemy.schedule import AlsSettings, schedule_from_windows
+    from cufep.alchemy.schedule import AlsSettings, precalculation_md_ps, schedule_from_windows
     from cufep.engine.leg import (
         adaptive_windows,
         check_kept_windows,
@@ -362,6 +479,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         pre_equilibrated,
         record_of_kept_windows,
         refuse_samples_without_windows,
+        starts_as_a_precalculation,
         starts_from,
         with_fallback,
     )
@@ -380,7 +498,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     run = open_leg(job, rcfg)
     leg_dir, log, seed = run.leg_dir, run.log, run.seed
     edge_dir = Path(job.edge_dir)
-    built = build_leg(rcfg, edge_dir, job.leg)
+    built = build_leg(rcfg, edge_dir, job.leg, log)
     gcmc = hybrid_gcmc(rcfg, built, job.leg, log)          # with the moves: the ghosts of the start switched off
     hybrid, prep, barostat = built.hybrid, built.prep, built.barostat
     n_atoms = hybrid.system.getNumParticles()
@@ -412,6 +530,8 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
+    # (the terminal flip moves are not among them: the windows and their start configurations are made without
+    # the moves, and a leg keeps them when the setting changes; the samples record the moves, hybrid_leg_spec)
     settings = hybrid_settings(rcfg, job.leg)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
@@ -420,6 +540,10 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                                plan.steps_per_iteration, mps_thread_percentage=thread_percentage(job.oversubscription),
                                **more)
 
+
+    #: how windows that the leg does not choose itself start by default (lambda_schedule.start_configurations)
+    starting = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
+                "minimize_steps": MINIMIZE_STEPS, "start_backend": "openmm"}
 
     def from_pre_equilibration(schedule) -> list:
         """The start of every window that the leg does not choose itself: the end of the pre-equilibration,
@@ -433,6 +557,31 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         the samples are of the backend of the leg."""
         return starts_from(run, spec_of(ends, "openmm", seed=seed + 29), schedule, start, hybrid.system, n_atoms,
                            MINIMIZE_STEPS, START_MD_PS)
+
+    def als_of_leg() -> AlsSettings:
+        """The settings of a precalculation of this leg (``lambda_schedule.adaptive``)."""
+        a = rcfg.lambda_schedule.adaptive
+        return AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
+                           candidates=a.candidates, initial_windows={"morph": a.initial_windows},
+                           window_ps=a.window(job.leg), equilibration_ps=a.equilibration(job.leg),
+                           sample_interval_ps=a.sample_interval_ps, start_configurations=a.start_configurations,
+                           walk_ps=a.walk_ps, max_windows=a.max_windows, rest2_scale=float(rest2_scale))
+
+    def starts_of_given_windows(schedule, backend: str) -> tuple[list, dict]:
+        """The start configurations of windows that the leg does not choose itself, and how they were made
+        (``lambda_schedule.start_configurations``): from the end of the pre-equilibration
+        (:func:`from_pre_equilibration`), or as a precalculation of adaptive lambda scheduling starts the windows
+        of its first iteration (:func:`cufep.engine.leg.starts_as_a_precalculation`: on the backend of the leg,
+        without a minimisation, as the precalculation), so that such windows and windows the precalculation chose
+        differ in their lambda values alone."""
+        if rcfg.lambda_schedule.start_configurations == "pre_equilibration":
+            return from_pre_equilibration(schedule), dict(starting)
+        als = als_of_leg()
+        pool_spec = spec_of(ends, backend, seed=seed + 23)
+        ctx, integ = leg_context(pool_spec, hybrid.system, start[1], start[0], start[2], run.device0, seed)
+        cfgs = starts_as_a_precalculation(run, pool_spec, ctx, integ, schedule, als, n_atoms)
+        del ctx, integ
+        return cfgs, {"start_configurations": PRECALCULATION_START, **precalculation_md_ps(als, timestep_fs)}
 
     def check_scale(schedule) -> None:
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -449,8 +598,6 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         else:
             t0 = time.perf_counter()
             a = ls.adaptive
-            starting = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
-                        "minimize_steps": MINIMIZE_STEPS, "start_backend": "openmm"}
             if (leg_dir / "schedule.yaml").exists():
                 # the windows this leg has, without start configurations of them (none, or of other windows): its
                 # samples are of these windows, so they are kept and only their start configurations are made
@@ -463,30 +610,26 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                 check_kept_windows(leg_dir, schedule, production.conditions())
                 record_of_kept_windows(leg_dir, schedule, settings, log)   # the settings the windows were chosen with
                 log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg has, without "
-                    "the start configurations of them; they are made again for these windows (the settings of "
-                    "lambda_schedule are not applied to them; cufep rbfe run --reschedule determines the windows "
+                    "the start configurations of them; they are made again for these windows (the windows are "
+                    "kept whatever lambda_schedule asks now; cufep rbfe run --reschedule determines the windows "
                     "again)")
-                cfgs = from_pre_equilibration(schedule)
+                cfgs, made = starts_of_given_windows(schedule, backend)
                 # samples taken up as they were made keep their start (unknown without a record of these windows),
                 # and how the file was made now is said apart; samples started anew start from these (reviews of
                 # PR #18)
-                how = kept_start_record(leg_dir, schedule, settings, {**starting, "windows": "those this leg had"},
+                how = kept_start_record(leg_dir, schedule, settings, {**made, "windows": "those this leg had"},
                                         log)
             elif goes_on_from_its_samples(leg_dir):
                 refuse_samples_without_windows(leg_dir)
             elif ls.mode == "fixed":
-                values = ls.windows
+                values = ls.windows_of(job.leg)
                 schedule = schedule_from_windows(STAGES, {"morph": values},
                                                  {"morph": values if isinstance(values, int) else len(values)},
                                                  rest2_scale)
-                cfgs = from_pre_equilibration(schedule)
-                how = {**starting, "windows": "given"}
+                cfgs, made = starts_of_given_windows(schedule, backend)
+                how = {**made, "windows": "given"}
             elif a.legs == "each" or job.leg == "solvent":
-                als = AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
-                                  candidates=a.candidates, initial_windows={"morph": a.initial_windows},
-                                  window_ps=a.window(job.leg), equilibration_ps=a.equilibration(job.leg),
-                                  sample_interval_ps=a.sample_interval_ps, start_configurations=a.start_configurations,
-                                  walk_ps=a.walk_ps, max_windows=a.max_windows, rest2_scale=float(rest2_scale))
+                als = als_of_leg()
                 pool_spec = spec_of(ends, backend, seed=seed + 23)
                 # the Context of this process, which walks through the windows of the first iteration
                 ctx, integ = leg_context(pool_spec, hybrid.system, start[1], start[0], start[2], run.device0, seed)
@@ -497,8 +640,8 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                        "windows": "chosen by this precalculation"}
             else:
                 schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
-                cfgs = from_pre_equilibration(schedule)
-                how = {**starting, "windows": "those of the solvent leg"}
+                cfgs, made = starts_of_given_windows(schedule, backend)
+                how = {**made, "windows": "those of the solvent leg"}
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}
             configs = publish_windows(leg_dir, schedule, cfgs, record, leg=job.leg, edge=job.edge,
                                       repeat=job.repeat, seed=seed, backend=backend)
@@ -535,6 +678,71 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     return result
 
 
+def flip_numbers(samples: dict, start: int, conditions: dict | None = None) -> dict | None:
+    """The terminal flip moves of the iterations from ``start`` on, by lambda window, as numbers without a verdict:
+    attempted and accepted, with the rule, the interval and the groups the samples record. None for samples of a
+    leg without the moves."""
+    if "flips" not in samples:
+        return None
+    data = np.asarray(samples["flips"][int(start):], dtype=np.int64)
+    recorded = ((conditions or {}).get("settings") or {}).get("terminal_flip")
+    return {**(dict(recorded) if isinstance(recorded, dict) else {}),
+            "attempted": [int(n) for n in data[:, :, 0].sum(axis=0)],
+            "accepted": [int(n) for n in data[:, :, 1].sum(axis=0)]}
+
+
+def md_of_leg(leg_dir: Path, schedule, samples: dict) -> dict:
+    """The MD of a leg after its pre-equilibration, as its files record it, in ps as integrated (numbers, no
+    verdict): the lambda windows (what the record of the start configurations says made them and their starts: the
+    precalculation that chose the windows, with its walk, and the start of windows the leg did not choose or whose
+    start configurations were made again), the replica exchange (every window, equilibration and production, as
+    stored) and their sum. A part that the files do not record is None, and so is the sum then: the windows of a
+    leg that kept windows it had (their record says how the start configurations were made again, not what made
+    the windows before). With it a calculation with given windows can be given the MD of one whose precalculation
+    chose them (``sampling.production_ns`` of each leg); nothing is derived from it."""
+    from cufep.steps import md_steps
+    from cufep.workflow import start_record_of
+
+    def recorded(read):
+        try:
+            return read()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    def windows():
+        file = Path(leg_dir) / "start_configs.npz"
+        made = start_record_of(file) if file.exists() else {}
+        n = len(schedule.states)
+        if made.get("windows") == "those this leg had" or "start_configurations_made_again" in made:
+            return None
+        ps = 0.0
+        if made.get("windows") == "chosen by this precalculation":
+            p = schedule.provenance
+            first = sum(int(v) for v in p["initial_windows"].values()) - (len(p["initial_windows"]) - 1)
+            if p.get("start_configurations") == "walk":
+                dt = float(samples["attrs"]["conditions"]["timestep_fs"])
+                ps += first * md_steps(float(p["walk_ps"]), dt) * dt / 1000.0
+            ps += int(p["windows_simulated"]) * (float(p["window_ps_integrated"])
+                                                 + float(p["equilibration_ps_integrated"]))
+        # the start of windows the leg did not choose, or start configurations made again for the windows it chose
+        # (the record then holds how they were made, cufep.engine.leg.record_the_start_used)
+        if "window_md_ps" in made:
+            ps += n * (float(made["walk_ps"]) + float(made["window_md_ps"]))
+        elif "start_md_ps" in made:
+            ps += n * float(made["start_md_ps"])
+        elif made.get("windows") != "chosen by this precalculation":
+            return None
+        return float(ps)
+
+    def replica_exchange():
+        u = samples["u"]
+        return float(u.shape[0] * u.shape[1] * float(samples["attrs"]["iteration_ps"]))
+
+    parts = {"lambda_windows": recorded(windows), "replica_exchange": recorded(replica_exchange)}
+    known = all(v is not None for v in parts.values())
+    return {**parts, "total": float(sum(parts.values())) if known else None}
+
+
 def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLeg | None = None, samples=None,
                       schedule=None) -> dict:
     """The result of a leg of an edge: the analysis of its samples (:func:`cufep.engine.leg.path_result`), whose
@@ -550,9 +758,21 @@ def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLe
     # and what the samples were made with: whether the leg made the moves, and with which chemical potential and
     # standard volume of water. The complex legs of one network must agree in it (cufep.rbfe.run)
     result["water_moves"] = water_moves_of(of["attrs"].get("conditions"))
+    # the MD of the leg after its pre-equilibration, as its files record it (None: not recorded)
+    if schedule is None and (leg_dir / "schedule.yaml").exists():
+        from cufep.alchemy.schedule import Schedule
+
+        schedule = Schedule.load(leg_dir / "schedule.yaml")
+    result["md_ps"] = md_of_leg(leg_dir, schedule, of["samples"])
+    # the terminal flip moves of the production that is analysed, by lambda window, and what the samples record of
+    # the moves (None: the leg made none)
+    result["terminal_flip"] = flip_numbers(of["samples"], of["first"], of["conditions"])
     if built is not None:
         h = built.hybrid
         result["hybrid"] = {"ligand_a": built.info["ligand_a"], "ligand_b": built.info["ligand_b"],
                             "core_atoms": len(h.core), "unique_old_atoms": len(h.unique_old),
-                            "unique_new_atoms": len(h.unique_new), "lomap_score": built.info.get("lomap_score")}
+                            "unique_new_atoms": len(h.unique_new), "lomap_score": built.info.get("lomap_score"),
+                            # with alchemy.dummy_bonded_terms: separated, the junctions and the torsion terms
+                            # that go to zero at an end (cufep.rbfe.junctions)
+                            "junctions": list(h.junctions), "torsions_off_at_an_end": h.torsions_off_at_an_end}
     return result

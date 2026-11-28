@@ -1234,3 +1234,258 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
     with pytest.raises(WorkflowError, match="prep/prep.json cannot be read"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     prepared.write_text(whole)
+
+
+def test_given_windows_start_as_a_precalculation_starts_them_and_the_md_of_a_leg_is_counted(tmp_path, monkeypatch,
+                                                                                         deterministic_cpu):
+    """Item 1 of the plan of 2026-11-28 (issue #27). ``lambda_schedule.start_configurations: precalculation``: the
+    windows a leg is given (here its own, ``windows: {complex: ..., solvent: ...}``) are started as a precalculation
+    of adaptive lambda scheduling starts the windows of its first iteration, and the record of the start
+    configurations and the result say so; by default they start from the end of the pre-equilibration. The MD of a
+    leg after its pre-equilibration is in its result (``md_ps``: what made its windows, and its replica exchange),
+    for a leg with given windows and for one whose precalculation chose them."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import PRE_EQUILIBRATION_START, PRECALCULATION_START, EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.workflow import start_record_of
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    given = {"mode": "fixed", "windows": {"complex": 4, "solvent": [0.0, 0.3, 1.0]}}
+    results, records = {}, {}
+    for name, more in (("precalculation", {**given, "start_configurations": "precalculation"}), ("default", given),
+                       ("adaptive", {})):
+        out_dir = tmp_path / name
+        ligands = _ligands(tmp_path, out_dir)
+        data = _config(tmp_path, out_dir, "adaptive").model_dump(mode="json")
+        rcfg = RbfeConfig.model_validate({**data, "lambda_schedule": {**data["lambda_schedule"], **more}})
+        edge_dir = out_dir / "edges" / "toluene~phenol"
+        prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+        results[name] = run_hybrid_leg_safe(EdgeLegJob(
+            edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+            config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production("solvent"), inline=True))
+        assert "error" not in results[name], results[name]
+        records[name] = start_record_of(edge_dir / "repeat_0" / "solvent" / "start_configs.npz")
+
+    # the windows of the leg, and how their replicas were started
+    for name in ("precalculation", "default"):
+        assert results[name]["lambda_windows"] == {"morph": [0.0, 0.3, 1.0]}
+        assert records[name]["windows"] == "given"
+    made = records["precalculation"]
+    assert made["start_configurations"] == PRECALCULATION_START
+    assert (made["walk_ps"], made["window_md_ps"]) == pytest.approx((0.2, 0.5))
+    assert "start_md_ps" not in made and "minimize_steps" not in made
+    assert results["precalculation"]["start_configurations"] == (
+        f"{PRECALCULATION_START}, 0.2 ps in each window, then 0.5 ps in each window")
+    assert records["default"]["start_configurations"] == PRE_EQUILIBRATION_START
+    assert results["default"]["start_configurations"] == PRE_EQUILIBRATION_START
+    assert records["adaptive"]["windows"] == "chosen by this precalculation"
+
+    # the MD after the pre-equilibration: every window 10 iterations of equilibration and 20 of production, of
+    # 0.248 ps each as integrated (62 steps of 4 fs for the 0.25 ps asked)
+    per_window = 30 * 62 * 0.004
+    for name, windows_ps in (("precalculation", 3 * (0.2 + 0.5)), ("default", 3 * 0.2)):
+        assert results[name]["md_ps"] == pytest.approx({
+            "lambda_windows": windows_ps, "replica_exchange": 3 * per_window, "total": windows_ps + 3 * per_window})
+    adaptive = results["adaptive"]
+    n = adaptive["n_states"]
+    from cufep.alchemy.schedule import Schedule
+
+    simulated = Schedule.load(tmp_path / "adaptive" / "edges" / "toluene~phenol" / "repeat_0" / "solvent"
+                              / "schedule.yaml").provenance["windows_simulated"]
+    assert simulated >= 3
+    # the walk through the three windows of the first iteration, and every window the precalculation ran
+    assert adaptive["md_ps"]["lambda_windows"] == pytest.approx(3 * 0.2 + simulated * 0.5)
+    assert adaptive["md_ps"]["replica_exchange"] == pytest.approx(n * per_window)
+    assert adaptive["md_ps"]["total"] == pytest.approx(3 * 0.2 + simulated * 0.5 + n * per_window)
+
+
+def test_each_leg_of_a_relative_run_gets_its_production(tmp_path, monkeypatch):
+    """``sampling.production_ns: {complex: ..., solvent: ...}`` of a relative run: the job of each leg is given the
+    production of its leg (item 1 of the plan of 2026-11-28: a leg with given windows is given the MD of one whose
+    precalculation chose them, leg by leg); one number is that of both legs."""
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import run_rbfe
+
+    class Captured(Exception):
+        pass
+
+    def capture(jobs, *args, **kwargs):
+        raise Captured({job.leg: job.production_ns for job in jobs})
+
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+    monkeypatch.setattr(run_module, "execute_jobs", capture)
+    for production, expected in (({"complex": 0.005, "solvent": 0.01}, {"complex": 0.005, "solvent": 0.01}),
+                                 (0.005, {"complex": 0.005, "solvent": 0.005})):
+        out_dir = tmp_path / f"run_{len(expected)}_{production if isinstance(production, float) else 'legs'}"
+        _ligands(tmp_path, out_dir)
+        data = {**_config(tmp_path, out_dir, "fixed").model_dump(mode="json"),
+                "network": {"edges": [["toluene", "phenol"]]}}
+        rcfg = RbfeConfig.model_validate({**data, "sampling": {**data["sampling"], "production_ns": production}})
+        with pytest.raises(Captured) as jobs:
+            run_rbfe(rcfg, log=lambda line: None)
+        assert jobs.value.args[0] == pytest.approx(expected)
+
+
+def _benzamides(tmp_path, out_dir):
+    """N-(3,3-dimethylbutyl)benzamide and its 3-fluoro compound in one frame (the fluorine where the hydrogen is),
+    0.6 nm from the peptide, with Gasteiger charges in the cache: the benzoyl ring is a terminal group of both, and
+    its two orientations differ in the second."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep.prep.ligand import load_ligands
+
+    a = Chem.AddHs(Chem.MolFromSmiles("O=C(NCCC(C)(C)C)c1ccccc1"))
+    AllChem.EmbedMolecule(a, randomSeed=13)
+    xyz = a.GetConformer().GetPositions()
+    for i, row in enumerate(xyz + np.array([16.0, 14.0, 16.0]) - xyz.mean(axis=0)):
+        a.GetConformer().SetAtomPosition(i, row.tolist())
+    ipso, ortho, meta = a.GetSubstructMatch(Chem.MolFromSmarts("[c;$(cC=O)]:c:c"))[:3]
+    hydrogen = next(n.GetIdx() for n in a.GetAtomWithIdx(meta).GetNeighbors() if n.GetAtomicNum() == 1)
+    b = Chem.RWMol(a)
+    b.GetAtomWithIdx(hydrogen).SetAtomicNum(9)
+    b = b.GetMol()
+    Chem.SanitizeMol(b)
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, mol, dg in (("benzamide", a, -5.0), ("fluorobenzamide", b, -5.4)):
+        mol.SetProp("_Name", name)
+        mol.SetProp("r_exp_dg", str(dg))
+        writer.write(mol)
+    writer.close()
+    ligands = load_ligands(tmp_path / "ligands.sdf")
+    (out_dir / "cache").mkdir(parents=True, exist_ok=True)
+    for lig in ligands:
+        mol = lig.offmol
+        mol.assign_partial_charges("gasteiger")
+        charges = [float(q) for q in mol.partial_charges.m_as("elementary_charge")]
+        shift = sum(charges) / len(charges)
+        (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
+            json.dumps({"charges": [q - shift for q in charges]}))
+    return ligands
+
+
+def test_terminal_flips_are_attempted_once_an_interval_and_recorded_with_the_samples(tmp_path, monkeypatch,
+                                                                                    deterministic_cpu):
+    """Item 2 of the plan of 2026-11-28 (issue #27). ``sampling.terminal_flip``: every replica of a leg whose hybrid
+    ligand has a terminal group that the moves turn attempts one move for every interval of its MD; the result
+    gives the moves of the production by lambda window, and the samples record the rule, the interval and the
+    groups, so that a run without the setting does not go on from them. A leg without such a group is sampled as
+    without the setting, and its record says nothing of the moves."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import EdgeLegJob, build_leg, hybrid_settings, ligand_flip_groups, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.sampling.storage import stored_conditions
+    from cufep.sampling.terminal_flip import FLIP_RULE
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _benzamides(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    without = RbfeConfig.model_validate(data)
+    rcfg = RbfeConfig.model_validate(
+        {**data, "sampling": {**data["sampling"], "terminal_flip": {"enabled": True, "interval_ps": 0.25}}})
+    edge_dir = out_dir / "edges" / "benzamide~fluorobenzamide"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    groups, record = ligand_flip_groups(edge_dir, "solvent")
+    assert len(groups) == 1 and len(groups[0].mobile) == 11 and [r["used"] for r in record] == [True]
+    recorded = hybrid_settings(rcfg, "solvent", edge_dir)["terminal_flip"]
+    assert recorded == {"rule": FLIP_RULE, "interval_ps": 0.25, "groups": [groups[0].to_dict()]}
+    assert "terminal_flip" not in hybrid_settings(without, "solvent", edge_dir)
+    built = build_leg(rcfg, edge_dir, "solvent")
+    assert built.flip is not None and len(built.flip.groups) == 1
+    assert build_leg(without, edge_dir, "solvent").flip is None
+    # the group of the System is that of the two ligands, in the atoms of the System
+    assert len(built.flip.groups[0].mobile) == 11
+
+    def job(config) -> EdgeLegJob:
+        return EdgeLegJob(edge="benzamide~fluorobenzamide", leg="solvent", repeat=0, edge_dir=str(edge_dir),
+                          devices=[None], config=config.model_dump(mode="json"),
+                          production_ns=config.sampling.production("solvent"), inline=True)
+
+    result = run_hybrid_leg_safe(job(rcfg))
+    assert "error" not in result, result
+    flips = result["terminal_flip"]
+    # 20 iterations of production of 0.25 ps, three windows: one move per replica and iteration
+    assert flips["attempted"] == [20, 20, 20]
+    assert all(0 <= n <= 20 for n in flips["accepted"]) and sum(flips["accepted"]) > 0
+    assert (flips["rule"], flips["interval_ps"], flips["groups"]) == (FLIP_RULE, 0.25, recorded["groups"])
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    assert stored_conditions(leg_dir / "hrex")[1]["settings"]["terminal_flip"] == recorded
+    # the windows and their start configurations are made without the moves, and their record does not hold the
+    # setting (review of 3367749: it did, and a leg with windows and no samples was refused when it changed)
+    from cufep.workflow import start_record_of
+
+    assert "terminal_flip" not in start_record_of(leg_dir / "start_configs.npz")["settings"]
+    # the same run again takes the leg as it is; a run without the moves does not go on from these samples
+    assert run_hybrid_leg_safe(job(rcfg))["delta_g"] == result["delta_g"]
+    refused = run_hybrid_leg_safe(job(without))
+    assert "terminal_flip" in refused["error"]
+
+
+def test_a_leg_without_a_terminal_group_is_sampled_as_without_the_setting(tmp_path):
+    """Toluene to phenol: the ring is the larger side of its bond, no group is turned. With
+    ``sampling.terminal_flip`` on, the leg has no moves and the settings of its samples say nothing of them: its
+    samples are those of a run without the setting, which can go on from them and the other way round."""
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import build_leg, hybrid_settings, ligand_flip_groups
+    from cufep.rbfe.prep import prepare_edge
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    rcfg = RbfeConfig.model_validate({**data, "sampling": {**data["sampling"], "terminal_flip": {"enabled": True}}})
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    for leg in ("solvent", "complex"):
+        assert ligand_flip_groups(edge_dir, leg)[0] == []
+        assert hybrid_settings(rcfg, leg, edge_dir) == hybrid_settings(RbfeConfig.model_validate(data), leg, edge_dir)
+        assert build_leg(rcfg, edge_dir, leg).flip is None
+
+
+def test_the_md_of_a_leg_is_counted_only_where_its_record_tells_it(tmp_path):
+    """Review of 3367749: the MD that made the windows of a leg (``md_ps``) is what the record of its start
+    configurations tells, as integrated: the precalculation that chose the windows with its walk; the start of
+    given windows; both where the start configurations of chosen windows were made again and the samples started
+    from them; and nothing (None, and no sum) for a leg that kept windows it had, whose record does not say what
+    made them. The first version counted only the start made again for such legs, and the walk as it was asked."""
+    from types import SimpleNamespace
+
+    from cufep.rbfe.leg import md_of_leg
+
+    schedule = SimpleNamespace(states=[0, 1, 2, 3], provenance={
+        "initial_windows": {"morph": 3}, "start_configurations": "walk", "walk_ps": 0.201, "windows_simulated": 5,
+        "window_ps_integrated": 0.5, "equilibration_ps_integrated": 0.1})
+    # 30 iterations of four replicas of 0.248 ps; a time step of 4 fs: a walk of 0.201 ps is 50 steps, 0.2 ps
+    samples = {"u": np.zeros((30, 4, 4)), "attrs": {"iteration_ps": 0.248, "conditions": {"timestep_fs": 4.0}}}
+    exchange = 30 * 4 * 0.248
+
+    def md(record: dict | None) -> dict:
+        leg_dir = tmp_path / f"leg_{len(list(tmp_path.iterdir()))}"
+        leg_dir.mkdir()
+        if record is not None:
+            np.savez(leg_dir / "start_configs.npz", positions=np.zeros((4, 1, 3)), made_with=json.dumps(record))
+        return md_of_leg(leg_dir, schedule, samples)
+
+    chosen = {"start_configurations": "walk", "walk_ps": 0.201, "windows": "chosen by this precalculation"}
+    precalculation = 3 * 0.2 + 5 * (0.5 + 0.1)
+    assert md(chosen) == pytest.approx({"lambda_windows": precalculation, "replica_exchange": exchange,
+                                        "total": precalculation + exchange})
+    assert md({"start_configurations": "x", "walk_ps": 0.2, "window_md_ps": 0.6, "windows": "given"})[
+        "lambda_windows"] == pytest.approx(4 * 0.8)
+    assert md({"start_configurations": "x", "start_md_ps": 10.0, "windows": "those of the solvent leg"})[
+        "lambda_windows"] == pytest.approx(40.0)
+    # chosen windows whose start configurations were made again, and the samples started from those
+    assert md({"start_configurations": "x", "start_md_ps": 10.0, "minimize_steps": 5000,
+               "windows": "chosen by this precalculation"})["lambda_windows"] == pytest.approx(precalculation + 40.0)
+    # not told by the record: windows the leg kept, a start made again beside that of the samples, no record
+    for record in ({"start_configurations": "x", "start_md_ps": 10.0, "windows": "those this leg had"},
+                   {**chosen, "start_configurations_made_again": {"start_md_ps": 10.0}}, {"windows": "given"}, None):
+        assert md(record) == {"lambda_windows": None, "replica_exchange": pytest.approx(exchange), "total": None}
