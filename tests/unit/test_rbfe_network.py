@@ -500,7 +500,7 @@ def test_the_results_of_a_run_are_made_again_only_from_legs_it_has_and_under_its
     for name in ("summary.json", "edges.csv", "ligands.csv", "network.json", "resolved_config.yaml"):
         shutil.copy(run / name, copy / name)
     before = {path.name: path.read_bytes() for path in copy.iterdir()}
-    with pytest.raises(WorkflowError, match="holds the ddG of 2 edge\\(s\\) made from files that are not in the "
+    with pytest.raises(WorkflowError, match="holds the results of 2 edge\\(s\\) made from files that are not in the "
                                            "directory \\(a~b: repeat_0/complex/result.json, repeat_0/solvent/"
                                            "result.json, prep/prep.json; b~c: .*Nothing was written.*cufep "
                                            "benchmark report"):
@@ -508,8 +508,8 @@ def test_the_results_of_a_run_are_made_again_only_from_legs_it_has_and_under_its
     assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == before
     # one edge whose legs are gone, among edges that have theirs
     shutil.rmtree(run / "edges" / "b~c")
-    with pytest.raises(WorkflowError, match="holds the ddG of 1 edge\\(s\\) made from files that are not in the "
-                                           "directory \\(b~c: "):
+    with pytest.raises(WorkflowError, match="holds the results of 1 edge\\(s\\) made from files that are not in "
+                                           "the directory \\(b~c: "):
         rewrite_results(run)
     assert (run / "summary.json").read_bytes() == before["summary.json"]
 
@@ -529,7 +529,7 @@ def test_analyze_write_refuses_the_recorded_results_which_have_no_legs(tmp_path)
     before = {path.name: path.read_bytes() for path in copy.iterdir()}
     result = CliRunner().invoke(cli.main, ["rbfe", "analyze", str(copy), "--write"])
     assert result.exit_code != 0
-    assert "holds the ddG of 22 edge(s) made from files that are not in the directory" in result.output
+    assert "holds the results of 22 edge(s) made from files that are not in the directory" in result.output
     assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == before
     result = CliRunner().invoke(cli.main, ["rbfe", "analyze", str(copy)])
     assert result.exit_code == 0
@@ -560,8 +560,8 @@ def test_results_are_not_made_again_without_every_file_their_ddg_was_made_from(t
     def refused_without(path, said: str) -> None:
         aside = path.with_name(path.name + ".aside")
         path.rename(aside)
-        with pytest.raises(WorkflowError, match="holds the ddG of 1 edge\\(s\\) made from files that are not in the "
-                                               f"directory \\({said}\\).*Nothing was written"):
+        with pytest.raises(WorkflowError, match="holds the results of 1 edge\\(s\\) made from files that are not in "
+                                               f"the directory \\({said}\\).*Nothing was written"):
             rewrite_results(run)
         assert {name: (run / name).read_bytes() for name in names} == before
         aside.rename(path)
@@ -728,8 +728,8 @@ def test_results_are_not_made_again_without_the_record_of_samples_that_their_sum
     names = ("summary.json", "edges.csv", "ligands.csv")
     before = {name: (run / name).read_bytes() for name in names}
     shutil.move(leg / "hrex", tmp_path / "aside")
-    with pytest.raises(WorkflowError, match="holds the ddG of 1 edge\\(s\\) made from files that are not in the "
-                                           "directory \\(a~b: repeat_0/complex/hrex \\(the record of its samples"):
+    with pytest.raises(WorkflowError, match="holds the results of 1 edge\\(s\\) made from files that are not in "
+                                           "the directory \\(a~b: repeat_0/complex/hrex \\(the record of its samples"):
         rewrite_results(run)
     assert {name: (run / name).read_bytes() for name in names} == before
     # a summary that holds the moves of the edge alone, not of its repeats
@@ -742,3 +742,83 @@ def test_results_are_not_made_again_without_the_record_of_samples_that_their_sum
     shutil.move(tmp_path / "aside", leg / "hrex")
     rewrite_results(run)
     assert {name: (run / name).read_bytes() for name in names} == before
+
+
+def test_an_edge_refused_for_its_repeats_stays_refused_when_the_record_of_one_is_set_aside(tmp_path):
+    """Fifth review of PR #21 (P1): repeat 0 of a~b has a result of a version before a leg recorded its moves, and
+    the record of its samples says an excess chemical potential of -5.0 kcal/mol; repeat 1 was made with -6.09.
+    The summary gives each repeat its ddG and the edge none (``inconsistent_legs``). With ``hrex/`` of repeat 0
+    moved away, `cufep rbfe analyze --write` did not look at the edge, which had no ddG; the value of repeat 0
+    was not recorded any more, the two repeats were averaged, and the dG of the two ligands were written. An edge
+    whose repeats were read is held to their files like one with a ddG: nothing is written, and the summary keeps
+    the refusal. The same when the result of a leg of such a repeat is set aside."""
+    import json
+    import shutil
+
+    import yaml
+
+    from cufep.rbfe.run import rewrite_results
+    from cufep.sampling.storage import MANIFEST
+    from cufep.workflow import WorkflowError
+
+    run = tmp_path / "run"
+    _run_directory(run, {"a~b": (-12.0, -10.5)})
+    (run / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 2}}))
+    leg = run / "edges" / "a~b" / "repeat_0" / "complex"
+    (leg / "result.json").write_text(json.dumps(_with_moves(-12.0, None) | {"gcmc": {"insertions_accepted": [1]}}))
+    (leg / "hrex").mkdir()
+    (leg / "hrex" / MANIFEST).write_text(json.dumps({"parts": [], "attrs": {"conditions": {"settings": {"gcmc": {
+        "enabled": True, "excess_chemical_potential_kcal_per_mol": -5.0, "standard_volume_nm3": 0.030345}}}}}))
+    _write_legs(run, "a~b", 1, _with_moves(-12.4, _moves()), _with_moves(-10.5, NO_MOVES))
+    summary = rewrite_results(run)
+    (edge,) = summary["edges"]
+    assert "ddg" not in edge and [r["ddg"] for r in edge["repeats"]] == pytest.approx([-1.5, -1.9])
+    assert edge["inconsistent_legs"] == [
+        "grand canonical moves of water in the complex leg: repeat 0 excess chemical potential -5 kcal/mol, standard "
+        "volume 0.030345 nm3, repeat 1 excess chemical potential -6.09 kcal/mol, standard volume 0.030345 nm3"]
+    assert summary["dg"] is None
+    names = ("summary.json", "edges.csv", "ligands.csv")
+    before = {name: (run / name).read_bytes() for name in names}
+
+    def refused(said: str) -> None:
+        with pytest.raises(WorkflowError, match="holds the results of 1 edge\\(s\\) made from files that are not in "
+                                               f"the directory \\(a~b: {said}"):
+            rewrite_results(run)
+        assert {name: (run / name).read_bytes() for name in names} == before
+        assert json.loads((run / "summary.json").read_text())["edges"][0]["inconsistent_legs"]
+
+    shutil.move(leg / "hrex", tmp_path / "aside")
+    refused("repeat_0/complex/hrex \\(the record of its samples")
+    shutil.move(tmp_path / "aside", leg / "hrex")
+    # the result of a leg of a repeat of the refused edge
+    solvent = run / "edges" / "a~b" / "repeat_0" / "solvent" / "result.json"
+    solvent.rename(solvent.with_name("result.aside.json"))
+    refused("repeat_0/solvent/result.json")
+    solvent.with_name("result.aside.json").rename(solvent)
+    rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == before
+    # a summary that cannot be read holds nothing: the results are made again from the legs
+    (run / "summary.json").write_text("{")
+    rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == before
+
+
+def test_a_repeat_that_is_read_no_more_is_not_a_record_that_is_gone():
+    """The independent review of the fix of the fifth review: repeat 0 never recorded the values of its water,
+    repeat 1 did, and the edge has them from repeat 1. When the result of repeat 1 is set aside (a run began the
+    leg again and was stopped), the edge is made again without those values; nothing of a record of samples is
+    gone, and what is gone is the result, which is held to the files apart."""
+    from cufep.rbfe.run import water_record_gone
+
+    stored = {"edge": "a~b", "ddg": -1.5, "conditions": {"water_moves": _moves(rule=None)},
+              "repeats": [{"repeat": 0, "ddg": -1.5, "water_moves": {"enabled": True}},
+                          {"repeat": 1, "ddg": -1.5, "water_moves": _moves(rule=None)}]}
+    made = {"edge": "a~b", "ddg": -1.5, "conditions": {"water_moves": {"enabled": True, RULE: None}},
+            "repeats": [{"repeat": 0, "ddg": -1.5, "water_moves": {"enabled": True}},
+                        {"repeat": 1, "missing": ["complex"]}]}
+    assert water_record_gone(stored, made) == []
+    # the values of a repeat that is still read and gives them no more: its record is gone
+    made["repeats"][1] = {"repeat": 1, "ddg": -1.5, "water_moves": {"enabled": True}}
+    assert water_record_gone(stored, made) == [
+        "repeat_1/complex/hrex (the record of its samples, from which the summary has the grand canonical moves of "
+        "water of the leg)"]

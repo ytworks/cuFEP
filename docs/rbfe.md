@@ -20,10 +20,11 @@ cufep rbfe plan config.yaml      # ligands, edges and atom mappings, without sim
 cufep rbfe run config.yaml       # run (or resume) every edge
 cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have; writes nothing
 cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv and summary.json again, under the
-                                       # lock of the directory; refused where the summary holds a ddG and the
-                                       # directory not every file it was made from (both legs of each of its
-                                       # repeats, the record of the prepared edge, the record of the samples
-                                       # where the summary has the water moves of a leg from it)
+                                       # lock of the directory; refused where the summary holds the ddG of an
+                                       # edge, or repeats for which it refused the edge one, and the directory
+                                       # not every file that was made from (both legs of each such repeat, the
+                                       # record of the prepared edge, the record of the samples where the
+                                       # summary has the water moves of a leg from it)
 ```
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
@@ -38,8 +39,13 @@ left the velocities of an inserted water as they were, are analysed as they are 
 System than this version builds (its checksum; the hybrid System of every leg with samples is built for that
 before the run starts, several legs at a time). A leg stopped at the checkpoint of the start of its replica
 exchange, before its first sample, is held to the conditions recorded with that checkpoint in the same way where
-its start configurations have to be made again. The directory, its record of the configuration and the results of
-its legs then stay as they were.
+its start configurations have to be made again. A run is also refused if results that it would combine at its end
+without sampling them (those of the edges or legs it does not run) are not what the directory made them from any
+more, so that they would be combined without the comparisons made before: the record of the samples from which
+the summary has the grand canonical moves of water of a complex leg (a result of an earlier version has them
+there) was set aside; the result of a leg that the summary read is gone (not where a run set it aside when it
+began the leg again, `result.previous.json`); or an edge has results and no record of its prepared systems. The
+directory, its record of the configuration and the results of its legs then stay as they were.
 
 ## Inputs
 

@@ -1021,3 +1021,118 @@ def test_a_leg_lowered_to_2_fs_goes_on_at_2_fs_when_its_pre_equilibration_is_mad
             "made at 2 fs")
     assert note in result["notes"]
     assert read_manifest(leg_dir / "hrex")["attrs"]["conditions"]["timestep_fs"] == 2.0
+
+
+def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_directory_lost(tmp_path, monkeypatch):
+    """Fifth review of PR #21 (P1), through the run: the summary of the directory refused toluene~phenol a ddG, for
+    the other values of the water of its two repeats; repeat 0 has a result of a version before a leg recorded its
+    moves, and its value is in the record of its samples. With that ``hrex/`` moved away, a run of the other edge
+    alone (--edge) writes a summary of all edges when it ends: the value of repeat 0 is not recorded any more, the
+    repeats are averaged, and the refused edge gives the dG of the network, as `cufep rbfe analyze --write` did.
+    The results a run combines without sampling them are held to what the summary has of them before the run
+    writes anything; with the record there the run goes on. The same for the result of a leg that the summary read
+    and that was moved away (the repeat would be left out, and the refused edge get the ddG of the other), though
+    not for one that a run set aside when it began the leg, and for the record of the prepared edge (the edge
+    would be left out of the comparison of the prepared systems). A summary that cannot be read holds nothing."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.prep.ligand import load_ligands
+    from cufep.rbfe import run as rbfe_run
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.prep import edge_made_from
+    from cufep.rbfe.run import rewrite_results, run_rbfe, write_run_files
+    from cufep.sampling.storage import MANIFEST
+    from cufep.workflow import WorkflowError
+
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, smiles in (("toluene", "Cc1ccccc1"), ("phenol", "Oc1ccccc1"), ("aniline", "Nc1ccccc1")):
+        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        AllChem.EmbedMolecule(mol, randomSeed=11)
+        mol.SetProp("_Name", name)
+        writer.write(mol)
+    writer.close()
+    ligands = {lig.name: lig for lig in load_ligands(tmp_path / "ligands.sdf")}
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    rcfg = RbfeConfig.model_validate({**data, "sampling": {**data["sampling"], "repeats": 2},
+                                      "network": {"edges": [["toluene", "phenol"], ["phenol", "aniline"]]}})
+    write_run_files(out_dir, rcfg, list(ligands), [("toluene", "phenol"), ("phenol", "aniline")], "given", {})
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    (edge_dir / "prep").mkdir(parents=True)
+    (edge_dir / "prep" / "prep.json").write_text(json.dumps(
+        {"made_from": edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"), "legs": {}}))
+
+    def result(dg_kcal: float, **moves) -> dict:
+        return {"delta_g": dg_kcal * 4.184, "delta_g_error": 0.3 * 4.184, "temperature_K": 298.15,
+                "pressure_bar": 1.0, "lrc_method": "none", "prepared_systems_sha256": "abc", "n_states": 9,
+                "backend": "openmm", "notes": [], **moves,
+                "quality": {"overlap": {"lowest": 0.1, "ok": True}, "samples": {"counted": 100.0}}}
+
+    water = {"enabled": True, "excess_chemical_potential_kcal_per_mol": -6.09, "standard_volume_nm3": 0.030345}
+    legs = {(0, "complex"): result(-12.0, gcmc={"insertions_accepted": [1]}),          # before the record of a leg
+            (1, "complex"): result(-12.4, gcmc={"insertions_accepted": [1]}, water_moves={
+                **water, "velocities_of_an_inserted_water": "turned with it"}),
+            (0, "solvent"): result(-10.5, gcmc=None, water_moves={"enabled": False}),
+            (1, "solvent"): result(-10.5, gcmc=None, water_moves={"enabled": False})}
+    for (repeat, leg), content in legs.items():
+        leg_dir = edge_dir / f"repeat_{repeat}" / leg
+        leg_dir.mkdir(parents=True)
+        (leg_dir / "result.json").write_text(json.dumps(content))
+    hrex = edge_dir / "repeat_0" / "complex" / "hrex"
+    hrex.mkdir()
+    (hrex / MANIFEST).write_text(json.dumps({"parts": [], "attrs": {"conditions": {"settings": {"gcmc": {
+        **water, "excess_chemical_potential_kcal_per_mol": -5.0}}}}}))
+    summary = rewrite_results(out_dir)
+    assert "ddg" not in summary["edges"][0] and summary["edges"][0]["inconsistent_legs"] and summary["dg"] is None
+
+    def files() -> dict:
+        return {path: path.read_bytes() for path in sorted(out_dir.rglob("*"))
+                if path.is_file() and path.name != ".cufep.lock"}
+
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+
+    def stop_at_the_first_write(*args, **kwargs):
+        raise RuntimeError("the run began to write")
+
+    monkeypatch.setattr(rbfe_run, "write_run_files", stop_at_the_first_write)
+    hrex.rename(tmp_path / "aside")
+    before = files()
+    with pytest.raises(WorkflowError, match="holds the results of 1 edge\\(s\\) which this run would combine without "
+                                           "sampling them.*toluene~phenol: repeat_0/complex/hrex.*Nothing was changed"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    assert files() == before
+    (tmp_path / "aside").rename(hrex)
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+
+    def refused_without(path, said: str) -> None:
+        path.rename(tmp_path / "aside")
+        before = files()
+        with pytest.raises(WorkflowError, match=f"would combine without sampling them.*toluene~phenol: {said}"):
+            run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+        assert files() == before
+        (tmp_path / "aside").rename(path)
+
+    result_of_a_leg = edge_dir / "repeat_0" / "complex" / "result.json"
+    refused_without(result_of_a_leg, "repeat_0/complex/result.json")
+    refused_without(edge_dir / "prep" / "prep.json", "prep/prep.json")
+    # a result that a run set aside when it began the leg (the leg was stopped): an ordinary state, not refused
+    result_of_a_leg.rename(result_of_a_leg.with_name("result.previous.json"))
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    result_of_a_leg.with_name("result.previous.json").rename(result_of_a_leg)
+    # the edge itself run again: its legs are sampled, and nothing of them is held to the summary
+    hrex.rename(tmp_path / "aside")
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None)
+    (tmp_path / "aside").rename(hrex)
+    # a summary that cannot be read: there is nothing to hold the results to
+    (out_dir / "summary.json").write_text("{")
+    hrex.rename(tmp_path / "aside")
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])

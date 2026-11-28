@@ -200,6 +200,66 @@ def check_legs_reuse(rcfg: RbfeConfig, out_dir: Path, edges, infos: dict, only_l
             raise WorkflowError(problem)
 
 
+def stored_edges(stored: Path) -> list[dict]:
+    """The edges of the summary a directory has that were made from the results of their legs
+    (:func:`made_from_results`); none where there is no summary, or one that cannot be read (it is written again
+    from the legs, and nothing of it is there to keep)."""
+    try:
+        edges = json.loads(Path(stored).read_text()).get("edges", [])
+        return [e for e in edges if isinstance(e, dict) and "edge" in e and made_from_results(e)]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return []
+
+
+def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: int) -> None:
+    """Before a run writes anything: the results it will combine at its end without sampling them must still be
+    what the directory made them from. The run writes a summary of all edges when it ends, as `cufep rbfe analyze
+    --write` does, and what is gone is not compared there: an edge whose repeats the summary refused a ddG for
+    their other values of the water is combined once the record of the samples of one repeat, or the result of
+    one, is moved away (fifth review of PR #21, found for --write; the same state through the run). Refused:
+
+    - an edge with the result of a leg and without the record of its prepared systems (``prep/prep.json``): the
+      prepared edges of a network are compared by that record, and an edge without it is left out;
+    - a leg result that the summary of the directory read and that is gone, for a leg this run does not sample;
+      not where a run set it aside when it began the leg (``result.previous.json``: a leg that was stopped or
+      failed), which is an ordinary state of a directory;
+    - what the summary holds of the grand canonical moves of water of a complex leg this run does not sample and
+      the results give no more (:func:`water_record_gone`).
+
+    Raises WorkflowError."""
+    out_dir = Path(out_dir)
+    stored = out_dir / "summary.json"
+    had = {e["edge"]: e for e in stored_edges(stored)}
+    chosen = {edge_name(a, b) for a, b in selected}
+
+    def sampled(name: str, leg: str) -> bool:
+        return name in chosen and (not only_legs or leg in only_legs)
+
+    gone = []
+    for a, b in edges:
+        name = edge_name(a, b)
+        edge_dir, files = out_dir / "edges" / name, []
+        if not (edge_dir / "prep" / "prep.json").exists() and list(edge_dir.glob("repeat_*/*/result.json")):
+            files.append("prep/prep.json")
+        if name in had:
+            for repeat in repeats_read(had[name]):
+                for leg in ("complex", "solvent"):
+                    leg_dir = edge_dir / f"repeat_{repeat}" / leg
+                    if not sampled(name, leg) and not (leg_dir / "result.json").exists() \
+                            and not (leg_dir / "result.previous.json").exists():
+                        files.append(f"repeat_{repeat}/{leg}/result.json")
+            if not sampled(name, "complex"):
+                files += water_record_gone(had[name], edge_result(edge_dir, a, b, repeats))
+        if files:
+            gone.append((name, files))
+    if gone:
+        shown = "; ".join(f"{edge}: {', '.join(files)}" for edge, files in gone[:3]) + (" ..." if len(gone) > 3 else "")
+        raise WorkflowError(
+            f"{out_dir} holds the results of {len(gone)} edge(s) which this run would combine without sampling them, "
+            f"made from files that are not in the directory ({shown}): combined again, they would not be compared "
+            "as they were. Nothing was changed. Put the files back, or run the calculation in a new output.dir")
+
+
 def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None,
              experiment: dict[str, float] | None = None) -> dict:
     """Run the whole relative calculation. Safe to call again to resume. ``experiment`` (kcal/mol by ligand) takes
@@ -252,6 +312,7 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
         # (with --reschedule the windows and samples of the legs are set aside: they start anew)
         check_legs_have_their_windows(out_dir, selected, rcfg.sampling.repeats, only_legs)
         check_legs_reuse(rcfg, out_dir, selected, prepared, only_legs, log)
+    check_results_combined(out_dir, edges, selected, only_legs, rcfg.sampling.repeats)
     experiment = (experiment_of(rcfg, ligands) if experiment is None
                   else {lig.name: float(experiment[lig.name]) for lig in ligands if lig.name in experiment})
     write_run_files(out_dir, rcfg, [lig.name for lig in ligands], edges, how, experiment)
@@ -705,14 +766,30 @@ def failed_edges(summary: dict) -> list[str]:
     return [e["edge"] for e in summary["edges"] if "ddg" not in e]
 
 
+def repeats_read(edge: dict) -> list[int]:
+    """The repeats of an edge of a summary of which the results of both legs were read: those with a ddG of their
+    own, and those whose legs gave none together (made under other conditions, or without a standard error).
+    What the summary says of the edge was made from them, whether the edge has a ddG or was refused one (the
+    repeats of an edge that were sampled with other moves of water each have their ddG, and the edge none)."""
+    return [r["repeat"] for r in edge.get("repeats") or []
+            if "repeat" in r and any(key in r for key in ("ddg", "inconsistent_legs", "no_standard_error"))]
+
+
+def made_from_results(edge: dict) -> bool:
+    """Whether a summary holds something of an edge that was made from the results of its legs: a ddG, or
+    repeats that were read (:func:`repeats_read`)."""
+    return edge.get("ddg") is not None or bool(repeats_read(edge))
+
+
 def files_gone(out_dir: Path, edge: dict) -> list[str]:
-    """Of an edge with a ddG in the summary a directory has: the files which that ddG, and what the summary holds
-    of the edge, were made from and which the directory does not have, by their path in the directory of the edge.
-    They are the result of both legs of every repeat the ddG was made from, and the record of the prepared edge
-    (its LOMAP score is read there, and the edges of a network are compared by it: an edge without it would be
-    left out of that comparison). For a summary that does not name the repeats of its ddG: any result of a leg."""
+    """Of an edge of the summary a directory has that was made from the results of its legs
+    (:func:`made_from_results`): the files which its ddG, or the refusal of one, and what the summary holds of
+    the edge were made from and which the directory does not have, by their path in the directory of the edge.
+    They are the result of both legs of every repeat that was read, and the record of the prepared edge (its
+    LOMAP score is read there, and the edges of a network are compared by it: an edge without it would be left
+    out of that comparison). For a summary that does not name the repeats of its ddG: any result of a leg."""
     edge_dir = Path(out_dir) / "edges" / edge["edge"]
-    repeats = [r["repeat"] for r in edge.get("repeats") or [] if "ddg" in r and "repeat" in r]
+    repeats = repeats_read(edge)
     needed = [f"repeat_{r}/{leg}/result.json" for r in repeats for leg in ("complex", "solvent")]
     needed.append("prep/prep.json")
     missing = [name for name in needed if not (edge_dir / name).exists()]
@@ -724,20 +801,23 @@ def files_gone(out_dir: Path, edge: dict) -> list[str]:
 def not_made_again(stored: Path, gone: list[tuple[str, list[str]]]) -> str:
     """The refusal of :func:`rewrite_results`: the edges of the summary ``stored`` with the files that are gone."""
     shown = "; ".join(f"{edge}: {', '.join(files)}" for edge, files in gone[:3]) + (" ..." if len(gone) > 3 else "")
-    return (f"{stored} holds the ddG of {len(gone)} edge(s) made from files that are not in the directory "
-            f"({shown}): made again from what is there, such an edge would have no ddG, or another one, or not all "
-            "the summary holds of it. Nothing was written. A report of the summary as it is: cufep benchmark report "
-            "NAME DIRECTORY --protocol rbfe")
+    return (f"{stored} holds the results of {len(gone)} edge(s) made from files that are not in the directory "
+            f"({shown}): made again from what is there, such an edge would have no ddG, or another one, or one that "
+            "it was refused, or not all the summary holds of it. Nothing was written. A report of the summary as it "
+            "is: cufep benchmark report NAME DIRECTORY --protocol rbfe")
 
 
 def water_record_gone(stored: dict, made: dict | None) -> list[str]:
-    """Of an edge with a ddG in the summary a directory has (``stored``) and the same edge made again from the
-    results of its legs (``made``): the repeats of whose complex leg the summary holds something of the grand
+    """Of an edge of the summary a directory has (``stored``; with a ddG, or refused one for its repeats) and the
+    same edge made again from the results of its legs (``made``): the repeats of whose complex leg the summary
+    holds something of the grand
     canonical moves of water (a value of the water, the rule of the mover) that is not read any more. A result
     that does not record it itself has it from the record of its samples (:func:`water_moves_of_leg`), so that
     record is gone; named by its path in the directory of the edge. (The review of 7f4a1e6: with the samples of
     such a leg moved away the values of its water were not recorded and not compared any more, and a summary
-    without a network, for other values of the water, was replaced by one with a network.)"""
+    without a network, for other values of the water, was replaced by one with a network. Fifth review of PR #21,
+    P1: the same for the repeats of one edge, which the summary had refused a ddG for their other values of the
+    water; that edge was not looked at, having no ddG, and got the mean of the two repeats.)"""
     def lost(held, read) -> bool:
         return isinstance(held, dict) and isinstance(read, dict) and any(
             held.get(key) is not None and read.get(key) is None for key in (*WATER_VALUES, WATER_RULE))
@@ -747,9 +827,11 @@ def water_record_gone(stored: dict, made: dict | None) -> list[str]:
     gone = [f"repeat_{repeat['repeat']}/complex/hrex {what}" for repeat in stored.get("repeats") or []
             if "ddg" in repeat and lost(repeat.get("water_moves"),
                                         (again.get(repeat.get("repeat")) or {}).get("water_moves"))]
-    # a summary that holds them of the edge alone
-    if not gone and lost((stored.get("conditions") or {}).get("water_moves"),
-                         ((made or {}).get("conditions") or {}).get("water_moves")):
+    # a summary that holds them of the edge alone, not of its repeats (with them, a repeat that is read no more,
+    # its result set aside by a run, takes its values out of the edge's without any record being gone)
+    of_repeats = any(isinstance(repeat.get("water_moves"), dict) for repeat in stored.get("repeats") or [])
+    if not of_repeats and lost((stored.get("conditions") or {}).get("water_moves"),
+                               ((made or {}).get("conditions") or {}).get("water_moves")):
         gone.append(f"repeat_*/complex/hrex {what}")
     return gone
 
@@ -759,9 +841,10 @@ def rewrite_results(out_dir: Path) -> dict:
     (:func:`analyse_directory`), as the run writes them. Under the lock of the directory from before the legs are
     read until the files are written, as a run holds it: a run in the directory could else finish a leg between the
     two, and its new summary be replaced by one that does not have the leg. Refused, with nothing written, where
-    the summary the directory has holds the ddG of an edge and the directory not every file it was made from
-    (:func:`files_gone`, :func:`water_record_gone`): written again, such an edge would have no ddG, that of the
-    repeats that are left, or conditions that are compared no more.
+    the summary the directory has holds the ddG of an edge, or the repeats for which it refused one, and the
+    directory not every file that was made from (:func:`files_gone`, :func:`water_record_gone`): written again,
+    such an edge would have no ddG, that of the repeats that are left, one it was refused, or conditions that are
+    compared no more.
     (Second review of PR #21: a copy of the results without the directories of the edges,
     ``benchmarks/results/``; third: one leg of a repeat set aside, which left the other leg and passed.) The
     network and the number of repeats are those the directory records now (``network.json``,
@@ -772,19 +855,17 @@ def rewrite_results(out_dir: Path) -> dict:
     lock = lock_output_directory(out_dir)
     try:
         stored = out_dir / "summary.json"
-        if stored.exists():
-            had = [e for e in json.loads(stored.read_text()).get("edges", []) if e.get("ddg") is not None]
-            gone = [(e["edge"], files_gone(out_dir, e)) for e in had]
-            gone = [(edge, files) for edge, files in gone if files]
-            if gone:
-                raise WorkflowError(not_made_again(stored, gone))
+        had = stored_edges(stored)
+        gone = [(e["edge"], files_gone(out_dir, e)) for e in had]
+        gone = [(edge, files) for edge, files in gone if files]
+        if gone:
+            raise WorkflowError(not_made_again(stored, gone))
         summary = analyse_directory(out_dir)
-        if stored.exists():
-            made = {e["edge"]: e for e in summary["edges"]}
-            gone = [(e["edge"], water_record_gone(e, made.get(e["edge"]))) for e in had]
-            gone = [(edge, files) for edge, files in gone if files]
-            if gone:
-                raise WorkflowError(not_made_again(stored, gone))
+        made = {e["edge"]: e for e in summary["edges"]}
+        gone = [(e["edge"], water_record_gone(e, made.get(e["edge"]))) for e in had]
+        gone = [(edge, files) for edge, files in gone if files]
+        if gone:
+            raise WorkflowError(not_made_again(stored, gone))
         write_results(out_dir, summary)
         return summary
     finally:
