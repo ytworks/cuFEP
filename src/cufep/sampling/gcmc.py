@@ -51,12 +51,22 @@ cuFEP's own (the sources are silent or do it otherwise)
   them in the pre-equilibration, which runs with a barostat).
 - A water with a virtual site (a 4-site model) is switched and placed as one body with it (grand
   takes TIP3P only).
-- An inserted water keeps the velocities it had as a ghost (grand's sampler sets positions only;
-  a ghost is integrated and thermostatted like every other molecule).
+- An inserted water keeps the velocity of its centre of mass that it had as a ghost (a ghost is
+  integrated and thermostatted like every other molecule), and its velocities relative to it are
+  turned with the molecule (:func:`cufep.sampling.relocation_mc.turn_velocities`, as the water
+  relocation moves do). grand's sampler sets positions only; a rigid water whose sites are turned
+  and whose velocities are not has velocities along its bonds.
 - The sphere is that of the water relocation moves: centred on the geometric centre of the heavy
   atoms of the ligand, radius half the largest distance between two of them in the prepared pose
   plus ``radius_margin_nm``.
 - With no ghost left the calculation stops with the reason, as grand does.
+- In a leg of a relative calculation (the hybrid System of :mod:`cufep.rbfe.hybrid`) a water is switched
+  in the NonbondedForce and in the force of the Lennard-Jones of the hybrid ligand with its environment
+  (both of its epsilons, those of A and of B); the sphere is centred on the heavy atoms of the hybrid
+  ligand, those of A and of B alike, so that it is one whichever way the edge is run. The stand-in gives
+  each atom of the hybrid ligand the charge and Lennard-Jones it has at the lambda of the state (the
+  lambda functions of :func:`cufep.rbfe.states.lambda_functions`), with the stand-in's soft-core of a
+  unique atom; REST2 is left out of it, as in the absolute calculation.
 """
 from __future__ import annotations
 
@@ -74,12 +84,21 @@ from cufep.sampling.relocation_mc import (
     image_within_half_a_cell,
     random_rotations,
     relocation_spec,
+    turn_velocities,
 )
 
 #: what a move reports, in this order in the samples of a leg (``gcmc``): trials of an insertion,
 #: insertions made, trials of a deletion, deletions made, waters in the sphere after the move
 COUNTS = ("insertions_attempted", "insertions_accepted", "deletions_attempted", "deletions_accepted",
           "waters_in_the_sphere")
+
+
+#: what the samples of a leg record of how the mover treats an inserted water (:func:`cufep.workflow.gcmc_record`).
+#: Samples of a mover of another rule are another sampling procedure and are not continued by this one: versions
+#: before 2026-11-28 left the velocities of an inserted water as they were, and their samples, which record no such
+#: rule, can be analysed as they are and are not extended (second review of PR #21: 5 ns of the earlier rule
+#: extended to 10 ns went into one estimate). A change of how the mover samples changes this value.
+INSERTED_WATER_VELOCITIES = "turned with it"
 
 
 class GcmcError(RelocationError):
@@ -112,6 +131,9 @@ class GcmcSpec:
     excess_chemical_potential_kj_per_mol: float
     standard_volume_nm3: float
     ghosts: np.ndarray            # the waters (rows of ``waters``) that are ghosts at the start
+    #: a hybrid ligand (a leg of a relative calculation): per atom of ``ligand``, its charge, sigma and epsilon
+    #: in A and in B and what it is (``kind``: 0 mapped, 1 unique to A, 2 unique to B); None otherwise
+    hybrid: dict | None = None
 
     @property
     def adams(self) -> float:
@@ -141,17 +163,42 @@ def farthest_waters(waters: np.ndarray, positions: np.ndarray, box: np.ndarray, 
     return np.sort(order[:int(n)])
 
 
+def hybrid_lj_force(system):
+    """The force of the Lennard-Jones of a hybrid ligand with its environment (:mod:`cufep.rbfe.hybrid`) and the
+    columns of the two epsilons of a particle in it, or (None, ()) in a System that has none."""
+    import openmm as mm
+
+    from cufep.rbfe.hybrid import HYBRID_LJ_FORCE_NAME
+
+    for f in system.getForces():
+        if isinstance(f, mm.CustomNonbondedForce) and f.getName() == HYBRID_LJ_FORCE_NAME:
+            names = [f.getPerParticleParameterName(k) for k in range(f.getNumPerParticleParameters())]
+            return f, (names.index("epsilonA"), names.index("epsilonB"))
+    return None, ()
+
+
+def _set_hybrid_epsilon(force, columns, i: int, epsilon: float) -> None:
+    values = list(force.getParticleParameters(i))
+    for column in columns:
+        values[column] = float(epsilon)
+    force.setParticleParameters(i, values)
+
+
 def ghosts_off(system, atoms) -> None:
     """Take the nonbonded interactions of ``atoms`` out of ``system`` (changed in place): charge 0
-    and epsilon 0 in its NonbondedForce. For the System of a leg with the moves before anything
+    and epsilon 0 in its NonbondedForce, and epsilon 0 in the Lennard-Jones of a hybrid ligand with its
+    environment where the System has one. For the System of a leg with the moves before anything
     is made of it, so that its plain MD, its alchemical System and its tail correction all have
     the ghosts of the start."""
     import openmm as mm
 
     force = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
+    hybrid, columns = hybrid_lj_force(system)
     for i in (int(a) for a in atoms):
         charge, sigma, epsilon = force.getParticleParameters(i)
         force.setParticleParameters(i, charge * 0.0, sigma, epsilon * 0.0)
+        if hybrid is not None:
+            _set_hybrid_epsilon(hybrid, columns, i, 0.0)
 
 
 def every_water_on(system, spec: GcmcSpec) -> None:
@@ -161,8 +208,60 @@ def every_water_on(system, spec: GcmcSpec) -> None:
     import openmm as mm
 
     force = next(f for f in system.getForces() if isinstance(f, mm.NonbondedForce))
+    hybrid, columns = hybrid_lj_force(system)
     for i in (int(a) for a in np.asarray(spec.waters).reshape(-1)):
         force.setParticleParameters(i, float(spec.charge[i]), float(spec.sigma[i]), float(spec.epsilon[i]))
+        if hybrid is not None:
+            _set_hybrid_epsilon(hybrid, columns, i, float(spec.epsilon[i]))
+
+
+def hybrid_parameters(hybrid, ligand: np.ndarray) -> dict:
+    """What the stand-in needs of a hybrid ligand (:attr:`GcmcSpec.hybrid`), from the HybridSystem of
+    :mod:`cufep.rbfe.hybrid`: per atom of ``ligand`` (the atoms of the hybrid ligand, in order) its charge,
+    sigma and epsilon in A and in B (a unique atom has charge and epsilon 0 at the other end) and its kind."""
+    core, old = set(hybrid.core), set(hybrid.unique_old)
+    out = {key: np.zeros(len(ligand)) for key in ("charge_a", "sigma_a", "epsilon_a", "charge_b", "sigma_b",
+                                                  "epsilon_b")}
+    out["kind"] = np.zeros(len(ligand), dtype=np.int64)
+    for k, h in enumerate(int(i) for i in ligand):
+        a, b = hybrid.parameters_a.get(h), hybrid.parameters_b.get(h)
+        out["kind"][k] = 0 if h in core else 1 if h in old else 2
+        here = a if a is not None else b
+        for end, values in (("a", a), ("b", b)):
+            charge, sigma, epsilon = values if values is not None else (0.0, here[1], 0.0)
+            out[f"charge_{end}"][k], out[f"sigma_{end}"][k], out[f"epsilon_{end}"][k] = charge, sigma, epsilon
+    return out
+
+
+def hybrid_ligand_parameters(spec: GcmcSpec, x: float) -> tuple:
+    """(charge, sigma, epsilon, soft-core term, factor of the Lennard-Jones) of every atom of the hybrid ligand at
+    lambda ``x``, for the stand-in: the charges and Lennard-Jones of the hybrid topology at that lambda (mapped
+    atoms interpolated, a unique atom of A losing its charge, then its Lennard-Jones, one of B gaining its
+    Lennard-Jones, then its charge), with the stand-in's soft-core on a unique atom."""
+    from cufep.rbfe.hybrid import (
+        LAMBDA_ELECTROSTATICS_CORE,
+        LAMBDA_ELECTROSTATICS_DELETE,
+        LAMBDA_ELECTROSTATICS_INSERT,
+        LAMBDA_STERICS_CORE,
+        LAMBDA_STERICS_DELETE,
+        LAMBDA_STERICS_INSERT,
+    )
+    from cufep.rbfe.states import lambda_functions
+
+    h, lf = spec.hybrid, lambda_functions(float(x))
+    kind = np.asarray(h["kind"])
+    core, old = kind == 0, kind == 1                         # the others (2) are unique to B
+    qa, qb = np.asarray(h["charge_a"], dtype=float), np.asarray(h["charge_b"], dtype=float)
+    sa, sb = np.asarray(h["sigma_a"], dtype=float), np.asarray(h["sigma_b"], dtype=float)
+    ea, eb = np.asarray(h["epsilon_a"], dtype=float), np.asarray(h["epsilon_b"], dtype=float)
+    lc, le = lf[LAMBDA_STERICS_CORE], lf[LAMBDA_ELECTROSTATICS_CORE]
+    charge = np.where(core, qa + (qb - qa) * le, np.where(old, qa * (1.0 - lf[LAMBDA_ELECTROSTATICS_DELETE]),
+                                                          qb * lf[LAMBDA_ELECTROSTATICS_INSERT]))
+    sigma = np.where(core, (1.0 - lc) * sa + lc * sb, np.where(old, sa, sb))
+    epsilon = np.where(core, (1.0 - lc) * ea + lc * eb, np.where(old, ea, eb))
+    scale = np.where(core, 1.0, np.where(old, 1.0 - lf[LAMBDA_STERICS_DELETE], lf[LAMBDA_STERICS_INSERT]))
+    soft = np.where(core, 0.0, float(spec.softcore_alpha) * (1.0 - scale) ** int(spec.softcore_b))
+    return charge, sigma, epsilon, soft, scale
 
 
 def gcmc_spec(system, topology, positions: np.ndarray, box: np.ndarray, ligand, cutoff_nm: float,
@@ -235,6 +334,8 @@ class WaterSwitch:
         self.nonbonded = found[0]
         soft = [f for f in forces if isinstance(f, mm.CustomNonbondedForce) and f.getName() == SOFTCORE_FORCE_NAME]
         self.softcore = soft[0] if soft else None
+        # the Lennard-Jones of a hybrid ligand with its environment (a leg of a relative calculation)
+        self.hybrid, self.hybrid_columns = hybrid_lj_force(system)
         self.charge, self.sigma, self.epsilon = (np.asarray(v, dtype=float) for v in
                                                  (spec.charge, spec.sigma, spec.epsilon))
         self.soft_epsilon = None
@@ -259,9 +360,13 @@ class WaterSwitch:
                     values = list(self.softcore.getParticleParameters(i))
                     values[self.soft_epsilon] = keep * self.epsilon[i]
                     self.softcore.setParticleParameters(i, values)
+                if self.hybrid is not None:
+                    _set_hybrid_epsilon(self.hybrid, self.hybrid_columns, i, keep * self.epsilon[i])
         self.nonbonded.updateParametersInContext(self.context)
         if self.softcore is not None:
             self.softcore.updateParametersInContext(self.context)
+        if self.hybrid is not None:
+            self.hybrid.updateParametersInContext(self.context)
         self.on = on.copy()
         return len(changed)
 
@@ -314,6 +419,12 @@ class GcmcMover:
     def _stand_in(self, x: np.ndarray, box: np.ndarray, state, on: np.ndarray):
         active = np.ones(len(self.spec.charge), dtype=bool)
         active[self.waters[~on].reshape(-1)] = False
+        if self.spec.hybrid is not None:                        # a state of a hybrid ligand: lambda_hybrid
+            ligand = hybrid_ligand_parameters(self.spec, state.lambda_hybrid)
+            if self.gpu is not None:
+                return self.gpu.load(x, box, 1.0, 1.0, active=active, ligand=ligand,
+                                     state_key=round(float(state.lambda_hybrid), 12))
+            return StandIn(self.spec, x, box, 1.0, 1.0, active=active, ligand=ligand)
         if self.gpu is not None:
             return self.gpu.load(x, box, state.lambda_electrostatics, state.lambda_sterics, active=active)
         return StandIn(self.spec, x, box, state.lambda_electrostatics, state.lambda_sterics, active=active)
@@ -334,15 +445,17 @@ class GcmcMover:
         """``k`` trials from a configuration (:meth:`configuration`), each with the logarithm of its
         acceptance by the stand-in energy: ``insert`` (per trial), ``log_p``, ``u`` (the change of
         the stand-in energy, kJ/mol), ``ghost`` (the water an insertion switches on), ``poses`` (of
-        its sites, per insertion), ``delete`` (the water of each deletion; -1 where the sphere is
-        empty) and ``uniform`` (the number each is accepted by)."""
+        its sites, per insertion) and ``rotations`` (the matrix each pose turns the molecule with),
+        ``delete`` (the water of each deletion; -1 where the sphere is empty) and ``uniform`` (the
+        number each is accepted by)."""
         spec, rng = self.spec, self.rng
         x, inside = configuration["x"], configuration["inside"]
         n = len(inside)
         insert = rng.integers(2, size=k) == 1
         n_in = int(insert.sum())
         out = {"insert": insert, "log_p": np.full(k, -np.inf), "u": np.zeros(k), "n": n, "ghost": -1,
-               "poses": np.zeros((0, self.waters.shape[1], 3)), "delete": np.full(k, -1, dtype=np.int64)}
+               "poses": np.zeros((0, self.waters.shape[1], 3)), "rotations": np.zeros((0, 3, 3)),
+               "delete": np.full(k, -1, dtype=np.int64)}
         if n_in:
             ghosts = configuration["ghosts"]
             if not len(ghosts):
@@ -356,9 +469,10 @@ class GcmcMover:
             direction /= np.linalg.norm(direction, axis=1, keepdims=True)
             points = configuration["centre"] + direction * (
                 float(spec.radius_nm) * rng.random(n_in) ** (1.0 / 3.0))[:, None]
-            poses = points[:, None, :] + np.einsum("kij,sj->ksi", random_rotations(rng, n_in), local)
+            rotations = random_rotations(rng, n_in)
+            poses = points[:, None, :] + np.einsum("kij,sj->ksi", rotations, local)
             u_in = configuration["energy"].pose_energies(poses, ghost, spec.cutoff_nm)
-            out["ghost"], out["poses"] = ghost, poses
+            out["ghost"], out["poses"], out["rotations"] = ghost, poses, rotations
             out["u"][insert] = u_in
             out["log_p"][insert] = self.b - np.log(n + 1.0) - self.beta * u_in
         n_out = k - n_in
@@ -406,10 +520,11 @@ class GcmcMover:
                     if energy_x is None:
                         energy_x = self._potential()
                     new_on, y = on.copy(), x
+                    which = int(batch["insert"][:j].sum())          # the number of this trial among the insertions
                     if batch["insert"][j]:
                         new_on[batch["ghost"]] = True
                         y = x.copy()
-                        y[self.waters[batch["ghost"]]] = batch["poses"][int(batch["insert"][:j].sum())]
+                        y[self.waters[batch["ghost"]]] = batch["poses"][which]
                         self.context.setPositions(y)
                         displaced = True
                     else:
@@ -418,6 +533,10 @@ class GcmcMover:
                     energy_y = self._potential()
                     log_r = -self.beta * ((energy_y - energy_x) - batch["u"][j])
                     if np.isfinite(log_r) and np.log(self.rng.random()) < log_r:
+                        if batch["insert"][j]:
+                            # the inserted water was turned: its velocities turn with it
+                            turn_velocities(self.context, self.waters[batch["ghost"]], spec.mass,
+                                            batch["rotations"][which])
                         displaced = displaced and not batch["insert"][j]
                         on, x, energy_x, configuration = new_on, y, energy_y, None
                         self._on = on.copy()

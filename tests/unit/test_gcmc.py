@@ -431,7 +431,14 @@ def test_the_moves_are_a_setting_of_the_complex_leg_and_combinations_they_cannot
     assert record["gcmc"] == {"enabled": True, "interval_ps": 4.0, "attempts": 2500, "batch_size": 1000,
                               "radius_margin_nm": 0.3, "ghost_waters": "auto",
                               "excess_chemical_potential_kcal_per_mol": -6.0, "standard_volume_nm3": 0.03,
-                              "cell_pressure_bar": 1.0}
+                              "cell_pressure_bar": 1.0, "velocities_of_an_inserted_water": "turned with it"}
+    # second review of PR #21 (P1): samples of the mover before 2026-11-28, which left the velocities of an
+    # inserted water as they were, record no such rule; a run of this version does not continue them (5 ns of them
+    # extended to 10 ns went into one estimate), and says why. They are analysed as they are
+    earlier = {**record, "gcmc": {key: value for key, value in record["gcmc"].items()
+                                  if key != "velocities_of_an_inserted_water"}}
+    assert settings_differences(earlier, record) == [
+        "gcmc.velocities_of_an_inserted_water: not recorded -> turned with it"]
     assert settings_differences(samples_settings(default, "complex"), record)[0].startswith("gcmc: not recorded -> ")
     # the pressure of such samples is that of the cell they are fixed in; of others that of their barostat
     assert pressure_of_samples({"pressure_bar": None, "settings": record}) == 1.0
@@ -469,8 +476,8 @@ def test_the_system_of_a_leg_with_the_moves_has_its_ghosts_off_and_its_alchemica
     without them, and the specification of the moves from the System with every water. Without the moves,
     and for the solvent leg, the prepared System as it is. The tail correction of the leg is set up with
     every water (the worker leaves out the ghosts of each configuration). The alchemical run starts in the
-    mean cell of the pre-equilibration, every molecule shifted whole into it; without the moves in the last
-    cell, as it was."""
+    cell of the last configuration of the pre-equilibration, with or without the moves (until 2026-11-28 in
+    its mean cell, into which the molecules of a drifting bilayer were shifted until they overlapped)."""
     from cufep.alchemy.lrc import TailEnergy
     from cufep.config.schema import Config
     from cufep.workflow import WorkflowError, alchemical_box, alchemical_leg, leg_spec, leg_system, positions_in_cell
@@ -526,9 +533,7 @@ def test_the_system_of_a_leg_with_the_moves_has_its_ghosts_off_and_its_alchemica
         files = property(lambda self: list(self))
 
     assert np.array_equal(alchemical_box(Arrays(eq), None), eq["box"])
-    assert np.array_equal(alchemical_box(Arrays(eq), moves), eq["mean_box"])
-    with pytest.raises(WorkflowError, match="does not record its mean cell"):
-        alchemical_box(Arrays(box=eq["box"]), moves)
+    assert np.array_equal(alchemical_box(Arrays(eq), moves), eq["box"])
     molecules = [tuple(a.index for a in residue.atoms()) for residue in residues]
     moved = positions_in_cell(positions, eq["box"], eq["mean_box"], molecules)
     for atoms in molecules[:50]:
@@ -640,3 +645,132 @@ def test_trials_evaluated_with_the_stand_in_energy_give_the_waters_of_the_plain_
     # tolerance: about four times the scatter of the difference of two chains, from six chains of each mover
     # with other seeds (means 4.51 and 4.49, standard deviations 0.19 and 0.24)
     assert with_stand_in.mean() == pytest.approx(plain.mean(), abs=1.2)
+
+
+@pytest.mark.parametrize("sites", [3, 4])
+def test_an_inserted_water_keeps_the_velocity_of_its_centre_of_mass_and_turns_the_rest_with_it(sites):
+    """Review of PR #21 (P1): an insertion turned the sites of the rigid water and left its velocities as they
+    were, so that the relative velocity of two of its atoms had a component along the bond between them (the
+    velocity constraints of the next MD step then took it out, and its kinetic energy with it). With the
+    velocities of rigid bodies (a translation and a rotation of each water), every water has after every move: no
+    relative velocity along a bond, the velocity of its centre of mass and the kinetic energy it had. A water that
+    was not inserted keeps its velocities to the bit; the massless site of a 4-site water has none."""
+    n, radius = 30, 0.6
+    system, x, _cell = ideal_waters(n, 2.4, 0.0, radius, seed=1, sites=sites)
+    spec = ideal_spec(system, n, sites, radius, mean=6.0)
+    context = mm.Context(system, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    context.setPositions(x)
+    rng = np.random.default_rng(8)
+    velocities = np.zeros_like(x)
+    for atoms in spec.waters:
+        real = atoms[:3]
+        m = spec.mass[real][:, None]
+        centre = (m * x[real]).sum(axis=0) / m.sum()
+        velocities[real] = rng.normal(size=3) + np.cross(5.0 * rng.normal(size=3), x[real] - centre)
+    context.setVelocities(velocities)
+    mover = GcmcMover(spec, context, seed=3)
+    state = AlchemicalState(lambda_restraints=1.0, lambda_electrostatics=1.0, lambda_sterics=1.0)
+
+    def snapshot():
+        st = context.getState(getPositions=True, getVelocities=True)
+        return (np.asarray(st.getPositions(asNumpy=True).value_in_unit(u.nanometer)),
+                np.asarray(st.getVelocities(asNumpy=True).value_in_unit(u.nanometer / u.picosecond)))
+
+    turned = 0
+    for _ in range(25):
+        (x0, v0), counts, (x1, v1) = snapshot(), mover.attempt(state), snapshot()
+        for atoms in spec.waters:
+            real = atoms[:3]
+            moved = bool(np.any(x0[real] != x1[real]))
+            if not moved:
+                assert np.array_equal(v0[atoms], v1[atoms])
+                continue
+            turned += 1
+            m = spec.mass[real][:, None]
+            for a in range(3):
+                for b in range(a):
+                    bond = x1[real[a]] - x1[real[b]]
+                    along = float((v1[real[a]] - v1[real[b]]) @ bond) / np.linalg.norm(bond)
+                    assert abs(along) < 1e-9                      # nm/ps: no relative velocity along a bond
+            assert np.allclose((m * v1[real]).sum(axis=0), (m * v0[real]).sum(axis=0), atol=1e-10)
+            assert (m * v1[real] ** 2).sum() == pytest.approx((m * v0[real] ** 2).sum(), rel=1e-10)
+            if sites == 4:
+                assert not v1[atoms[3]].any()
+        assert counts["insertions_accepted"] >= 0
+    assert turned >= 5                                            # (waters were inserted with another orientation)
+
+
+def test_a_leg_that_has_run_in_a_fixed_cell_keeps_it(tmp_path):
+    """Review of PR #21 (P2): a leg with the moves of the rule before 2026-11-28 ran in the mean cell of its
+    pre-equilibration; with the cell of the last configuration its alchemical System had another checksum than its
+    samples record, and the same YAML could not continue it. The cell of such a leg is the one it has run in: that
+    of the checkpoint of its replica exchange, where it goes on from; without one, that of the start
+    configurations of its windows, if they are those of its windows (second review: start configurations of other
+    windows, which are made again, were taken before the checkpoint, and the leg could not be continued). A leg
+    that has not run yet, and every leg without the moves, has the cell of the last configuration."""
+    import json
+
+    from cufep.alchemy.schedule import fixed_schedule
+    from cufep.workflow import alchemical_box, fixed_cell_of
+
+    last, mean = np.eye(3) * 3.0, np.diag([3.02, 3.02, 2.95])
+
+    class Arrays(dict):
+        files = property(lambda self: list(self))
+
+    eq = Arrays(box=last, mean_box=mean)
+    moves = object()
+    leg = tmp_path / "leg"
+    leg.mkdir()
+    assert fixed_cell_of(leg) is None and np.array_equal(alchemical_box(eq, moves, leg), last)
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 2})
+    schedule.save(leg / "schedule.yaml")
+    states = [state.to_dict() for state in schedule.states]
+    other = np.diag([3.01, 3.01, 2.97])
+
+    def start_configurations(of_states) -> None:
+        np.savez(leg / "start_configs.npz", boxes=np.stack([other] * len(states)),
+                 positions=np.zeros((len(states), 1, 3)), made_with=json.dumps({"states": of_states}))
+
+    start_configurations(states)
+    assert np.array_equal(alchemical_box(eq, moves, leg), other)           # those of its windows: their cell
+    start_configurations(states[:-1] + [{**states[-1], "lambda_sterics": 0.123}])
+    assert fixed_cell_of(leg) is None                                      # of other windows: made again
+    (leg / "hrex").mkdir()
+    np.savez(leg / "hrex" / "checkpoint.npz", boxes=np.stack([mean] * len(states)), iteration=3)
+    assert np.array_equal(alchemical_box(eq, moves, leg), mean)            # the checkpoint, whatever the others say
+    start_configurations(states)
+    assert np.array_equal(alchemical_box(eq, moves, leg), mean)            # ... also before start configurations
+    assert np.array_equal(alchemical_box(eq, None, leg), last)             # a leg without the moves
+    assert np.array_equal(alchemical_box(eq, moves), last)                 # (no leg: the rule of a new one)
+
+
+def test_auto_gives_the_values_of_the_water_only_under_the_conditions_they_were_determined_at():
+    """Review of PR #21 (P2): ``auto`` looked at the water model alone, and TIP3P at 310 K got the excess chemical
+    potential and the standard volume that were determined at 298.15 K, 1 bar and a cutoff of 0.9 nm; both enter
+    the acceptance of every insertion and deletion. Under other conditions the numbers are asked for, when the
+    configuration is read; numbers that are given are taken under any conditions."""
+    from cufep.config.schema import Config
+    from cufep.prep.water import BULK_WATER_CONDITIONS
+    from cufep.workflow import gcmc_water_values
+
+    assert BULK_WATER_CONDITIONS == {"temperature_K": 298.15, "pressure_bar": 1.0, "cutoff_nm": 0.9}
+    auto = {"gcmc": {"enabled": True}}
+    assert gcmc_water_values(Config.model_validate(dict(BASE, sampling=auto))) == (-6.09, 0.030345)
+    for section, key, value in (("thermodynamics", "temperature_K", 310.0), ("thermodynamics", "pressure_bar", 2.0),
+                                ("dynamics", "cutoff_nm", 1.0)):
+        with pytest.raises(ValueError) as refused:
+            Config.model_validate(dict(BASE, sampling=auto, **{section: {key: value}}))
+        message = str(refused.value)
+        assert ("sampling.gcmc.excess_chemical_potential_kcal_per_mol and sampling.gcmc.standard_volume_nm3 are auto, "
+                "and the values cuFEP has for forcefield.water = 'amber14/tip3p.xml' were determined at 298.15 K, 1 "
+                f"bar and a cutoff of 0.9 nm; this run has {section}.{key} = {value:g}") in message
+        assert "sampling.gcmc.enabled: false" in message
+        given = Config.model_validate(dict(BASE, sampling={"gcmc": MOVES}, **{section: {key: value}}))
+        assert gcmc_water_values(given) == (-6.0, 0.03)
+        # one of the two numbers given: the other is still cuFEP's
+        with pytest.raises(ValueError, match="sampling.gcmc.standard_volume_nm3 is auto, and the values"):
+            Config.model_validate(dict(BASE, **{section: {key: value}}, sampling={
+                "gcmc": {"enabled": True, "excess_chemical_potential_kcal_per_mol": -6.0}}))
+    # without the moves the conditions of the run do not matter
+    Config.model_validate(dict(BASE, thermodynamics={"temperature_K": 310.0}))

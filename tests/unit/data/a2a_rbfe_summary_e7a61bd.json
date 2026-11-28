@@ -1,0 +1,1738 @@
+{
+ "ligands": [
+  "4g",
+  "4h",
+  "4j",
+  "4k",
+  "4l",
+  "4i",
+  "4a",
+  "4b",
+  "4c",
+  "4d",
+  "4o",
+  "4f",
+  "4e",
+  "4m",
+  "4q",
+  "4n",
+  "4r"
+ ],
+ "edges": [
+  {
+   "edge": "4a~4o",
+   "ligand_a": "4a",
+   "ligand_b": "4o",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -2.3177693550496907,
+     "se": 0.18874739188278739,
+     "complex_dg": -23.798514593830745,
+     "complex_se": 0.1829688884435394,
+     "solvent_dg": -21.480745238781054,
+     "solvent_se": 0.046346130413338245,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.10416270924823591,
+      "solvent": 0.15761247087933408
+     },
+     "lowest_overlap_used": {
+      "complex": 0.1293377124648242,
+      "solvent": 0.15825759262068523
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 125.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -2.3177693550496907,
+   "complex_dg": -23.798514593830745,
+   "solvent_dg": -21.480745238781054,
+   "se": 0.18874739188278739,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.10416270924823591,
+    "solvent": 0.15761247087933408
+   },
+   "lowest_overlap_used": {
+    "complex": 0.1293377124648242,
+    "solvent": 0.15825759262068523
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -1.943999999999999
+  },
+  {
+   "edge": "4a~4q",
+   "ligand_a": "4a",
+   "ligand_b": "4q",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -2.2951547960494247,
+     "se": 0.15548309305031155,
+     "complex_dg": -24.190464003913014,
+     "complex_se": 0.15036528123511964,
+     "solvent_dg": -21.89530920786359,
+     "solvent_se": 0.039563549178192,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.13718973657013656,
+      "solvent": 0.15782671462694392
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13284673102842015,
+      "solvent": 0.15863272148833418
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 400.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -2.2951547960494247,
+   "complex_dg": -24.190464003913014,
+   "solvent_dg": -21.89530920786359,
+   "se": 0.15548309305031155,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.13718973657013656,
+    "solvent": 0.15782671462694392
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13284673102842015,
+    "solvent": 0.15863272148833418
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 0.5259999999999998
+  },
+  {
+   "edge": "4b~4e",
+   "ligand_a": "4b",
+   "ligand_b": "4e",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -2.348740727653485,
+     "se": 0.4450011779976154,
+     "complex_dg": -15.573157817511644,
+     "complex_se": 0.44295839005370324,
+     "solvent_dg": -13.22441708985816,
+     "solvent_se": 0.042590058702667646,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.1146763669592564,
+      "solvent": 0.15731789124905726
+     },
+     "lowest_overlap_used": {
+      "complex": 0.11985966523951366,
+      "solvent": 0.15715419387612387
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 31.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: few independent samples: lambda window 6 (morph stage) has 31 and gives MBAR 31 samples (its energy difference to the previous window is correlated over 64 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)",
+      "complex: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 6 keeps 3 sample(s) there; 4 are needed for an estimate"
+     ]
+    }
+   ],
+   "ddg": -2.348740727653485,
+   "complex_dg": -15.573157817511644,
+   "solvent_dg": -13.22441708985816,
+   "se": 0.4450011779976154,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.1146763669592564,
+    "solvent": 0.15731789124905726
+   },
+   "lowest_overlap_used": {
+    "complex": 0.11985966523951366,
+    "solvent": 0.15715419387612387
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -2.115
+  },
+  {
+   "edge": "4b~4m",
+   "ligand_a": "4b",
+   "ligand_b": "4m",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -2.0571838166403893,
+     "se": 0.1206812713296745,
+     "complex_dg": -31.574110146598326,
+     "complex_se": 0.11243462786098533,
+     "solvent_dg": -29.516926329957936,
+     "solvent_se": 0.04384545252940441,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.11399384880842428,
+      "solvent": 0.1613752165000469
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12523650688719992,
+      "solvent": 0.16075459771026138
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 80.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -2.0571838166403893,
+   "complex_dg": -31.574110146598326,
+   "solvent_dg": -29.516926329957936,
+   "se": 0.1206812713296745,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.11399384880842428,
+    "solvent": 0.1613752165000469
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12523650688719992,
+    "solvent": 0.16075459771026138
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.5910000000000011
+  },
+  {
+   "edge": "4c~4d",
+   "ligand_a": "4c",
+   "ligand_b": "4d",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 2.3635883141095584,
+     "se": 0.12958698795191292,
+     "complex_dg": 6.823659392122678,
+     "complex_se": 0.11356377447873028,
+     "solvent_dg": 4.460071078013119,
+     "solvent_se": 0.062418399311367445,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.17015787936458812,
+      "solvent": 0.1778475615594039
+     },
+     "lowest_overlap_used": {
+      "complex": 0.17080071464814736,
+      "solvent": 0.17989435298809803
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 500.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 2.3635883141095584,
+   "complex_dg": 6.823659392122678,
+   "solvent_dg": 4.460071078013119,
+   "se": 0.12958698795191292,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.17015787936458812,
+    "solvent": 0.1778475615594039
+   },
+   "lowest_overlap_used": {
+    "complex": 0.17080071464814736,
+    "solvent": 0.17989435298809803
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 0.9550000000000001
+  },
+  {
+   "edge": "4c~4n",
+   "ligand_a": "4c",
+   "ligand_b": "4n",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.8903332462431492,
+     "se": 0.13122307609308975,
+     "complex_dg": -33.799287141094204,
+     "complex_se": 0.12159363114334176,
+     "solvent_dg": -31.908953894851052,
+     "solvent_se": 0.04934049619440176,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.13025462108458316,
+      "solvent": 0.16026157401238353
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13120236167460433,
+      "solvent": 0.15999041912854595
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 286.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -1.8903332462431492,
+   "complex_dg": -33.799287141094204,
+   "solvent_dg": -31.908953894851052,
+   "se": 0.13122307609308975,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.13025462108458316,
+    "solvent": 0.16026157401238353
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13120236167460433,
+    "solvent": 0.15999041912854595
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.08999999999999986
+  },
+  {
+   "edge": "4d~4f",
+   "ligand_a": "4d",
+   "ligand_b": "4f",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -3.4169139207844434,
+     "se": 0.5802741162647436,
+     "complex_dg": -11.604442081971039,
+     "complex_se": 0.57877980358288,
+     "solvent_dg": -8.187528161186595,
+     "solvent_se": 0.04161717159289004,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.1497055587373987,
+      "solvent": 0.14707292223647134
+     },
+     "lowest_overlap_used": {
+      "complex": 0.11591319071280064,
+      "solvent": 0.14671522603278125
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 74.45425850899922,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "openmm",
+      "solvent": "openmm"
+     },
+     "warnings": [
+      "complex: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "complex: the leg was continued on openmm, the backend its samples were made with",
+      "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "solvent: the leg was continued on openmm, the backend its samples were made with"
+     ]
+    }
+   ],
+   "ddg": -3.4169139207844434,
+   "complex_dg": -11.604442081971039,
+   "solvent_dg": -8.187528161186595,
+   "se": 0.5802741162647436,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.1497055587373987,
+    "solvent": 0.14707292223647134
+   },
+   "lowest_overlap_used": {
+    "complex": 0.11591319071280064,
+    "solvent": 0.14671522603278125
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "openmm"
+    ],
+    "solvent": [
+     "openmm"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.940999999999999
+  },
+  {
+   "edge": "4f~4e",
+   "ligand_a": "4f",
+   "ligand_b": "4e",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.7577729444539915,
+     "se": 0.30029252954777913,
+     "complex_dg": -2.819260234803637,
+     "complex_se": 0.28731749534206924,
+     "solvent_dg": -2.0614872903496453,
+     "solvent_se": 0.08731700964052647,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.0843660852813474,
+      "solvent": 0.12751433629809253
+     },
+     "lowest_overlap_used": {
+      "complex": 0.094328072034843,
+      "solvent": 0.12731631240868838
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 91.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -0.7577729444539915,
+   "complex_dg": -2.819260234803637,
+   "solvent_dg": -2.0614872903496453,
+   "se": 0.30029252954777913,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.0843660852813474,
+    "solvent": 0.12751433629809253
+   },
+   "lowest_overlap_used": {
+    "complex": 0.094328072034843,
+    "solvent": 0.12731631240868838
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.6280000000000001
+  },
+  {
+   "edge": "4g~4d",
+   "ligand_a": "4g",
+   "ligand_b": "4d",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 2.4233784654299346,
+     "se": 0.24826333434850098,
+     "complex_dg": 45.23145877631325,
+     "complex_se": 0.24491222147625896,
+     "solvent_dg": 42.80808031088331,
+     "solvent_se": 0.040653252679207025,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.15674268203534805,
+      "solvent": 0.16363369657110433
+     },
+     "lowest_overlap_used": {
+      "complex": 0.11979754244140749,
+      "solvent": 0.16172614446438333
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 35.18688882935422,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: few independent samples: lambda window 8 (morph stage) has 35 and gives MBAR 36 samples (its energy difference to the previous window is correlated over 57 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)"
+     ]
+    }
+   ],
+   "ddg": 2.4233784654299346,
+   "complex_dg": 45.23145877631325,
+   "solvent_dg": 42.80808031088331,
+   "se": 0.24826333434850098,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.15674268203534805,
+    "solvent": 0.16363369657110433
+   },
+   "lowest_overlap_used": {
+    "complex": 0.11979754244140749,
+    "solvent": 0.16172614446438333
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 0.5589999999999993
+  },
+  {
+   "edge": "4g~4i",
+   "ligand_a": "4g",
+   "ligand_b": "4i",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.9400938435272863,
+     "se": 0.059832109546991995,
+     "complex_dg": -10.51941211757762,
+     "complex_se": 0.0520905055789296,
+     "solvent_dg": -11.459505961104906,
+     "solvent_se": 0.029435702155286785,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.1094871035759061,
+      "solvent": 0.11981735094676947
+     },
+     "lowest_overlap_used": {
+      "complex": 0.11103204069467558,
+      "solvent": 0.11999236440479791
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 250.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 0.9400938435272863,
+   "complex_dg": -10.51941211757762,
+   "solvent_dg": -11.459505961104906,
+   "se": 0.059832109546991995,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.1094871035759061,
+    "solvent": 0.11981735094676947
+   },
+   "lowest_overlap_used": {
+    "complex": 0.11103204069467558,
+    "solvent": 0.11999236440479791
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 0.75
+  },
+  {
+   "edge": "4g~4j",
+   "ligand_a": "4g",
+   "ligand_b": "4j",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.6103752013341103,
+     "se": 0.03531142439079024,
+     "complex_dg": -0.946691364910016,
+     "complex_se": 0.029018380334714124,
+     "solvent_dg": -0.3363161635759058,
+     "solvent_se": 0.02012039500746376,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.12593882957939082,
+      "solvent": 0.12301345844158319
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12254836117686764,
+      "solvent": 0.12172257045840242
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 1000.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -0.6103752013341103,
+   "complex_dg": -0.946691364910016,
+   "solvent_dg": -0.3363161635759058,
+   "se": 0.03531142439079024,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.12593882957939082,
+    "solvent": 0.12301345844158319
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12254836117686764,
+    "solvent": 0.12172257045840242
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 0.1769999999999996
+  },
+  {
+   "edge": "4g~4k",
+   "ligand_a": "4g",
+   "ligand_b": "4k",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.8611308644597961,
+     "se": 0.1446625712508225,
+     "complex_dg": 57.14933867315769,
+     "complex_se": 0.13711769441665297,
+     "solvent_dg": 58.01046953761749,
+     "solvent_se": 0.04610853932581982,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.10487008358147867,
+      "solvent": 0.11553696615563745
+     },
+     "lowest_overlap_used": {
+      "complex": 0.10857255397541742,
+      "solvent": 0.11573076286120608
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 667.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -0.8611308644597961,
+   "complex_dg": 57.14933867315769,
+   "solvent_dg": 58.01046953761749,
+   "se": 0.1446625712508225,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.10487008358147867,
+    "solvent": 0.11553696615563745
+   },
+   "lowest_overlap_used": {
+    "complex": 0.10857255397541742,
+    "solvent": 0.11573076286120608
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.47799999999999976
+  },
+  {
+   "edge": "4g~4l",
+   "ligand_a": "4g",
+   "ligand_b": "4l",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 1.005790896504554,
+     "se": 0.11036330745756122,
+     "complex_dg": 51.164993482202725,
+     "complex_se": 0.09741036306759507,
+     "solvent_dg": 50.159202585698175,
+     "solvent_se": 0.051877555840763145,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.12367090090080185,
+      "solvent": 0.11083903427260051
+     },
+     "lowest_overlap_used": {
+      "complex": 0.09833163658249638,
+      "solvent": 0.11053262543464416
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 334.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 1.005790896504554,
+   "complex_dg": 51.164993482202725,
+   "solvent_dg": 50.159202585698175,
+   "se": 0.11036330745756122,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.12367090090080185,
+    "solvent": 0.11083903427260051
+   },
+   "lowest_overlap_used": {
+    "complex": 0.09833163658249638,
+    "solvent": 0.11053262543464416
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.31400000000000006
+  },
+  {
+   "edge": "4g~4n",
+   "ligand_a": "4g",
+   "ligand_b": "4n",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.3162320909948788,
+     "se": 0.14193879800667059,
+     "complex_dg": 5.030502512313975,
+     "complex_se": 0.12341257817194715,
+     "solvent_dg": 6.346734603308853,
+     "solvent_se": 0.07011389255013208,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.17999803157485816,
+      "solvent": 0.18386728308922348
+     },
+     "lowest_overlap_used": {
+      "complex": 0.18216577382073543,
+      "solvent": 0.1815273750639396
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 400.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -1.3162320909948788,
+   "complex_dg": 5.030502512313975,
+   "solvent_dg": 6.346734603308853,
+   "se": 0.14193879800667059,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.17999803157485816,
+    "solvent": 0.18386728308922348
+   },
+   "lowest_overlap_used": {
+    "complex": 0.18216577382073543,
+    "solvent": 0.1815273750639396
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.48600000000000065
+  },
+  {
+   "edge": "4h~4l",
+   "ligand_a": "4h",
+   "ligand_b": "4l",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.45121297309410946,
+     "se": 0.2425868549509029,
+     "complex_dg": 58.48397377148623,
+     "complex_se": 0.2374366684476079,
+     "solvent_dg": 58.03276079839211,
+     "solvent_se": 0.049721330145835047,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.08384971616866214,
+      "solvent": 0.11299989625781348
+     },
+     "lowest_overlap_used": {
+      "complex": 0.08949483808104682,
+      "solvent": 0.11479526874104623
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 286.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 0.45121297309410946,
+   "complex_dg": 58.48397377148623,
+   "solvent_dg": 58.03276079839211,
+   "se": 0.2425868549509029,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.08384971616866214,
+    "solvent": 0.11299989625781348
+   },
+   "lowest_overlap_used": {
+    "complex": 0.08949483808104682,
+    "solvent": 0.11479526874104623
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.7230000000000008
+  },
+  {
+   "edge": "4h~4r",
+   "ligand_a": "4h",
+   "ligand_b": "4r",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -2.443550558906692,
+     "se": 0.26612245834909604,
+     "complex_dg": 59.56834996708802,
+     "complex_se": 0.25815549876059507,
+     "solvent_dg": 62.011900525994704,
+     "solvent_se": 0.06462895092321046,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.13428653199453253,
+      "solvent": 0.15236426430935637
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13704302868059337,
+      "solvent": 0.15073637110094204
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 154.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -2.443550558906692,
+   "complex_dg": 59.56834996708802,
+   "solvent_dg": 62.011900525994704,
+   "se": 0.26612245834909604,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.13428653199453253,
+    "solvent": 0.15236426430935637
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13704302868059337,
+    "solvent": 0.15073637110094204
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.8070000000000004
+  },
+  {
+   "edge": "4j~4i",
+   "ligand_a": "4j",
+   "ligand_b": "4i",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 1.152106055002308,
+     "se": 0.0791517720583331,
+     "complex_dg": -9.979698413842048,
+     "complex_se": 0.07637667636952877,
+     "solvent_dg": -11.131804468844356,
+     "solvent_se": 0.020775137225024175,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.09953963980912034,
+      "solvent": 0.12016514195164209
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12260715260591136,
+      "solvent": 0.12019495193818698
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 100.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 1.152106055002308,
+   "complex_dg": -9.979698413842048,
+   "solvent_dg": -11.131804468844356,
+   "se": 0.0791517720583331,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.09953963980912034,
+    "solvent": 0.12016514195164209
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12260715260591136,
+    "solvent": 0.12019495193818698
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 0.5730000000000004
+  },
+  {
+   "edge": "4k~4r",
+   "ligand_a": "4k",
+   "ligand_b": "4r",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.8386414410804416,
+     "se": 0.19538310392857333,
+     "complex_dg": -4.554836818543979,
+     "complex_se": 0.18561528009097936,
+     "solvent_dg": -3.7161953774635372,
+     "solvent_se": 0.061004303926124485,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.175562892413857,
+      "solvent": 0.18661460658405762
+     },
+     "lowest_overlap_used": {
+      "complex": 0.18304448957540614,
+      "solvent": 0.1860575715963388
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 118.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -0.8386414410804416,
+   "complex_dg": -4.554836818543979,
+   "solvent_dg": -3.7161953774635372,
+   "se": 0.19538310392857333,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.175562892413857,
+    "solvent": 0.18661460658405762
+   },
+   "lowest_overlap_used": {
+    "complex": 0.18304448957540614,
+    "solvent": 0.1860575715963388
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 0.08000000000000007
+  },
+  {
+   "edge": "4m~4n",
+   "ligand_a": "4m",
+   "ligand_b": "4n",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.5762575575097744,
+     "se": 0.14971603455774155,
+     "complex_dg": -11.486775765517901,
+     "complex_se": 0.14643253085307234,
+     "solvent_dg": -9.910518208008128,
+     "solvent_se": 0.03118340763385042,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.12498578297801295,
+      "solvent": 0.12434675219811508
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12190740434708415,
+      "solvent": 0.12486737470169584
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 200.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -1.5762575575097744,
+   "complex_dg": -11.486775765517901,
+   "solvent_dg": -9.910518208008128,
+   "se": 0.14971603455774155,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.12498578297801295,
+    "solvent": 0.12434675219811508
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12190740434708415,
+    "solvent": 0.12486737470169584
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -1.0
+  },
+  {
+   "edge": "4m~4q",
+   "ligand_a": "4m",
+   "ligand_b": "4q",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 3.8367995000217014,
+     "se": 0.08344898818527262,
+     "complex_dg": 13.84517487115904,
+     "complex_se": 0.06919388498458746,
+     "solvent_dg": 10.008375371137339,
+     "solvent_se": 0.04664697106871411,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.1288134098181152,
+      "solvent": 0.12640200846960625
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13125902251983984,
+      "solvent": 0.12682227658410594
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 334.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": 3.8367995000217014,
+   "complex_dg": 13.84517487115904,
+   "solvent_dg": 10.008375371137339,
+   "se": 0.08344898818527262,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.1288134098181152,
+    "solvent": 0.12640200846960625
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13125902251983984,
+    "solvent": 0.12682227658410594
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": 1.6630000000000003
+  },
+  {
+   "edge": "4o~4e",
+   "ligand_a": "4o",
+   "ligand_b": "4e",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -4.343245578325451,
+     "se": 0.054550074281330026,
+     "complex_dg": 1.3958388496006,
+     "complex_se": 0.039904601453079384,
+     "solvent_dg": 5.739084427926051,
+     "solvent_se": 0.037193190061750786,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.13648578311266954,
+      "solvent": 0.13036719944409447
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13105416730438477,
+      "solvent": 0.12975152097543824
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 667.0,
+      "solvent": 1000.0
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "ddg": -4.343245578325451,
+   "complex_dg": 1.3958388496006,
+   "solvent_dg": 5.739084427926051,
+   "se": 0.054550074281330026,
+   "not_reliable": [],
+   "lowest_overlap": {
+    "complex": 0.13648578311266954,
+    "solvent": 0.13036719944409447
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13105416730438477,
+    "solvent": 0.12975152097543824
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none"
+   },
+   "exp_ddg": -0.7170000000000005
+  }
+ ],
+ "experiment_kcal_mol": {
+  "4g": -11.064,
+  "4h": -10.655,
+  "4j": -10.887,
+  "4k": -11.542,
+  "4l": -11.378,
+  "4i": -10.314,
+  "4a": -9.413,
+  "4b": -9.959,
+  "4c": -11.46,
+  "4d": -10.505,
+  "4o": -11.357,
+  "4f": -11.446,
+  "4e": -12.074,
+  "4m": -10.55,
+  "4q": -8.887,
+  "4n": -11.55,
+  "4r": -11.462
+ },
+ "cycle_closures": [
+  {
+   "ligands": [
+    "4b",
+    "4e",
+    "4o",
+    "4a",
+    "4q",
+    "4m"
+   ],
+   "sum_kcal_mol": 0.2375037262909201,
+   "se_kcal_mol": 0.5313473742000638
+  },
+  {
+   "ligands": [
+    "4d",
+    "4f",
+    "4e",
+    "4o",
+    "4a",
+    "4q",
+    "4m",
+    "4n",
+    "4g"
+   ],
+   "sum_kcal_mol": -1.48227322901938,
+   "se_kcal_mol": 0.7751321592312065
+  },
+  {
+   "ligands": [
+    "4d",
+    "4c",
+    "4n",
+    "4g"
+   ],
+   "sum_kcal_mol": -0.5143110039278942,
+   "se_kcal_mol": 0.34028457018677183
+  },
+  {
+   "ligands": [
+    "4h",
+    "4l",
+    "4g",
+    "4k",
+    "4r"
+   ],
+   "sum_kcal_mol": 0.18920032995600966,
+   "se_kcal_mol": 0.44827605500112533
+  },
+  {
+   "ligands": [
+    "4i",
+    "4j",
+    "4g"
+   ],
+   "sum_kcal_mol": 0.3983629898590887,
+   "se_kcal_mol": 0.10531752487275832
+  }
+ ],
+ "dg": {
+  "reference": "mean of the experimental values",
+  "reference_ligands": [
+   "4g",
+   "4h",
+   "4j",
+   "4k",
+   "4l",
+   "4i",
+   "4a",
+   "4b",
+   "4c",
+   "4d",
+   "4o",
+   "4f",
+   "4e",
+   "4m",
+   "4q",
+   "4n",
+   "4r"
+  ],
+  "values": {
+   "4g": {
+    "dg": -11.844283361198809,
+    "se": 0.10675727101802117
+   },
+   "4h": {
+    "dg": -11.222830545684364,
+    "se": 0.2183180394898776
+   },
+   "4j": {
+    "dg": -12.409876079679838,
+    "se": 0.11102383366592426
+   },
+   "4k": {
+    "dg": -12.725117716069983,
+    "se": 0.15868829848910038
+   },
+   "4l": {
+    "dg": -10.827024661757664,
+    "se": 0.14140612707587621
+   },
+   "4i": {
+    "dg": -11.032761495901598,
+    "se": 0.11614219368982939
+   },
+   "4a": {
+    "dg": -5.631559956997868,
+    "se": 0.16994385405873877
+   },
+   "4b": {
+    "dg": -9.700321245621188,
+    "se": 0.15968707786476477
+   },
+   "4c": {
+    "dg": -11.42216425493858,
+    "se": 0.1335357763703739
+   },
+   "4d": {
+    "dg": -9.106600530215497,
+    "se": 0.14806608778697816
+   },
+   "4o": {
+    "dg": -7.979439499725094,
+    "se": 0.19770021608524174
+   },
+   "4f": {
+    "dg": -11.769387875504938,
+    "se": 0.2921729864173841
+   },
+   "4e": {
+    "dg": -12.325200102646296,
+    "se": 0.19939184162608245
+   },
+   "4m": {
+    "dg": -11.737196283406707,
+    "se": 0.1218159109979339
+   },
+   "4q": {
+    "dg": -7.906282423383557,
+    "se": 0.1346147079480192
+   },
+   "4n": {
+    "dg": -13.263252596901259,
+    "se": 0.10024172897772796
+   },
+   "4r": {
+    "dg": -13.599701370366752,
+    "se": 0.20878529831437193
+   }
+  }
+ },
+ "notes": [],
+ "failed_in_this_run": []
+}

@@ -66,8 +66,9 @@ OUTPUT_ROOT_NAMES = frozenset({
     "protein_prepared.pdb", "summary.json", "summary.csv", "timing.json", "timing_rerun.json",
     "benchmark_report.md", "benchmark_report.csv", "benchmark_report.png", "benchmark_report_ligands.png",
     "frozen_schedules", ".cufep.lock",
-    # the output of a relative run (cufep.rbfe.run)
-    "edges", "network.json", "edges.csv", "ligands.csv"})
+    # the output of a relative run (cufep.rbfe.run) and of its benchmark report (cufep.benchmarks.relative)
+    "edges", "network.json", "edges.csv", "ligands.csv", "rbfe_report.md", "rbfe_report.png",
+    "rbfe_report_edges.csv", "rbfe_report_edges.png", "rbfe_report_ligands.csv"})
 
 
 def ligand_dir_name(name: str) -> str:
@@ -711,12 +712,16 @@ def gcmc_water_values(cfg: Config) -> tuple[float, float]:
 
 def gcmc_record(cfg: Config) -> dict:
     """What of ``sampling.gcmc`` the files of a leg with the moves depend on, the two numbers of the
-    water as they are used (``auto`` resolved)."""
+    water as they are used (``auto`` resolved), and the rule of the mover where versions differ in it
+    (:data:`cufep.sampling.gcmc.INSERTED_WATER_VELOCITIES`): samples that record another rule, or none,
+    are not continued by this version."""
+    from cufep.sampling.gcmc import INSERTED_WATER_VELOCITIES
+
     mu, volume = gcmc_water_values(cfg)
     return {**cfg.sampling.gcmc.model_dump(mode="json"), "excess_chemical_potential_kcal_per_mol": mu,
             # the pressure at which the cell the leg is fixed in was equilibrated
             "cell_pressure_bar": float(cfg.thermodynamics.pressure_bar),
-            "standard_volume_nm3": volume}
+            "standard_volume_nm3": volume, WATER_RULE: INSERTED_WATER_VELOCITIES}
 
 
 def leg_system(cfg: Config, prep: dict, leg: str):
@@ -763,25 +768,33 @@ def electrostatics_annihilated(conditions: dict | None) -> bool:
     return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
 
 
-def alchemical_box(eq, gcmc) -> np.ndarray:
+def alchemical_box(eq, gcmc=None, leg_dir: Path | None = None) -> np.ndarray:
     """The cell in which the alchemical run of a leg starts, from its pre-equilibration (the arrays
-    of ``equil.npz``): the cell of its last configuration. A leg with grand canonical moves of water
-    has no barostat after that and stays in one cell: the mean cell of the second half of the
-    pre-equilibration (``mean_box``; cuFEP's own choice: grand's examples go on from the last frame
-    of an MD at constant pressure, whose volume is one value of a fluctuating one)."""
-    if gcmc is None:
-        return np.asarray(eq["box"], dtype=float)
-    if "mean_box" not in eq.files:
-        raise WorkflowError("the pre-equilibration of this leg does not record its mean cell, which a leg with "
-                            "sampling.gcmc is fixed in: it was written by a version without it. Nothing was "
-                            "changed; run the calculation in a new output.dir")
-    return np.asarray(eq["mean_box"], dtype=float)
+    of ``equil.npz``): the cell of its last configuration, which a leg with grand canonical moves of
+    water (``gcmc``), without a barostat after that, keeps (grand's examples go on from the last frame
+    of an MD at constant pressure). Before 2026-11-28 such a leg was fixed in the mean cell of the second
+    half of the pre-equilibration, every molecule of the last configuration shifted whole into it: in a
+    bilayer whose cell still drifted the molecules then overlapped (A2A 4b~4m, the mean cell 2.3 % shorter in
+    z than the last one: a CUDA failure on the plugin, NaN on stock OpenMM).
+
+    A leg with the moves that has run already (``leg_dir``) stays in the cell it has run in
+    (:func:`fixed_cell_of`): its System, whose checksum its samples record, has that cell, and a leg of
+    the earlier rule is continued in its mean cell (review of PR #21: with the last cell its samples were
+    refused as made with another System)."""
+    if gcmc is not None and leg_dir is not None:
+        kept = fixed_cell_of(leg_dir)
+        if kept is not None:
+            return kept
+    return np.asarray(eq["box"], dtype=float)
 
 
 def positions_in_cell(positions, box, new_box, molecules) -> np.ndarray:
     """A configuration moved into another cell as a barostat moves it: every molecule is shifted as
     a whole, so that its centre keeps its fractional coordinates. No distance within a molecule
-    changes (constraints, virtual sites)."""
+    changes (constraints, virtual sites). For a cell that differs little from that of the configuration:
+    a leg of the earlier rule of :func:`alchemical_box` whose start configurations are made again in
+    the cell it has run in, and the check of the values of bulk water (``spikes/m35_bulk_water_gcmc.py``).
+    Between cells that differ by percent the molecules of a dense system overlap afterwards."""
     x = np.array(positions, dtype=float)
     transform = np.linalg.inv(np.asarray(box, dtype=float)) @ np.asarray(new_box, dtype=float)
     for atoms in molecules:
@@ -789,6 +802,33 @@ def positions_in_cell(positions, box, new_box, molecules) -> np.ndarray:
         centre = x[index].mean(axis=0)
         x[index] += centre @ transform - centre
     return x
+
+
+def fixed_cell_of(leg_dir: Path) -> np.ndarray | None:
+    """The cell a leg without a barostat has run in so far (all replicas of such a leg have one cell): that of
+    the checkpoint of its replica exchange, which is where the leg goes on from; for a leg without one, that of
+    the start configurations of its lambda windows, if they are those of its windows (start configurations of
+    other windows are made again, :func:`stored_windows`, and their cell is not the leg's: second review of PR
+    #21, such a file was taken before the checkpoint and the leg could not be continued). None for a leg that
+    has neither."""
+    from cufep.alchemy.schedule import Schedule
+
+    def cell(path: Path) -> np.ndarray | None:
+        with np.load(path, allow_pickle=False) as stored:
+            if "boxes" in stored.files and len(stored["boxes"]):
+                return np.asarray(stored["boxes"][0], dtype=float)
+        return None
+
+    leg_dir = Path(leg_dir)
+    checkpoint = leg_dir / "hrex" / "checkpoint.npz"
+    if checkpoint.exists():
+        found = cell(checkpoint)
+        if found is not None:
+            return found
+    start_file, sched_file = leg_dir / "start_configs.npz", leg_dir / "schedule.yaml"
+    if sched_file.exists() and has_starts_of(leg_dir, Schedule.load(sched_file)):
+        return cell(start_file)
+    return None
 
 
 def samples_settings(cfg: Config, leg: str | None = None) -> dict:
@@ -839,6 +879,19 @@ def starts_are_of(made: dict, schedule) -> bool:
     ``schedule``. A record that does not name its windows (an earlier version) does not say they
     are others."""
     return made.get("states") is None or made["states"] == [state.to_dict() for state in schedule.states]
+
+
+def has_starts_of(leg_dir: Path, schedule) -> bool:
+    """Whether a leg has the start configurations of the lambda windows of ``schedule``: the file is there, its
+    record does not name other windows (:func:`starts_are_of`) and it holds one configuration per window. A leg
+    that does not has them made again for the windows it has (:func:`stored_windows`). The one rule of the run
+    of a leg, of the cell a leg has run in (:func:`fixed_cell_of`) and of the checks before a run."""
+    start_file = Path(leg_dir) / "start_configs.npz"
+    if not start_file.exists():
+        return False
+    with np.load(start_file) as start:
+        n_configs = len(start["positions"]) if "positions" in start.files else 0
+    return starts_are_of(start_record_of(start_file), schedule) and n_configs == len(schedule.states)
 
 
 def check_windows_settings(made: dict, settings: dict, where: Path, log=print) -> bool:
@@ -1010,7 +1063,7 @@ def conditions_of_this_run(cfg: Config, lig_dir: Path, leg: str, repeat: int, pr
         if is_complex else None
     system, gcmc = leg_system(cfg, prep, leg)
     built = alchemical_leg(
-        cfg, system, prep, alchemical_box(eq, gcmc), restraint, is_complex, gcmc
+        cfg, system, prep, alchemical_box(eq, gcmc, leg_dir), restraint, is_complex, gcmc
     )
     states = [state.to_dict() for state in Schedule.load(leg_dir / "schedule.yaml").states]
     barostat = prep_info["complex_barostat"] if is_complex else "isotropic"
@@ -1094,6 +1147,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     """
     from cufep.alchemy.schedule import Schedule
     from cufep.sampling.storage import (
+        CONDITIONS_OF_EARLIER_VERSIONS,
         ConditionsError,
         _same,
         conditions_differences,
@@ -1155,7 +1209,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     # given; checked here, before begin_leg sets the result of the leg aside (fifth review of PR #18), after the
     # checks of the samples below, whose refusals say more of them (the windows of samples that are refused for
     # their conditions do not matter)
-    from cufep.engine.leg import check_samples_have_their_windows
+    from cufep.engine.leg import check_samples_have_their_windows, start_conditions
 
     src = given_schedule_file(cfg, lig_dir.name, leg, repeat)
     windows = sched_file if sched_file.exists() else (src if src is not None and src.exists() else None)
@@ -1164,6 +1218,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         check_samples_have_their_windows(leg_dir, None if windows is None
                                          else [state.to_dict() for state in Schedule.load(windows).states])
 
+    has_starts = False                               # the start configurations of the windows of the leg
     if sched_file.exists():
         schedule = Schedule.load(sched_file)
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -1176,14 +1231,21 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
             made = start_record_of(start_file)
             if starts_are_of(made, schedule):         # start configurations of other windows are made again
                 check_windows_settings(made, windows_settings(cfg), start_file, quiet)
+        has_starts = has_starts_of(leg_dir, schedule)
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
-        samples_have_their_windows()                 # a checkpoint of the start without samples
-        return
+        # a checkpoint of the start without samples. Where the start configurations of the windows are made
+        # again the leg holds the conditions recorded with that checkpoint against those of this run
+        # (cufep.engine.leg.check_kept_windows), after the run has written its record: they are compared here,
+        # as those of samples are (third review of PR #21, the class of the relative leg's)
+        conditions = None if has_starts or windows is None else start_conditions(leg_dir)
+        if conditions is None:
+            samples_have_their_windows()
+            return
     # a leg that is to be continued from a checkpoint of an earlier version (run_leg analyses a leg
     # that has all its iterations as it is, without its checkpoint)
     used_timestep = (
-        float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+        float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else kept_time_step(cfg, leg_dir)
     )
     plan = planned_iterations(cfg.sampling.time_per_iteration_ps, used_timestep, cfg.sampling.equilibration(leg),
                               production_ns)
@@ -1205,11 +1267,27 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
             refuse_unrecorded_samples(leg_dir, n_stored, problems)
         samples_have_their_windows()
         return
+    # the conditions that follow from the configuration alone, as the leg gives them to its samples (leg_spec):
+    # compared here without building the System (the independent review of e28e6e6: another sampling.exchange
+    # was refused by the leg only, after the run had written its record)
     current = {"temperature_K": float(cfg.thermodynamics.temperature_K),
                "pressure_bar": None if gcmc_in(cfg, leg) else float(cfg.thermodynamics.pressure_bar),
-               "friction_per_ps": float(cfg.dynamics.friction_per_ps)}
-    differing = [f"{key}: {conditions[key]} -> {value}" for key, value in current.items()
-                 if key in conditions and not _same(conditions[key], value)]
+               "friction_per_ps": float(cfg.dynamics.friction_per_ps),
+               "exchange": str(cfg.sampling.exchange),
+               "barostat_frequency": int(cfg.dynamics.barostat_frequency),
+               # (the samples of a leg stay on the backend they were made with)
+               "precision": _precision(cfg, str(conditions.get("backend") or cfg.backend.name)),
+               # the time step of the pre-equilibration the leg has, or will make again (kept_time_step), and the
+               # steps of an iteration at it (the review of 7f4a1e6: without equil.npz, which holds a run to the
+               # time step it was made for, another dynamics.timestep_fs was refused by the leg only)
+               "timestep_fs": float(used_timestep),
+               "steps_per_iteration": int(planned_iterations(cfg.sampling.time_per_iteration_ps, used_timestep,
+                                                             0.0, 0.0).steps_per_iteration)}
+    # what versions before a condition was recorded always had (conditions_differences)
+    recorded = {**{key: value for key, value in CONDITIONS_OF_EARLIER_VERSIONS.items() if key in current},
+                **conditions}
+    differing = [f"{key}: {recorded[key]} -> {value}" for key, value in current.items()
+                 if key in recorded and not _same(recorded[key], value)]
     if isinstance(conditions.get("settings"), dict):
         differing += settings_differences(conditions["settings"], samples_settings(cfg, leg))
     elif not differing:
@@ -2511,8 +2589,32 @@ def precision_that_ran(cfg: Config, backend: str) -> str:
     return f"that of the {cfg.backend.platform} platform"
 
 
+def kept_time_step(cfg: Config, leg_dir: Path) -> float:
+    """The time step (fs) at which the pre-equilibration of a leg is made when it is made again: that of the
+    configuration; or the one an unstable pre-equilibration is lowered to
+    (:data:`cufep.sampling.equilibrate.LOWERED_TIMESTEP_FS`), where the replica exchange of the leg goes on from
+    samples, or from the checkpoint of its start, that record it. Such a leg can only go on at the time step of
+    its samples: its pre-equilibration is not tried at the higher one again (it was made at the lowered one after
+    an unstable run, as far as its files say: none of them records the time step that was asked for once
+    ``equil.npz`` is gone). The one rule of the leg (:func:`cufep.engine.leg.pre_equilibrated`) and
+    of the checks before a run (fourth review of PR #21: the check took the time step of the YAML for a leg whose
+    start checkpoint records 2 fs, and refused a leg the same YAML had made)."""
+    from cufep.engine.leg import goes_on_from_its_samples
+    from cufep.sampling.equilibrate import LOWERED_TIMESTEP_FS
+    from cufep.sampling.storage import recorded_conditions
+
+    asked = float(cfg.dynamics.timestep_fs)
+    if asked <= LOWERED_TIMESTEP_FS or not goes_on_from_its_samples(leg_dir):
+        return asked
+    recorded = (recorded_conditions(Path(leg_dir) / "hrex") or {}).get("timestep_fs")
+    if isinstance(recorded, (int, float)) and abs(float(recorded) - LOWERED_TIMESTEP_FS) < 1e-9:
+        return LOWERED_TIMESTEP_FS
+    return asked
+
+
 def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: str, membrane_info: dict, seed: int,
-                          equil_file: Path, device, log=print, what: str = "pre-equilibration") -> None:
+                          equil_file: Path, device, log=print, what: str = "pre-equilibration",
+                          timestep_fs: float | None = None) -> None:
     """Make the pre-equilibration of a prepared system (:func:`load_prepared`) and write it to
     ``equil_file``: plain MD of the fully interacting system, by the settings of ``leg``
     (:func:`pre_equilibration_parts`, :func:`equil_made_with`).
@@ -2520,7 +2622,9 @@ def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: s
     One function for the system of a leg and for the complex in the bilayer in which the restraint
     of a leg in water is chosen (``membrane.complex_leg: water``): ``barostat`` says which the
     system is (``membrane`` for a bilayer), ``membrane_info`` holds the numbers of its bilayer,
-    and ``what`` is how the log names the MD. ``system`` None reads the System of ``prep``."""
+    and ``what`` is how the log names the MD. ``system`` None reads the System of ``prep``.
+    ``timestep_fs`` is the time step it begins with where that is not the one of the configuration
+    (:func:`kept_time_step`); the log and the notes of the file say so."""
     from cufep.sampling.equilibrate import pre_equilibrate
     from cufep.steps import frames_of
 
@@ -2552,8 +2656,10 @@ def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: s
                     xyz = prep["positions"][a_.index]
                     if abs(xyz[2]) > wall_half and tree.query(xyz)[0] > 0.6:
                         wall_atoms.append(a_.index)
+    asked = float(cfg.dynamics.timestep_fs)
+    first = asked if timestep_fs is None else float(timestep_fs)
     settings = plain_md_settings(
-        cfg, float(cfg.dynamics.timestep_fs), barostat, seed,
+        cfg, first, barostat, seed,
         nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns, production_ns=production,
         hold_solute=held, restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half,
         wall_centre_nm=0.0,
@@ -2563,6 +2669,12 @@ def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: s
         if in_membrane else [])
     t0 = time.perf_counter()
     eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device, log)
+    if abs(first - asked) > 1e-9:
+        # what is known: the record of the samples and the setting (a file that said what was asked is gone)
+        eq.notes.append(f"{what} made again at {first:g} fs, the time step that the samples of this leg (or the "
+                        f"checkpoint of their start) record; dynamics.timestep_fs is {asked:g} fs, and a {what} "
+                        f"that is unstable at it is made at {first:g} fs")
+        log(eq.notes[-1])
     # the restraint search uses the last pre_equilibration md_ns of the trajectory
     n_keep = max(2, frames_of(pre.md_ns * 1000.0, settings.frame_interval_ps, eq.timestep_fs))
     # simulated_ns is the MD integrated (simulated_ns_is_integrated): earlier versions recorded the
@@ -2842,7 +2954,7 @@ def run_leg(job: LegJob) -> dict:
         + (time.perf_counter() - t_restraint) - md_seconds
 
     # ---- 3. alchemical System ------------------------------------------------------------------
-    built = alchemical_leg(cfg, system, prep, alchemical_box(eq, gcmc), restraint, is_complex, gcmc)
+    built = alchemical_leg(cfg, system, prep, alchemical_box(eq, gcmc, leg_dir), restraint, is_complex, gcmc)
     alch, alch_xml = built.alch, built.xml
     rest2 = cfg.sampling.rest2
     rest2_on, hot_atoms, hot_residues = built.rest2_on, built.hot_atoms, built.hot_residues
@@ -2934,10 +3046,12 @@ def run_leg(job: LegJob) -> dict:
                 gcmc=built.gcmc,
             )
             # (with grand canonical moves the cell is fixed, alchemical_box, and the spec has no barostat)
-            start_box = alchemical_box(eq, gcmc)
+            # (a leg that has run in another cell than the last one of its pre-equilibration, the mean cell of the
+            # earlier rule, has its start configurations made in that cell, the configuration moved into it)
+            start_box = alchemical_box(eq, gcmc, leg_dir)
             ctx, integ = leg_context(
                 pool_spec, alch.system, start_box,
-                eq["positions"] if gcmc is None else
+                eq["positions"] if np.array_equal(start_box, np.asarray(eq["box"], dtype=float)) else
                 (lambda c: positions_in_cell(eq["positions"], eq["box"], start_box, c.getMolecules())),
                 eq["velocities"], device0, seed)
             t0 = time.perf_counter()
@@ -2978,29 +3092,10 @@ def run_leg(job: LegJob) -> dict:
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
 
-                def inline_mover():
-                    """The water moves of a window made by a mover on this Context, for the windows that run in
-                    this process."""
-                    mover, interval_steps = None, 0
-                    if built.relocation is not None:
-                        from cufep.sampling.relocation_mc import RelocationMover
-                        from cufep.sampling.worker import RELOCATION_STREAM, stream_seed
-                        from cufep.steps import md_steps
-
-                        mover = RelocationMover(built.relocation, ctx, stream_seed(seed + 23, 0, 0, RELOCATION_STREAM))
-                        interval_steps = md_steps(built.relocation.interval_ps, timestep_fs)
-                    if built.gcmc is not None:                 # (and the grand canonical moves of water)
-                        from cufep.sampling.gcmc import GcmcMover
-                        from cufep.sampling.worker import GCMC_STREAM, stream_seed
-                        from cufep.steps import md_steps
-
-                        mover = GcmcMover(built.gcmc, ctx, stream_seed(seed + 23, 0, 0, GCMC_STREAM))
-                        interval_steps = md_steps(built.gcmc.interval_ps, timestep_fs)
-                    return mover, interval_steps
-
-                # the windows of an iteration run at the same time on the GPUs the scheduler grants
+                # the windows of an iteration run at the same time on the GPUs the scheduler grants (in this
+                # process, with the water moves of the leg made on its Context, where it has no workers for them)
                 schedule, cfgs = adaptive_windows(run, pool_spec, ctx, integ, stages, als,
-                                                  alch.system.getNumParticles(), inline_mover)
+                                                  alch.system.getNumParticles())
                 made_with = {"start_configurations": als.start_configurations,
                              **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {}),
                              "windows": "chosen by this precalculation"}
@@ -3336,7 +3431,7 @@ def stored_windows(leg_dir: Path, leg: str, stages: list[str], settings: dict, l
     with np.load(start_file) as start:
         configs = (start["positions"], start["boxes"], start["velocities"],
                    *((start["water_on"],) if "water_on" in start.files else ()))
-    if not starts_are_of(made, schedule) or len(configs[0]) != len(schedule.states):
+    if not has_starts_of(leg_dir, schedule):
         log(f"the start configurations in {start_file} are not those of the lambda windows in {sched_file} "
             f"({len(configs[0])} configurations, {len(schedule.states)} windows): they are made again for these "
             "windows")
@@ -4517,6 +4612,32 @@ def pressure_of_samples(conditions: dict) -> float | None:
     if pressure is None and isinstance(settings.get("gcmc"), dict):
         pressure = settings["gcmc"].get("cell_pressure_bar")
     return pressure
+
+
+#: the rule of the mover that the samples of a leg with grand canonical moves of water record (gcmc_record)
+WATER_RULE = "velocities_of_an_inserted_water"
+
+
+def water_moves_of(conditions: dict | None) -> dict | None:
+    """The grand canonical moves of water that samples with these recorded conditions were made with:
+    ``{"enabled": False}`` for samples without the moves, else the excess chemical potential of water and
+    its standard volume as they were used, which with the temperature are the activity of the water the leg
+    was in equilibrium with, and the rule of the mover for the velocities of an inserted water
+    (:data:`cufep.sampling.gcmc.INSERTED_WATER_VELOCITIES`; None for samples that record none: a version
+    before the record, 2026-11-28, whose earlier movers left those velocities as they were). None if the
+    conditions are not recorded. Free energies of legs made with other values of the water are not of one
+    thermodynamic state of the water and are not combined; legs of another rule of the mover are named
+    (:func:`cufep.rbfe.run.edge_result`, :func:`cufep.rbfe.run.combine_network`)."""
+    if not isinstance(conditions, dict):
+        return None
+    settings = conditions.get("settings") if isinstance(conditions.get("settings"), dict) else {}
+    moves = settings.get("gcmc")
+    if not isinstance(moves, dict):
+        return {"enabled": False}
+    return {"enabled": True,
+            "excess_chemical_potential_kcal_per_mol": float(moves["excess_chemical_potential_kcal_per_mol"]),
+            "standard_volume_nm3": float(moves["standard_volume_nm3"]),
+            WATER_RULE: moves.get(WATER_RULE)}
 
 
 def gcmc_numbers(samples: dict, start: int) -> dict | None:

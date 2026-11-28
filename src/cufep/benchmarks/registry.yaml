@@ -5,9 +5,17 @@
 # sampling); its ligand is one of the set's.
 # `subset` lists five ligands evenly spaced by experimental rank; it was fixed before any
 # benchmark calculation was run.
+# `rbfe_example` is the configuration of `cufep rbfe` whose settings the set runs with by relative
+# calculations (`--protocol rbfe`, src/cufep/benchmarks/relative.py); `fepplus_edges` the edges of the
+# published map with their FEP+ predictions; `openfe_dg`, `openfe_edges` the published results of the
+# OpenFE benchmark on the set (benchmarks/README.md), where there are any.
 tyk2:
   title: TYK2 kinase (PDB 4GIH), Schrödinger public benchmark jacs_set/tyk2
   example: examples/kinase_tyk2/config.yaml
+  rbfe_example: examples/rbfe_tyk2/config.yaml
+  fepplus_edges: benchmarks/tyk2/inputs/edge_predictions_tyk2_out.csv
+  openfe_dg: benchmarks/tyk2/inputs/openfe_dg_tyk2.csv
+  openfe_edges: benchmarks/tyk2/inputs/openfe_edges_tyk2.csv
   protein: benchmarks/tyk2/inputs/tyk2_protein.pdb
   ligands: benchmarks/tyk2/ligands.sdf
   reference: benchmarks/tyk2/ligands.csv
@@ -15,6 +23,8 @@ tyk2:
 a2a:
   title: Adenosine A2A receptor (PDB 5OLZ) in a POPC bilayer, Schrödinger public benchmark gpcrs/a2a_hip278
   example: examples/membrane_a2a/config.yaml
+  rbfe_example: examples/rbfe_a2a_membrane/config.yaml
+  fepplus_edges: benchmarks/a2a/inputs/edge_predictions_a2a_hip278_out.csv
   protein: benchmarks/a2a/inputs/a2a_hip278_protein.pdb
   ligands: benchmarks/a2a/ligands.sdf
   reference: benchmarks/a2a/ligands.csv

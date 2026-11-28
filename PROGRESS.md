@@ -64,11 +64,11 @@ start from the walk whatever number of workers it has; three settings that stay 
 | Development harness | PR #2; ruff 0.17.5 with the rules of fmeta (`scripts/lint.sh`) by PR #3 |
 
 Open items:
+- Plan `docs/plans/2026-11-27-rbfe-benchmarks.md` (done: PR #21 merged into main on the owner's order of 2026-11-28; eight reviews answered, every thread resolved; head of the code 957a9cf: unit 860 and GPU 70 passed): `cufep benchmark run|plan|report NAME --protocol rbfe` on the LOMAP network (TYK2 22 edges, those of the OpenFE benchmark; A2A 21, 17 neutral compounds), reported against experiment, FEP+ and OpenFE (published for TYK2 only); legs the plugin's integrator cannot constrain run on stock OpenMM (the owner's decision of 2026-11-27); grand canonical moves of water are on by default in the RBFE complex leg (the owner's decision of 2026-11-28). Both full sets run with the image of 957a9cf, one calculation per edge (the owner's decision of 2026-11-28 to run them again: the records before were sampled before the fix of the velocities of an inserted water). TYK2 (`benchmarks/results/tyk2_rbfe/`): 22/22 edges, dG RMSE after centring each method on the 16 compounds 0.72 [0.42, 0.89] kcal/mol (FEP+ 0.47, OpenFE 0.59), Kendall tau 0.65 (0.81, 0.68), edge RMSE 0.89 (OpenFE on the same 22 edges 0.61); no leg NOT RELIABLE, two edges with a window below 50 independent samples, 5 edges on stock OpenMM. A2A (`benchmarks/results/a2a_rbfe/`): 21/21 edges, dG RMSE after centring on the 17 compounds 1.51 [0.79, 1.98] (FEP+ 1.08), Kendall tau 0.69 (0.59), edge RMSE 1.66, on the 10 edges of the published map 2.16 (FEP+ 1.42); no leg NOT RELIABLE, two edges below 50 independent samples, one edge on stock OpenMM. Against the runs before the fix (TYK2 faa65e0: dG RMSE 0.65, edge RMSE 0.82; A2A cd15025: 1.59, 1.57) the ddG of the edges differ by 0.44 RMS (at most 1.08) and 0.59 RMS (at most 1.70), one calculation each. There is no A2A relative run without the moves (stopped).
 - Plan `docs/plans/2026-11-25-rbfe.md` (done: PR #17 with PR #18 merged into main on 2026-11-26): `cufep rbfe` (`docs/rbfe.md`). TYK2 example (image f6ac3b4): ddG -1.86 ± 0.29, +0.56 ± 0.32, +2.39 ± 0.32 kcal/mol (experiment -1.77, +1.79, +3.56), cycle closure -0.03 ± 0.54, dG RMSE 0.57 against experiment. A2A example in the bilayer (image f6ac3b4): ddG +0.91 ± 0.30, +3.26 ± 0.12, +1.38 ± 0.26 (experiment +2.12, +0.72, -1.40), cycle closure -0.97 ± 0.41, dG RMSE 1.35 (FEP+ 0.83); both in the plan's record. No long-range correction of the ligand LJ in RBFE (OpenFE's default), where the plan had one at both ends. Plan `docs/plans/2026-11-25-leg-engine.md` (done, PR #18): one engine of a leg for both (`src/cufep/engine/`), steps 1-6 done; ABFE fingerprint and analysis of a stored run unchanged; the TYK2 relative example on its image agrees with image f6ac3b4 within the errors (the plan's record).
 - Plans `docs/plans/2026-11-24-opc-water-model.md` and `docs/plans/2026-11-24-gcmc-water.md` (done; PR #15, merged on the owner's order of 2026-11-25): TYK2 with OPC (16 ligands); A2A stopped after 4k and 4e in each variant (OPC in the bilayer, the complex leg in water, water relocation moves, grand canonical moves with TIP3P and OPC: Change Log). The owner's decision of 2026-11-25: stop, and no default changes for now (water TIP3P; `sampling.gcmc`, `sampling.relocation_mc` off; `membrane.complex_leg: bilayer`).
   With `sampling.gcmc`: the error of the excess chemical potential of water enters the complex leg times the waters the sphere gains (0.05 kcal/mol and 7 waters: 0.35 kcal/mol). One short run under MPS ended with a CUDA launch failure on one GPU; the same run again and the four full runs did not (not explained). Open: with REST2 the backends differ in the dispersion correction (up to 0.55 kT between windows, 0 at both ends; the plan); `spikes/m36` (2026-11-25): stock OpenMM does not update it when an epsilon offset changes (3.50 kT at s = 0.6 on a TYK2 complex), the plugin gives the energy of the System with the scaled parameters written in.
-- The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22;
-  the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
+- The wiki pages (`docs/wiki/`, PR #8) are not on the GitHub Wiki yet (no page, checked 2026-11-22; the owner creates the first). Issue #5: the differences from Felis, measurements to separate causes.
 - Plan `docs/plans/2026-11-22-accuracy-causes-and-fixes.md` (done, PR #9). Adopted: the walk as the
   one way of starting the windows (below). Not adopted, defaults unchanged: longer production,
   `alchemy.annihilate_electrostatics`, `alchemy.softcore_b` 2, `analysis.detect_equilibration`,
@@ -112,55 +112,84 @@ Open items:
 
 ## Change Log
 
-### 2026-11-26 — [progress] RBFE and the engine of a leg merged (PR #17 with PR #18)
-- What: the reviews of PR #17 (four rounds, 18 findings) and PR #18 (eight rounds, 20 findings) were each
-  reproduced first, fixed with a test, pushed and answered; on the owner's order after no further findings,
-  PR #18 was merged into `feat/rbfe` and PR #17 into main.
-- Verified: unit suites of the heads before the last fixes (#17 a0b1b52: 795 passed; #18 2babdd8: 803
-  passed), the tests of every later fix before and after it, CI of each PR; the ABFE fingerprint unchanged.
-- Refs: `docs/plans/2026-11-25-rbfe.md`, `docs/plans/2026-11-25-leg-engine.md` (records of the reviews)
+### 2026-11-28 — [progress] Relative benchmarks of TYK2 and A2A merged (PR #21)
+- What: `cufep benchmark run|plan|report NAME --protocol rbfe` with the tables against experiment, FEP+ and OpenFE,
+  grand canonical moves of water in the RBFE complex leg (on by default), the REST2 fix of core proper torsions,
+  and the checks of kept results (`rbfe analyze --write`, the results a run combines). The eight reviews (33
+  findings) were each reproduced first, fixed with a test, pushed and answered; merged on the owner's order.
+- Verified: head of the code 957a9cf: unit 860 passed (local and CI), GPU 70 passed; both full sets run with its
+  image (the two entries below); the tests that read the records after they were replaced (61 passed).
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record of the reviews and the runs); `docs/rbfe.md`
 
-### 2026-11-26 — [amendment] RBFE: the nine findings of the review of PR #17
-- What: each end state in a force field with its own ligand (one template served A and B of one bonded graph:
-  System A had the charges of B in the test); the legs of an edge are checked as the ABFE checks them
-  (temperature, pressure, prepared systems) and a leg without a standard error does not count, the other
-  edges are combined; pH in the record of a prepared edge; the force field of the lipid patch for a 4-site
-  water; prepared edges checked before a run writes anything; exit code from the jobs of the run; the legs in
-  edges.csv from the repeats of the ddG; initial windows within max_windows. Each reproduced first, as a test.
-- Why: the review of PR #17 (2026-11-25); the examples were not affected (no such inputs, no reruns).
-- Refs: `docs/plans/2026-11-25-rbfe.md` (record); `docs/rbfe.md`
+### 2026-11-28 — [progress] RBFE benchmark of A2A run again with the image of 957a9cf
+- What: the full A2A set by relative calculations again (as TYK2, the entry below): 21/21 edges, dG RMSE after
+  centring on the 17 compounds 1.51 [0.79, 1.98] kcal/mol (FEP+ 1.08), Kendall tau 0.69 (0.59), edge RMSE 1.66, on
+  the 10 edges of the published map 2.16 (FEP+ 1.42); no leg NOT RELIABLE, two edges with a window below 50
+  independent samples (4c~4d, 4h~4r), one edge on stock OpenMM. Against the run of cd15025 the ddG differ by 0.59
+  RMS and at most 1.70 kcal/mol, one calculation each. Both records are now runs of the fixed mover.
+- Refs: `benchmarks/results/a2a_rbfe/`, `benchmarks/results/README.md`; `docs/plans/2026-11-27-rbfe-benchmarks.md`
 
-### 2026-11-25 — [progress] One engine of a leg: the ABFE and the RBFE as two protocols
-- What: `src/cufep/engine/` (protocols, steps of a leg, analysis of a path, jobs); `CommonConfig`; the relative
-  leg runs on the engine without `shared()`, renamed results or the ABFE job. Found on the way: the timing of a
-  relative run read a ligand per leg (KeyError after all legs had finished), and the test of an edge was not
-  repeatable (CPU platform without deterministic forces, hydrogens placed at random); both fixed with tests.
-- Verified: ABFE fingerprint (`spikes/m38`, Reference platform) identical before and after; analysis of a stored
-  TYK2 ligand identical; unit suite and GPU tests; TYK2 relative example (image 5cc23eb, resumed on c3665a3).
-- Refs: `docs/plans/2026-11-25-leg-engine.md`; branch `refactor/leg-engine`
+### 2026-11-28 — [progress] RBFE benchmark of TYK2 run again with the image of 957a9cf
+- What: the full TYK2 set by relative calculations again (the owner's decision: the record was sampled before the
+  fix of the velocities of an inserted water): 22/22 edges, dG RMSE after centring 0.72 [0.42, 0.89] kcal/mol (FEP+
+  0.47, OpenFE 0.59), Kendall tau 0.65, edge RMSE 0.89 (OpenFE 0.61); no leg NOT RELIABLE, two edges with a window
+  below 50 independent samples, 5 edges on stock OpenMM. Against the run of faa65e0 the ddG differ by 0.44 RMS and
+  at most 1.08 kcal/mol, one calculation each. The A2A set is running with the same image.
+- Refs: `benchmarks/results/tyk2_rbfe/`, `benchmarks/results/README.md`; `docs/plans/2026-11-27-rbfe-benchmarks.md`
 
-### 2026-11-25 — [design] Plan: one engine of a leg for the ABFE and the RBFE
-- What: `src/cufep/engine/` (protocols of a leg, the steps of a leg, jobs); the ABFE and the RBFE become two
-  protocols on it; `RbfeConfig.shared()`, the renaming of leg results, the job subclass and the dispatch on the
-  keys of a state go. ABFE numbers, files and defaults unchanged, checked with `spikes/m38` before and after.
-- Why: the owner's question (is the sharing forced, is it the right architecture?): the RBFE was fitted into the
-  entrances of the ABFE (an ABFE configuration made from its settings, its pre-equilibration steered by the
-  setting of the ABFE restraint, result keys renamed, command hints replaced as text).
-- Refs: `docs/plans/2026-11-25-leg-engine.md`; branch `refactor/leg-engine`
+### 2026-11-28 — [amendment] RBFE: what the checks of kept results read is held to its shape
+- What: after an independent review of the fixes of the seventh and eighth review of PR #21: without a readable
+  summary a run holds every edge with a leg it does not sample to `edges.csv` (with --leg the edge it runs too);
+  a leg result, the record of a prepared edge and the summary are read by one reader each, which names a file
+  of another shape or counts the summary as not readable; a table that is not text is no record.
+- Why: a complex result moved away passed with --leg solvent; records of another shape raised errors of their own.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
 
-### 2026-11-25 — [progress] RBFE: TYK2 example; the findings of the review of the diff
-- What: TYK2 example on image f6ac3b4 (plan record; Current Status). Review of PR #17: a torsion that a System
-  has twice counts twice (it became one, as in OpenFE; the end at lambda 0 was 16.6 kJ/mol off in the test);
-  bonds and angles of the environment that differ between A and B are refused; `--leg complex` with
-  `adaptive.legs: solvent` before the solvent leg has windows is refused (it waited for ever); the complex
-  pre-equilibration is stated in `shared()`. One finding rejected: OpenFE also separates unique old and new atoms.
-- Refs: `docs/rbfe.md` ("Hybrid topology", "Sampling"); `test_rbfe_hybrid.py`, `test_rbfe_config.py`
+### 2026-11-28 — [amendment] Seventh review of PR #21: one finding fixed (P2), one completed
+- What: a run reads every leg result it will combine without sampling it before it writes (a truncated result of
+  a solvent leg passed, and the run failed when it combined the results); a result that cannot be read is named.
+  Where the summary cannot be read, the tables are held by their values (ddG, dG and standard errors), by
+  `rbfe analyze --write` and by a run: a mean of two repeats was replaced by the value of one.
+- Why: the owner's review 6095905516; each reproduced as a test that failed before the fix.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
 
-### 2026-11-25 — [design] RBFE: each leg chooses its own lambda windows (`lambda_schedule.adaptive.legs: each`)
-- What: TYK2 example, image of 58bef64, 8 GPUs, kcal/mol (experiment; FEP+): ddG ejm_31->ejm_46 -1.43 ± 0.32
-  (-1.77; -0.91), ejm_31->ejm_49 +0.74 ± 1.28 NOT RELIABLE (+1.79; +1.86), ejm_46->ejm_49 +2.10 ± 0.45 (+3.56);
-  cycle closure -0.08 ± 1.40; dG (mean of the experimental values) -9.28, -10.71, -8.61 (-9.54, -11.31, -7.75).
-  The windows of the solvent leg left a pair of the ejm_31->ejm_49 complex leg at 0.013 (λ 0.12, 0.25). The owner:
-  each leg its own precalculation (complex 500 ps after 500 ps, as the ABFE); `cufep rbfe run --leg`.
-- Why: the owner's choice of 2026-11-25 after that result.
-- Refs: `docs/rbfe.md` ("Lambda windows"), `runs/rbfe_tyk2_58bef64` (untracked)
+### 2026-11-28 — [amendment] Sixth review of PR #21: four findings fixed (one P1)
+- What: the check of a run on the results it combines without sampling them holds each leg to the summary by
+  itself (with --leg solvent a complex leg whose record was gone was combined once the solvent leg had finished),
+  takes a leg as being run by its `started.json` or `error.json` (not by `result.previous.json`), and asks only
+  for the repeats of `sampling.repeats`; `rbfe analyze --write` with a summary that cannot be read is refused
+  where the legs do not give what the two tables hold.
+- Why: the owner's review 6095856567; each reproduced as a test that failed before the fix.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
+
+### 2026-11-28 — [amendment] Fifth review of PR #21: one finding fixed (P1)
+- What: `cufep rbfe analyze --write` holds an edge that the summary refused a ddG for its repeats (other values of
+  the water) to the files of those repeats, like an edge with a ddG: with the record of the samples of one repeat
+  set aside, the refusal was lifted and the mean of the two repeats went into the dG of the network. A run holds
+  the results it combines without sampling them to the summary in the same way, before it writes.
+- Why: the owner's review 6095731095; reproduced as a test that failed before the fix.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
+
+### 2026-11-28 — [amendment] Fourth review of PR #21: three findings fixed (all P2)
+- What: a pre-equilibration made again for a leg whose samples (or start checkpoint) record 2 fs is made at 2 fs,
+  and the check before a run takes that time step; what a result says of its samples (the rule of the mover) is
+  read from their record alone, so results whose HDF5 parts were set aside are combined; an edge without a
+  recorded rule is named as one of which the rule cannot be told, not as one of another rule.
+- Why: the owner's review 6095477333; each reproduced as a test that failed before the fix.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`, `docs/protocol.md`
+
+### 2026-11-28 — [amendment] Third review of PR #21: four findings fixed (all P2)
+- What: a leg stopped at the checkpoint of its start is held to the run before the run writes (RBFE, and the ABFE
+  alike); a report of an earlier summary takes the legs with few samples from the notes of its repeats; `rbfe
+  analyze --write` needs both legs of every repeat of a stored ddG; the rule of the mover is in the result of a
+  complex leg, of the repeat and of the edge, and a network of edges of two rules names them in a note.
+- Why: the owner's review 6095212888; each reproduced as a test that failed before the fix.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`, `docs/protocol.md`
+
+### 2026-11-28 — [amendment] Second review of PR #21: seven findings fixed (two P1)
+- What: GCMC samples record the rule of the mover and samples of the earlier rule are not extended; whether a complex
+  leg made the moves is compared for every edge, apart from the values of the water; a relative run checks the
+  windows, samples and System checksum of its legs before it writes; a GCMC leg's cell is that of its checkpoint;
+  reports of earlier summaries read the repeats; `rbfe analyze --write` holds the lock and refuses results without legs.
+- Why: the owner's review 6095000582; each reproduced as a test that failed before the fix.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`, `docs/protocol.md`

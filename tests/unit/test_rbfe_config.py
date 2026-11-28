@@ -26,7 +26,11 @@ def test_documented_defaults_are_the_defaults_of_the_code(repo):
 
 
 @pytest.mark.parametrize("more, message", [
-    ({"sampling": {"gcmc": {"enabled": True}}}, "moves of the ABFE"),
+    ({"sampling": {"relocation_mc": {"enabled": True}}}, "a move of the ABFE"),
+    # the checks of the grand canonical moves are those of the ABFE (cufep.config.schema.gcmc_problems)
+    ({"sampling": {"gcmc": {"batch_size": 3000}}}, "batch_size"),
+    ({"sampling": {"gcmc": {"enabled": True}}, "forcefield": {"water": "amber14/spce.xml"}},
+     "no value for forcefield.water"),
     ({"membrane": {"enabled": True, "complex_leg": "water"}}, "complex_leg"),
     ({"network": {"edges": [["a", "a"]]}}, "to itself"),
     ({"network": {"edges": [["a", "b"], ["b", "a"]]}}, "twice"),
@@ -89,4 +93,29 @@ def test_the_exit_code_is_that_of_the_jobs_of_this_run(monkeypatch, tmp_path, fa
     (tmp_path / "c.yaml").write_text("x: 1\n")
     result = CliRunner().invoke(cli.main, ["rbfe", "run", str(tmp_path / "c.yaml")])
     assert result.exit_code == code, result.output
+
+
+def test_a_relative_run_makes_grand_canonical_moves_of_water_in_the_complex_leg_by_default():
+    """The owner's decision of 2026-11-28: on by default in the complex leg of a relative calculation (off in the
+    ABFE); the solvent leg never has them."""
+    from cufep.config.schema import Config
+    from cufep.workflow import gcmc_in
+
+    rcfg = RbfeConfig.model_validate(_minimal())
+    assert rcfg.sampling.gcmc.enabled is True
+    assert gcmc_in(rcfg, "complex") and not gcmc_in(rcfg, "solvent")
+    assert Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}}).sampling.gcmc.enabled is False
+    off = RbfeConfig.model_validate(_minimal(sampling={"gcmc": {"enabled": False}}))
+    assert not gcmc_in(off, "complex")
+    # the values of the water that auto gives are those of 298.15 K, 1 bar and a cutoff of 0.9 nm (review of PR #21):
+    # a relative run under other conditions, whose moves are on by default, is told what it can do
+    with pytest.raises(ValueError, match="were determined at 298.15 K, 1 bar and a cutoff of 0.9 nm; this run has "
+                                         "thermodynamics.temperature_K = 310") as refused:
+        RbfeConfig.model_validate(_minimal(thermodynamics={"temperature_K": 310.0}))
+    assert "give the numbers of these conditions" in str(refused.value)
+    assert "sampling.gcmc.enabled: false" in str(refused.value)
+    RbfeConfig.model_validate(_minimal(thermodynamics={"temperature_K": 310.0}, sampling={"gcmc": {"enabled": False}}))
+    # a YAML that gives only some of the settings of the moves keeps them on (they were switched off so before)
+    some = RbfeConfig.model_validate(_minimal(sampling={"gcmc": {"attempts": 5000}}))
+    assert gcmc_in(some, "complex") and some.sampling.gcmc.attempts == 5000
 

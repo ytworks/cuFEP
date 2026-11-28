@@ -279,6 +279,39 @@ def tail_summary(lrc: dict) -> dict:
 INTEGRATOR_STREAM, BAROSTAT_STREAM, RELOCATION_STREAM, GCMC_STREAM = 0, 1, 2, 3
 
 
+def water_movers(spec, context, start: int = 0, worker_id: int = 0) -> tuple:
+    """The water moves of a leg on one Context: ``(mover of the water relocation moves, MD steps of a replica for
+    which one move is attempted, mover of the grand canonical moves of water, its MD steps)``, None and 0 for moves
+    the leg does not make. Each mover has a random stream of its own (``start`` and ``worker_id`` as for
+    :func:`stream_seed`); the mover of the grand canonical moves also holds which waters interact in the Context.
+    One function for the Context of a worker and for that of a process that runs windows itself
+    (:func:`window_mover_on`)."""
+    from cufep.steps import md_steps
+
+    mover, relocation_steps, gcmc, gcmc_steps = None, 0, None, 0
+    if spec.relocation is not None:
+        from cufep.sampling.relocation_mc import RelocationMover
+
+        mover = RelocationMover(spec.relocation, context, stream_seed(spec.seed, start, worker_id, RELOCATION_STREAM))
+        relocation_steps = md_steps(spec.relocation.interval_ps, spec.timestep_fs)
+    if spec.gcmc is not None:
+        from cufep.sampling.gcmc import GcmcMover
+
+        gcmc = GcmcMover(spec.gcmc, context, stream_seed(spec.seed, start, worker_id, GCMC_STREAM))
+        gcmc_steps = md_steps(spec.gcmc.interval_ps, spec.timestep_fs)
+    return mover, relocation_steps, gcmc, gcmc_steps
+
+
+def window_mover_on(spec, context) -> tuple:
+    """(mover, MD steps between its moves) for windows that the process of a leg runs itself on ``context``, where
+    it has no workers for them: the moves a worker makes in its windows (:meth:`Worker.window_mover`), with the
+    random stream of worker 0. (None, 0) for a leg without water moves. Whether the windows of a leg run on workers
+    or in its own process depends on the GPUs it is granted, and the moves must not (review of PR #21: the start of
+    given windows made the grand canonical moves on workers and none in the process of the leg)."""
+    mover, relocation_steps, gcmc, gcmc_steps = water_movers(spec, context)
+    return (gcmc, gcmc_steps) if gcmc is not None else (mover, relocation_steps)
+
+
 def stream_seed(seed: int, start: int, worker_id: int, purpose: int = INTEGRATOR_STREAM) -> int:
     """The seed of one random stream of a leg, in 1 ... 2**31 - 1.
 
@@ -347,24 +380,9 @@ class ReplicaWorker:
         if spec.lrc is not None:
             from cufep.alchemy.lrc import TailEnergy
             self.lrc = TailEnergy.from_dict(spec.lrc)
-        # water relocation moves: a mover on this Context, with a random stream of its own, and
-        # the number of MD steps of a replica for which one move is attempted
-        self.mover, self.relocation_steps = None, 0
-        if spec.relocation is not None:
-            from cufep.sampling.relocation_mc import RelocationMover
-            from cufep.steps import md_steps
-
-            self.mover = RelocationMover(spec.relocation, self.context,
-                                         stream_seed(spec.seed, start, worker_id, RELOCATION_STREAM))
-            self.relocation_steps = md_steps(spec.relocation.interval_ps, spec.timestep_fs)
-        # grand canonical moves of water: a mover that also holds which waters interact in this Context
-        self.gcmc, self.gcmc_steps = None, 0
-        if spec.gcmc is not None:
-            from cufep.sampling.gcmc import GcmcMover
-            from cufep.steps import md_steps
-
-            self.gcmc = GcmcMover(spec.gcmc, self.context, stream_seed(spec.seed, start, worker_id, GCMC_STREAM))
-            self.gcmc_steps = md_steps(spec.gcmc.interval_ps, spec.timestep_fs)
+        # the water moves of the leg on this Context (water_movers)
+        self.mover, self.relocation_steps, self.gcmc, self.gcmc_steps = water_movers(spec, self.context, start,
+                                                                                     worker_id)
 
     def window_mover(self) -> tuple:
         """(mover, MD steps between its moves) for a window of the precalculation in this Context."""

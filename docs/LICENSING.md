@@ -33,6 +33,10 @@ This is a summary for orientation, not legal advice.
 `benchmarks/*/ligands.sdf` and `ligands.csv` are derived from them by
 `cufep/benchmarks/curate.py`. `examples/` reuses the same structures.
 
+`benchmarks/tyk2/inputs/openfe_*_tyk2.csv` are rows, unchanged, of the published results of the OpenFE
+industry benchmark ([IndustryBenchmarks2024](https://github.com/OpenFreeEnergy/IndustryBenchmarks2024) v1.0.0,
+MIT licence, copyright 2024 Open Free Energy; see `benchmarks/THIRD_PARTY/`), used to compare accuracy.
+
 ## The rule for restraint anchors from interactions
 
 The rule that chooses the anchors of the Boresch restraint from the interactions of an MD

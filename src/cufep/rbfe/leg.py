@@ -14,6 +14,12 @@ The lambda windows (``lambda_schedule``)
     Windows that a leg does not choose itself start, all of them, from the end of its pre-equilibration, minimised in
     their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all windows at the same time
     on the GPUs of the leg; the equilibration of the replica exchange then relaxes them further.
+
+Grand canonical moves of water (``sampling.gcmc``, on by default in the complex leg)
+    As in the ABFE (:mod:`cufep.sampling.gcmc`): the waters farthest from the ligand are ghosts from the start, the
+    pre-equilibration with its barostat settles the cell without them, and the windows and the replica exchange keep
+    the cell of its last configuration, without a barostat, with the moves in a sphere around the heavy atoms of the
+    hybrid ligand (those of A and of B).
 """
 from __future__ import annotations
 
@@ -149,10 +155,174 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
                      barostat=leg_info["barostat"], membrane_info=leg_info.get("membrane_info") or {}, info=info)
 
 
-def hybrid_settings(rcfg) -> dict:
-    """The settings of a relative run that the samples of a leg depend on beyond its System."""
-    return {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"), "mapping": rcfg.mapping.model_dump(mode="json")},
-            "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
+def hybrid_settings(rcfg, leg: str | None = None) -> dict:
+    """The settings of a relative run that the samples of a leg depend on beyond its System; for the leg that makes
+    grand canonical moves of water (the complex leg) also those of the moves, as the ABFE records them
+    (:func:`cufep.workflow.gcmc_record`; the pressure of the samples is that of the cell they are fixed in)."""
+    from cufep.workflow import gcmc_in, gcmc_record
+
+    settings = {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"),
+                         "mapping": rcfg.mapping.model_dump(mode="json")},
+                "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
+    if gcmc_in(rcfg, leg):
+        settings["gcmc"] = gcmc_record(rcfg)
+    return settings
+
+
+def hybrid_gcmc(rcfg, built: HybridLeg, leg: str, log=print):
+    """The grand canonical moves of water of a leg (:class:`cufep.sampling.gcmc.GcmcSpec`), or None for a leg
+    without them. With them the waters that are ghosts at the start are switched off in the hybrid System of
+    ``built`` (changed in place, with its XML and its prepared system), so that every MD of the leg has them: as
+    :func:`cufep.workflow.leg_system` makes the System of a leg of the ABFE. The soft-core of the stand-in energy is
+    that of the ABFE (cuFEP's own: the stand-in decides only which trials are tested with the full potential)."""
+    import openmm as mm
+
+    from cufep.config.schema import AlchemyConfig
+    from cufep.sampling.gcmc import GcmcError, gcmc_spec, ghosts_off, hybrid_parameters
+    from cufep.workflow import gcmc_in, gcmc_water_values
+
+    if not gcmc_in(rcfg, leg):
+        return None
+    g, prep, stand_in = rcfg.sampling.gcmc, built.prep, AlchemyConfig()
+    mu, volume = gcmc_water_values(rcfg)
+    try:
+        spec = gcmc_spec(built.hybrid.system, prep["topology"], prep["positions"], np.asarray(prep["box"], dtype=float),
+                         prep["ligand"], rcfg.dynamics.cutoff_nm, stand_in.softcore_alpha, stand_in.softcore_b,
+                         rcfg.thermodynamics.temperature_K, g.interval_ps, g.attempts, g.batch_size,
+                         g.radius_margin_nm, mu, volume, None if g.ghost_waters == "auto" else int(g.ghost_waters))
+    except GcmcError as exc:
+        raise WorkflowError(f"sampling.gcmc cannot be used with this system: {exc}") from exc
+    spec.hybrid = hybrid_parameters(built.hybrid, spec.ligand)
+    ghosts_off(built.hybrid.system, spec.waters[spec.ghosts].reshape(-1))
+    built.xml = mm.XmlSerializer.serialize(built.hybrid.system)
+    built.prep = {**prep, "system_xml": built.xml}
+    log(f"grand canonical moves of water: sphere of {10 * spec.radius_nm:.1f} A around the heavy atoms of the hybrid "
+        f"ligand, Adams value B = {spec.adams:.3f} (excess chemical potential "
+        f"{spec.excess_chemical_potential_kj_per_mol / KCAL:.3f} kcal/mol, standard volume "
+        f"{1000 * spec.standard_volume_nm3:.3f} A^3), {len(spec.ghosts)} of the {len(spec.waters)} waters are ghosts "
+        "at the start (those farthest from the ligand); the windows and the replica exchange have no barostat")
+    return spec
+
+
+def hybrid_leg_spec(rcfg, built: HybridLeg, gcmc, leg: str, name: str, states: list[dict], backend: str,
+                    timestep_fs: float, steps_per_iteration: int, **more):
+    """What the workers of a relative leg are given (:class:`cufep.sampling.worker.LegSpec`), from the configuration
+    and the hybrid System of the leg (``built``, with its ghosts off where ``gcmc`` gives the moves). Its
+    ``conditions()`` are what the samples record, so the run of a leg and the check before a run
+    (:func:`check_leg_reuse`) make it here, in one place. ``timestep_fs`` is the time step of the pre-equilibration,
+    ``more`` what only a run needs (seed, frame atoms, the share of the GPU)."""
+    from cufep.engine.protocol import HYBRID
+    from cufep.sampling.worker import LegSpec
+    from cufep.workflow import _precision
+
+    barostat = built.barostat
+    return LegSpec(name=name, system_xml=built.xml, states=states, n_atoms=built.hybrid.system.getNumParticles(),
+                   protocol=HYBRID, backend=backend, precision=_precision(rcfg, backend),
+                   platform=rcfg.backend.platform, temperature_K=rcfg.thermodynamics.temperature_K,
+                   pressure_bar=None if gcmc is not None else rcfg.thermodynamics.pressure_bar,
+                   barostat="none" if gcmc is not None else barostat,
+                   barostat_frequency=rcfg.dynamics.barostat_frequency, exchange=rcfg.sampling.exchange,
+                   friction_per_ps=rcfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
+                   steps_per_iteration=steps_per_iteration, cpu_threads=rcfg.resources.cpu_threads_per_worker,
+                   box_safety=1.3 if barostat == "membrane" and gcmc is None else None,
+                   settings=hybrid_settings(rcfg, leg), gcmc=gcmc, **more)
+
+
+def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
+    """Before a run writes or samples anything: the lambda windows and the samples (or the checkpoint of their
+    start) that the directory of a leg holds must be ones this run can go on from. The checks the leg makes where
+    it uses the files (:func:`run_hybrid_leg`: the settings its windows were chosen with, and every condition of
+    its samples with the checksum of the System, for which the hybrid System of this run is built), made first
+    from the files alone, so that a run that will be refused leaves the directory, its record of the configuration
+    and the results of its legs as they were. Second review of PR #21: a finished edge run again with another
+    chemical potential of water, or a run of an earlier version of the hybrid continued, was refused by its legs
+    after the run had replaced ``resolved_config.yaml`` and the legs had set their results aside. Raises
+    WorkflowError or ConditionsError."""
+    from cufep.engine.leg import check_kept_windows, start_conditions
+    from cufep.sampling.storage import other_conditions, stored_conditions
+    from cufep.workflow import (
+        _choose_backend,
+        _schedule_of_this_leg,
+        check_windows_settings,
+        has_starts_of,
+        kept_time_step,
+        planned_iterations,
+        settings_differences,
+        start_record_of,
+        starts_are_of,
+    )
+
+    leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
+    sched_file, start_file, hrex = leg_dir / "schedule.yaml", leg_dir / "start_configs.npz", leg_dir / "hrex"
+    if not sched_file.exists():
+        return                 # no windows yet (samples without their windows: check_samples_have_their_windows)
+    quiet = lambda _message: None                                    # noqa: E731  the leg logs it when it runs
+    settings = hybrid_settings(rcfg, leg)
+    schedule = _schedule_of_this_leg(sched_file, leg, STAGES)
+    rest2_scale = rcfg.sampling.rest2.scale if rcfg.sampling.rest2.scale > 1.0 else 1.0
+    if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
+        raise WorkflowError(f"the lambda schedule in {sched_file} was made with a REST2 scale of "
+                            f"{schedule.rest2_scale:g} but sampling.rest2.scale is {rcfg.sampling.rest2.scale:g}. "
+                            "Nothing was changed. Use the same value, or start the leg anew with --reschedule.")
+    if start_file.exists():
+        made = start_record_of(start_file)
+        if starts_are_of(made, schedule):                  # start configurations of other windows are made again
+            check_windows_settings(made, settings, start_file, quiet)
+    n_stored, conditions = stored_conditions(hrex)
+    if n_stored == 0:
+        # no samples. A leg stopped at the checkpoint of the start of its replica exchange, whose start
+        # configurations are made again, holds the conditions recorded with that checkpoint against those of this
+        # run (check_kept_windows in run_hybrid_leg), as it does those of samples: they are compared here too
+        # (third review of PR #21: such a leg of a System this version builds otherwise was refused after the run
+        # had replaced resolved_config.yaml). With its start configurations the replica exchange takes the
+        # conditions of this run for a leg without samples (LegStorage.check_conditions)
+        if not (hrex / "checkpoint.npz").exists() or has_starts_of(leg_dir, schedule):
+            return
+        conditions = start_conditions(leg_dir)
+    if conditions is None:
+        raise WorkflowError(f"the samples in {hrex} do not record their conditions; nothing was changed")
+    # the settings first: no System has to be built to compare them
+    if isinstance(conditions.get("settings"), dict):
+        differing = settings_differences(conditions["settings"], settings)
+        if differing:
+            raise other_conditions(n_stored, hrex, differing)
+    # then every condition, with the checksum of the System this run would sample: the hybrid System is built
+    equil_file = leg_dir / "equil.npz"
+    if equil_file.exists():
+        with np.load(equil_file) as eq:
+            timestep_fs = float(eq["timestep_fs"])
+    elif n_stored:
+        raise WorkflowError(f"{hrex} holds samples of this leg but {equil_file}, which they started from, is not "
+                            "there. Nothing was changed; run the calculation in a new output.dir")
+    else:
+        # a leg without samples makes its pre-equilibration again, at the time step of the configuration or at
+        # the lowered one its start checkpoint was made with (cufep.workflow.kept_time_step)
+        timestep_fs = kept_time_step(rcfg, leg_dir)
+    built = build_leg(rcfg, Path(edge_dir), leg)
+    gcmc = hybrid_gcmc(rcfg, built, leg, quiet)
+    plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
+                              rcfg.sampling.production_ns)
+    # the samples of a leg stay on the backend they were made with; a leg without samples runs on the one this
+    # run chooses for its System (cufep.engine.leg.chosen_backend)
+    backend = (str(conditions.get("backend") or rcfg.backend.name) if n_stored else
+               _choose_backend(rcfg, built.hybrid.system, quiet)[0])
+    spec = hybrid_leg_spec(rcfg, built, gcmc, leg, f"{Path(edge_dir).name}/r{repeat}/{leg}",
+                           [state.to_dict() for state in schedule.states], backend, timestep_fs,
+                           plan.steps_per_iteration)
+    check_kept_windows(leg_dir, schedule, spec.conditions())
+
+
+def leg_reuse_problem(config: dict, edge_dir: str, leg: str, repeat: int) -> str | None:
+    """:func:`check_leg_reuse` for a process of its own (the legs of a run are checked at the same time): the
+    refusal as text, or None."""
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.sampling.storage import ConditionsError
+
+    try:
+        check_leg_reuse(RbfeConfig.model_validate(config), Path(edge_dir), leg, repeat)
+    except (WorkflowError, ConditionsError) as exc:
+        return str(exc)
+    return None
 
 
 def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None):
@@ -195,12 +365,10 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         starts_from,
         with_fallback,
     )
-    from cufep.engine.protocol import HYBRID, stage_state
+    from cufep.engine.protocol import stage_state
     from cufep.mps import thread_percentage
     from cufep.rbfe.config import RbfeConfig
-    from cufep.sampling.worker import LegSpec
     from cufep.workflow import (
-        _precision,
         _schedule_of_this_leg,
         planned_iterations,
         publish_windows,
@@ -213,10 +381,10 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     leg_dir, log, seed = run.leg_dir, run.log, run.seed
     edge_dir = Path(job.edge_dir)
     built = build_leg(rcfg, edge_dir, job.leg)
+    gcmc = hybrid_gcmc(rcfg, built, job.leg, log)          # with the moves: the ghosts of the start switched off
     hybrid, prep, barostat = built.hybrid, built.prep, built.barostat
     n_atoms = hybrid.system.getNumParticles()
     is_complex = job.leg == "complex"
-    T = rcfg.thermodynamics.temperature_K
     rest2 = rcfg.sampling.rest2
     rest2_scale = rest2.scale if rest2.scale > 1.0 else 1.0
     log(f"hybrid: {len(hybrid.core)} core atoms, {len(hybrid.unique_old)} unique to "
@@ -229,6 +397,8 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     eq, _recorded = pre_equilibrated(run, prep, hybrid.system, barostat, built.membrane_info)
     timestep_fs = float(eq["timestep_fs"])
     start = (np.asarray(eq["positions"]), np.asarray(eq["box"]), np.asarray(eq["velocities"]))
+    # (with grand canonical moves of water the windows and the replica exchange have no barostat: they keep the cell
+    # of this last configuration, cufep.workflow.alchemical_box)
 
     # ---- 2. backend -------------------------------------------------------------------------------
     backend_name = chosen_backend(run, hybrid.system)
@@ -242,18 +412,14 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
-    settings = hybrid_settings(rcfg)
+    settings = hybrid_settings(rcfg, job.leg)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
-    def spec_of(states: list[dict], backend: str, **more) -> LegSpec:
-        return LegSpec(name=job.tag, system_xml=built.xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
-                       backend=backend, precision=_precision(rcfg, backend), platform=rcfg.backend.platform,
-                       temperature_K=T, pressure_bar=rcfg.thermodynamics.pressure_bar, barostat=barostat,
-                       barostat_frequency=rcfg.dynamics.barostat_frequency, exchange=rcfg.sampling.exchange,
-                       friction_per_ps=rcfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
-                       steps_per_iteration=plan.steps_per_iteration, cpu_threads=rcfg.resources.cpu_threads_per_worker,
-                       box_safety=1.3 if barostat == "membrane" else None, settings=settings,
-                       mps_thread_percentage=thread_percentage(job.oversubscription), **more)
+    def spec_of(states: list[dict], backend: str, **more):
+        return hybrid_leg_spec(rcfg, built, gcmc, job.leg, job.tag, states, backend, timestep_fs,
+                               plan.steps_per_iteration, mps_thread_percentage=thread_percentage(job.oversubscription),
+                               **more)
+
 
     def from_pre_equilibration(schedule) -> list:
         """The start of every window that the leg does not choose itself: the end of the pre-equilibration,
@@ -375,9 +541,15 @@ def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLe
     free energy along the path (``delta_g``) is that of transforming A into B in the leg, and what the hybrid
     topology is made of."""
     from cufep.engine.leg import path_result
+    from cufep.workflow import gcmc_numbers, water_moves_of
 
-    result, _ = path_result(leg_dir, analysis, run_record, {"edge": run_record.get("edge")}, samples=samples,
-                            schedule=schedule, command=RBFE_COMMAND)
+    result, of = path_result(leg_dir, analysis, run_record, {"edge": run_record.get("edge")}, samples=samples,
+                             schedule=schedule, command=RBFE_COMMAND)
+    # the grand canonical moves of water of the production that is analysed, by lambda window (None: none)
+    result["gcmc"] = gcmc_numbers(of["samples"], of["first"])
+    # and what the samples were made with: whether the leg made the moves, and with which chemical potential and
+    # standard volume of water. The complex legs of one network must agree in it (cufep.rbfe.run)
+    result["water_moves"] = water_moves_of(of["attrs"].get("conditions"))
     if built is not None:
         h = built.hybrid
         result["hybrid"] = {"ligand_a": built.info["ligand_a"], "ligand_b": built.info["ligand_b"],

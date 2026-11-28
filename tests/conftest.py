@@ -345,11 +345,12 @@ def _molecules(smiles_b: str = PHENOL, core_b: dict | None = None):
     return out
 
 
-def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4):
+def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm: float = 2.4,
+                      with_topologies: bool = False):
     """A relative transformation for the tests: toluene (A) into phenol (B, or ``smiles_b``) in a box of water,
     Systems A and B with the same water, the ligand of A first and that of B last (as an edge is built).
     Returns (system A, positions A, ligand A, system B, positions B, ligand B, core map, box), indices of the
-    Systems, positions in nm."""
+    Systems, positions in nm; with ``with_topologies`` also (topology A, topology B) at the end."""
     import openmm as mm
     import openmm.app as app
     import openmm.unit as u
@@ -384,4 +385,7 @@ def build_hybrid_edge(smiles_b: str = PHENOL, core_b: dict | None = None, box_nm
     ligand_b = list(range(n_b_total - n_b, n_b_total))
     core = {i: n_b_total - n_b + j for i, j in (RING_MAP if core_b is None else core_b).items()}
     box = np.asarray(modeller.topology.getPeriodicBoxVectors().value_in_unit(u.nanometer))
+    if with_topologies:
+        return system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box, (modeller.topology,
+                                                                               modeller_b.topology)
     return system_a, pos_a, ligand_a, system_b, pos_b, ligand_b, core, box

@@ -348,31 +348,22 @@ def _load_rbfe(config: str):
 @click.argument("config", type=click.Path(exists=True, dir_okay=False))
 def rbfe_plan(config: str) -> None:
     """Show the ligands, the edges and their atom mappings of CONFIG, without simulating."""
-    from cufep.rbfe.mapping import MappingSettings, kartograf_mapping, lomap_score
-    from cufep.rbfe.run import edges_of, experiment_of, ligands_of
+    from cufep.rbfe.run import edges_of, experiment_of, ligands_of, mapped_edges
 
     rcfg = _load_rbfe(config)
     try:
         ligands = ligands_of(rcfg)
         edges, _how = edges_of(rcfg, ligands, click.echo)
+        rows = mapped_edges(rcfg, ligands, edges)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
     experiment = experiment_of(rcfg, ligands)
-    by_name = {lig.name: lig for lig in ligands}
-    m = rcfg.mapping
-    settings = MappingSettings(atom_max_distance=m.atom_max_distance_A,
-                               map_hydrogens_on_hydrogens_only=m.map_hydrogens_on_hydrogens_only,
-                               map_exact_ring_matches_only=m.map_exact_ring_matches_only,
-                               allow_partial_fused_rings=m.allow_partial_fused_rings,
-                               allow_bond_breaks=m.allow_bond_breaks)
     for lig in ligands:
         exp = experiment.get(lig.name)
         click.echo(f"ligand {lig.name}: {lig.n_atoms} atoms" + (f", experiment {exp:.2f} kcal/mol" if exp else ""))
-    for a, b in edges:
-        mapping = kartograf_mapping(by_name[a], by_name[b], settings)
-        click.echo(f"edge {a} -> {b}: {len(mapping)} atoms mapped, {by_name[a].n_atoms - len(mapping)} unique to {a}, "
-                   f"{by_name[b].n_atoms - len(mapping)} unique to {b}; LOMAP score "
-                   f"{lomap_score(by_name[a], by_name[b], mapping):.2f}")
+    for r in rows:
+        click.echo(f"edge {r['ligand_a']} -> {r['ligand_b']}: {r['mapped']} atoms mapped, {r['unique_a']} unique to "
+                   f"{r['ligand_a']}, {r['unique_b']} unique to {r['ligand_b']}; LOMAP score {r['lomap_score']:.2f}")
     ls = rcfg.lambda_schedule
     click.echo(f"lambda windows: {ls.mode}" + (f" from {ls.adaptive.initial_windows}, overlap threshold "
                                                  f"{ls.adaptive.overlap_threshold:g} ({ls.adaptive.legs} leg decides)"
@@ -423,13 +414,18 @@ def rbfe_run(config: str, production_ns, gpus, backend, output, edges, legs, res
 
 @rbfe.command("analyze")
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
-def rbfe_analyze(directory: str) -> None:
+@click.option("--write", is_flag=True,
+              help="Also write edges.csv, ligands.csv and summary.json of DIRECTORY again, as a run writes them.")
+def rbfe_analyze(directory: str, write: bool) -> None:
     """Print the ddG of the edges and the dG of the ligands of the output DIRECTORY of a relative run, from the
-    results its legs have. Writes nothing."""
-    from cufep.rbfe.run import analyse_directory, result_lines
+    results its legs have. Writes nothing unless --write is given: then the tables and the summary of the run are
+    made again by this version (what it records of an edge beyond an earlier one: the LOMAP score, the windows
+    with few independent samples, the grand canonical moves of water), under the lock of the directory; refused
+    where the directory holds results whose legs are not in it."""
+    from cufep.rbfe.run import analyse_directory, result_lines, rewrite_results
 
     try:
-        summary = analyse_directory(Path(directory))
+        summary = rewrite_results(Path(directory)) if write else analyse_directory(Path(directory))
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
     for line in result_lines(summary):
@@ -451,18 +447,89 @@ def benchmark_list() -> None:
         )
 
 
+_PROTOCOL = click.option("--protocol", type=click.Choice(["abfe", "rbfe"]), default="abfe", show_default=True,
+                         help="abfe: absolute binding free energies of every ligand (`cufep run`); rbfe: relative "
+                              "binding free energies on the LOMAP network of the set (`cufep rbfe`).")
+
+
+def _rbfe_benchmark_config(name: str, tier: str, output, gpus):
+    from cufep.benchmarks.relative import benchmark_rbfe_config
+
+    if tier == "subset":
+        raise click.ClickException("a relative benchmark has the tiers smoke and full")
+    try:
+        rcfg = benchmark_rbfe_config(name, tier, output)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    if gpus:
+        rcfg.resources.gpus = "auto" if gpus == "auto" else [int(x) for x in gpus.split(",")]
+    return rcfg
+
+
+@benchmark.command("plan")
+@click.argument("name")
+@click.option("--tier", type=click.Choice(["smoke", "full"]), default="full", show_default=True)
+@click.option("--protocol", type=click.Choice(["rbfe"]), default="rbfe", show_default=True,
+              help="The network of the relative benchmark (an absolute benchmark has none).")
+def benchmark_plan(name: str, tier: str, protocol: str) -> None:
+    """Show the ligands and the network of the relative benchmark NAME, without simulating."""
+    from cufep.benchmarks.relative import plan_lines
+
+    rcfg = _rbfe_benchmark_config(name, tier, None, None)
+    try:
+        lines = plan_lines(name, tier, rcfg)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    for line in lines:
+        click.echo(line)
+
+
+def _benchmark_run_rbfe(name: str, tier: str, output, gpus, edges=None) -> None:
+    from cufep.benchmarks.relative import experiment
+    from cufep.benchmarks.relative import report as relative_report
+    from cufep.rbfe.run import failed_edges, run_rbfe
+
+    rcfg = _rbfe_benchmark_config(name, tier, output, gpus)
+    try:
+        summary = run_rbfe(rcfg, experiment=experiment(name), only_edges=list(edges) or None)
+        click.echo(relative_report(name, rcfg.output.dir))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
+    missing = failed_edges(summary)
+    if missing:
+        click.echo("no ddG: " + ", ".join(missing), err=True)
+    failed = summary.get("failed_in_this_run") or []
+    if failed:
+        click.echo("failed in this run: " + ", ".join(failed), err=True)
+        sys.exit(1)
+
+
 @benchmark.command("run")
 @click.argument("name")
 @click.option("--tier", type=click.Choice(["smoke", "subset", "full"]), default="smoke", show_default=True,
-              help="smoke: one ligand, very short; subset: five ligands; full: every ligand.")
-@click.option("-o", "--output", help="Output directory (default: runs/benchmark_<name>_<tier>).")
+              help="smoke: one ligand (rbfe: one edge), very short; subset: five ligands (abfe only); full: every "
+                   "ligand.")
+@click.option("-o", "--output", help="Output directory (default: runs/benchmark_<name>_<tier>, "
+                                     "runs/benchmark_rbfe_<name>_<tier> with --protocol rbfe).")
 @click.option("--gpus", help="'auto' or a comma separated list of CUDA device numbers.")
 @click.option("--repeats", type=int, help="Override the number of repeats.")
-def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
+@click.option("--edge", "edges", multiple=True,
+              help="rbfe: run only this edge (A~B) of the network; repeat for several. The results of the other "
+                   "edges in the output directory are combined with it.")
+@_PROTOCOL
+def benchmark_run(name: str, tier: str, output, gpus, repeats, edges, protocol: str) -> None:
     """Run benchmark NAME (resumable)."""
     from cufep import run as driver
     from cufep.benchmarks.runner import benchmark_config, example_notices, report
 
+    if protocol == "rbfe":
+        if repeats is not None:
+            raise click.ClickException("--repeats is a setting of the absolute benchmark; a relative benchmark runs "
+                                       "the repeats of its example")
+        _benchmark_run_rbfe(name, tier, output, gpus, edges)
+        return
+    if edges:
+        raise click.ClickException("--edge is an option of a relative benchmark (--protocol rbfe)")
     try:
         example, notices = example_notices(name)
         for notice in notices:
@@ -483,10 +550,15 @@ def benchmark_run(name: str, tier: str, output, gpus, repeats) -> None:
 @benchmark.command("report")
 @click.argument("name")
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
-def benchmark_report(name: str, directory: str) -> None:
-    """Compare a benchmark run in DIRECTORY with experiment and FEP+."""
+@_PROTOCOL
+def benchmark_report(name: str, directory: str, protocol: str) -> None:
+    """Compare a benchmark run in DIRECTORY with experiment and FEP+ (and, for a relative run, OpenFE)."""
+    from cufep.benchmarks.relative import report as relative_report
     from cufep.benchmarks.runner import report
-    click.echo(report(name, directory))
+    try:
+        click.echo(relative_report(name, directory) if protocol == "rbfe" else report(name, directory))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
 
 
 @benchmark.command("freeze")

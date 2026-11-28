@@ -233,3 +233,40 @@ def test_the_checks_hold_on_the_inputs_of_the_review_of_pr_3(tmp_path):
     assert c.outline("<!--\n## Hidden\n-->\n## Shown\n") == [2]
     assert c.uncommented(["echo it's fine # comment"]) == ["echo it's fine"]
     assert c.anchors("Line one\nline two\n========\n\n## A &amp; B\n") == {"line-one-line-two", "a--b"}
+
+
+def test_the_scripts_import_only_names_that_cufep_has():
+    """Review of PR #21 (P2): a function of the package was removed, and spikes/m35_bulk_water_gcmc.py, the check
+    of the values of bulk water that the grand canonical moves use, stopped with an ImportError when it started.
+    Every name that a script of spikes/ or scripts/ imports from cufep is one its module defines (or a module of
+    the package), read from the source without importing anything."""
+    import ast
+
+    def defined(module: str) -> set[str] | None:
+        base = ROOT / "src" / Path(*module.split("."))
+        source = base.with_suffix(".py") if base.with_suffix(".py").exists() else base / "__init__.py"
+        if not source.exists():
+            return None
+        names = {child.stem for child in base.iterdir()} if base.is_dir() else set()
+        for node in ast.parse(source.read_text()).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                names |= {(alias.asname or alias.name).split(".")[0] for alias in node.names}
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    names |= {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
+        return names
+
+    scripts = sorted([*(ROOT / "spikes").glob("*.py"), *(ROOT / "scripts").glob("*.py")])
+    assert len(scripts) > 40
+    missing = []
+    for script in scripts:
+        for node in ast.walk(ast.parse(script.read_text())):
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and (node.module or "").split(".")[0] == "cufep":
+                names = defined(node.module)
+                for alias in node.names:
+                    if names is None or alias.name not in names:
+                        missing.append(f"{script.relative_to(ROOT)}: from {node.module} import {alias.name}")
+    assert missing == []

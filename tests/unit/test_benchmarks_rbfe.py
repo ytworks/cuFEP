@@ -1,0 +1,512 @@
+"""The built-in benchmarks by relative binding free energies (`cufep benchmark ... --protocol rbfe`)."""
+import pytest
+from click.testing import CliRunner
+
+from cufep.benchmarks.relative import benchmark_rbfe_config, example_path, experiment, published_edges
+from cufep.benchmarks.runner import data_root, load_registry, read_reference
+
+pytestmark = pytest.mark.needs("openff.toolkit", "rdkit")
+
+
+def _settings(rcfg) -> dict:
+    data = rcfg.model_dump(mode="json")
+    for key in ("protein", "ligands", "ligand_names", "experiment"):
+        data["system"].pop(key)
+    data.pop("output")
+    data.pop("network")
+    return data
+
+
+@pytest.mark.parametrize("name", ["tyk2", "a2a"])
+def test_a_relative_benchmark_runs_with_the_settings_of_its_example_on_every_compound_of_the_set(name, tmp_path):
+    """The full tier: the settings of the relative example, the protein and every compound of the set, the LOMAP
+    network (the edges of the example are not used); the example's protein is the set's and its ligands are records
+    of the set with the same poses, so the example's edges are calculations the set can have."""
+    from cufep.prep.ligand import load_ligands
+    from cufep.rbfe.config import load_rbfe_config
+
+    entry, root = load_registry()[name], data_root()
+    example = load_rbfe_config(example_path(name))
+    full = benchmark_rbfe_config(name, "full", tmp_path / "full")
+    assert _settings(full) == _settings(example)
+    assert full.system.ligand_names is None and full.network.edges is None and full.system.experiment is None
+    assert full.network == type(full.network)()                   # LOMAP with the defaults of docs/rbfe.md
+    assert full.system.protein == root / entry["protein"] and full.system.ligands == root / entry["ligands"]
+    assert str(full.output.dir) == str(tmp_path / "full")
+    assert example.system.protein.read_bytes() == full.system.protein.read_bytes()
+    in_set = {lig.name: lig for lig in load_ligands(full.system.ligands)}
+    assert sorted(in_set) == sorted(read_reference(name))
+    for lig in load_ligands(example.system.ligands):
+        other = in_set[lig.name]
+        assert lig.offmol.to_smiles(mapped=True) == other.offmol.to_smiles(mapped=True)
+        assert abs(lig.positions_nm() - other.positions_nm()).max() < 1e-4
+    assert experiment(name) == {compound: ref["exp"] for compound, ref in read_reference(name).items()}
+
+
+def test_the_smoke_tier_runs_the_first_edge_of_the_example_and_never_lengthens_a_setting(tmp_path, monkeypatch):
+    smoke = benchmark_rbfe_config("tyk2", "smoke", tmp_path / "s")
+    assert smoke.network.edges == [("ejm_31", "ejm_46")] and smoke.system.ligand_names == ["ejm_31", "ejm_46"]
+    assert smoke.sampling.production_ns == 0.1 and smoke.sampling.equilibration_ns == 0.05
+    adaptive = smoke.lambda_schedule.adaptive
+    assert adaptive.window("complex") == adaptive.window("solvent") == 10 and adaptive.equilibration("complex") == 0
+    a2a = benchmark_rbfe_config("a2a", "smoke", tmp_path / "m")
+    assert a2a.membrane.enabled is True and a2a.membrane.equilibration_ns == 0.5
+    assert a2a.network.edges == [("4e", "4b")]
+    # a shorter setting of the example stays
+    (tmp_path / "benchmarks").mkdir()
+    (tmp_path / "examples" / "rbfe_tyk2").mkdir(parents=True)
+    (tmp_path / "examples" / "rbfe_tyk2" / "config.yaml").write_text(
+        "system: {protein: protein.pdb, ligands: ligands.sdf}\nnetwork: {edges: [[a, b]]}\n"
+        "sampling: {production_ns: 0.05}\n")
+    monkeypatch.setenv("CUFEP_DATA", str(tmp_path))
+    assert benchmark_rbfe_config("tyk2", "smoke", tmp_path / "s").sampling.production_ns == 0.05
+    with pytest.raises(KeyError):
+        benchmark_rbfe_config("tyk2", "subset")
+
+
+def test_benchmark_run_with_the_relative_protocol_runs_the_relative_calculation_with_the_values_of_the_set(
+        tmp_path, monkeypatch):
+    from cufep import cli
+    from cufep.rbfe import run as rbfe_run
+
+    seen = {}
+
+    def fake(rcfg, experiment=None, only_edges=None, **_kw):
+        seen.update(rcfg=rcfg, experiment=experiment, only_edges=only_edges)
+        return {"edges": [], "failed_in_this_run": ["ejm_31~ejm_46/r0/complex: no free energy"]}
+
+    monkeypatch.setattr(rbfe_run, "run_rbfe", fake)
+    result = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--protocol", "rbfe", "--tier", "full",
+                                           "--gpus", "0,1", "-o", str(tmp_path / "out")])
+    assert result.exit_code == 1, result.output
+    assert seen["rcfg"].network.edges is None and seen["rcfg"].resources.gpus == [0, 1]
+    assert str(seen["rcfg"].output.dir) == str(tmp_path / "out") and seen["experiment"] == experiment("tyk2")
+    seen.clear()
+    result = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--protocol", "rbfe", "--tier", "full",
+                                           "-o", str(tmp_path / "out"), "--edge", "ejm_42~ejm_54",
+                                           "--edge", "ejm_55~ejm_54"])
+    assert seen["only_edges"] == ["ejm_42~ejm_54", "ejm_55~ejm_54"]
+    refused = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--edge", "ejm_42~ejm_54"])
+    assert refused.exit_code != 0 and "--edge is an option of a relative benchmark" in refused.output
+    for args in (["--tier", "subset"], ["--repeats", "3"]):
+        refused = CliRunner().invoke(cli.main, ["benchmark", "run", "tyk2", "--protocol", "rbfe", *args])
+        assert refused.exit_code != 0 and "Error" in refused.output
+
+
+def test_the_published_map_is_read_in_the_direction_it_was_computed():
+    tyk2 = published_edges("tyk2")
+    assert len(tyk2) == 24
+    edge = tyk2[frozenset(("jmc_23", "jmc_30"))]
+    assert (edge["ligand_a"], edge["ligand_b"]) == ("jmc_23", "jmc_30")
+    assert edge["exp_ddg"] == pytest.approx(0.76, abs=1e-3) and edge["ccc_ddg"] == pytest.approx(0.14)
+    from cufep.benchmarks.relative import oriented
+
+    assert oriented(edge["ccc_ddg"], edge, "jmc_30", "jmc_23") == pytest.approx(-0.14)
+    assert len(published_edges("a2a")) == 19                # the edges between the records of the set's compounds
+
+
+@pytest.mark.needs("openff.toolkit", "rdkit", "kartograf", "lomap")
+def test_the_lomap_network_of_tyk2_is_that_of_the_openfe_benchmark():
+    """The network the full tier runs: lomap2's defaults with Kartograf on the 16 compounds give the 22 edges with
+    which the OpenFE benchmark (IndustryBenchmarks2024, jacs_set/tyk2) computed this set, in the same directions."""
+    from cufep.benchmarks.relative import openfe_results
+    from cufep.rbfe.run import edges_of, ligands_of
+
+    rcfg = benchmark_rbfe_config("tyk2", "full")
+    edges, how = edges_of(rcfg, ligands_of(rcfg), lambda _line: None)
+    assert how == "planned by LOMAP" and len(edges) == 22
+    assert sorted(edges) == sorted((e["ligand_a"], e["ligand_b"]) for e in openfe_results("tyk2")[1].values())
+
+
+def _synthetic_run(tmp_path, dg: dict[str, float], edges: list[dict]):
+    """A run directory as `cufep rbfe run` leaves it (summary.json, network.json), with the given dG and edges."""
+    import json
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
+    ligands = list(dg)
+    summary = {"ligands": ligands, "edges": edges, "experiment_kcal_mol": experiment("tyk2"),
+               "cycle_closures": [{"ligands": ligands[:3], "sum_kcal_mol": 0.25, "se_kcal_mol": 0.5}],
+               "dg": {"reference": "mean of the experimental values", "reference_ligands": ligands,
+                      "values": {name: {"dg": v, "se": 0.3} for name, v in dg.items()}}, "notes": []}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    (tmp_path / "network.json").write_text(json.dumps({"ligands": ligands, "edges": [[e["ligand_a"], e["ligand_b"]]
+                                                                                     for e in edges],
+                                                       "edges_from": "planned by LOMAP"}))
+    return tmp_path
+
+
+def _edge(a, b, ddg=None, backend=("cupotential", "cupotential"), missing=None):
+    e = {"edge": f"{a}~{b}", "ligand_a": a, "ligand_b": b, "repeats": [{"repeat": 0, "missing": missing}]
+         if missing else [{"repeat": 0}]}
+    if ddg is not None:
+        e.update(ddg=ddg, se=0.2, windows={"complex": [12], "solvent": [10]},
+                 lowest_overlap={"complex": 0.11, "solvent": 0.2}, not_reliable=[],
+                 backend={"complex": [backend[0]], "solvent": [backend[1]]})
+    return e
+
+
+def test_the_report_compares_every_method_on_the_same_compounds_and_edges_in_the_direction_of_the_run(tmp_path):
+    """Known answers: the statistics of each method are those of its values on the compounds that every method has;
+    a published ddG computed the other way round is turned to the direction of the run (OpenFE and FEP+ computed
+    ejm_49 -> ejm_31, the run ejm_31 -> ejm_49); an edge without a ddG is listed with the reason, a leg on stock
+    OpenMM is named, and the dG differences of the network are given next to the ddG of each edge."""
+    from cufep.benchmarks.relative import report
+    from cufep.benchmarks.stats import centred, metrics
+
+    ref = read_reference("tyk2")
+    dg = {"ejm_31": -9.0, "ejm_46": -11.5, "ejm_49": -8.5, "jmc_23": -11.8}
+    edges = [_edge("ejm_31", "ejm_46", -2.4, backend=("cupotential", "openmm")), _edge("ejm_31", "ejm_49", 0.6),
+             _edge("jmc_23", "ejm_31", 2.9), _edge("ejm_46", "ejm_49", missing=["complex"])]
+    run = _synthetic_run(tmp_path, dg, edges)
+    text = report("tyk2", run)
+    names = list(dg)
+    exp = [ref[n]["exp"] for n in names]
+    openfe = {"ejm_31": -9.82880464210406, "ejm_46": -11.022554899425682, "ejm_49": -8.786546351803489,
+              "jmc_23": -11.096362322919733}
+    for column, values in ((1, [dg[n] for n in names]), (2, [ref[n]["fepplus"] for n in names]),
+                           (3, [openfe[n] for n in names])):
+        m = metrics(centred(values, exp), exp)
+        row = next(line for line in text.splitlines() if line.startswith("| RMSE (kcal/mol) |"))
+        assert row.split("|")[column + 1].strip().startswith(f"{m['rmse']:.2f} [")
+    row = next(line for line in text.splitlines() if line.startswith("| ejm_31 -> ejm_49 |"))
+    cells = [c.strip() for c in row.split("|")[1:-1]]
+    assert cells[2] == "+1.79" and cells[3] == "+0.60" and cells[5] == "+0.50"      # experiment, edge, network
+    assert cells[6] == "+1.84" and cells[7] == "+1.86"                              # FEP+ turned round
+    assert cells[8] == "+0.84 ± 0.14"                                               # OpenFE turned round
+    row = next(line for line in text.splitlines() if line.startswith("| ejm_46 -> ejm_49 |"))
+    assert "no ddG (no result of the complex leg)" in row and "| - | - | - |" in row
+    assert "the fallback to stock OpenMM, whose reason the log of the leg gives): ejm_31~ejm_46." in text
+    assert "(planned by LOMAP)" in text and "| ejm_31 -> ejm_46 -> ejm_49 | +0.25 | 0.50 |" in text
+    edge_rmse = metrics([-2.4, 0.6, 2.9], [ref["ejm_46"]["exp"] - ref["ejm_31"]["exp"],
+                                           ref["ejm_49"]["exp"] - ref["ejm_31"]["exp"],
+                                           ref["ejm_31"]["exp"] - ref["jmc_23"]["exp"]])["rmse"]
+    assert f"| all 3 edges of the run | 3 | RMSE (kcal/mol) | {edge_rmse:.2f} |" in text
+    for f in ("rbfe_report.md", "rbfe_report_ligands.csv", "rbfe_report_edges.csv"):
+        assert (run / f).exists()
+    import csv
+
+    with open(run / "rbfe_report_edges.csv") as fh:
+        rows = {r["edge"]: r for r in csv.DictReader(fh)}
+    assert float(rows["ejm_31~ejm_49"]["openfe_ddg"]) == pytest.approx(0.8430866987305023)
+    assert rows["ejm_46~ejm_49"]["why_no_ddg"] == "no result of the complex leg"
+
+
+def test_a_set_without_published_openfe_results_says_so(tmp_path):
+    import json
+
+    from cufep.benchmarks.relative import openfe_results, report
+
+    assert openfe_results("a2a") == ({}, {})
+    dg, of_edges = openfe_results("tyk2")
+    assert len(dg) == 16 and len(of_edges) == 22
+    (tmp_path / "summary.json").write_text(json.dumps({
+        "ligands": ["4e", "4b"], "edges": [_edge("4b", "4e", -2.0)], "experiment_kcal_mol": experiment("a2a"),
+        "cycle_closures": [], "notes": [],
+        "dg": {"reference": "mean of the experimental values", "reference_ligands": ["4e", "4b"],
+               "values": {"4e": {"dg": -12.0, "se": 0.2}, "4b": {"dg": -10.0, "se": 0.2}}}}))
+    text = report("a2a", tmp_path)
+    assert "the OpenFE benchmark published no result for this set; its columns are empty" in text
+    assert "| statistic | cuFEP | FEP+ |" in text and "OpenFE's network" not in text
+
+
+def test_the_published_map_of_a2a_is_read_by_compound(tmp_path):
+    """Review of PR #21: the FEP+ map of A2A names its records ("4e D", 4jS ...), the run its compounds; the edge
+    4e -> 4b of the smoke tier (published "4e D" -> "4b D": experiment +2.11, Bennett +1.03, cycle closure +1.02) was
+    not found, and 8 of the 19 published edges between the records of the set were left out."""
+    from cufep.benchmarks.relative import report
+
+    a2a = published_edges("a2a")
+    edge = a2a[frozenset(("4e", "4b"))]
+    assert (edge["ligand_a"], edge["ligand_b"]) == ("4e", "4b") and edge["bennett_ddg"] == pytest.approx(1.03, abs=5e-3)
+    compounds = set(read_reference("a2a"))
+    assert sum(1 for key in a2a if key <= compounds) == 19
+    assert frozenset(("4j", "4k")) in a2a and frozenset(("4m", "4n")) in a2a
+    import json
+
+    (tmp_path / "summary.json").write_text(json.dumps({
+        "ligands": ["4e", "4b"], "edges": [_edge("4e", "4b", 1.5)], "experiment_kcal_mol": experiment("a2a"),
+        "cycle_closures": [], "notes": [],
+        "dg": {"reference": "mean of the experimental values", "reference_ligands": ["4e", "4b"],
+               "values": {"4e": {"dg": -11.8, "se": 0.2}, "4b": {"dg": -10.3, "se": 0.2}}}}))
+    row = next(line for line in report("a2a", tmp_path).splitlines() if line.startswith("| 4e -> 4b |"))
+    cells = [c.strip() for c in row.split("|")[1:-1]]
+    assert cells[6] == "+1.03" and cells[7] == "+1.02"
+
+
+def test_without_dg_the_edges_are_still_compared(tmp_path):
+    """Review of PR #21: a run without dG (edges that do not connect the compounds) gave an empty row for all its
+    edges, because the row also asked for the ddG of the network."""
+    import json
+
+    from cufep.benchmarks.relative import report
+    from cufep.benchmarks.stats import metrics
+
+    ref = read_reference("tyk2")
+    edges = [_edge("ejm_31", "ejm_46", -1.5), _edge("ejm_46", "jmc_23", -0.5), _edge("ejm_31", "ejm_49")]
+    (tmp_path / "summary.json").write_text(json.dumps({
+        "ligands": ["ejm_31", "ejm_46", "ejm_49", "jmc_23"], "edges": edges, "experiment_kcal_mol": experiment("tyk2"),
+        "cycle_closures": [], "dg": None, "notes": ["the edges with a ddG do not connect all ligands: no dG"]}))
+    text = report("tyk2", tmp_path)
+    rmse = metrics([-1.5, -0.5], [ref["ejm_46"]["exp"] - ref["ejm_31"]["exp"],
+                                  ref["jmc_23"]["exp"] - ref["ejm_46"]["exp"]])["rmse"]
+    assert f"| all 2 edges of the run | 2 | RMSE (kcal/mol) | {rmse:.2f} |" in text
+
+
+def test_every_method_is_centred_on_the_compounds_it_is_compared_on(tmp_path):
+    """Review of PR #21: only cuFEP was on the experimental mean of the compounds compared; FEP+ as published has a
+    mean signed error of -0.156 over the 17 compounds of A2A (MUE 0.841 published, 0.793 centred). Every method is
+    centred on the compounds compared (cinnabar's centralizing), so that RMSE and MUE compare like with like."""
+    import json
+
+    import numpy as np
+
+    from cufep.benchmarks.relative import report
+
+    ref = read_reference("a2a")
+    names = list(ref)
+    exp = np.array([ref[n]["exp"] for n in names])
+    fep = np.array([ref[n]["fepplus"] for n in names])
+    assert np.mean(fep - exp) == pytest.approx(-0.156, abs=1e-3)
+    centred = fep - fep.mean() + exp.mean()
+    mue = float(np.mean(np.abs(centred - exp)))
+    assert mue == pytest.approx(0.793, abs=1e-3)
+    (tmp_path / "summary.json").write_text(json.dumps({
+        "ligands": names, "edges": [], "experiment_kcal_mol": experiment("a2a"), "cycle_closures": [], "notes": [],
+        "dg": {"reference": "mean of the experimental values", "reference_ligands": names,
+               "values": {n: {"dg": ref[n]["exp"] + 0.4 * (i % 3 - 1), "se": 0.2} for i, n in enumerate(names)}}}))
+    row = next(line for line in report("a2a", tmp_path).splitlines() if line.startswith("| MUE (kcal/mol) |"))
+    assert row.split("|")[3].strip().startswith(f"{mue:.2f} [")
+
+
+def test_the_interval_of_a_centred_statistic_centres_every_resample():
+    """Review of PR #21 (P2): the RMSE and MUE of the dG are of values centred on the compounds compared, and the
+    bootstrap kept the shift of all compounds while it resampled them. Four compounds with the errors -1, -1, +1,
+    +1: the RMSE is 1 and its interval was [1, 1]; a resample of one sign alone (2 of 16) is, centred on itself,
+    without error, so the interval begins at 0. Statistics that are not centred are resampled as before."""
+    import numpy as np
+
+    from cufep.benchmarks.stats import bootstrap, centred, metrics
+
+    exp = np.array([-10.0, -9.0, -8.0, -7.0])
+    pred = exp + np.array([-1.0, -1.0, 1.0, 1.0])
+    assert metrics(centred(pred, exp), exp)["rmse"] == pytest.approx(1.0)
+    assert bootstrap(pred, exp, n_boot=2000, seed=0)["rmse"] == (1.0, 1.0)
+    low, high = bootstrap(pred, exp, n_boot=2000, seed=0, centre=True)["rmse"]
+    assert low == 0.0 and high == pytest.approx(1.0)
+    # a constant offset is no error of centred values, in the estimate and in every resample
+    shifted = bootstrap(exp + 3.0, exp, n_boot=200, seed=1, centre=True)
+    assert shifted["rmse"] == pytest.approx((0.0, 0.0), abs=1e-12)
+    assert np.allclose(centred(exp + 3.0, exp), exp)
+
+
+def test_the_uncertainty_of_an_openfe_edge_is_named_as_it_is_computed(tmp_path):
+    """Review of PR #21 (P2): the published ``stdev DDG_bind`` of an OpenFE edge is sqrt(SD_complex^2 +
+    SD_solvent^2) of the three repeats of each leg, for all 22 edges of TYK2, and the report called it the standard
+    deviation of its three repeats (ejm_49 -> ejm_50: 0.1364 kcal/mol published, 0.0587 for the three ddG by repeat
+    number). The published value is kept and named as what it is."""
+    import csv
+    import math
+    import statistics
+
+    from cufep.benchmarks.relative import OPENFE_EDGE_ERROR, report
+
+    with open(data_root() / load_registry()["tyk2"]["openfe_edges"], newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 22
+    for row in rows:
+        legs = {leg: [float(row[f"{leg}_repeat_{k}_DG (kcal/mol)"]) for k in range(3)]
+                for leg in ("complex", "solvent")}
+        propagated = math.hypot(statistics.stdev(legs["complex"]), statistics.stdev(legs["solvent"]))
+        assert float(row["stdev DDG_bind (kcal/mol)"]) == pytest.approx(propagated, abs=1e-12)
+        if (row["ligand_A"], row["ligand_B"]) == ("ejm_49", "ejm_50"):
+            of_three = statistics.stdev([c - s for c, s in zip(legs["complex"], legs["solvent"])])
+            assert propagated == pytest.approx(0.1364, abs=5e-5) and of_three == pytest.approx(0.0587, abs=5e-5)
+    assert OPENFE_EDGE_ERROR == ("the standard deviation propagated from the three repeats of the complex and of the "
+                                 "solvent leg")
+    run = _synthetic_run(tmp_path, {"ejm_49": -8.0, "ejm_50": -9.0}, [_edge("ejm_49", "ejm_50", -1.0)])
+    text = report("tyk2", run)
+    assert text.count(OPENFE_EDGE_ERROR) == 2 and "± their standard deviation" not in text
+
+
+def test_the_report_gives_the_legs_with_few_independent_samples_and_the_score_of_the_summary(tmp_path):
+    """Review of PR #21 (P2): the comparison table gave the standard error of an edge and not that a leg of it has
+    a window with fewer independent samples than the level of the analysis (A2A 4b -> 4e: 31 in the complex leg),
+    and the LOMAP score was read from the prepared edges, which the recorded results do not hold, so that a report
+    made again from them had no score. Both come from the summary of the run."""
+    import csv
+
+    from cufep.benchmarks.relative import report
+
+    few = {**_edge("ejm_31", "ejm_46", -1.5), "lomap_score": 0.367879, "few_samples": ["complex"],
+           "fewest_independent_samples": {"complex": 31.0, "solvent": 1434.0}}
+    fine = {**_edge("ejm_31", "ejm_49", 1.7), "lomap_score": 0.272532, "few_samples": [], "not_reliable": ["solvent"],
+            "fewest_independent_samples": {"complex": 198.0, "solvent": 1605.0}}
+    run = _synthetic_run(tmp_path, {"ejm_31": -9.0, "ejm_46": -11.0, "ejm_49": -8.0}, [few, fine])
+    assert not (run / "edges").exists()                                      # as the recorded results: no prep
+    text = report("tyk2", run)
+    rows = {line.split("|")[1].strip(): [c.strip() for c in line.split("|")[1:-1]]
+            for line in text.splitlines() if line.startswith("| ejm_31 ->")}
+    assert rows["ejm_31 -> ejm_46"][1] == "0.37" and rows["ejm_31 -> ejm_46"][11] == "31, 1434"
+    assert rows["ejm_31 -> ejm_46"][13] == "few independent samples: complex"
+    assert rows["ejm_31 -> ejm_49"][1] == "0.27" and rows["ejm_31 -> ejm_49"][13] == "NOT RELIABLE: solvent"
+    assert "Edges with a flag: NOT RELIABLE: ejm_31~ejm_49; few independent samples: ejm_31~ejm_46." in text
+    with open(run / "rbfe_report_edges.csv") as fh:
+        table = {r["edge"]: r for r in csv.DictReader(fh)}
+    assert float(table["ejm_31~ejm_46"]["lomap_score"]) == pytest.approx(0.367879)
+    assert float(table["ejm_31~ejm_46"]["fewest_independent_samples_complex"]) == 31.0
+    assert table["ejm_31~ejm_46"]["few_independent_samples"] == "complex"
+    assert table["ejm_31~ejm_49"]["few_independent_samples"] == ""
+
+
+@pytest.mark.parametrize("name", ["tyk2", "a2a"])
+def test_the_recorded_reports_are_those_the_code_makes_of_the_recorded_files(name, tmp_path):
+    """The report of a recorded relative run, made again from the files that are kept of it
+    (``benchmarks/results/<set>_rbfe``: the summary, the network and the configuration, without the directories of
+    the edges), is the recorded one: the statistics with their intervals, every compound and every edge with its
+    LOMAP score, its samples and its flags (review of PR #21: made again, the scores of all 43 edges were empty)."""
+    import shutil
+
+    from cufep.benchmarks.relative import report
+
+    recorded = data_root() / "benchmarks" / "results" / f"{name}_rbfe"
+    again = tmp_path / name
+    shutil.copytree(recorded, again)
+    for made in again.glob("rbfe_report*"):
+        made.unlink()
+    report(name, again)
+    for table in ("rbfe_report.md", "rbfe_report_ligands.csv", "rbfe_report_edges.csv"):
+        assert (again / table).read_text() == (recorded / table).read_text(), table
+    import csv
+
+    with open(recorded / "rbfe_report_edges.csv") as fh:
+        scores = [row["lomap_score"] for row in csv.DictReader(fh)]
+    assert len(scores) == {"tyk2": 22, "a2a": 21}[name] and all(float(score) > 0.2 for score in scores)
+
+
+def test_a_report_of_the_run_of_another_set_writes_nothing(tmp_path):
+    """Review of PR #21 (P2): `cufep benchmark report tyk2 <results of A2A> --protocol rbfe` left out all 17
+    compounds (none is one of TYK2), wrote an empty report under the name of TYK2 over the one of A2A and removed
+    its two figures. A directory with ligands that are not compounds of the set is refused before anything is
+    written; a run of some compounds of the set (the smoke tier) is reported. The absolute report refuses a
+    directory none of whose ligands is of the set."""
+    import json
+    import shutil
+
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep.benchmarks.relative import report
+    from cufep.benchmarks.runner import report as absolute_report
+
+    recorded = data_root() / "benchmarks" / "results"
+    a2a = tmp_path / "a2a_rbfe"
+    shutil.copytree(recorded / "a2a_rbfe", a2a)
+    before = {path.name: path.read_bytes() for path in a2a.iterdir()}
+    with pytest.raises(ValueError, match="is not a run of the benchmark tyk2: its ligands 4g, 4h, 4j, 4k, 4l ... are "
+                                         "not compounds of that set. Nothing was written."):
+        report("tyk2", a2a)
+    result = CliRunner().invoke(cli.main, ["benchmark", "report", "tyk2", str(a2a), "--protocol", "rbfe"])
+    assert result.exit_code != 0 and "is not a run of the benchmark tyk2" in result.output
+    assert {path.name: path.read_bytes() for path in a2a.iterdir()} == before
+    # a run of two compounds of the set
+    part = _synthetic_run(tmp_path / "part", {"ejm_31": -9.0, "ejm_46": -11.0}, [_edge("ejm_31", "ejm_46", -2.0)])
+    assert "compounds with a dG: 2 of 2" in report("tyk2", part)
+    # the absolute report
+    absolute = tmp_path / "a2a"
+    shutil.copytree(recorded / "a2a", absolute)
+    before = {path.name: path.read_bytes() for path in absolute.iterdir()}
+    with pytest.raises(ValueError, match="is not a run of the benchmark tyk2"):
+        absolute_report("tyk2", absolute)
+    assert {path.name: path.read_bytes() for path in absolute.iterdir()} == before
+    assert json.loads((absolute / "summary.json").read_text())[0]["ligand"] in absolute_report("a2a", absolute)
+
+
+
+def test_a_summary_of_an_earlier_version_keeps_its_few_samples_or_says_that_they_are_not_recorded(tmp_path):
+    """Second review of PR #21 (P2): a summary of a version before the record of an edge (e7a61bd) has the numbers
+    of its legs in the repeats alone, and a report of it said "few independent samples: none" of A2A 4b -> 4e,
+    whose complex leg has 31. The repeats of the ddG are read, against the level of the analysis that the directory
+    records; where the summary has no such numbers, or the directory no level, the table says "not recorded"."""
+    import json
+
+    import yaml
+
+    from cufep.benchmarks.relative import report
+
+    def earlier(a, b, ddg, counts) -> dict:
+        edge = _edge(a, b, ddg)
+        edge["repeats"] = [{"repeat": 0, "ddg": ddg, "se": 0.2, **({} if counts is None else {
+            "fewest_independent_samples": counts})}]
+        return edge
+
+    edges = [earlier("4b", "4e", -2.35, {"complex": 31.0, "solvent": 1000.0}),
+             earlier("4a", "4o", -2.32, {"complex": 125.0, "solvent": 1000.0}),
+             earlier("4a", "4q", -2.30, None)]
+    run = tmp_path / "earlier"
+    run.mkdir()
+    (run / "summary.json").write_text(json.dumps({
+        "ligands": ["4a", "4b", "4e", "4o", "4q"], "edges": edges, "experiment_kcal_mol": experiment("a2a"),
+        "cycle_closures": [], "notes": [], "dg": None}))
+    (run / "resolved_config.yaml").write_text(yaml.safe_dump({"analysis": {"min_effective_samples": 50.0}}))
+    text = report("a2a", run)
+    rows = {line.split("|")[1].strip(): [c.strip() for c in line.split("|")[1:-1]]
+            for line in text.splitlines() if line.startswith("| 4")}
+    assert rows["4b -> 4e"][11] == "31, 1000" and rows["4b -> 4e"][13] == "few independent samples: complex"
+    assert rows["4a -> 4o"][11] == "125, 1000" and rows["4a -> 4o"][13] == ""
+    assert rows["4a -> 4q"][13] == "few independent samples: not recorded"
+    assert "Edges with a flag: NOT RELIABLE: none; few independent samples: 4b~4e." in text
+    assert "Few independent samples: not recorded for 4a~4q" in text
+    # without the level of the analysis nothing can be said of any edge
+    (run / "resolved_config.yaml").unlink()
+    text = report("a2a", run)
+    assert "few independent samples: none." in text
+    assert "Few independent samples: not recorded for 4b~4e, 4a~4o, 4a~4q" in text
+
+
+def test_the_summary_of_an_earlier_run_alone_gives_the_legs_its_analysis_noted_for_few_samples(tmp_path):
+    """Third review of PR #21 (P2): the summary of the A2A run as e7a61bd recorded it (tests/unit/data), reported
+    from that file alone, without the configuration of the run. The repeat of 4b -> 4e holds the note of the
+    analysis that its complex leg has 31 independent samples where 50 are recommended; the report said "not
+    recorded" of the edge and "none" of the edges with few samples. The notes of the repeats of the ddG are read:
+    4b~4e and 4g~4d are named, the other 19 edges have no such leg, none is "not recorded". A leg for which no
+    repeat gives a ground is not recorded, alone where the other leg of the edge is named."""
+    import csv
+    import json
+    from pathlib import Path
+
+    from cufep.benchmarks.relative import independent_samples_of, report
+
+    earlier = json.loads((Path(__file__).parent / "data" / "a2a_rbfe_summary_e7a61bd.json").read_text())
+    run = tmp_path / "a2a"
+    run.mkdir()
+    (run / "summary.json").write_text(json.dumps(earlier))
+    text = report("a2a", run)
+    def edge_rows(text: str) -> dict:
+        return {line.split("|")[1].strip(): [c.strip() for c in line.split("|")[1:-1]]
+                for line in text.splitlines() if line.startswith("| 4") and line.split("|")[1].count(" -> ") == 1}
+
+    rows = edge_rows(text)
+    assert len(rows) == 21
+    assert rows["4b -> 4e"][11] == "31, 1000" and rows["4b -> 4e"][13] == "few independent samples: complex"
+    assert rows["4g -> 4d"][11] == "35, 1000" and rows["4g -> 4d"][13] == "few independent samples: complex"
+    assert rows["4b -> 4m"][11] == "80, 1000" and rows["4b -> 4m"][13] == ""
+    assert "Edges with a flag: NOT RELIABLE: none; few independent samples: 4b~4e, 4g~4d." in text
+    assert "Few independent samples: not recorded" not in text
+    with open(run / "rbfe_report_edges.csv") as fh:
+        table = {row["edge"]: row["few_independent_samples"] for row in csv.DictReader(fh)}
+    assert table["4b~4e"] == table["4g~4d"] == "complex" and sorted(table.values())[:19] == [""] * 19
+    # a repeat without the notes of its legs gives no ground; the leg another repeat names stays named
+    edges = {e["edge"]: e for e in earlier["edges"]}
+    del edges["4b~4m"]["repeats"][0]["warnings"]
+    edges["4g~4d"]["repeats"].append({"repeat": 1, "ddg": -1.0, "se": 0.2})
+    assert independent_samples_of(edges["4g~4d"], None) == ({"complex": edges["4g~4d"]["repeats"][0][
+        "fewest_independent_samples"]["complex"], "solvent": 1000.0}, ["complex"], ["solvent"])
+    (run / "summary.json").write_text(json.dumps(earlier))
+    text = report("a2a", run)
+    rows = edge_rows(text)
+    assert rows["4g -> 4d"][13] == "few independent samples: complex, solvent not recorded"
+    assert rows["4b -> 4m"][13] == "few independent samples: not recorded"
+    assert "few independent samples: 4b~4e, 4g~4d." in text
+    (line,) = [line for line in text.splitlines() if line.startswith("Few independent samples: not recorded for ")]
+    assert "4g~4d (solvent leg)" in line and "4b~4m (" not in line and "4b~4m" in line

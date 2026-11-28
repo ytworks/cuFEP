@@ -19,6 +19,15 @@ the hybrid topology. The sections that mean the same in both YAMLs are one schem
 cufep rbfe plan config.yaml      # ligands, edges and atom mappings, without simulating
 cufep rbfe run config.yaml       # run (or resume) every edge
 cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have; writes nothing
+cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv and summary.json again, under the
+                                       # lock of the directory; refused where the summary holds the ddG of an
+                                       # edge, or repeats for which it refused the edge one, and the directory
+                                       # not every file that was made from (both legs of each such repeat, the
+                                       # record of the prepared edge, the record of the samples where the
+                                       # summary has the water moves of a leg from it), or where the summary
+                                       # cannot be read and the legs do not give the values of the two tables.
+                                       # A leg that a run began and did not finish has no result, and its
+                                       # repeat is left out, as by a run
 ```
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
@@ -26,7 +35,27 @@ samples do not connect), 0 otherwise (also when some edges have no
 ddG yet because only some legs were run, `--leg`). A run in a directory that holds results is refused before it
 writes anything if a prepared edge of the network (one it runs, or one whose results it combines) was made
 from other inputs or settings (protein, ligands, force
-field, solvation, bilayer, cutoff, ionic strength, pH ...).
+field, solvation, bilayer, cutoff, ionic strength, pH ...), or if a leg it runs has a pre-equilibration, lambda
+windows or samples it cannot go on from: made with other settings (the grand canonical moves of water and their
+values of the water among them), by a mover of another rule (samples of versions before 2026-11-28, whose moves
+left the velocities of an inserted water as they were, are analysed as they are and not extended), or of another
+System than this version builds (its checksum; the hybrid System of every leg with samples is built for that
+before the run starts, several legs at a time). A leg stopped at the checkpoint of the start of its replica
+exchange, before its first sample, is held to the conditions recorded with that checkpoint in the same way where
+its start configurations have to be made again. A run is also refused if results that it would combine at its end
+without sampling them (those of the edges or legs it does not run) are not what the directory made them from any
+more, so that they would be combined without the comparisons made before: the record of the samples from which
+the summary has the grand canonical moves of water of a complex leg (a result of an earlier version has them
+there) was set aside; the result of a leg that the summary read is gone (not where a run began the leg again and
+did not finish it: its `started.json` or `error.json` is there); or an edge has results and no record of its
+prepared systems. Each such leg is held to the summary by itself, whatever the other leg of its repeat has now,
+and only the repeats that the run combines (`sampling.repeats`); every result the run will combine must be one
+that can be read. Where the summary of the directory cannot be
+read (truncated, or not the record a run writes), `edges.csv` is the record of every edge with a leg the run does
+not sample (the edges it does not run; with `--leg`, every edge): the legs as they are must give the ddG it holds,
+since no repeat can be held to a record of its own; `cufep rbfe analyze DIRECTORY --write` makes the summary again
+where they do. A result or a record of a prepared edge that cannot be read is named. The
+directory, its record of the configuration and the results of its legs then stay as they were.
 
 ## Inputs
 
@@ -112,6 +141,22 @@ Hamiltonian replica exchange with REST2 on the whole hybrid ligand and the pocke
 `sampling.rest2` of the ABFE): 1 ns of equilibration and 5 ns of production per window, the defaults of
 OpenFE's relative protocol. One calculation per edge (`sampling.repeats: 1`).
 
+Grand canonical moves of water (`sampling.gcmc`, on by default in the complex leg; the owner's decision of
+2026-11-28): the moves of the ABFE (`docs/protocol.md`, `src/cufep/sampling/gcmc.py`), water inserted into and
+deleted from a sphere around the heavy atoms of the hybrid ligand (those of A and of B, so that the sphere is one
+whichever way the edge is run), in equilibrium with bulk water. The waters farthest from the ligand are ghosts from
+the start; the pre-equilibration, with its barostat, settles the cell without them, and the windows and the replica
+exchange keep the cell of its last configuration, without a barostat. A ghost has no charge and no Lennard-Jones in
+the NonbondedForce and in the Lennard-Jones of the hybrid ligand with its environment. The trials are first
+evaluated with a stand-in energy in which each atom of the hybrid ligand has its charge and Lennard-Jones at the
+lambda of the window; the one that passes is tested with the full potential of the replica. The solvent leg has no
+moves. The windows a leg does not choose itself make the moves in the MD of their start too, on workers and in the
+process of the leg alike. `auto` gives the excess chemical potential and the standard volume of the water only at
+the conditions they were determined at (298.15 K, 1 bar, a cutoff of 0.9 nm; `docs/configuration.md`): a run under
+others gives its own numbers or switches the moves off. A directory of a version before the moves, run again with
+its YAML, is refused before anything is written (the pre-equilibration of its complex legs was made without
+ghosts), and says that `sampling.gcmc.enabled: false` continues it as it was made.
+
 ### Membrane proteins
 
 `membrane.enabled` builds the complex leg in a POPC bilayer (Lipid21) as the ABFE does, with the membrane
@@ -127,10 +172,25 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
 - Cycle closure: the sum of the ddG around every cycle of a cycle basis, with its standard error, as
   numbers without a verdict.
 - The edges combined into cycle closures and dG must have been made under the same conditions (temperature,
-  pressure, tail correction) from the same preparation besides their ligands (protein, force field, solvation,
-  bilayer, pH ...), and a ligand of one name must be one molecule in all of them; otherwise each edge gives its
-  ddG and the run says what differs, without cycle closures and without dG. `edges.csv` gives the lowest overlap
-  of all iterations and that among the samples of the estimate, the two checks behind NOT RELIABLE.
+  pressure, tail correction, and the grand canonical moves of water of their complex legs: with or without them,
+  the same excess chemical potential and standard volume of water, as the samples record them) from the same
+  preparation besides their ligands (protein, force field, solvation, bilayer, pH ...), and a ligand of one name
+  must be one molecule in all of them; otherwise each edge gives its ddG and the run says what differs, without
+  cycle closures and without dG. The repeats of an edge whose complex legs were sampled with other moves give no
+  ddG. Whether a complex leg made the moves is known of every result (a result of an earlier version with the
+  counts of the moves made them); where the values of the water are not recorded (such a result without its
+  samples), the edge is compared by the moves alone and the summary names it and its repeats. The result of a
+  complex leg, and with it every repeat and edge of the summary (`water_moves`), also records the rule of the mover
+  for the velocities of an inserted water (`velocities_of_an_inserted_water`; none for samples of a version
+  before 2026-11-28, `water_rule_not_recorded`; the rule of a result is read from the record of its samples
+  alone, so that a result whose HDF5 parts were set aside is still combined). Edges of rules that are known to
+  differ are combined into one network, and a note of the summary names the edges of each rule (what the earlier
+  rule does to a ddG has not been measured). An edge without a recorded rule is named as one of which it cannot
+  be told whether it was sampled under the rule of the edges that record one, which the note names too; a network
+  none of whose edges records a rule has a note that says so.
+- `edges.csv` gives the lowest overlap of all iterations and that among the samples of the estimate, the two
+  checks behind NOT RELIABLE, the window with the fewest independent samples of each leg and the legs below the
+  level of the analysis (`few_independent_samples`; Mey et al. 2020), and the LOMAP score of the mapping.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
   of their variance. The edges fix the differences between the ligands; the one constant they leave is set
@@ -142,14 +202,33 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   - without any: the mean of all estimates is 0 (cinnabar's output), dG relative to the mean of the network;
     the result says so.
 
+## Benchmarks
+
+`cufep benchmark run tyk2|a2a --protocol rbfe --tier smoke|full` runs a built-in benchmark set (`benchmarks/`) by
+relative calculations: the settings of the set's relative example (`examples/rbfe_tyk2`,
+`examples/rbfe_a2a_membrane`), the protein and every compound of the set (TYK2 16, A2A 17 in the bilayer) on the
+LOMAP network above (the edges of the example are not used), and the experimental values of the set's table;
+`smoke` runs the first edge of the example with shortened sampling. `cufep benchmark plan NAME` shows the network
+before anything runs: for TYK2 the 22 edges with which the OpenFE benchmark (IndustryBenchmarks2024, Baumann et
+al.) computed this set, in the same directions. `cufep benchmark report NAME DIR --protocol rbfe` compares a run
+with experiment and the published results (`rbfe_report.md`, `rbfe_report_ligands.csv`, `rbfe_report_edges.csv`,
+two figures): the dG of the compounds and the ddG of the edges of every method on the same compounds and edges,
+with 95 % bootstrap intervals (for the dG, each method centred on the compounds compared, in every resample), and
+for every edge its LOMAP score, its windows, lowest overlap, fewest independent samples, the backend of its legs
+and its flags (NOT RELIABLE, few independent samples). The report is made from `summary.json` of the run, so it
+can be made again from the files that are kept of a run (`benchmarks/results/`); of a summary of an earlier
+version the legs with few independent samples are those the analysis noted in the repeats of each ddG (or, without
+its notes, the numbers of the legs against the level of the run), and "not recorded" is said of a leg for which
+the summary gives neither. A
+directory that is not a run of the set named is refused before anything is written (`benchmarks/README.md`).
+
 ## Not in this version
 
 - An edge that changes the net charge (refused before anything is written).
 - A correction of the Lennard-Jones of the ligand with its surroundings beyond the cutoff: none, as OpenFE's
   relative protocol (`use_dispersion_correction: False` for the hybrid); the NonbondedForce of the
   environment keeps its own long-range correction.
-- Water moves (`sampling.relocation_mc`, `sampling.gcmc`) and `membrane.complex_leg: water`, which are of
-  the ABFE.
+- Water relocation moves (`sampling.relocation_mc`) and `membrane.complex_leg: water`, which are of the ABFE.
 
 ## All settings and their defaults
 
@@ -192,6 +271,15 @@ lambda_schedule:
 sampling:
   production_ns: 5.0
   equilibration_ns: 1.0
+  gcmc:
+    enabled: true
+    interval_ps: 4.0
+    attempts: 2500
+    batch_size: 1000
+    radius_margin_nm: 0.3
+    ghost_waters: auto
+    excess_chemical_potential_kcal_per_mol: auto
+    standard_volume_nm3: auto
 analysis:
   lrc: none
 output:
@@ -210,6 +298,7 @@ output:
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent 50 ps and 0; complex 500 ps after 500 ps | the solvent leg: the paper's; the complex leg: the values of the ABFE, measured on TYK2 (`docs/protocol.md`, "What was measured on TYK2") |
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
+| `sampling.gcmc.enabled` | true (the complex leg) | the owner's decision of 2026-11-28; the moves and their other settings are those of the ABFE, with their basis (`docs/configuration.md`), where they are off by default |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |
 | `analysis.lrc` | none | OpenFE's `use_dispersion_correction: False` for the hybrid |
 | the constant of the dG (no setting) | the mean of the experimental values, else the mean of the network | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; cinnabar gives estimates of mean 0 |

@@ -1,0 +1,23 @@
+edge,ligand_a,ligand_b,ddg_kcal_mol,standard_error,exp_ddg_kcal_mol,complex_dg,solvent_dg,windows_complex,windows_solvent,lowest_overlap_complex,lowest_overlap_solvent,lowest_overlap_used_complex,lowest_overlap_used_solvent,not_reliable,backend_complex,backend_solvent,fewest_independent_samples_complex,fewest_independent_samples_solvent,few_independent_samples,lomap_score
+ejm_31~ejm_42,ejm_31,ejm_42,0.667,0.259,-0.240,14.442,13.775,9,9,0.079,0.097,0.082,0.097,,cupotential,cupotential,143.000,1000.000,,0.905
+ejm_31~ejm_44,ejm_31,ejm_44,3.304,0.260,2.120,36.511,33.207,10,9,0.095,0.060,0.096,0.060,,cupotential,cupotential,125.000,667.000,,0.607
+ejm_31~ejm_45,ejm_31,ejm_45,0.549,0.202,-0.020,20.740,20.191,10,9,0.061,0.082,0.061,0.082,,openmm,openmm,286.000,1000.000,,0.741
+ejm_31~ejm_46,ejm_31,ejm_46,-1.721,0.199,-1.770,20.780,22.501,9,9,0.088,0.098,0.073,0.098,,cupotential,cupotential,286.000,1000.000,,0.368
+ejm_31~ejm_48,ejm_31,ejm_48,0.298,0.276,0.540,24.390,24.092,10,9,0.057,0.068,0.049,0.068,,cupotential,cupotential,50.000,1000.000,,0.301
+ejm_42~ejm_54,ejm_42,ejm_54,-0.862,0.325,-0.750,-26.565,-25.703,9,9,0.111,0.159,0.110,0.159,,openmm,openmm,42.000,32.000,complex; solvent,0.861
+ejm_43~ejm_42,ejm_43,ejm_42,-1.631,0.284,-1.520,-13.195,-11.564,9,9,0.062,0.102,0.064,0.102,,openmm,openmm,154.000,1000.000,,0.905
+ejm_44~ejm_43,ejm_44,ejm_43,-1.356,0.211,-0.840,-9.269,-7.913,9,9,0.043,0.099,0.051,0.101,,cupotential,cupotential,125.000,1000.000,,0.741
+ejm_47~ejm_31,ejm_47,ejm_31,-0.176,0.284,0.160,-23.653,-23.477,10,9,0.052,0.085,0.051,0.085,,cupotential,cupotential,91.000,1000.000,,0.333
+ejm_47~ejm_50,ejm_47,ejm_50,-0.879,0.403,0.720,22.364,23.242,10,9,0.042,0.086,0.037,0.086,,cupotential,cupotential,65.000,1000.000,,0.301
+ejm_49~ejm_31,ejm_49,ejm_31,-0.699,0.354,-1.790,-33.901,-33.203,10,10,0.073,0.087,0.096,0.087,,cupotential,cupotential,167.000,1000.000,,0.273
+ejm_49~ejm_50,ejm_49,ejm_50,-0.697,0.475,-1.230,13.083,13.779,10,10,0.090,0.090,0.085,0.090,,cupotential,cupotential,154.000,1000.000,,0.247
+ejm_50~ejm_42,ejm_50,ejm_42,0.210,0.250,-0.800,-33.109,-33.319,9,9,0.088,0.134,0.094,0.134,,openmm,openmm,167.000,1000.000,,0.951
+ejm_50~ejm_48,ejm_50,ejm_48,1.028,0.419,-0.020,-22.023,-23.051,10,9,0.085,0.049,0.085,0.050,,cupotential,cupotential,84.000,1000.000,,0.273
+ejm_50~ejm_55,ejm_50,ejm_55,-0.706,0.245,-0.230,-48.771,-48.064,9,9,0.088,0.144,0.091,0.144,,openmm,openmm,286.000,1000.000,,0.905
+ejm_55~ejm_54,ejm_55,ejm_54,0.992,0.277,-1.320,-11.197,-12.189,9,9,0.086,0.141,0.089,0.141,,cupotential,cupotential,223.000,400.000,,0.861
+jmc_23~ejm_31,jmc_23,ejm_31,1.486,0.316,2.160,-3.698,-5.183,9,9,0.065,0.088,0.062,0.088,,cupotential,cupotential,106.000,1000.000,,0.333
+jmc_23~jmc_27,jmc_23,jmc_27,0.772,0.356,0.420,11.146,10.374,9,9,0.106,0.223,0.093,0.215,,cupotential,cupotential,118.000,1000.000,,0.951
+jmc_23~jmc_28,jmc_23,jmc_28,0.544,0.446,0.720,16.772,16.229,9,9,0.091,0.149,0.099,0.149,,cupotential,cupotential,400.000,1000.000,,0.951
+jmc_27~ejm_46,jmc_27,ejm_46,-0.045,0.153,-0.030,6.199,6.244,9,9,0.077,0.124,0.078,0.124,,cupotential,cupotential,334.000,1000.000,,0.905
+jmc_28~jmc_30,jmc_28,jmc_30,-1.298,0.182,0.040,-5.076,-3.778,9,9,0.114,0.163,0.110,0.163,,cupotential,cupotential,200.000,1000.000,,0.779
+jmc_30~ejm_46,jmc_30,ejm_46,0.018,0.201,-0.370,4.726,4.708,9,9,0.077,0.135,0.080,0.135,,cupotential,cupotential,48.889,1000.000,complex,0.819

@@ -1,0 +1,2188 @@
+{
+ "ligands": [
+  "4g",
+  "4h",
+  "4j",
+  "4k",
+  "4l",
+  "4i",
+  "4a",
+  "4b",
+  "4c",
+  "4d",
+  "4o",
+  "4f",
+  "4e",
+  "4m",
+  "4q",
+  "4n",
+  "4r"
+ ],
+ "edges": [
+  {
+   "edge": "4a~4o",
+   "ligand_a": "4a",
+   "ligand_b": "4o",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -3.490931546604025,
+     "se": 0.16949216505508413,
+     "complex_dg": -27.195215734742995,
+     "complex_se": 0.16370524905499131,
+     "solvent_dg": -23.70428418813897,
+     "solvent_se": 0.04391110846816719,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.11219021972259291,
+      "solvent": 0.1577857646941051
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12042976306850531,
+      "solvent": 0.1581628189525311
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 286.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": -3.490931546604025,
+   "complex_dg": -27.195215734742995,
+   "solvent_dg": -23.70428418813897,
+   "se": 0.16949216505508413,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 286.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.11219021972259291,
+    "solvent": 0.1577857646941051
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12042976306850531,
+    "solvent": 0.1581628189525311
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -1.943999999999999
+  },
+  {
+   "edge": "4a~4q",
+   "ligand_a": "4a",
+   "ligand_b": "4q",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -2.1996167862367377,
+     "se": 0.1359983603656867,
+     "complex_dg": -26.499162243990686,
+     "complex_se": 0.12560337686101372,
+     "solvent_dg": -24.299545457753947,
+     "solvent_se": 0.052147346464276954,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.14571054983307952,
+      "solvent": 0.15914077853866565
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13308807841130413,
+      "solvent": 0.15857765965487314
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 400.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.951229424500714,
+   "ddg": -2.1996167862367377,
+   "complex_dg": -26.499162243990686,
+   "solvent_dg": -24.299545457753947,
+   "se": 0.1359983603656867,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 400.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.14571054983307952,
+    "solvent": 0.15914077853866565
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13308807841130413,
+    "solvent": 0.15857765965487314
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 0.5259999999999998
+  },
+  {
+   "edge": "4b~4e",
+   "ligand_a": "4b",
+   "ligand_b": "4e",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -4.051553343456264,
+     "se": 0.2388904202712367,
+     "complex_dg": -17.216238375448114,
+     "complex_se": 0.23545462395018424,
+     "solvent_dg": -13.164685031991851,
+     "solvent_se": 0.040370198882906334,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.10088924002821725,
+      "solvent": 0.15673704157408155
+     },
+     "lowest_overlap_used": {
+      "complex": 0.09603839633330648,
+      "solvent": 0.1567350298414564
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 167.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": -4.051553343456264,
+   "complex_dg": -17.216238375448114,
+   "solvent_dg": -13.164685031991851,
+   "se": 0.2388904202712367,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 167.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.10088924002821725,
+    "solvent": 0.15673704157408155
+   },
+   "lowest_overlap_used": {
+    "complex": 0.09603839633330648,
+    "solvent": 0.1567350298414564
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -2.115
+  },
+  {
+   "edge": "4b~4m",
+   "ligand_a": "4b",
+   "ligand_b": "4m",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.3602397279775333,
+     "se": 0.09875507123986456,
+     "complex_dg": -30.86234994928691,
+     "complex_se": 0.09042130358852914,
+     "solvent_dg": -29.502110221309376,
+     "solvent_se": 0.03970581762086977,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.13552600405761253,
+      "solvent": 0.15884043629597247
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13725138509466567,
+      "solvent": 0.15860680613659328
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 334.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.951229424500714,
+   "ddg": -1.3602397279775333,
+   "complex_dg": -30.86234994928691,
+   "solvent_dg": -29.502110221309376,
+   "se": 0.09875507123986456,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 334.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.13552600405761253,
+    "solvent": 0.15884043629597247
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13725138509466567,
+    "solvent": 0.15860680613659328
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.5910000000000011
+  },
+  {
+   "edge": "4c~4d",
+   "ligand_a": "4c",
+   "ligand_b": "4d",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 2.0747722458848323,
+     "se": 0.17541753039025618,
+     "complex_dg": 6.695579256763404,
+     "complex_se": 0.1604339027411478,
+     "solvent_dg": 4.620807010878571,
+     "solvent_se": 0.07093851435898822,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.18189340315349728,
+      "solvent": 0.17685131641223123
+     },
+     "lowest_overlap_used": {
+      "complex": 0.18102252375305614,
+      "solvent": 0.17787521693418926
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 36.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [
+      "complex"
+     ],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: few independent samples: lambda window 4 (morph stage) has 36 and gives MBAR 36 samples (its energy difference to the previous window is correlated over 55 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)",
+      "complex: parts of the production without an estimate (1; they are not shown in analysis.png): reverse point 0.10 (iterations 1800-2000 of the production): lambda window 4 keeps 3 sample(s) there; 4 are needed for an estimate"
+     ]
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": 2.0747722458848323,
+   "complex_dg": 6.695579256763404,
+   "solvent_dg": 4.620807010878571,
+   "se": 0.17541753039025618,
+   "not_reliable": [],
+   "few_samples": [
+    "complex"
+   ],
+   "fewest_independent_samples": {
+    "complex": 36.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.18189340315349728,
+    "solvent": 0.17685131641223123
+   },
+   "lowest_overlap_used": {
+    "complex": 0.18102252375305614,
+    "solvent": 0.17787521693418926
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 0.9550000000000001
+  },
+  {
+   "edge": "4c~4n",
+   "ligand_a": "4c",
+   "ligand_b": "4n",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.9805259478568629,
+     "se": 0.12628108688273074,
+     "complex_dg": -34.02742837650485,
+     "complex_se": 0.11744531655894222,
+     "solvent_dg": -32.04690242864799,
+     "solvent_se": 0.046405931976996696,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.13362074727134463,
+      "solvent": 0.16180056715841115
+     },
+     "lowest_overlap_used": {
+      "complex": 0.1352972765601967,
+      "solvent": 0.16110022665948326
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 72.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.951229424500714,
+   "ddg": -1.9805259478568629,
+   "complex_dg": -34.02742837650485,
+   "solvent_dg": -32.04690242864799,
+   "se": 0.12628108688273074,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 72.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.13362074727134463,
+    "solvent": 0.16180056715841115
+   },
+   "lowest_overlap_used": {
+    "complex": 0.1352972765601967,
+    "solvent": 0.16110022665948326
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.08999999999999986
+  },
+  {
+   "edge": "4d~4f",
+   "ligand_a": "4d",
+   "ligand_b": "4f",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -3.5876401905538366,
+     "se": 0.1746619982093136,
+     "complex_dg": -11.592121347303772,
+     "complex_se": 0.16765481682778127,
+     "solvent_dg": -8.004481156749936,
+     "solvent_se": 0.04897628010489752,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.14719620295648622,
+      "solvent": 0.14660871849655757
+     },
+     "lowest_overlap_used": {
+      "complex": 0.13071715374451745,
+      "solvent": 0.14686504757166627
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 58.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "openmm",
+      "solvent": "openmm"
+     },
+     "warnings": [
+      "complex: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "complex: the leg was continued on openmm, the backend its samples were made with",
+      "solvent: the pre-equilibration MD failed on cupotential and was repeated on stock OpenMM",
+      "solvent: the leg was continued on openmm, the backend its samples were made with"
+     ]
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": -3.5876401905538366,
+   "complex_dg": -11.592121347303772,
+   "solvent_dg": -8.004481156749936,
+   "se": 0.1746619982093136,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 58.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.14719620295648622,
+    "solvent": 0.14660871849655757
+   },
+   "lowest_overlap_used": {
+    "complex": 0.13071715374451745,
+    "solvent": 0.14686504757166627
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "openmm"
+    ],
+    "solvent": [
+     "openmm"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.940999999999999
+  },
+  {
+   "edge": "4f~4e",
+   "ligand_a": "4f",
+   "ligand_b": "4e",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.8591815581660799,
+     "se": 0.33059981148552725,
+     "complex_dg": -3.0575831535969717,
+     "complex_se": 0.3229286028061441,
+     "solvent_dg": -2.198401595430892,
+     "solvent_se": 0.07080503402963505,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.08861423603890586,
+      "solvent": 0.12703928686386073
+     },
+     "lowest_overlap_used": {
+      "complex": 0.07996891218649527,
+      "solvent": 0.12716601807609235
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 96.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.8607079764250578,
+   "ddg": -0.8591815581660799,
+   "complex_dg": -3.0575831535969717,
+   "solvent_dg": -2.198401595430892,
+   "se": 0.33059981148552725,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 96.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.08861423603890586,
+    "solvent": 0.12703928686386073
+   },
+   "lowest_overlap_used": {
+    "complex": 0.07996891218649527,
+    "solvent": 0.12716601807609235
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.6280000000000001
+  },
+  {
+   "edge": "4g~4d",
+   "ligand_a": "4g",
+   "ligand_b": "4d",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 2.519029921598082,
+     "se": 0.189753661986541,
+     "complex_dg": 45.27900120394125,
+     "complex_se": 0.1843515067118315,
+     "solvent_dg": 42.759971282343166,
+     "solvent_se": 0.04495524675029597,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.10923010752998571,
+      "solvent": 0.16005117372614786
+     },
+     "lowest_overlap_used": {
+      "complex": 0.11946181707319313,
+      "solvent": 0.16033282729120663
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 223.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.951229424500714,
+   "ddg": 2.519029921598082,
+   "complex_dg": 45.27900120394125,
+   "solvent_dg": 42.759971282343166,
+   "se": 0.189753661986541,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 223.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.10923010752998571,
+    "solvent": 0.16005117372614786
+   },
+   "lowest_overlap_used": {
+    "complex": 0.11946181707319313,
+    "solvent": 0.16033282729120663
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 0.5589999999999993
+  },
+  {
+   "edge": "4g~4i",
+   "ligand_a": "4g",
+   "ligand_b": "4i",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 0.9056458395705845,
+     "se": 0.07706092693463035,
+     "complex_dg": -10.528804338962555,
+     "complex_se": 0.07005112410713653,
+     "solvent_dg": -11.43445017853314,
+     "solvent_se": 0.03211271510400501,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.14462654053955037,
+      "solvent": 0.1173688737068126
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12011600105618733,
+      "solvent": 0.11783654695381833
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 334.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.8187307530779818,
+   "ddg": 0.9056458395705845,
+   "complex_dg": -10.528804338962555,
+   "solvent_dg": -11.43445017853314,
+   "se": 0.07706092693463035,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 334.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.14462654053955037,
+    "solvent": 0.1173688737068126
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12011600105618733,
+    "solvent": 0.11783654695381833
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 0.75
+  },
+  {
+   "edge": "4g~4j",
+   "ligand_a": "4g",
+   "ligand_b": "4j",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.44170286202469794,
+     "se": 0.06990940993838546,
+     "complex_dg": -0.7685754715558112,
+     "complex_se": 0.0665407910045017,
+     "solvent_dg": -0.32687260953111325,
+     "solvent_se": 0.021439420011475405,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.1184649604014882,
+      "solvent": 0.12124117155314419
+     },
+     "lowest_overlap_used": {
+      "complex": 0.11806328519601318,
+      "solvent": 0.12096883036395731
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 667.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": -0.44170286202469794,
+   "complex_dg": -0.7685754715558112,
+   "solvent_dg": -0.32687260953111325,
+   "se": 0.06990940993838546,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 667.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.1184649604014882,
+    "solvent": 0.12124117155314419
+   },
+   "lowest_overlap_used": {
+    "complex": 0.11806328519601318,
+    "solvent": 0.12096883036395731
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 0.1769999999999996
+  },
+  {
+   "edge": "4g~4k",
+   "ligand_a": "4g",
+   "ligand_b": "4k",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.9519023814255326,
+     "se": 0.21856555283181026,
+     "complex_dg": 56.93826904372775,
+     "complex_se": 0.21474236607073485,
+     "solvent_dg": 57.890171425153284,
+     "solvent_se": 0.040701561383039556,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.11456755538260682,
+      "solvent": 0.11657286738248783
+     },
+     "lowest_overlap_used": {
+      "complex": 0.10825152861257592,
+      "solvent": 0.11531391932545784
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 200.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.7408182206817179,
+   "ddg": -0.9519023814255326,
+   "complex_dg": 56.93826904372775,
+   "solvent_dg": 57.890171425153284,
+   "se": 0.21856555283181026,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 200.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.11456755538260682,
+    "solvent": 0.11657286738248783
+   },
+   "lowest_overlap_used": {
+    "complex": 0.10825152861257592,
+    "solvent": 0.11531391932545784
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.47799999999999976
+  },
+  {
+   "edge": "4g~4l",
+   "ligand_a": "4g",
+   "ligand_b": "4l",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.08946673003671433,
+     "se": 0.17828117787694753,
+     "complex_dg": 50.06611809603786,
+     "complex_se": 0.16776523006778493,
+     "solvent_dg": 50.15558482607457,
+     "solvent_se": 0.0603241739727532,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.08051034303637487,
+      "solvent": 0.10995703504376815
+     },
+     "lowest_overlap_used": {
+      "complex": 0.08266875172075866,
+      "solvent": 0.10994467461786782
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 200.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.6703200460356393,
+   "ddg": -0.08946673003671433,
+   "complex_dg": 50.06611809603786,
+   "solvent_dg": 50.15558482607457,
+   "se": 0.17828117787694753,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 200.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.08051034303637487,
+    "solvent": 0.10995703504376815
+   },
+   "lowest_overlap_used": {
+    "complex": 0.08266875172075866,
+    "solvent": 0.10994467461786782
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.31400000000000006
+  },
+  {
+   "edge": "4g~4n",
+   "ligand_a": "4g",
+   "ligand_b": "4n",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.7749679350558487,
+     "se": 0.1770446885197724,
+     "complex_dg": 4.540888851496626,
+     "complex_se": 0.16307378424574898,
+     "solvent_dg": 6.315856786552475,
+     "solvent_se": 0.0689330299989355,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.16513687213877656,
+      "solvent": 0.17742502090119464
+     },
+     "lowest_overlap_used": {
+      "complex": 0.18065460461180868,
+      "solvent": 0.17742382005891938
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 667.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": -1.7749679350558487,
+   "complex_dg": 4.540888851496626,
+   "solvent_dg": 6.315856786552475,
+   "se": 0.1770446885197724,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 667.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.16513687213877656,
+    "solvent": 0.17742502090119464
+   },
+   "lowest_overlap_used": {
+    "complex": 0.18065460461180868,
+    "solvent": 0.17742382005891938
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.48600000000000065
+  },
+  {
+   "edge": "4h~4l",
+   "ligand_a": "4h",
+   "ligand_b": "4l",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.32804559814851075,
+     "se": 0.1513475376079328,
+     "complex_dg": 57.66939779370759,
+     "complex_se": 0.1435051866795565,
+     "solvent_dg": 57.9974433918561,
+     "solvent_se": 0.04808678130266436,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.09402154771037785,
+      "solvent": 0.11535185909799922
+     },
+     "lowest_overlap_used": {
+      "complex": 0.09559300912520569,
+      "solvent": 0.11513865204369807
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 223.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.7408182206817179,
+   "ddg": -0.32804559814851075,
+   "complex_dg": 57.66939779370759,
+   "solvent_dg": 57.9974433918561,
+   "se": 0.1513475376079328,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 223.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.09402154771037785,
+    "solvent": 0.11535185909799922
+   },
+   "lowest_overlap_used": {
+    "complex": 0.09559300912520569,
+    "solvent": 0.11513865204369807
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.7230000000000008
+  },
+  {
+   "edge": "4h~4r",
+   "ligand_a": "4h",
+   "ligand_b": "4r",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -2.4864263882578355,
+     "se": 0.26600384378727854,
+     "complex_dg": 59.53521499860941,
+     "complex_se": 0.25864051935452015,
+     "solvent_dg": 62.021641386867245,
+     "solvent_se": 0.062154055842165136,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.13019839077791429,
+      "solvent": 0.1549292134250345
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12697146357875644,
+      "solvent": 0.15459356315526257
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 26.8380340124505,
+      "solvent": 1000.0
+     },
+     "few_samples": [
+      "complex"
+     ],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": [
+      "complex: few independent samples: lambda window 4 (morph stage) has 27 and gives MBAR 27 samples (its energy difference to the next window is correlated over 75 iterations); 50 are recommended for MBAR (Mey et al. 2020). The free energy and its uncertainty rest on these samples. A longer production gives more: cufep rbfe run CONFIG --edge NAME --leg complex --production-ns NS (or sampling.production_ns)",
+      "complex: parts of the production without an estimate (2; they are not shown in analysis.png): forward point 0.10 (iterations 0-200 of the production): lambda window 4 keeps 3 sample(s) there; 4 are needed for an estimate; reverse point 0.10 (iterations 1800-2000 of the production): lambda window 4 keeps 3 sample(s) there; 4 are needed for an estimate"
+     ]
+    }
+   ],
+   "lomap_score": 0.7046880897187134,
+   "ddg": -2.4864263882578355,
+   "complex_dg": 59.53521499860941,
+   "solvent_dg": 62.021641386867245,
+   "se": 0.26600384378727854,
+   "not_reliable": [],
+   "few_samples": [
+    "complex"
+   ],
+   "fewest_independent_samples": {
+    "complex": 26.8380340124505,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.13019839077791429,
+    "solvent": 0.1549292134250345
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12697146357875644,
+    "solvent": 0.15459356315526257
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.8070000000000004
+  },
+  {
+   "edge": "4j~4i",
+   "ligand_a": "4j",
+   "ligand_b": "4i",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 1.3842889932972064,
+     "se": 0.04710763630425,
+     "complex_dg": -9.72328578638682,
+     "complex_se": 0.041105447203748785,
+     "solvent_dg": -11.107574779684025,
+     "solvent_se": 0.023010250071507546,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.11127470828331762,
+      "solvent": 0.12071129372765729
+     },
+     "lowest_overlap_used": {
+      "complex": 0.11605958505172342,
+      "solvent": 0.12009917560949816
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 667.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": 1.3842889932972064,
+   "complex_dg": -9.72328578638682,
+   "solvent_dg": -11.107574779684025,
+   "se": 0.04710763630425,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 667.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.11127470828331762,
+    "solvent": 0.12071129372765729
+   },
+   "lowest_overlap_used": {
+    "complex": 0.11605958505172342,
+    "solvent": 0.12009917560949816
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 0.5730000000000004
+  },
+  {
+   "edge": "4k~4r",
+   "ligand_a": "4k",
+   "ligand_b": "4r",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -0.8755589892479148,
+     "se": 0.29174621020416935,
+     "complex_dg": -4.56304534989482,
+     "complex_se": 0.28269745245417793,
+     "solvent_dg": -3.687486360646905,
+     "solvent_se": 0.07209716738134164,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.1517037491828091,
+      "solvent": 0.18823213099911282
+     },
+     "lowest_overlap_used": {
+      "complex": 0.18507699398770028,
+      "solvent": 0.18939155120619391
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 143.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.8607079764250578,
+   "ddg": -0.8755589892479148,
+   "complex_dg": -4.56304534989482,
+   "solvent_dg": -3.687486360646905,
+   "se": 0.29174621020416935,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 143.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.1517037491828091,
+    "solvent": 0.18823213099911282
+   },
+   "lowest_overlap_used": {
+    "complex": 0.18507699398770028,
+    "solvent": 0.18939155120619391
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 0.08000000000000007
+  },
+  {
+   "edge": "4m~4n",
+   "ligand_a": "4m",
+   "ligand_b": "4n",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -1.8678798673714823,
+     "se": 0.08880984851370712,
+     "complex_dg": -11.700666506368886,
+     "complex_se": 0.08205984989734925,
+     "solvent_dg": -9.832786638997405,
+     "solvent_se": 0.03396130486085767,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.12168045029111516,
+      "solvent": 0.12304951274235713
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12065501624564579,
+      "solvent": 0.12262576922986
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 334.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": -1.8678798673714823,
+   "complex_dg": -11.700666506368886,
+   "solvent_dg": -9.832786638997405,
+   "se": 0.08880984851370712,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 334.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.12168045029111516,
+    "solvent": 0.12304951274235713
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12065501624564579,
+    "solvent": 0.12262576922986
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -1.0
+  },
+  {
+   "edge": "4m~4q",
+   "ligand_a": "4m",
+   "ligand_b": "4q",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": 3.6395020044324,
+     "se": 0.07606027694503839,
+     "complex_dg": 13.684201466216503,
+     "complex_se": 0.06538988257162943,
+     "solvent_dg": 10.044699461784104,
+     "solvent_se": 0.03885008347770249,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.12943353764040172,
+      "solvent": 0.12640549165495496
+     },
+     "lowest_overlap_used": {
+      "complex": 0.1273834087099061,
+      "solvent": 0.126718580282307
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 286.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": 3.6395020044324,
+   "complex_dg": 13.684201466216503,
+   "solvent_dg": 10.044699461784104,
+   "se": 0.07606027694503839,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 286.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.12943353764040172,
+    "solvent": 0.12640549165495496
+   },
+   "lowest_overlap_used": {
+    "complex": 0.1273834087099061,
+    "solvent": 0.126718580282307
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": 1.6630000000000003
+  },
+  {
+   "edge": "4o~4e",
+   "ligand_a": "4o",
+   "ligand_b": "4e",
+   "repeats": [
+    {
+     "repeat": 0,
+     "ddg": -4.747502177397823,
+     "se": 0.050103173311392656,
+     "complex_dg": 0.9579043026869031,
+     "complex_se": 0.028503027940394422,
+     "solvent_dg": 5.705406480084727,
+     "solvent_se": 0.04120564735689205,
+     "windows": {
+      "complex": 9,
+      "solvent": 9
+     },
+     "lowest_overlap": {
+      "complex": 0.12126005838097165,
+      "solvent": 0.12807499345399306
+     },
+     "lowest_overlap_used": {
+      "complex": 0.12897987338380898,
+      "solvent": 0.12769414730332196
+     },
+     "not_reliable": [],
+     "fewest_independent_samples": {
+      "complex": 500.0,
+      "solvent": 1000.0
+     },
+     "few_samples": [],
+     "water_moves": {
+      "enabled": true,
+      "excess_chemical_potential_kcal_per_mol": -6.09,
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": "turned with it"
+     },
+     "backend": {
+      "complex": "cupotential",
+      "solvent": "cupotential"
+     },
+     "warnings": []
+    }
+   ],
+   "lomap_score": 0.9048374180359595,
+   "ddg": -4.747502177397823,
+   "complex_dg": 0.9579043026869031,
+   "solvent_dg": 5.705406480084727,
+   "se": 0.050103173311392656,
+   "not_reliable": [],
+   "few_samples": [],
+   "fewest_independent_samples": {
+    "complex": 500.0,
+    "solvent": 1000.0
+   },
+   "lowest_overlap": {
+    "complex": 0.12126005838097165,
+    "solvent": 0.12807499345399306
+   },
+   "lowest_overlap_used": {
+    "complex": 0.12897987338380898,
+    "solvent": 0.12769414730332196
+   },
+   "windows": {
+    "complex": [
+     9
+    ],
+    "solvent": [
+     9
+    ]
+   },
+   "backend": {
+    "complex": [
+     "cupotential"
+    ],
+    "solvent": [
+     "cupotential"
+    ]
+   },
+   "conditions": {
+    "temperature_K": 298.15,
+    "pressure_bar": 1.0,
+    "lrc_method": "none",
+    "water_moves": {
+     "enabled": true,
+     "excess_chemical_potential_kcal_per_mol": -6.09,
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": "turned with it"
+    }
+   },
+   "water_values_not_recorded": [],
+   "water_rule_not_recorded": [],
+   "exp_ddg": -0.7170000000000005
+  }
+ ],
+ "experiment_kcal_mol": {
+  "4g": -11.064,
+  "4h": -10.655,
+  "4j": -10.887,
+  "4k": -11.542,
+  "4l": -11.378,
+  "4i": -10.314,
+  "4a": -9.413,
+  "4b": -9.959,
+  "4c": -11.46,
+  "4d": -10.505,
+  "4o": -11.357,
+  "4f": -11.446,
+  "4e": -12.074,
+  "4m": -10.55,
+  "4q": -8.887,
+  "4n": -11.55,
+  "4r": -11.462
+ },
+ "cycle_closures": [
+  {
+   "ligands": [
+    "4b",
+    "4e",
+    "4o",
+    "4a",
+    "4q",
+    "4m"
+   ],
+   "sum_kcal_mol": -0.29199868214601965,
+   "se_kcal_mol": 0.34977112335783417
+  },
+  {
+   "ligands": [
+    "4d",
+    "4f",
+    "4e",
+    "4o",
+    "4a",
+    "4q",
+    "4m",
+    "4n",
+    "4g"
+   ],
+   "sum_kcal_mol": 0.37861117389524335,
+   "se_kcal_mol": 0.5201539713182745
+  },
+  {
+   "ligands": [
+    "4d",
+    "4c",
+    "4n",
+    "4g"
+   ],
+   "sum_kcal_mol": 0.23869966291223577,
+   "se_kcal_mol": 0.3377417605847194
+  },
+  {
+   "ligands": [
+    "4h",
+    "4l",
+    "4g",
+    "4k",
+    "4r"
+   ],
+   "sum_kcal_mol": 0.42038614947259134,
+   "se_kcal_mol": 0.5082667139287733
+  },
+  {
+   "ligands": [
+    "4i",
+    "4j",
+    "4g"
+   ],
+   "sum_kcal_mol": -0.03694029170192403,
+   "se_kcal_mol": 0.11421401602312721
+  }
+ ],
+ "dg": {
+  "reference": "mean of the experimental values",
+  "reference_ligands": [
+   "4g",
+   "4h",
+   "4j",
+   "4k",
+   "4l",
+   "4i",
+   "4a",
+   "4b",
+   "4c",
+   "4d",
+   "4o",
+   "4f",
+   "4e",
+   "4m",
+   "4q",
+   "4n",
+   "4r"
+  ],
+  "values": {
+   "4g": {
+    "dg": -11.40011267456167,
+    "se": 0.09622075848667673
+   },
+   "4h": {
+    "dg": -11.072536878961758,
+    "se": 0.19962815244773988
+   },
+   "4j": {
+    "dg": -11.855655431370609,
+    "se": 0.1081359690126085
+   },
+   "4k": {
+    "dg": -12.429752184132745,
+    "se": 0.1974952433429879
+   },
+   "4l": {
+    "dg": -11.437857316415524,
+    "se": 0.16819677217312412
+   },
+   "4i": {
+    "dg": -10.477650553336009,
+    "se": 0.10886300572608874
+   },
+   "4a": {
+    "dg": -5.399249430627355,
+    "se": 0.14775087663056402
+   },
+   "4b": {
+    "dg": -9.812808149095197,
+    "se": 0.1302261562828392
+   },
+   "4c": {
+    "dg": -11.089431755324304,
+    "se": 0.12377561123530399
+   },
+   "4d": {
+    "dg": -8.982981035282481,
+    "se": 0.12563088844645084
+   },
+   "4o": {
+    "dg": -8.930495889149576,
+    "se": 0.1557786683691677
+   },
+   "4f": {
+    "dg": -12.62554934719756,
+    "se": 0.17604598732484145
+   },
+   "4e": {
+    "dg": -13.68152093905735,
+    "se": 0.15498543995294983
+   },
+   "4m": {
+    "dg": -11.204293837010665,
+    "se": 0.10449827424767547
+   },
+   "4q": {
+    "dg": -7.572910453534577,
+    "se": 0.11845190108777483
+   },
+   "4n": {
+    "dg": -13.086374744537025,
+    "se": 0.09571956794623533
+   },
+   "4r": {
+    "dg": -13.443819380405603,
+    "se": 0.2413183025679884
+   }
+  }
+ },
+ "notes": [],
+ "failed_in_this_run": []
+}

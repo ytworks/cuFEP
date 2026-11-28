@@ -741,7 +741,16 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   the one recorded.
 - **The move.** With probability 1/2 an insertion, else a deletion. An insertion puts the oxygen
   of a ghost at a point drawn uniformly in the sphere, the molecule turned at random; a deletion
-  takes one of the N waters that interact and have their oxygen in the sphere. The acceptance is
+  takes one of the N waters that interact and have their oxygen in the sphere. An inserted water
+  keeps the velocity of its centre of mass, and its velocities relative to it are turned with the
+  molecule, as in the water relocation moves (one function for both): they stay those of a rigid
+  body, with the kinetic energy they had. (Until 2026-11-28 they were left as they were, with
+  components along the bonds of the turned molecule, which the constraints of the next MD step
+  took out. The samples of a leg record the rule of the mover, `velocities_of_an_inserted_water`
+  in their settings; samples of the earlier rule record none, are analysed as they are, and are
+  not continued by this version, so that no estimate is made of both. A relative run records the
+  rule with the result of every complex leg and names the edges of each rule where a network has
+  edges of both, `docs/rbfe.md`.) The acceptance is
 
       P(insert) = min[1, exp(B) exp(-beta dE) / (N + 1)]
       P(delete) = min[1, N exp(-B) exp(-beta dE)]
@@ -760,7 +769,12 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
 - **Constant volume.** The grand canonical ensemble has a fixed volume, so the alchemical run of
   the leg (the precalculation of the lambda windows and the replica exchange) has no barostat.
   The pre-equilibration and the MD for the restraint keep theirs; the cell is then fixed at the
-  mean cell of the second half of the pre-equilibration, every molecule shifted whole into it.
+  cell of the last configuration of the pre-equilibration (grand's examples go on from the last frame
+  of an MD at constant pressure). Until 2026-11-28 it was the mean cell of the second half, every
+  molecule shifted whole into it; in a bilayer whose cell still drifted the molecules then overlapped.
+  A leg that has run under that rule stays in the cell it has run in (that of the checkpoint
+  of its replica exchange, else of the start configurations of its windows), so that it is
+  continued with the System its samples record.
   The solvent leg is as without the moves, at constant pressure. The free energy of the complex
   leg is then one at constant volume and constant chemical potential of the water in the sphere,
   that of the solvent leg one at constant pressure; the result records the pressure at which the
@@ -1206,6 +1220,23 @@ belong together:
   continued from such a checkpoint: the run is refused before anything is written, with what to
   do (`--reschedule` starts the leg anew and keeps its samples in `previous_<n>/`). A leg that
   holds all its iterations is analysed as it is.
+- Before a run writes anything, the samples a leg would go on from are held to the run: the
+  conditions that follow from the configuration alone (temperature, pressure, friction,
+  `sampling.exchange`, the frequency of the barostat, the precision on the backend of the
+  samples), the time step of the pre-equilibration the leg has or will make again with the
+  steps of an iteration at it, and the settings behind the System. A leg stopped at the checkpoint of the start of
+  its replica exchange, before its first sample, is held to the conditions recorded with that
+  checkpoint in the same way where its start configurations have to be made again. The checksum
+  of the System itself is compared before the run only for samples that do not record their
+  settings (the table below); otherwise the leg compares it when it opens its samples. A
+  relative run builds the hybrid System of its legs and compares every condition before it
+  writes (`docs/rbfe.md`).
+- A pre-equilibration that is unstable at `dynamics.timestep_fs` is made at 2 fs, and the
+  samples of the leg record the time step that was used. Where the pre-equilibration of a leg
+  has to be made again and its samples (or the checkpoint of their start) record 2 fs, it is
+  made at 2 fs at once and not tried at the configured time step again, and the file and the
+  result say so: the leg can only go on at the time step of its samples. The check before a
+  run takes the same time step.
 - Workers are started by one function for the replica exchange, the lambda precalculation and a
   change of GPUs: if one does not start, every worker that was started is stopped before the
   error is raised, and the workers and the GPUs the sampler names agree.

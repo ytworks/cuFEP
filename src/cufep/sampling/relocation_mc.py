@@ -196,26 +196,32 @@ class StandIn:
     (the module's docstring): Lennard-Jones and reaction-field Coulomb within a radius."""
 
     def __init__(self, spec: RelocationSpec, positions: np.ndarray, box: np.ndarray, lambda_electrostatics: float,
-                 lambda_sterics: float, active: np.ndarray | None = None) -> None:
+                 lambda_sterics: float, active: np.ndarray | None = None, ligand: tuple | None = None) -> None:
         """``active`` (per atom; None: every atom): an atom that is not active has no charge and no
         Lennard-Jones here, as a water that is switched off has none in the simulation
-        (:mod:`cufep.sampling.gcmc`)."""
+        (:mod:`cufep.sampling.gcmc`). ``ligand``: (charge, sigma, epsilon, soft-core term, factor of the
+        Lennard-Jones) of each atom of ``spec.ligand``, in place of what the two lambdas give it (a hybrid
+        ligand, whose atoms are each in a state of their own: :func:`cufep.sampling.gcmc.hybrid_ligand_parameters`)."""
         self.spec = spec
         self.positions = np.asarray(positions, dtype=float)
         self.set_groups(len(self.positions), np.asarray(spec.waters))
         self.environment = Environment(positions, box, spec.cutoff_nm)
         self.charge = np.array(spec.charge, dtype=float)
         self.charge[spec.ligand] *= float(lambda_electrostatics)
-        self.sigma = np.asarray(spec.sigma, dtype=float)
+        self.sigma = np.array(spec.sigma, dtype=float)
         self.epsilon = np.array(spec.epsilon, dtype=float)
-        if active is not None:
-            off = ~np.asarray(active, dtype=bool)
-            self.charge[off], self.epsilon[off] = 0.0, 0.0
         # the soft-core of the ligand: x = 1 / (alpha (1 - lambda)^b + (r / sigma)^6), times lambda
         self.soft = np.zeros(len(self.charge))
         self.soft[spec.ligand] = float(spec.softcore_alpha) * (1.0 - float(lambda_sterics)) ** int(spec.softcore_b)
         self.scale = np.ones(len(self.charge))
         self.scale[spec.ligand] = float(lambda_sterics)
+        if ligand is not None:
+            index = np.asarray(spec.ligand)
+            for array, values in zip((self.charge, self.sigma, self.epsilon, self.soft, self.scale), ligand):
+                array[index] = np.asarray(values, dtype=float)
+        if active is not None:
+            off = ~np.asarray(active, dtype=bool)
+            self.charge[off], self.epsilon[off] = 0.0, 0.0
 
     def pair_energies(self, points: np.ndarray, charge: np.ndarray, sigma: np.ndarray, epsilon: np.ndarray,
                       radius_nm: float, skip: np.ndarray | None = None,
@@ -465,22 +471,29 @@ class GpuStandIn:
         self.parameters = {}                     # by (lambda_electrostatics, lambda_sterics): on the device
 
     def load(self, positions: np.ndarray, box: np.ndarray, lambda_electrostatics: float,
-             lambda_sterics: float, active: np.ndarray | None = None) -> GpuStandIn:
-        """The configuration and the alchemical state the next numbers are of; ``active`` as in
-        :class:`StandIn`."""
+             lambda_sterics: float, active: np.ndarray | None = None, ligand: tuple | None = None,
+             state_key=None) -> GpuStandIn:
+        """The configuration and the alchemical state the next numbers are of; ``active`` and ``ligand`` as in
+        :class:`StandIn` (``state_key``: what names the state of ``ligand``, under which its parameters are
+        kept on the device)."""
         cp, spec = self.cp, self.spec
         box = np.asarray(box, dtype=np.float64)
         inverse = np.linalg.inv(box)
-        key = (float(lambda_electrostatics), float(lambda_sterics))
+        key = (float(lambda_electrostatics), float(lambda_sterics)) if ligand is None else ("ligand", state_key)
         if key not in self.parameters:
             # per atom: charge, sigma, the square root of epsilon, the soft-core term and the factor
             # of its Lennard-Jones
             par = np.empty((len(spec.charge), 5))
             par[:, 0], par[:, 1], par[:, 2] = spec.charge, spec.sigma, np.sqrt(spec.epsilon)
             par[:, 3], par[:, 4] = 0.0, 1.0
-            par[spec.ligand, 0] *= key[0]
-            par[spec.ligand, 3] = float(spec.softcore_alpha) * (1.0 - key[1]) ** int(spec.softcore_b)
-            par[spec.ligand, 4] = key[1]
+            if ligand is None:
+                par[spec.ligand, 0] *= key[0]
+                par[spec.ligand, 3] = float(spec.softcore_alpha) * (1.0 - key[1]) ** int(spec.softcore_b)
+                par[spec.ligand, 4] = key[1]
+            else:
+                charge, sigma, epsilon, soft, scale = (np.asarray(v, dtype=float) for v in ligand)
+                par[spec.ligand, 0], par[spec.ligand, 1], par[spec.ligand, 2] = charge, sigma, np.sqrt(epsilon)
+                par[spec.ligand, 3], par[spec.ligand, 4] = soft, scale
             if len(self.parameters) >= 128:      # a worker has the states of one leg: far fewer
                 self.parameters.clear()
             with self.device:
@@ -594,6 +607,27 @@ def gpu_stand_in(spec: RelocationSpec, context) -> GpuStandIn | None:
     except ImportError:
         return None
     return GpuStandIn(spec, int(platform.getPropertyValue(context, "DeviceIndex").split(",")[0]))
+
+
+def turn_velocities(context, atoms, mass, rotation) -> None:
+    """Turn the velocities of a molecule whose sites a move turned as one body (``rotation``: the matrix they were
+    turned with): the velocity of its centre of mass is kept, the velocities relative to it are turned with the
+    molecule, so that they stay those of a rigid body (no component along a constrained bond) with the kinetic
+    energy they had. A site without a mass (the virtual site of a 4-site water) has no velocity of its own and gets
+    none. One function for the water relocation moves and the grand canonical moves of water (review of PR #21: the
+    latter turned the sites of an inserted water and left its velocities, which then had components along its
+    bonds that the constraints of the next MD step took out, with their kinetic energy)."""
+    import openmm.unit as u
+
+    mass = np.asarray(mass, dtype=float)
+    atoms = np.asarray(atoms, dtype=np.int64)
+    atoms = atoms[mass[atoms] > 0.0]
+    velocities = np.asarray(context.getState(getVelocities=True).getVelocities(asNumpy=True)
+                            .value_in_unit(u.nanometer / u.picosecond), dtype=float)
+    m = mass[atoms]
+    com = (m[:, None] * velocities[atoms]).sum(axis=0) / m.sum()
+    velocities[atoms] = com + (velocities[atoms] - com) @ np.asarray(rotation, dtype=float).T
+    context.setVelocities(velocities)
 
 
 def logsumexp(values: np.ndarray) -> float:
@@ -780,16 +814,7 @@ class RelocationMover:
             self.context.setPositions(x)
             return result
         # accepted: the velocity of the centre of mass is kept, the rest turns with the molecule
-        # (a site without a mass, the virtual site of a 4-site water, has no velocity of its own
-        # and gets none)
-        atoms = self.waters[move["moved"]]
-        atoms = atoms[np.asarray(self.spec.mass, dtype=float)[atoms] > 0.0]
-        velocities = np.asarray(self.context.getState(getVelocities=True).getVelocities(asNumpy=True)
-                                .value_in_unit(u.nanometer / u.picosecond), dtype=float)
-        mass = np.asarray(self.spec.mass, dtype=float)[atoms]
-        com = (mass[:, None] * velocities[atoms]).sum(axis=0) / mass.sum()
-        velocities[atoms] = com + (velocities[atoms] - com) @ move["rotation"].T
-        self.context.setVelocities(velocities)
+        turn_velocities(self.context, self.waters[move["moved"]], self.spec.mass, move["rotation"])
         result["accepted"] = True
         return result
 

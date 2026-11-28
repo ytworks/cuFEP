@@ -116,6 +116,47 @@ def test_the_plugin_gets_only_charges_of_the_ligand(edge):
 def test_the_evaluator_gives_the_energy_of_every_state(edge, rest2):
     """The cheap evaluation (a quadratic in each half of lambda for the main group, the others per value)
     equals setting each state and computing the energy, for a configuration after MD in the middle."""
+    _check_the_evaluator(edge, rest2)
+
+
+#: toluene -> 4-methylpyridine (Cc1ccncc1): the atoms in the same places, the hydrogen of the ring carbon that
+#: becomes the nitrogen (12) unique; the ring torsions through that atom differ between A and B, so the hybrid has
+#: core proper torsions with a term of B
+PYRIDINE_MAP = {**{i: i for i in range(0, 10)}, 10: 10, 11: 11, 13: 12, 14: 13}
+
+
+def test_rest2_scales_the_whole_core_proper_torsion_and_the_evaluator_gives_every_state():
+    """Review of PR #21 (found in the record of PR #19): the REST2 factor was put in front of
+    (1-lambda)*U1 + lambda*U2 and multiplied the term of A alone, so in a window with s != 1 the System sampled
+    another Hamiltonian than the one the evaluator gives MBAR (s times the whole group). Toluene ->
+    4-methylpyridine has core proper torsions with a term of B (4 of 8)."""
+    from cufep.rbfe.hybrid import CORE_PROPER_TORSION_FORCE_NAME, HYBRID_HOT_GROUP
+    from cufep.rbfe.states import HybridState
+
+    pyridine = build_hybrid_edge("Cc1ccncc1", PYRIDINE_MAP)
+    *_, box = pyridine
+    hybrid = _hybrid(pyridine, rest2=True, rest2_atoms=[])
+    (propers,) = [f for f in hybrid.system.getForces() if f.getName() == CORE_PROPER_TORSION_FORCE_NAME]
+    assert sum(1 for k in range(propers.getNumTorsions()) if propers.getTorsionParameters(k)[4][5] != 0.0) == 4
+    # the ring twisted out of its plane, so that the torsion terms of B are not near their minimum of 0
+    positions = hybrid.positions.copy()
+    rng = np.random.default_rng(5)
+    ligand = list(hybrid.ligand_atoms)
+    positions[ligand] += rng.normal(0.0, 0.02, size=(len(ligand), 3))
+    ctx = reference_context(hybrid.system, positions, box)
+    for x in (0.25, 0.5, 0.75):
+        _set(ctx, HybridState(x, 1.0))
+        cold = potential(ctx, {HYBRID_HOT_GROUP})
+        state = HybridState(x, 2.0)
+        _set(ctx, state)
+        hot = potential(ctx, {HYBRID_HOT_GROUP})
+        # the whole group times s (here 1/2); before the fix the term x * U2 of B kept its full size
+        assert state.rest2_energy_scale == pytest.approx(0.5)
+        assert hot == pytest.approx(state.rest2_energy_scale * cold, abs=1e-6 * abs(cold) + 1e-6)
+    _check_the_evaluator(pyridine, True)
+
+
+def _check_the_evaluator(edge, rest2):
     from cufep.alchemy.schedule import fixed_schedule
     from cufep.rbfe.states import HybridEnergyEvaluator, HybridState
     from cufep.sampling.states import R_GAS
