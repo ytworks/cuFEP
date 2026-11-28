@@ -1,5 +1,5 @@
 # RBFE ベンチマーク(TYK2・A2A)と、実験値・FEP+・OpenFE との比較表
-Status: In progress (branch `feat/rbfe-benchmark-tables`)
+Status: Done (PR #21 into main; the owner's order of 2026-11-28, after eight reviews with every thread resolved and both sets run again with the final code)
 Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks2024 v1.0.0(Baumann et al., doi:10.5281/zenodo.17245550); Ross et al. Commun Chem 2023
 
 ## Context
