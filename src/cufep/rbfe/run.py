@@ -312,7 +312,7 @@ def water_moves_of_leg(result: dict, leg_dir: Path) -> dict:
     (:data:`cufep.workflow.WATER_RULE`) is that of the result, or for a result of a version before it was recorded
     there, that of its samples; None (or no such key) where neither records one (third review of PR #21: the rule
     did not reach the result of a leg, and the results did not tell the edges of the earlier mover)."""
-    from cufep.sampling.storage import stored_conditions
+    from cufep.sampling.storage import recorded_conditions
     from cufep.workflow import water_moves_of
 
     recorded = result.get("water_moves")
@@ -320,7 +320,9 @@ def water_moves_of_leg(result: dict, leg_dir: Path) -> dict:
         return recorded
     if not isinstance(recorded, dict) and ("gcmc" not in result or result["gcmc"] is None):
         return {"enabled": False}
-    of_samples = water_moves_of(stored_conditions(Path(leg_dir) / "hrex")[1])
+    # from the record of the samples alone: a result is combined also where the parts of its samples were set
+    # aside, which a reader of the samples refuses (fourth review of PR #21)
+    of_samples = water_moves_of(recorded_conditions(Path(leg_dir) / "hrex"))
     if isinstance(recorded, dict):
         # a result of a version that recorded the values of the water and not yet the rule of the mover
         return {**recorded, WATER_RULE: (of_samples or {}).get(WATER_RULE)}
@@ -564,22 +566,32 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
         f"{WATER_MOVES}: made, and the excess chemical potential and the standard volume of the water not "
         f"recorded, for {', '.join(unknown)} (results of an earlier version whose samples are not there); those "
         "values were not compared for them"]
-    # edges whose movers were not of one rule give their ddG to one network, and which are of which is said (third
-    # review of PR #21: an edge finished by the mover before 2026-11-28 and one added by this version gave one set of
-    # dG, and nothing told them apart); so is a network none of whose edges records a rule
+    # edges whose movers were not of one rule, or of which that cannot be told, give their ddG to one network, and
+    # which are of which is said (third review of PR #21: an edge finished by the mover before 2026-11-28 and one
+    # added by this version gave one set of dG, and nothing told them apart); so is a network none of whose edges
+    # records a rule
     rules = water_rules(results)
     # (what is known of a leg without a rule: nothing but that; said with what the movers did until the rule)
     earlier = "(until 2026-11-28 the mover left those velocities as they were)"
-    if len(rules) > 1:
+    known = {rule: edges for rule, edges in rules.items() if rule is not None}
+    unrecorded = rules.get(None, [])
+    if len(known) > 1:
+        # rules that are known to differ (fourth review of PR #21: an edge without a recorded rule was said to
+        # be of another rule; it is one of which the rule cannot be told)
         water_notes.append(
             f"{WATER_MOVES}: the edges with a ddG were not sampled under one rule for the velocities of an inserted "
-            "water: " + "; ".join(
-                (f"{rule} for " if rule is not None else f"no rule recorded {earlier} for ") + ", ".join(edges)
-                for rule, edges in sorted(rules.items(), key=lambda item: item[0] is None)))
-    elif None in rules:
+            "water: " + "; ".join(f"{rule} for {', '.join(edges)}" for rule, edges in known.items())
+            + (f"; no rule recorded {earlier} for {', '.join(unrecorded)}" if unrecorded else ""))
+    elif known and unrecorded:
+        (rule,) = known
+        water_notes.append(
+            f"{WATER_MOVES}: no rule for the velocities of an inserted water is recorded for "
+            f"{', '.join(unrecorded)} {earlier}; whether every edge with a ddG was sampled under one rule cannot be "
+            f"told (the other edges record: {rule})")
+    elif unrecorded:
         water_notes.append(
             f"{WATER_MOVES}: no rule for the velocities of an inserted water is recorded for any of the "
-            f"{len(rules[None])} edge(s) with a ddG whose complex legs made the moves {earlier}")
+            f"{len(unrecorded)} edge(s) with a ddG whose complex legs made the moves {earlier}")
     differing = network_differences(out_dir, results)
     if differing:
         # each edge gives its ddG; no dG and no cycle closure is made from edges of other conditions

@@ -372,6 +372,28 @@ def stored_conditions(directory: str | Path) -> tuple[int, dict | None]:
     return (n, conditions) if n and isinstance(conditions, dict) else (n, None)
 
 
+def recorded_conditions(directory: str | Path) -> dict | None:
+    """The conditions recorded with the samples in ``directory``, from their record alone (the manifest; the
+    file of samples of an earlier version): also where parts of the samples were set aside, which every reader
+    of the samples refuses (:func:`stored_layout`), and for a leg that has no samples yet. None if nothing
+    records them or the record cannot be read. For what is said of a leg from its record (the rule of the mover
+    of a result, the time step of a start checkpoint), never to read or continue samples. Fourth review of PR
+    #21: `cufep rbfe analyze` stopped for a whole directory when the HDF5 parts of one leg were moved away."""
+    d = Path(directory)
+    try:
+        manifest = read_manifest(d)
+        if manifest is not None:
+            conditions = (manifest.get("attrs") or {}).get("conditions")
+        elif (d / "samples.h5").exists():
+            with open_samples(d / "samples.h5") as h5:
+                conditions = decoded_attributes(h5).get("conditions")
+        else:
+            return None
+    except (StorageError, OSError):
+        return None
+    return conditions if isinstance(conditions, dict) else None
+
+
 def stored_backend(directory: str | Path) -> str | None:
     """Backend with which the samples in ``directory`` were made, or None if there are none."""
     parts, attrs = stored_layout(directory)

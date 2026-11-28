@@ -61,14 +61,15 @@ def open_leg(job, cfg) -> LegRun:
 def pre_equilibrated(run: LegRun, prep: dict, system, barostat: str, membrane_info: dict):
     """The pre-equilibration of the leg (``equil.npz``), made if the leg has none, checked against the settings of
     this run: ``(its arrays, whether its file records what it was made with)``."""
-    from cufep.workflow import check_equil_file, run_pre_equilibration
+    from cufep.workflow import check_equil_file, kept_time_step, run_pre_equilibration
 
     equil_file = run.leg_dir / "equil.npz"
     leg = run.job.leg
     if not equil_file.exists():
         t0 = time.perf_counter()
+        # (a leg that goes on from samples made at the lowered time step is pre-equilibrated at it)
         run_pre_equilibration(run.cfg, leg, prep, system, barostat, membrane_info, run.seed, equil_file, run.device0,
-                              run.log)
+                              run.log, timestep_fs=kept_time_step(run.cfg, run.leg_dir))
         run.timed("pre_equilibration", t0)
     eq = np.load(equil_file)
     in_membrane = leg == "complex" and barostat == "membrane"

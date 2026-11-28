@@ -165,9 +165,12 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   samples), the edge is compared by the moves alone and the summary names it and its repeats. The result of a
   complex leg, and with it every repeat and edge of the summary (`water_moves`), also records the rule of the mover
   for the velocities of an inserted water (`velocities_of_an_inserted_water`; none for samples of a version
-  before 2026-11-28, `water_rule_not_recorded`). Edges that are not of one rule are combined into one network,
-  and a note of the summary names the edges of each rule (what the earlier rule does to a ddG has not been
-  measured); a network none of whose edges records a rule has a note that says so.
+  before 2026-11-28, `water_rule_not_recorded`; the rule of a result is read from the record of its samples
+  alone, so that a result whose HDF5 parts were set aside is still combined). Edges of rules that are known to
+  differ are combined into one network, and a note of the summary names the edges of each rule (what the earlier
+  rule does to a ddG has not been measured). An edge without a recorded rule is named as one of which it cannot
+  be told whether it was sampled under the rule of the others; a network none of whose edges records a rule has
+  a note that says so.
 - `edges.csv` gives the lowest overlap of all iterations and that among the samples of the estimate, the two
   checks behind NOT RELIABLE, the window with the fewest independent samples of each leg and the legs below the
   level of the analysis (`few_independent_samples`; Mey et al. 2020), and the LOMAP score of the mapping.

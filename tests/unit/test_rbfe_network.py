@@ -391,14 +391,14 @@ def test_the_water_moves_of_a_leg_are_those_of_its_result_or_else_of_its_samples
     assert water_moves_differ(_moves(), _moves(mu=-5.0)) and not water_moves_differ(_moves(), _moves())
     import cufep.sampling.storage as storage
 
-    monkeypatch.setattr(storage, "stored_conditions", lambda directory: (10, {"settings": {"gcmc": record}}))
+    monkeypatch.setattr(storage, "recorded_conditions", lambda directory: {"settings": {"gcmc": record}})
     assert water_moves_of_leg({"gcmc": {"insertions_accepted": [1]}}, tmp_path) == _moves(rule=None)
     # a result of the versions that recorded the values of the water and not the rule of the mover: the rule of
     # its samples (third review of PR #21)
     values = {key: value for key, value in _moves(mu=-5.0).items() if key != RULE}
     assert water_moves_of_leg({"water_moves": values, "gcmc": {}}, tmp_path) == _moves(mu=-5.0, rule=None)
-    monkeypatch.setattr(storage, "stored_conditions", lambda directory: (10, {"settings": {"gcmc": {
-        **record, RULE: "turned with it"}}}))
+    monkeypatch.setattr(storage, "recorded_conditions", lambda directory: {"settings": {"gcmc": {
+        **record, RULE: "turned with it"}}})
     assert water_moves_of_leg({"water_moves": values, "gcmc": {}}, tmp_path) == _moves(mu=-5.0)
 
 
@@ -580,9 +580,12 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     """Third review of PR #21 (P2): the rule of the mover for the velocities of an inserted water was recorded with
     the samples and did not reach the result of a leg. a~b finished by the mover before 2026-11-28 and b~c added by
     this version, with the same values of the water, gave one set of dG, and nothing in the results told which edge
-    was of which mover. The rule is in what the repeat and the edge record of the moves; edges that are not of one
-    rule are named in a note of the network, also where no network is made, and a network none of whose edges
-    records a rule says that; a network of this version's rule has no note (the tests of one network above)."""
+    was of which mover. The rule is in what the repeat and the edge record of the moves; the edges without a
+    recorded rule are named in a note of the network, also where no network is made, and a network none of whose
+    edges records a rule says that; a network of this version's rule has no note (the tests of one network above).
+    Fourth review (P2): an edge without a recorded rule was said to be of another rule than the others; two edges
+    of this version, the samples of one set aside, were so reported. Rules that are known to differ are reported
+    as that; an edge without a rule is one of which it cannot be told."""
     from cufep.rbfe.run import combine_network, result_lines
 
     _write_legs(tmp_path, "a~b", 0, _with_moves(-12.0, _moves(rule=None)), _with_moves(-10.5, NO_MOVES))
@@ -595,10 +598,11 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     assert edges["a~b"]["conditions"]["water_moves"] == _moves(rule=None)
     assert edges["a~b"]["water_rule_not_recorded"] == [0] and edges["b~c"]["water_rule_not_recorded"] == []
     assert edges["b~c"]["conditions"]["water_moves"][RULE] == "turned with it"
-    note = ("grand canonical moves of water in the complex leg: the edges with a ddG were not sampled under one "
-            "rule for the velocities of an inserted water: turned with it for b~c; no rule recorded (until "
-            "2026-11-28 the mover left those velocities as they were) for a~b")
+    note = ("grand canonical moves of water in the complex leg: no rule for the velocities of an inserted water is "
+            "recorded for a~b (until 2026-11-28 the mover left those velocities as they were); whether every edge "
+            "with a ddG was sampled under one rule cannot be told (the other edges record: turned with it)")
     assert summary["notes"] == [note] and f"note: {note}" in result_lines(summary)
+    assert not any("were not sampled under one rule" in item for item in summary["notes"])
     # with an edge without the moves there is no network; the note stays
     summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")], 1, {"a": -9.0})
     assert summary["dg"] is None and summary["notes"][0].startswith("NO NETWORK") and summary["notes"][1] == note
@@ -621,8 +625,19 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     edge = summary["edges"][0]
     assert edge["ddg"] == pytest.approx(-1.7) and edge["conditions"]["water_moves"][RULE] is None
     assert edge["water_rule_not_recorded"] == [0]
-    assert any("turned with it for a~b (repeat 1); no rule recorded" in item and item.endswith("for a~b (repeat 0)")
+    assert any("is recorded for a~b (repeat 0) (until" in item and "cannot be told" in item
                for item in summary["notes"])
+    # rules that are known to differ (another rule than this version's): reported as that, with the edges of each,
+    # and the edge without a rule apart
+    other = tmp_path / "other"
+    _write_legs(other, "a~b", 0, _with_moves(-12.0, _moves(rule="left as they were")), _with_moves(-10.5, NO_MOVES))
+    _write_legs(other, "b~c", 0, _with_moves(-8.0, _moves()), _with_moves(-9.0, NO_MOVES))
+    _write_legs(other, "c~d", 0, _with_moves(-8.0, _moves(rule=None)), _with_moves(-9.0, NO_MOVES))
+    summary = combine_network(other, ["a", "b", "c", "d"], [("a", "b"), ("b", "c"), ("c", "d")], 1, {"a": -9.0})
+    assert summary["notes"] == [
+        "grand canonical moves of water in the complex leg: the edges with a ddG were not sampled under one rule for "
+        "the velocities of an inserted water: left as they were for a~b; turned with it for b~c; no rule recorded "
+        "(until 2026-11-28 the mover left those velocities as they were) for c~d"]
 
 
 def test_the_record_of_a_prepared_edge_is_needed_whatever_the_summary_holds_of_it(tmp_path):
@@ -636,3 +651,51 @@ def test_the_record_of_a_prepared_edge_is_needed_whatever_the_summary_holds_of_i
     assert files_gone(tmp_path, earlier) == []
     (tmp_path / "edges" / "a~b" / "prep" / "prep.json").unlink()
     assert files_gone(tmp_path, earlier) == ["prep/prep.json"]
+
+
+def test_a_result_whose_samples_were_set_aside_is_combined_from_the_record_that_is_left(tmp_path):
+    """Fourth review of PR #21 (P2): both legs of an edge have their result.json; the HDF5 parts of the samples of
+    its complex leg were moved away and hrex/manifest.json was left. To complete the rule of the mover of a result
+    that records the values of the water and not the rule (f24342b), the samples were opened as a reader of
+    samples opens them, which refuses a manifest whose parts are not there: `cufep rbfe analyze` stopped for the
+    whole directory, which d605f12 combined from its results. What is said of a result is read from the record of
+    its samples alone: the rule the manifest records, or none; the ddG and the dG are given."""
+    import json
+
+    from cufep.rbfe.run import combine_network, water_moves_of_leg
+    from cufep.sampling.storage import MANIFEST, StorageError, stored_conditions
+
+    values = {key: value for key, value in _moves().items() if key != RULE}        # as f24342b recorded them
+    record = {"enabled": True, "interval_ps": 4.0, "excess_chemical_potential_kcal_per_mol": -6.09,
+              "standard_volume_nm3": 0.030345}
+    for edge, complex_dg, solvent_dg in (("a~b", -12.0, -10.5), ("b~c", -8.0, -9.0)):
+        _write_legs(tmp_path, edge, 0, _with_moves(complex_dg, values), _with_moves(solvent_dg, NO_MOVES))
+
+    def leg(edge: str):
+        return tmp_path / "edges" / edge / "repeat_0" / "complex"
+
+    def manifest_without_its_parts(edge: str, gcmc: dict) -> None:
+        (leg(edge) / "hrex").mkdir(exist_ok=True)
+        (leg(edge) / "hrex" / MANIFEST).write_text(json.dumps({
+            "parts": [{"file": "segment_000001.h5", "rows": 10, "tail": 0, "frames": 0}],
+            "attrs": {"conditions": {"settings": {"gcmc": gcmc}}}}))
+
+    def moves(edge: str) -> dict:
+        return water_moves_of_leg(json.loads((leg(edge) / "result.json").read_text()), leg(edge))
+
+    manifest_without_its_parts("a~b", {**record, RULE: "turned with it"})
+    manifest_without_its_parts("b~c", record)
+    with pytest.raises(StorageError, match="names parts of the samples that are not there"):
+        stored_conditions(leg("a~b") / "hrex")                       # (a reader of the samples refuses them)
+    assert moves("a~b") == _moves() and moves("b~c") == _moves(rule=None)
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {"a": -9.0})
+    assert [e["ddg"] for e in summary["edges"]] == pytest.approx([-1.5, 1.0]) and summary["dg"] is not None
+    assert [e["water_rule_not_recorded"] for e in summary["edges"]] == [[], [0]]
+    # a record that cannot be read: no rule, and the result is combined all the same
+    (leg("b~c") / "hrex" / MANIFEST).write_text("{")
+    assert moves("b~c") == _moves(rule=None)
+    # a result of the versions before a leg recorded its moves (their counts alone): the values and the rule of the
+    # record that is left
+    counts_only = _with_moves(-8.0, None) | {"gcmc": {"insertions_accepted": [1]}}
+    assert water_moves_of_leg(counts_only, leg("a~b")) == _moves()
+    assert water_moves_of_leg(counts_only, leg("b~c")) == {"enabled": True}

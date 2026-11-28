@@ -245,6 +245,7 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
         _schedule_of_this_leg,
         check_windows_settings,
         has_starts_of,
+        kept_time_step,
         planned_iterations,
         settings_differences,
         start_record_of,
@@ -294,8 +295,9 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
         raise WorkflowError(f"{hrex} holds samples of this leg but {equil_file}, which they started from, is not "
                             "there. Nothing was changed; run the calculation in a new output.dir")
     else:
-        # a leg without samples makes its pre-equilibration again, with the time step of the configuration
-        timestep_fs = float(rcfg.dynamics.timestep_fs)
+        # a leg without samples makes its pre-equilibration again, at the time step of the configuration or at
+        # the lowered one its start checkpoint was made with (cufep.workflow.kept_time_step)
+        timestep_fs = kept_time_step(rcfg, leg_dir)
     built = build_leg(rcfg, Path(edge_dir), leg)
     gcmc = hybrid_gcmc(rcfg, built, leg, quiet)
     plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),

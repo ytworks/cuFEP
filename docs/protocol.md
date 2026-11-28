@@ -1230,6 +1230,12 @@ belong together:
   settings (the table below); otherwise the leg compares it when it opens its samples. A
   relative run builds the hybrid System of its legs and compares every condition before it
   writes (`docs/rbfe.md`).
+- A pre-equilibration that is unstable at `dynamics.timestep_fs` is made at 2 fs, and the
+  samples of the leg record the time step that was used. Where the pre-equilibration of a leg
+  has to be made again and its samples (or the checkpoint of their start) record 2 fs, it is
+  made at 2 fs at once and not tried at the configured time step again, and the file and the
+  result say so: the leg can only go on at the time step of its samples. The check before a
+  run takes the same time step.
 - Workers are started by one function for the replica exchange, the lambda precalculation and a
   change of GPUs: if one does not start, every worker that was started is stopped before the
   error is raised, and the workers and the GPUs the sampler names agree.

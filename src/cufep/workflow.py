@@ -1245,7 +1245,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     # a leg that is to be continued from a checkpoint of an earlier version (run_leg analyses a leg
     # that has all its iterations as it is, without its checkpoint)
     used_timestep = (
-        float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else float(cfg.dynamics.timestep_fs)
+        float(np.load(equil_file)["timestep_fs"]) if equil_file.exists() else kept_time_step(cfg, leg_dir)
     )
     plan = planned_iterations(cfg.sampling.time_per_iteration_ps, used_timestep, cfg.sampling.equilibration(leg),
                               production_ns)
@@ -2583,8 +2583,32 @@ def precision_that_ran(cfg: Config, backend: str) -> str:
     return f"that of the {cfg.backend.platform} platform"
 
 
+def kept_time_step(cfg: Config, leg_dir: Path) -> float:
+    """The time step (fs) at which the pre-equilibration of a leg is made when it is made again: that of the
+    configuration; or the one an unstable pre-equilibration is lowered to
+    (:data:`cufep.sampling.equilibrate.LOWERED_TIMESTEP_FS`), where the replica exchange of the leg goes on from
+    samples, or from the checkpoint of its start, that record it. Such a leg can only go on at the time step of
+    its samples: its pre-equilibration is not tried at the higher one again (it was made at the lowered one after
+    an unstable run, as far as its files say: none of them records the time step that was asked for once
+    ``equil.npz`` is gone). The one rule of the leg (:func:`cufep.engine.leg.pre_equilibrated`) and
+    of the checks before a run (fourth review of PR #21: the check took the time step of the YAML for a leg whose
+    start checkpoint records 2 fs, and refused a leg the same YAML had made)."""
+    from cufep.engine.leg import goes_on_from_its_samples
+    from cufep.sampling.equilibrate import LOWERED_TIMESTEP_FS
+    from cufep.sampling.storage import recorded_conditions
+
+    asked = float(cfg.dynamics.timestep_fs)
+    if asked <= LOWERED_TIMESTEP_FS or not goes_on_from_its_samples(leg_dir):
+        return asked
+    recorded = (recorded_conditions(Path(leg_dir) / "hrex") or {}).get("timestep_fs")
+    if isinstance(recorded, (int, float)) and abs(float(recorded) - LOWERED_TIMESTEP_FS) < 1e-9:
+        return LOWERED_TIMESTEP_FS
+    return asked
+
+
 def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: str, membrane_info: dict, seed: int,
-                          equil_file: Path, device, log=print, what: str = "pre-equilibration") -> None:
+                          equil_file: Path, device, log=print, what: str = "pre-equilibration",
+                          timestep_fs: float | None = None) -> None:
     """Make the pre-equilibration of a prepared system (:func:`load_prepared`) and write it to
     ``equil_file``: plain MD of the fully interacting system, by the settings of ``leg``
     (:func:`pre_equilibration_parts`, :func:`equil_made_with`).
@@ -2592,7 +2616,9 @@ def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: s
     One function for the system of a leg and for the complex in the bilayer in which the restraint
     of a leg in water is chosen (``membrane.complex_leg: water``): ``barostat`` says which the
     system is (``membrane`` for a bilayer), ``membrane_info`` holds the numbers of its bilayer,
-    and ``what`` is how the log names the MD. ``system`` None reads the System of ``prep``."""
+    and ``what`` is how the log names the MD. ``system`` None reads the System of ``prep``.
+    ``timestep_fs`` is the time step it begins with where that is not the one of the configuration
+    (:func:`kept_time_step`); the log and the notes of the file say so."""
     from cufep.sampling.equilibrate import pre_equilibrate
     from cufep.steps import frames_of
 
@@ -2624,8 +2650,10 @@ def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: s
                     xyz = prep["positions"][a_.index]
                     if abs(xyz[2]) > wall_half and tree.query(xyz)[0] > 0.6:
                         wall_atoms.append(a_.index)
+    asked = float(cfg.dynamics.timestep_fs)
+    first = asked if timestep_fs is None else float(timestep_fs)
     settings = plain_md_settings(
-        cfg, float(cfg.dynamics.timestep_fs), barostat, seed,
+        cfg, first, barostat, seed,
         nvt_ns=pre.nvt_ns, npt_ns=2.0 * pre.npt_ns if in_membrane else pre.npt_ns, production_ns=production,
         hold_solute=held, restrained_atoms=restrained, wall_atoms=wall_atoms, wall_half_width_nm=wall_half,
         wall_centre_nm=0.0,
@@ -2635,6 +2663,12 @@ def run_pre_equilibration(cfg: Config, leg: str, prep: dict, system, barostat: s
         if in_membrane else [])
     t0 = time.perf_counter()
     eq = pre_equilibrate(system, prep["positions"], prep["box"], prep["solute"], settings, device, log)
+    if abs(first - asked) > 1e-9:
+        # what is known: the record of the samples and the setting (a file that said what was asked is gone)
+        eq.notes.append(f"{what} made again at {first:g} fs, the time step that the samples of this leg (or the "
+                        f"checkpoint of their start) record; dynamics.timestep_fs is {asked:g} fs, and a {what} "
+                        f"that is unstable at it is made at {first:g} fs")
+        log(eq.notes[-1])
     # the restraint search uses the last pre_equilibration md_ns of the trajectory
     n_keep = max(2, frames_of(pre.md_ns * 1000.0, settings.frame_interval_ps, eq.timestep_fs))
     # simulated_ns is the MD integrated (simulated_ns_is_integrated): earlier versions recorded the

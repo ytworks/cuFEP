@@ -349,12 +349,16 @@ def pre_equilibrate(system: mm.System, positions, box, frame_atoms: list[int],
         float(settings.timestep_fs or 4.0), log)
 
 
+#: the time step an unstable plain MD is made again at (fs)
+LOWERED_TIMESTEP_FS = 2.0
+
+
 def with_time_step_recovery(run, first_fs: float, log, what: str = "pre-equilibration") -> EquilibrationResult:
     """``run(time step in fs)`` at ``first_fs`` and, if that fails and is above 2 fs, once more at
     2 fs from its start; the notes of the result say that the time step was lowered. ``what``
     names the MD in the log and in the error of a run that fails at every time step."""
     first = float(first_fs)
-    attempts = [first] + ([2.0] if first > 2.0 else [])
+    attempts = [first] + ([LOWERED_TIMESTEP_FS] if first > LOWERED_TIMESTEP_FS else [])
     last: Exception | None = None
     for i, dt in enumerate(attempts):
         try:

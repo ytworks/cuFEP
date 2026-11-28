@@ -935,3 +935,89 @@ def test_a_leg_stopped_at_the_checkpoint_of_its_start_is_checked_before_a_run_wr
     monkeypatch.setattr(rbfe_run, "write_run_files", not_to_be_reached)
     with pytest.raises(WorkflowError, match="wrote the checkpoint of its start.*the System"):
         run_rbfe(rcfg, log=lambda line: None)
+
+
+def test_a_leg_lowered_to_2_fs_goes_on_at_2_fs_when_its_pre_equilibration_is_made_again(tmp_path, monkeypatch,
+                                                                                       deterministic_cpu):
+    """Fourth review of PR #21 (P2): the pre-equilibration of a leg was unstable at the 4 fs of the YAML and was
+    made at 2 fs; the leg stopped at the checkpoint of the start of its replica exchange, which records 2 fs. With
+    its start configurations and equil.npz to be made again, the check before the run built the conditions from the
+    4 fs of the YAML and refused a leg that the same YAML had made. A leg that goes on from samples (or the
+    checkpoint of their start) made at the lowered time step has its pre-equilibration made again at that time
+    step, also where 4 fs would be stable this time; the check before the run compares with it; the leg goes on,
+    and its pre-equilibration and its result say so."""
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe import run as rbfe_run
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.rbfe.run import run_rbfe, write_run_files
+    from cufep.sampling import equilibrate, hrex
+    from cufep.sampling.storage import read_manifest, stored_conditions
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = {**_config(tmp_path, out_dir, "fixed").model_dump(mode="json"),
+            "network": {"edges": [["toluene", "phenol"]]}}
+    rcfg = RbfeConfig.model_validate(data)
+    assert rcfg.dynamics.timestep_fs == 4.0
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    job = EdgeLegJob(edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+                     config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True)
+    production = equilibrate._production
+    tried = []
+
+    def unstable_at_4_fs(system, backend, start, frame_atoms, settings, dt_fs, *args, **kwargs):
+        tried.append(dt_fs)
+        if dt_fs == 4.0:
+            raise equilibrate.EquilibrationError("energy became non-finite during the pre-equilibration MD")
+        return production(system, backend, start, frame_atoms, settings, dt_fs, *args, **kwargs)
+
+    def stopped(self, *args, **kwargs):
+        raise RuntimeError("stopped after the checkpoint of the start")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(equilibrate, "_production", unstable_at_4_fs)
+        patch.setattr(hrex.ReplicaExchangeSampler, "run", stopped)
+        assert "stopped" in run_hybrid_leg_safe(job)["error"]
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    assert tried == [4.0, 2.0]
+    assert (leg_dir / "hrex" / "checkpoint.npz").exists() and stored_conditions(leg_dir / "hrex")[0] == 0
+    assert read_manifest(leg_dir / "hrex")["attrs"]["conditions"]["timestep_fs"] == 2.0
+    # the checkpoint stays; the start configurations and the pre-equilibration are to be made again
+    (leg_dir / "start_configs.npz").unlink()
+    (leg_dir / "equil.npz").unlink()
+    write_run_files(out_dir, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
+    protein = _protein()
+
+    def stop_at_the_first_write(*args, **kwargs):
+        raise RuntimeError("the run began to write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+        patch.setattr(rbfe_run, "write_run_files", stop_at_the_first_write)
+        with pytest.raises(RuntimeError, match="the run began to write"):           # the check before the run passes
+            run_rbfe(rcfg, log=lambda line: None)
+    # the leg: 4 fs would be stable now, and is not tried
+    tried.clear()
+
+    def stable(system, backend, start, frame_atoms, settings, dt_fs, *args, **kwargs):
+        tried.append(dt_fs)
+        return production(system, backend, start, frame_atoms, settings, dt_fs, *args, **kwargs)
+
+    monkeypatch.setattr(equilibrate, "_production", stable)
+    result = run_hybrid_leg_safe(job)
+    assert "error" not in result, result
+    assert tried == [2.0]
+    with np.load(leg_dir / "equil.npz") as eq:
+        assert float(eq["timestep_fs"]) == 2.0
+    note = ("pre-equilibration made again at 2 fs, the time step that the samples of this leg (or the checkpoint of "
+            "their start) record; dynamics.timestep_fs is 4 fs, and a pre-equilibration that is unstable at it is "
+            "made at 2 fs")
+    assert note in result["notes"]
+    assert read_manifest(leg_dir / "hrex")["attrs"]["conditions"]["timestep_fs"] == 2.0
