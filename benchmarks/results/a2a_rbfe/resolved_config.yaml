@@ -94,12 +94,10 @@ resources:
   - 3
   - 4
   - 5
-  - 6
-  - 7
   oversubscription_factor: auto
   cpu_threads_per_worker: 2
 output:
-  dir: runs/rbfe_bench_a2a_cd15025
+  dir: runs/rbfe_bench_a2a_957a9cf
 system:
   protein: /opt/cufep/benchmarks/a2a/inputs/a2a_hip278_protein.pdb
   ligands: /opt/cufep/benchmarks/a2a/ligands.sdf

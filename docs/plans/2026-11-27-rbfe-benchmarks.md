@@ -263,3 +263,10 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   標準 OpenMM の辺は 5 つ(ejm_31~ejm_45、ejm_42~ejm_54、ejm_43~ejm_42、ejm_50~ejm_42、ejm_50~ejm_55)。全辺が速度の規則
   「turned with it」を記録し、注記なし。修正前の実行(faa65e0)との差(新 − 旧、辺の ΔΔG): 平均 +0.16、RMS 0.44、最大 1.08
   (ejm_31→ejm_45)。どちらも 1 回の計算で、差には実行ごとのばらつきが入っている(速度の修正だけの効果とは分けられない)。
+- 2026-11-28 A2A full の流し直し(image cufep:957a9cf、`runs/rbfe_bench_a2a_957a9cf`、`benchmarks/results/a2a_rbfe/`。GPU 3〜5 で
+  開始し、TYK2 の終了後に GPU 0〜5 でチェックポイントから再開): exit 0、21/21 辺、17/17 化合物。dG(17 化合物の上で中心合わせ):
+  RMSE 1.51 [0.79, 1.98]、MUE 1.15 [0.63, 1.70]、pairwise RMSE 2.21、R² 0.68、Kendall τ 0.69(FEP+ 1.08 / 0.79 / 1.58 / 0.50 /
+  0.59)。辺の RMSE: 21 辺 1.66 [1.19, 2.11]、公開 map と共通の 10 辺 2.16(FEP+ Bennett 1.42)。NOT RELIABLE の脚なし(最小の
+  重なり 0.081、4g~4l)。独立サンプル 50 未満: 4c~4d(complex 36)、4h~4r(complex 27)。標準 OpenMM の辺は 4d~4f。全辺が速度の規則
+  「turned with it」を記録し、注記なし。修正前の実行(cd15025)との差(新 − 旧、辺の ΔΔG): 平均 −0.27、RMS 0.59、最大 1.70
+  (4b→4e)。化合物の誤差が大きいのは 4a(+4.01)、4o(+2.43)、4r(−1.98)で、修正前の実行でも同じ化合物だった。

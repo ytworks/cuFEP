@@ -45,18 +45,14 @@ published one: the standard deviation propagated from the three repeats of its c
 | set | directory | edges with a ddG | compounds with a dG | calculation | report |
 |---|---|---|---|---|---|
 | TYK2 (`tyk2`) | [tyk2_rbfe](tyk2_rbfe) | 22 of 22 | 16 of 16 | 2026-11-28, commit 957a9cf (grand canonical moves of water in the complex leg; on three of the GPUs) | of the run |
-| A2A (`a2a`) | [a2a_rbfe](a2a_rbfe) | 21 of 21 | 17 of 17 | 2026-11-28, commit cd15025 (grand canonical moves of water in the complex leg; started on five GPUs, resumed from its checkpoints on eight with the same image) | made again from the legs of the run by the code of 773e8f5 |
+| A2A (`a2a`) | [a2a_rbfe](a2a_rbfe) | 21 of 21 | 17 of 17 | 2026-11-28, commit 957a9cf (grand canonical moves of water in the complex leg; started on three of the GPUs, resumed from its checkpoints on six with the same image) | of the run |
 
-- TYK2 was run again with the image of 957a9cf (the owner's decision of 2026-11-28, after the reviews of PR #21): the
-  run of faa65e0 that was recorded before had been sampled before the fix of the velocities of an inserted water
-  (c2f6903). Edge by edge the new ddG differ from those of that run by +0.16 kcal/mol in the mean, 0.44 RMS and at
-  most 1.08 (ejm_31 -> ejm_45), one calculation each. The record of the run of faa65e0 is in the tree of commit
-  957a9cf.
-- A2A: the record is the run of cd15025, which was made before that fix: its samples record no rule of the mover, and
-  the summary says so of every edge (`water_rule_not_recorded`, and `velocities_of_an_inserted_water` of its
-  `water_moves`) and in a note, which the report repeats. Its summary and report were made again from the legs of the
-  run (`cufep rbfe analyze <run directory> --write`, then the report; image of 773e8f5): every ddG and dG is the one
-  the run gave.
+- Both sets were run again with the image of 957a9cf (the owner's decision of 2026-11-28, after the reviews of PR #21):
+  the runs that were recorded before (TYK2 of faa65e0, A2A of cd15025) had been sampled before the fix of the
+  velocities of an inserted water (c2f6903). Edge by edge the new ddG differ from those of the earlier run by +0.16
+  kcal/mol in the mean, 0.44 RMS and at most 1.08 (ejm_31 -> ejm_45) for TYK2, and by -0.27 in the mean, 0.59 RMS and
+  at most 1.70 (4b -> 4e) for A2A; one calculation each, so that the differences hold the scatter between two runs
+  too. The records of the earlier runs are in the tree of commit 957a9cf.
 - Files: `rbfe_report.md` (statistics and tables), `rbfe_report_ligands.csv`, `rbfe_report_edges.csv`,
   `rbfe_report.png` (dG of the compounds), `rbfe_report_edges.png` (ddG of the edges), and the run's `summary.json`,
   `edges.csv`, `ligands.csv`, `network.json`, `resolved_config.yaml`.
