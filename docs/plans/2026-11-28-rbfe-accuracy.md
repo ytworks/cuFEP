@@ -69,3 +69,44 @@ issue の項目はどれも設定として実装し、既定はオーナーが�
 - 実行: 上の表の検証 run(コミットから作ったイメージ、GPU 0〜5、1 辺ずつ)。
 
 ## Record
+
+### 2026-11-28: 項目 1 の実装(f80b132)
+- `lambda_schedule.start_configurations: pre_equilibration | precalculation`(既定は前者 = いまの動作)、`lambda_schedule.windows`
+  と `sampling.production_ns` を脚ごとに、脚の結果に `md_ps`(pre-equilibration のあとの MD: 窓を作った MD と replica
+  exchange)。walk は `cufep.alchemy.schedule.walk_starts` の 1 つを、適応 λ の 1 回目と、与えた窓の開始
+  (`precalculation_starts`)の両方が使う。
+- テスト: 与えた窓の開始構造が、同じ窓を選んだ precalculation の開始構造とビット単位で一致する(CPU、1 スレッド、決定的な
+  力。`test_given_windows_started_as_a_precalculation_start_as_its_first_iteration_does`)。対象のテスト 80 passed、GPU テスト
+  70 passed(GPU 2 枚)。
+- 記録と同じ System になること(`spikes/m39_same_system_as_a_record.py`、run の前の確認 `check_leg_reuse` を記録の
+  ディレクトリに対して行う): `runs/rbfe_bench_tyk2_957a9cf` の 44 脚と `runs/rbfe_bench_a2a_957a9cf` の 42 脚のすべてで、
+  このツリーが作る hybrid System の checksum・窓・samples の条件が記録と同じ(違いは 0 脚)。
+
+### 2026-11-28: 記録の 43 辺の分類(実験値を使わない。`spikes/m40_rbfe_edge_classes.py`、`spikes/m41_terminal_group_orientations.py`)
+- 末端回転 MC の対象基がある辺: TYK2 は 22 辺中 0(2,6-ジクロロフェニルは 2 つの向きが同じ。ピリジン側は結合の大きい
+  側)。A2A は 21 辺中 13(4b~4e、4b~4m、4f~4e、4g~4j、4g~4k、4g~4l、4h~4l、4h~4r、4j~4i、4k~4r、4m~4n、4m~4q、4o~4e。
+  回る原子は 10〜18)。公開 map が回転異性体の状態を置いた化合物(4b、4e、4j、4k、4l、4m、4r)を含む辺と一致する。
+- 保存フレーム(λ = 0 のレプリカ、各脚 600 フレーム)での対象基の向き: 13 辺すべてで、複合体の脚は開始と反対の向きが
+  0.0 %(フレーム間の入れ替わり 0 回)。溶媒の脚は 6.7〜44.2 %(入れ替わり 68〜254 回)。
+- 接合部: 橋の原子の混成が両端で変わるダミー基がある辺は TYK2 の 3 辺(ejm_42~ejm_54、ejm_50~ejm_55、jmc_28~jmc_30)、
+  A2A は 0。
+- REST2: いまの hot 原子はリガンド全体(31〜47 原子)と受容体 190〜278 原子。固有原子は辺あたり 0〜18、元素が変わるか
+  固有原子に結合する core 原子は 1〜4、電荷が 0.05 e より大きく変わる core 原子は 0〜7。
+
+### 2026-11-28: 項目 2 の実装(3367749)
+- `sampling.terminal_flip.{enabled: false, interval_ps: 2.5}`、`src/cufep/sampling/terminal_flip.py`。規則と SOMD2 との
+  違いは `docs/rbfe.md`("Sampling")。対象基がない脚は設定なしと同じに計算し、samples の設定にも書かない。
+- テスト(`tests/unit/test_terminal_flip.py` 15 件、`tests/unit/test_rbfe_run.py` 2 件): 規則(小さい側の芳香環、向きの
+  区別、両リガンドの基、ダミーも回る、対象外の理由)、半回転 2 回で元に戻る、MC だけで 1 kT 差の 2 つの向きの集団が
+  0.269 になる(Reference、6000 回)、受理で速度も回り拘束長と運動エネルギーが保たれ、棄却で何も変わらない、脚で 1 反復
+  1 試行が窓ごとに記録され、設定なしの run はその samples を引き継がない。
+- GPU テスト(`tests/gpu/test_gpu.py`、8 件): 両バックエンドの Context で、leg の中間の状態(REST2 あり・なし)の MD の
+  あとに半回転を 1 回試み、判定に使ったエネルギー差が、標準 OpenMM・倍精度・Ewald 誤差 1e-6 の同じ状態での 2 つの配置の
+  差と一致する(12 回の測定で差は最大 0.006 kT、エネルギー差は 0.0〜10.0 kT、受理と棄却の両方。水準 0.05 kT)。
+
+### 検証 run: 未実行
+- 項目 1 の対照(TYK2 `ejm_55~ejm_54`)の入力は用意した: `runs/rbfe_acc_item1_recorded_windows_f80b132/` と
+  `runs/rbfe_acc_item1_11_windows_f80b132/`(記録の `prep/` と `cache/` を写したもの、イメージ `cufep:f80b132`)。
+  両側とも `mode: fixed`、`start_configurations: precalculation`、`sampling.repeats: 2`。記録の窓の側は両脚
+  [0, 0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88, 1.0]、production 5 ns。11 窓の側は等間隔 11 窓で、production は
+  複合体 3.725 ns、溶媒 3.8975 ns(脚ごとの MD の合計が記録の窓の側以下になる長さ)。オーナーの確認のあとに始める。
