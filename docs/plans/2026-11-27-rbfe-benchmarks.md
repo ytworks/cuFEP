@@ -101,4 +101,27 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   0.084)。kcal/mol、95 % bootstrap、17 化合物で中心合わせ: dG の RMSE 1.59 [0.95, 2.14](FEP+ 1.08)、MUE 1.22(0.79)、pairwise 2.33
   (1.58)、R² 0.51(0.50)、τ 0.57(0.59)。辺の RMSE 21 辺 1.57、FEP+ と共通の 10 辺 1.97(FEP+ Bennett 1.42)。外れの大きい化合物:
   4a +3.78、4o +3.38(4o→4e −4.34、実験 −0.72)、4r −2.14、4n −1.71。GCMC なしの A2A(RBFE)は止めたので比べる相手がない。
+- 2026-11-28 オーナーのレビュー(review 6094696180、P1 2 件・P2 10 件)。各件を今のコードで再現し、修正前に失敗するテストにして
+  から直した(c2f6903):
+  - P1 水の化学ポテンシャルの違う辺の統合 → 脚の結果に、サンプルが記録した GCMC の有無・μ'・V° を入れ(`water_moves`)、辺の
+    反復間(違えば ddG なし)とネットワークの辺間(違えば dG・サイクルなし)で照合。記録の無い旧結果はサンプルの記録から読む。
+    ABFE の反復間の照合は issue #20 のまま(オーナーの以前の指示)。
+  - P1 挿入した水の速度 → 水を回した行列で重心まわりの相対速度も回す(`turn_velocities`、RelocationMC と共通の 1 関数)。修正前の
+    テスト: 結合方向の相対速度 0.79 nm/ps。**記録した TYK2(faa65e0)と A2A(cd15025)の計算はこの修正の前のもので、流し直して
+    いない(ΔG への影響は未測定)。**
+  - P2 `auto` の水の値は決めた条件(298.15 K、1 bar、cutoff 0.9 nm)のときだけ。条件外は数値を求めるか GCMC を切るよう、設定を
+    読むときに拒否。P2 GCMC なしで作ったディレクトリを既定 ON で再実行 → 脚の前平衡化を、書く前・脚を始める前に照合して拒否し、
+    `sampling.gcmc.enabled: false` で続けられると案内。P2 旧規則(平均セル)で走った ABFE の GCMC 脚 → 走ったセル(開始配置、
+    無ければ checkpoint)を使い続ける。`positions_in_cell` は戻した(旧規則の脚の開始配置の作り直しと `spikes/m35`)。P2 開始 MD
+    の GCMC が GPU の割り当てで変わる → ワーカーと脚のプロセスで同じ関数(`water_movers`、`window_mover_on`)。P2 ΔG の RMSE・MUE
+    の bootstrap は標本ごとに中心を合わせ直す。P2 OpenFE の ± は両脚の反復の SD から伝播した値と明記(全 22 辺で一致、
+    ejm_49→ejm_50: 0.1364 対 0.0587)。P2 比較表に脚ごとの独立サンプルの最小値と基準未満の脚。P2 LOMAP スコアを summary に入れ、
+    `cufep rbfe analyze --write` で実行の表を作り直せる。P2 セットの違うディレクトリの報告は書く前に拒否(ABFE の報告も、全部が
+    別セットなら拒否)。P2 スクリプトが cufep から import する名前が実在することのテスト(spikes 53 本・scripts)。
+  - 記録の作り直し(image c2f6903、`rbfe analyze --write` と report): ddG と dG は全て同じ。dG の RMSE・MUE の区間が変わった:
+    TYK2 RMSE 0.65 [0.44, 0.80]、MUE 0.55 [0.33, 0.72](FEP+ 0.47 [0.28, 0.63]、OpenFE 0.59 [0.38, 0.72]); A2A RMSE 1.59
+    [0.80, 2.05]、MUE 1.22 [0.65, 1.78](FEP+ 1.08 [0.58, 1.40])。フラグ: TYK2 は NOT RELIABLE が ejm_31~ejm_48 の complex 脚
+    (最小の重なり 0.028。これまでの報告に書き落としていた)、独立サンプル 50 未満が ejm_31~ejm_45(complex 48)、ejm_42~ejm_54
+    (solvent 25)、ejm_49~ejm_50(complex 36); A2A は NOT RELIABLE なし、50 未満が 4b~4e(complex 31)、4g~4d(complex 35)。
+    水の移動の条件は両セットとも全辺で同じ(μ' −6.09 kcal/mol、V° 0.030345 nm³)。
 
