@@ -609,6 +609,27 @@ def gpu_stand_in(spec: RelocationSpec, context) -> GpuStandIn | None:
     return GpuStandIn(spec, int(platform.getPropertyValue(context, "DeviceIndex").split(",")[0]))
 
 
+def turn_velocities(context, atoms, mass, rotation) -> None:
+    """Turn the velocities of a molecule whose sites a move turned as one body (``rotation``: the matrix they were
+    turned with): the velocity of its centre of mass is kept, the velocities relative to it are turned with the
+    molecule, so that they stay those of a rigid body (no component along a constrained bond) with the kinetic
+    energy they had. A site without a mass (the virtual site of a 4-site water) has no velocity of its own and gets
+    none. One function for the water relocation moves and the grand canonical moves of water (review of PR #21: the
+    latter turned the sites of an inserted water and left its velocities, which then had components along its
+    bonds that the constraints of the next MD step took out, with their kinetic energy)."""
+    import openmm.unit as u
+
+    mass = np.asarray(mass, dtype=float)
+    atoms = np.asarray(atoms, dtype=np.int64)
+    atoms = atoms[mass[atoms] > 0.0]
+    velocities = np.asarray(context.getState(getVelocities=True).getVelocities(asNumpy=True)
+                            .value_in_unit(u.nanometer / u.picosecond), dtype=float)
+    m = mass[atoms]
+    com = (m[:, None] * velocities[atoms]).sum(axis=0) / m.sum()
+    velocities[atoms] = com + (velocities[atoms] - com) @ np.asarray(rotation, dtype=float).T
+    context.setVelocities(velocities)
+
+
 def logsumexp(values: np.ndarray) -> float:
     values = np.asarray(values, dtype=float)
     if values.size == 0:
@@ -793,16 +814,7 @@ class RelocationMover:
             self.context.setPositions(x)
             return result
         # accepted: the velocity of the centre of mass is kept, the rest turns with the molecule
-        # (a site without a mass, the virtual site of a 4-site water, has no velocity of its own
-        # and gets none)
-        atoms = self.waters[move["moved"]]
-        atoms = atoms[np.asarray(self.spec.mass, dtype=float)[atoms] > 0.0]
-        velocities = np.asarray(self.context.getState(getVelocities=True).getVelocities(asNumpy=True)
-                                .value_in_unit(u.nanometer / u.picosecond), dtype=float)
-        mass = np.asarray(self.spec.mass, dtype=float)[atoms]
-        com = (mass[:, None] * velocities[atoms]).sum(axis=0) / mass.sum()
-        velocities[atoms] = com + (velocities[atoms] - com) @ move["rotation"].T
-        self.context.setVelocities(velocities)
+        turn_velocities(self.context, self.waters[move["moved"]], self.spec.mass, move["rotation"])
         result["accepted"] = True
         return result
 

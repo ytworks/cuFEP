@@ -19,6 +19,7 @@ the hybrid topology. The sections that mean the same in both YAMLs are one schem
 cufep rbfe plan config.yaml      # ligands, edges and atom mappings, without simulating
 cufep rbfe run config.yaml       # run (or resume) every edge
 cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have; writes nothing
+cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv and summary.json again
 ```
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
@@ -121,7 +122,12 @@ exchange keep the cell of its last configuration, without a barostat. A ghost ha
 the NonbondedForce and in the Lennard-Jones of the hybrid ligand with its environment. The trials are first
 evaluated with a stand-in energy in which each atom of the hybrid ligand has its charge and Lennard-Jones at the
 lambda of the window; the one that passes is tested with the full potential of the replica. The solvent leg has no
-moves.
+moves. The windows a leg does not choose itself make the moves in the MD of their start too, on workers and in the
+process of the leg alike. `auto` gives the excess chemical potential and the standard volume of the water only at
+the conditions they were determined at (298.15 K, 1 bar, a cutoff of 0.9 nm; `docs/configuration.md`): a run under
+others gives its own numbers or switches the moves off. A directory of a version before the moves, run again with
+its YAML, is refused before anything is written (the pre-equilibration of its complex legs was made without
+ghosts), and says that `sampling.gcmc.enabled: false` continues it as it was made.
 
 ### Membrane proteins
 
@@ -138,10 +144,14 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
 - Cycle closure: the sum of the ddG around every cycle of a cycle basis, with its standard error, as
   numbers without a verdict.
 - The edges combined into cycle closures and dG must have been made under the same conditions (temperature,
-  pressure, tail correction) from the same preparation besides their ligands (protein, force field, solvation,
-  bilayer, pH ...), and a ligand of one name must be one molecule in all of them; otherwise each edge gives its
-  ddG and the run says what differs, without cycle closures and without dG. `edges.csv` gives the lowest overlap
-  of all iterations and that among the samples of the estimate, the two checks behind NOT RELIABLE.
+  pressure, tail correction, and the grand canonical moves of water of their complex legs: with or without them,
+  the same excess chemical potential and standard volume of water, as the samples record them) from the same
+  preparation besides their ligands (protein, force field, solvation, bilayer, pH ...), and a ligand of one name
+  must be one molecule in all of them; otherwise each edge gives its ddG and the run says what differs, without
+  cycle closures and without dG. The repeats of an edge whose complex legs were sampled with other moves give no
+  ddG. `edges.csv` gives the lowest overlap of all iterations and that among the samples of the estimate, the two
+  checks behind NOT RELIABLE, the window with the fewest independent samples of each leg and the legs below the
+  level of the analysis (`few_independent_samples`; Mey et al. 2020), and the LOMAP score of the mapping.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
   2019, 59, 4720), by cinnabar's solver (OpenFE's `openfe gather --report dg`), edges weighted by the inverse
   of their variance. The edges fix the differences between the ligands; the one constant they leave is set
@@ -164,8 +174,11 @@ before anything runs: for TYK2 the 22 edges with which the OpenFE benchmark (Ind
 al.) computed this set, in the same directions. `cufep benchmark report NAME DIR --protocol rbfe` compares a run
 with experiment and the published results (`rbfe_report.md`, `rbfe_report_ligands.csv`, `rbfe_report_edges.csv`,
 two figures): the dG of the compounds and the ddG of the edges of every method on the same compounds and edges,
-with 95 % bootstrap intervals, and for every edge its windows, lowest overlap and the backend of its legs
-(`benchmarks/README.md`).
+with 95 % bootstrap intervals (for the dG, each method centred on the compounds compared, in every resample), and
+for every edge its LOMAP score, its windows, lowest overlap, fewest independent samples, the backend of its legs
+and its flags (NOT RELIABLE, few independent samples). The report is made from `summary.json` of the run, so it
+can be made again from the files that are kept of a run (`benchmarks/results/`); a directory that is not a run of
+the set named is refused before anything is written (`benchmarks/README.md`).
 
 ## Not in this version
 

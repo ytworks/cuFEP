@@ -297,3 +297,100 @@ def test_the_table_gives_the_overlap_among_the_samples_of_the_estimate(tmp_path)
     row = next(csv.DictReader((tmp_path / "edges.csv").open()))
     assert float(row["lowest_overlap_complex"]) == pytest.approx(0.12)
     assert float(row["lowest_overlap_used_complex"]) == pytest.approx(0.001) and row["not_reliable"] == "complex"
+
+
+def _moves(mu: float = -6.09, volume: float = 0.030345) -> dict:
+    return {"enabled": True, "excess_chemical_potential_kcal_per_mol": mu, "standard_volume_nm3": volume}
+
+
+NO_MOVES = {"enabled": False}
+
+
+def _with_moves(dg_kcal: float, moves: dict | None, **more) -> dict:
+    """A leg result as this version writes it: the counts of the moves (None without them) and what the samples
+    were made with."""
+    result = {**_leg_result(dg_kcal, **more), "gcmc": {"insertions_accepted": [3]} if (moves or {}).get("enabled")
+              else None}
+    if moves is not None:
+        result["water_moves"] = moves
+    return result
+
+
+def test_complex_legs_of_other_grand_canonical_moves_of_water_are_not_combined(tmp_path):
+    """Review of PR #21 (P1): `--edge a~b`, then another sampling.gcmc.excess_chemical_potential_kcal_per_mol and
+    `--edge b~c` in the same directory: the samples of a~b were not looked at again, the conditions compared among
+    edges were temperature, pressure and the tail correction, and the dG of a, b and c were estimated from edges of
+    two activities of water. Each edge gives its ddG; no dG and no cycle closure is made of them. The same for
+    edges with and without the moves, and for the repeats of one edge, which then has no ddG."""
+    from cufep.rbfe.run import combine_network, result_lines
+
+    _write_legs(tmp_path, "a~b", 0, _with_moves(-12.0, _moves()), _with_moves(-10.5, NO_MOVES))
+    _write_legs(tmp_path, "b~c", 0, _with_moves(-8.0, _moves(mu=-5.0)), _with_moves(-9.0, NO_MOVES))
+    _write_legs(tmp_path, "a~c", 0, _with_moves(-7.0, _moves()), _with_moves(-6.0, NO_MOVES))
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")], 1, {"a": -9.0})
+    edges = {e["edge"]: e for e in summary["edges"]}
+    assert edges["a~b"]["ddg"] == pytest.approx(-1.5) and edges["b~c"]["ddg"] == pytest.approx(1.0)
+    assert edges["a~b"]["conditions"]["water_moves"] == _moves()
+    assert summary["dg"] is None and summary["cycle_closures"] == []
+    (differing,) = summary["inconsistent_edges"]
+    assert differing == ("grand canonical moves of water in the complex leg: a~b excess chemical potential -6.09 "
+                         "kcal/mol, standard volume 0.030345 nm3, b~c excess chemical potential -5 kcal/mol, standard "
+                         "volume 0.030345 nm3, a~c excess chemical potential -6.09 kcal/mol, standard volume 0.030345 "
+                         "nm3")
+    assert any(line.startswith("note: NO NETWORK") for line in result_lines(summary))
+    # with and without the moves
+    other = tmp_path / "with_and_without"
+    _write_legs(other, "a~b", 0, _with_moves(-12.0, _moves()), _with_moves(-10.5, NO_MOVES))
+    _write_legs(other, "b~c", 0, _with_moves(-8.0, NO_MOVES), _with_moves(-9.0, NO_MOVES))
+    summary = combine_network(other, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {})
+    assert summary["dg"] is None and "b~c none" in summary["inconsistent_edges"][0]
+    # the same moves in every edge: one network
+    same = tmp_path / "same"
+    _write_legs(same, "a~b", 0, _with_moves(-12.0, _moves()), _with_moves(-10.5, NO_MOVES))
+    _write_legs(same, "b~c", 0, _with_moves(-8.0, _moves()), _with_moves(-9.0, NO_MOVES))
+    summary = combine_network(same, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {})
+    assert summary["dg"] is not None and "inconsistent_edges" not in summary and summary["notes"] == [
+        "no ligand has an experimental value: the dG are relative to the mean of the network"]
+    # two repeats of one edge
+    repeats = tmp_path / "repeats"
+    _write_legs(repeats, "a~b", 0, _with_moves(-12.0, _moves()), _with_moves(-10.5, NO_MOVES))
+    _write_legs(repeats, "a~b", 1, _with_moves(-12.4, _moves(volume=0.03)), _with_moves(-10.5, NO_MOVES))
+    edge = combine_network(repeats, ["a", "b"], [("a", "b")], 2, {})["edges"][0]
+    assert "ddg" not in edge
+    assert edge["inconsistent_legs"] == [
+        "grand canonical moves of water in the complex leg: repeat 0 excess chemical potential -6.09 kcal/mol, "
+        "standard volume 0.030345 nm3, repeat 1 excess chemical potential -6.09 kcal/mol, standard volume 0.03 nm3"]
+
+
+def test_the_water_moves_of_a_leg_are_those_of_its_result_or_else_of_its_samples(tmp_path, monkeypatch):
+    """What a complex leg was sampled with is read where it is recorded: in the result of this version; for a
+    result of the versions that made the moves and did not record them (it has their counts), in the conditions of
+    its samples; a result of a version before a relative leg could make them (no ``gcmc`` at all) was made
+    without. A result with counts and without samples is not recorded, and the summary says that the edge was
+    combined without the comparison."""
+    from cufep.rbfe import run as run_module
+    from cufep.rbfe.run import combine_network, water_moves_of_leg
+    from cufep.workflow import water_moves_of
+
+    record = {"enabled": True, "interval_ps": 4.0, "excess_chemical_potential_kcal_per_mol": -6.09,
+              "standard_volume_nm3": 0.030345, "cell_pressure_bar": 1.0}
+    assert water_moves_of({"settings": {"gcmc": record}}) == _moves()
+    assert water_moves_of({"settings": {"rbfe": {}}}) == NO_MOVES and water_moves_of({}) == NO_MOVES
+    assert water_moves_of(None) is None
+    assert water_moves_of_leg({"water_moves": _moves(mu=-5.0), "gcmc": {}}, tmp_path) == _moves(mu=-5.0)
+    assert water_moves_of_leg({"delta_g": 1.0}, tmp_path) == NO_MOVES            # a version before the moves
+    assert water_moves_of_leg({"gcmc": None}, tmp_path) == NO_MOVES
+    assert water_moves_of_leg({"gcmc": {"insertions_accepted": [1]}}, tmp_path) is None   # no samples to ask
+    import cufep.sampling.storage as storage
+
+    monkeypatch.setattr(storage, "stored_conditions", lambda directory: (10, {"settings": {"gcmc": record}}))
+    assert water_moves_of_leg({"gcmc": {"insertions_accepted": [1]}}, tmp_path) == _moves()
+    monkeypatch.undo()
+    _write_legs(tmp_path, "a~b", 0, _with_moves(-12.0, None) | {"gcmc": {"insertions_accepted": [1]}},
+                _with_moves(-10.5, NO_MOVES))
+    summary = combine_network(tmp_path, ["a", "b"], [("a", "b")], 1, {"a": -9.0})
+    assert summary["dg"] is not None and summary["edges"][0]["conditions"]["water_moves"] is None
+    assert summary["notes"] == ["grand canonical moves of water in the complex leg: not recorded for a~b (results "
+                                "of an earlier version whose samples are not there); they are combined without that "
+                                "comparison"]
+    assert run_module.WATER_MOVES == "grand canonical moves of water in the complex leg"

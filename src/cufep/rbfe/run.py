@@ -14,6 +14,7 @@ import math
 import time
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 from cufep import jsonio
@@ -131,6 +132,39 @@ def check_legs_have_their_windows(out_dir: Path, edges, repeats: int, only_legs)
                     leg_dir, [state.to_dict() for state in Schedule.load(sched).states] if sched.exists() else None)
 
 
+def check_pre_equilibrations(rcfg: RbfeConfig, out_dir: Path, edges, infos: dict, only_legs) -> None:
+    """Before a run moves or writes anything: the pre-equilibration that a leg it runs has is one this run can use
+    (:func:`cufep.workflow.check_equil_file`, the check the leg makes when it begins). Review of PR #21: a
+    directory of a version before the grand canonical moves of water, run again with the same YAML, was refused by
+    its legs one by one, after the run had replaced ``resolved_config.yaml`` and every leg had set its result
+    aside, and the edges that had a ddG had none. The refusal of such a directory says how it is continued as it
+    was made."""
+    from cufep.workflow import check_equil_file, gcmc_in, leg_seed
+
+    for a, b in edges:
+        info = infos.get(edge_name(a, b))
+        if info is None:
+            continue                                        # not prepared yet: it has no legs
+        for r in range(rcfg.sampling.repeats):
+            for leg in ("solvent", "complex"):
+                equil_file = out_dir / "edges" / edge_name(a, b) / f"repeat_{r}" / leg / "equil.npz"
+                if (only_legs and leg not in only_legs) or not equil_file.exists():
+                    continue
+                with np.load(equil_file) as eq:
+                    stored = json.loads(str(eq["made_with"])) if "made_with" in eq.files else None
+                    in_membrane = leg == "complex" and info["legs"][leg].get("barostat") == "membrane"
+                    try:
+                        check_equil_file(eq, equil_file, rcfg, leg, in_membrane, leg_seed(rcfg, r, leg),
+                                         lambda _message: None)
+                    except WorkflowError as exc:
+                        if stored is not None and "gcmc" not in stored and gcmc_in(rcfg, leg):
+                            raise WorkflowError(
+                                f"{exc} This leg was made without grand canonical moves of water, which a relative "
+                                "calculation makes in its complex leg by default: with sampling.gcmc.enabled: false "
+                                "the calculation is continued as it was made.") from exc
+                        raise
+
+
 def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None,
              experiment: dict[str, float] | None = None) -> dict:
     """Run the whole relative calculation. Safe to call again to resume. ``experiment`` (kcal/mol by ligand) takes
@@ -176,8 +210,9 @@ def _run(rcfg: RbfeConfig, out_dir: Path, reschedule: bool, log, only_edges=None
     # every prepared edge of the network, before the run writes anything: those it runs, and those whose results it
     # combines (second review of PR #17: an edge of another protein was combined); a refused run keeps the record
     # of the run whose results the directory holds (review of PR #17)
-    for a, b in edges:
-        prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b), box_shape)
+    prepared = {edge_name(a, b): prepared_edge(rcfg, by_name[a], by_name[b], out_dir / "edges" / edge_name(a, b),
+                                               box_shape) for a, b in edges}
+    check_pre_equilibrations(rcfg, out_dir, selected, prepared, only_legs)
     if not reschedule:
         check_legs_have_their_windows(out_dir, selected, rcfg.sampling.repeats, only_legs)
     experiment = (experiment_of(rcfg, ligands) if experiment is None
@@ -225,6 +260,34 @@ def write_run_files(out_dir: Path, rcfg: RbfeConfig, ligands: list[str], edges, 
                                                       indent=1))
 
 
+def water_moves_of_leg(result: dict, leg_dir: Path) -> dict | None:
+    """The grand canonical moves of water a complex leg was sampled with (:func:`cufep.workflow.water_moves_of`):
+    as its result records them; for a result that does not (a version before the record), as its samples do. A
+    result of a version before a relative leg could make the moves (it has no ``gcmc`` at all) was made without
+    them. None if neither the result nor samples say."""
+    from cufep.sampling.storage import stored_conditions
+    from cufep.workflow import water_moves_of
+
+    if isinstance(result.get("water_moves"), dict):
+        return result["water_moves"]
+    if "gcmc" not in result or result["gcmc"] is None:
+        return {"enabled": False}
+    return water_moves_of(stored_conditions(Path(leg_dir) / "hrex")[1])
+
+
+def water_moves_text(moves: dict | None) -> str:
+    if moves is None:
+        return "not recorded"
+    if not moves.get("enabled"):
+        return "none"
+    return (f"excess chemical potential {moves['excess_chemical_potential_kcal_per_mol']:g} kcal/mol, standard "
+            f"volume {moves['standard_volume_nm3']:g} nm3")
+
+
+#: how the grand canonical moves of water of the complex legs are named where they differ
+WATER_MOVES = "grand canonical moves of water in the complex leg"
+
+
 def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     """ddG of an edge from the results of its legs (kcal/mol); repeats are averaged, their standard deviation
     given (as the ABFE combines repeats).
@@ -234,10 +297,19 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     conditions (:func:`cufep.workflow.cycle_differences`, the check of the ABFE: temperature, pressure, prepared
     systems ...); if they were not, the edge gets no ddG and says what differs (``inconsistent_legs``) (review of
     PR #17: legs at 298 K and 310 K were subtracted). The free energies of the legs are the means over the same
-    repeats as the ddG, which is their difference."""
+    repeats as the ddG, which is their difference. The complex legs of the repeats must also have been sampled with
+    the same grand canonical moves of water (:func:`water_moves_of_leg`: with or without them, the same chemical
+    potential and standard volume of water), or the edge has no ddG (review of PR #21)."""
+    from cufep.sampling.storage import _same
     from cufep.workflow import cycle_differences
 
     out = {"edge": edge_name(a, b), "ligand_a": a, "ligand_b": b, "repeats": []}
+    prep = Path(edge_dir) / "prep" / "prep.json"
+    if prep.exists():
+        # the LOMAP score of the mapping the edge was prepared with: in the summary, so that a report made again from
+        # the summary alone has it (review of PR #21)
+        score = json.loads(prep.read_text()).get("lomap_score")
+        out["lomap_score"] = None if score is None else float(score)
     complete = []
     for r in range(repeats):
         legs = {}
@@ -273,11 +345,19 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
                                     for leg in legs},
             "not_reliable": [leg for leg in legs if not legs[leg]["quality"]["overlap"]["ok"]],
             "fewest_independent_samples": {leg: legs[leg]["quality"]["samples"].get("counted") for leg in legs},
+            # the legs with a window below the level of independent samples of the analysis (Mey et al. 2020)
+            "few_samples": [leg for leg in legs if legs[leg]["quality"]["samples"].get("ok") is False],
+            "water_moves": water_moves_of_leg(c, Path(edge_dir) / f"repeat_{r}" / "complex"),
             "backend": {leg: legs[leg].get("backend") for leg in legs},
             "warnings": [f"{leg}: {n}" for leg in legs for n in legs[leg].get("notes", [])]})
     inconsistent, not_compared = cycle_differences(complete)
     inconsistent += [item for r in out["repeats"] for item in r.get("inconsistent_legs", [])
                      if item not in inconsistent]
+    moves = [(f"repeat {r['repeat']}", r["water_moves"]) for r in out["repeats"] if "ddg" in r]
+    known = [(where, value) for where, value in moves if value is not None]
+    if any(not _same(value, known[0][1]) for _where, value in known[1:]):
+        inconsistent.append(f"{WATER_MOVES}: " + ", ".join(f"{where} {water_moves_text(value)}"
+                                                         for where, value in known))
     if inconsistent:
         out["inconsistent_legs"] = inconsistent
     if not_compared:
@@ -295,6 +375,11 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         else:
             out["se"] = done[0]["se"]
         out["not_reliable"] = sorted({leg for r in done for leg in r["not_reliable"]})
+        out["few_samples"] = sorted({leg for r in done for leg in r["few_samples"]})
+        out["fewest_independent_samples"] = {
+            leg: min((r["fewest_independent_samples"][leg] for r in done
+                      if r["fewest_independent_samples"][leg] is not None), default=None)
+            for leg in ("complex", "solvent")}
         # what the table gives of the legs: over the repeats of the ddG (second review of PR #17: the first only)
         out["lowest_overlap"] = {leg: min(r["lowest_overlap"][leg] for r in done) for leg in ("complex", "solvent")}
         out["lowest_overlap_used"] = {leg: min((r["lowest_overlap_used"][leg] for r in done
@@ -304,6 +389,8 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
         out["backend"] = {leg: sorted({str(r["backend"][leg]) for r in done}) for leg in ("complex", "solvent")}
         # the conditions of the legs, which the edges of one network must share (combine_network)
         out["conditions"] = {key: complete[0][1].get(key) for key, _ in NETWORK_CONDITIONS}
+        # of the complex legs alone (the solvent leg never makes the moves); None: not recorded for any repeat
+        out["conditions"]["water_moves"] = known[0][1] if known else None
     return out
 
 
@@ -322,16 +409,19 @@ def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
     legs (:data:`NETWORK_CONDITIONS`), and what their prepared systems were made from besides the two ligands
     (:data:`SHARED_PREPARATION`: protein, force field, pH ...), and that a ligand of one name is one molecule in all
     of them (the digests of their records). Second review of PR #17: an edge run at 298 K and one at 310 K, or with
-    another protein, gave one set of dG; third: two molecules under one name were one node."""
+    another protein, gave one set of dG; third: two molecules under one name were one node. Review of PR #21: so
+    did edges whose complex legs were sampled with other grand canonical moves of water (another chemical potential
+    after a change of the YAML between two runs of --edge, or with and without the moves)."""
     from cufep.sampling.storage import _same
 
     out = []
     done = [r for r in results if "ddg" in r]
-    for key, name in NETWORK_CONDITIONS:
+    for key, name in (*NETWORK_CONDITIONS, ("water_moves", WATER_MOVES)):
         values = [(r["edge"], (r.get("conditions") or {}).get(key)) for r in done]
         known = [(edge, value) for edge, value in values if value is not None]
         if any(not _same(value, known[0][1]) for _edge, value in known[1:]):
-            out.append(f"{name}: " + ", ".join(f"{edge} {value}" for edge, value in known))
+            shown = water_moves_text if key == "water_moves" else str
+            out.append(f"{name}: " + ", ".join(f"{edge} {shown(value)}" for edge, value in known))
     made, molecules = [], {}
     for r in done:
         f = Path(out_dir) / "edges" / r["edge"] / "prep" / "prep.json"
@@ -371,6 +461,10 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     measured = [Edge(r["ligand_a"], r["ligand_b"], r["ddg"], r["se"]) for r in results if "ddg" in r]
     summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment,
                "cycle_closures": cycle_closures(measured), "dg": None, "notes": []}
+    unknown = [r["edge"] for r in results if "ddg" in r and (r.get("conditions") or {}).get("water_moves") is None]
+    if unknown:
+        summary["notes"].append(f"{WATER_MOVES}: not recorded for {', '.join(unknown)} (results of an earlier "
+                                "version whose samples are not there); they are combined without that comparison")
     import networkx as nx
 
     graph = nx.Graph([(e.ligand_a, e.ligand_b) for e in measured])
@@ -395,19 +489,23 @@ def write_results(out_dir: Path, summary: dict) -> None:
         w.writerow(["edge", "ligand_a", "ligand_b", "ddg_kcal_mol", "standard_error", "exp_ddg_kcal_mol",
                     "complex_dg", "solvent_dg", "windows_complex", "windows_solvent", "lowest_overlap_complex",
                     "lowest_overlap_solvent", "lowest_overlap_used_complex", "lowest_overlap_used_solvent",
-                    "not_reliable", "backend_complex", "backend_solvent"])
+                    "not_reliable", "backend_complex", "backend_solvent", "fewest_independent_samples_complex",
+                    "fewest_independent_samples_solvent", "few_independent_samples", "lomap_score"])
         def joined(values) -> str:
             return "/".join(str(v) for v in values or [])
 
         for e in summary["edges"]:
             windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
             used = e.get("lowest_overlap_used") or {}
+            fewest = e.get("fewest_independent_samples") or {}
             w.writerow([e["edge"], e["ligand_a"], e["ligand_b"], fmt(e.get("ddg")), fmt(e.get("se")),
                         fmt(e.get("exp_ddg")), fmt(e.get("complex_dg")), fmt(e.get("solvent_dg")),
                         joined(windows.get("complex")), joined(windows.get("solvent")),
                         fmt(overlap.get("complex")), fmt(overlap.get("solvent")), fmt(used.get("complex")),
                         fmt(used.get("solvent")), "; ".join(e.get("not_reliable", [])),
-                        joined(backend.get("complex")), joined(backend.get("solvent"))])
+                        joined(backend.get("complex")), joined(backend.get("solvent")),
+                        fmt(fewest.get("complex")), fmt(fewest.get("solvent")), "; ".join(e.get("few_samples", [])),
+                        fmt(e.get("lomap_score"))])
 
     def ligands_table(fh) -> None:
         w = csv.writer(fh)
@@ -429,6 +527,8 @@ def result_lines(summary: dict) -> list[str]:
         if "ddg" in e:
             exp = f" (experiment {e['exp_ddg']:+.2f})" if e.get("exp_ddg") is not None else ""
             flag = f"; NOT RELIABLE ({', '.join(e['not_reliable'])} leg)" if e.get("not_reliable") else ""
+            if e.get("few_samples"):
+                flag += f"; few independent samples ({', '.join(e['few_samples'])} leg)"
             lines.append(f"RESULT {e['edge']}: ddG = {e['ddg']:+.2f} ± {e['se']:.2f} kcal/mol{exp}{flag}")
         elif e.get("inconsistent_legs"):
             lines.append(f"RESULT {e['edge']}: no ddG; its legs were not made under the same conditions "

@@ -94,7 +94,11 @@ def _config(tmp_path, out_dir, mode: str, legs: str = "each"):
         "thermodynamics": {"ionic_strength_M": 0.0},
         "sampling": {"production_ns": 0.005, "equilibration_ns": 0.0025, "time_per_iteration_ps": 0.25,
                      "checkpoint_interval_ps": 1.0, "rest2": {"scale": 1.5},
-                     "pre_equilibration": {"complex": short, "solvent": short}},
+                     "pre_equilibration": {"complex": short, "solvent": short},
+                     # the grand canonical moves of the complex leg: the numbers of the water are given (auto is for
+                     # the cutoff they were determined at), a move every 0.1 ps of few trials
+                     "gcmc": {"interval_ps": 0.1, "attempts": 20, "batch_size": 10,
+                              "excess_chemical_potential_kcal_per_mol": -6.09, "standard_volume_nm3": 0.030345}},
         "analysis": {"error_blocks": [2], "part_error_blocks": 2, "convergence_points": 2, "convergence_blocks": 2},
         "lambda_schedule": {"mode": mode, "windows": 3,
                             "adaptive": {"initial_windows": 3, "window_ps": 0.5, "sample_interval_ps": 0.1,
@@ -129,9 +133,28 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     # window take minutes on one processor)
     monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
     monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    from cufep.engine import leg as engine_leg
     from cufep.rbfe.prep import prepare_edge
     from cufep.rbfe.run import analyse_directory, combine_network, edge_result, write_results, write_run_files
+    from cufep.sampling.gcmc import GcmcMover
 
+    # the grand canonical moves that are made while the windows a leg does not choose are started (review of PR #21)
+    moves = {"all": 0, "in_the_start_of_windows": 0}
+    attempt, starts_from = GcmcMover.attempt, engine_leg.starts_from
+
+    def counted(self, state):
+        moves["all"] += 1
+        return attempt(self, state)
+
+    def start_with_count(*args, **kwargs):
+        before = moves["all"]
+        try:
+            return starts_from(*args, **kwargs)
+        finally:
+            moves["in_the_start_of_windows"] += moves["all"] - before
+
+    monkeypatch.setattr(GcmcMover, "attempt", counted)
+    monkeypatch.setattr(engine_leg, "starts_from", start_with_count)
     out_dir = tmp_path / "run"
     ligands = _ligands(tmp_path, out_dir)
     rcfg = _config(tmp_path, out_dir, mode, legs)
@@ -155,11 +178,29 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
     assert made["windows"] == expected[(mode, legs)]
     if mode == "fixed":
         assert len(solvent["lambda_windows"]["morph"]) == 3
+    # the complex leg makes the grand canonical moves of water, the solvent leg none; its result says what its
+    # samples were made with (review of PR #21: the edges of a network are compared by it)
+    assert complex_["water_moves"] == {"enabled": True, "excess_chemical_potential_kcal_per_mol": -6.09,
+                                       "standard_volume_nm3": 0.030345}
+    assert solvent["water_moves"] == {"enabled": False} and solvent["gcmc"] is None
+    assert sum(complex_["gcmc"]["insertions_attempted"]) + sum(complex_["gcmc"]["deletions_attempted"]) > 0
+    with np.load(edge_dir / "repeat_0" / "complex" / "start_configs.npz") as start:
+        n_windows = len(complex_["lambda_windows"]["morph"])
+        assert start["water_on"].shape[0] == n_windows                      # the waters of every start
+    if mode == "fixed" or legs == "solvent":
+        # review of PR #21 (P2): the windows a leg does not choose start with 0.2 ps of MD each (here), in which a
+        # move is due every 0.1 ps: two per window, also where the process of the leg runs them itself (a leg
+        # with workers made them, this one made none)
+        assert moves["in_the_start_of_windows"] == 2 * n_windows
+    else:
+        assert moves["in_the_start_of_windows"] == 0
     assert all(np.isfinite(r["delta_g"]) and r["delta_g_error"] > 0 for r in results)
     h = solvent["hybrid"]
     assert h["core_atoms"] + h["unique_old_atoms"] == 15 and h["core_atoms"] + h["unique_new_atoms"] == 13
     edge = edge_result(edge_dir, "toluene", "phenol", 1)
     assert edge["ddg"] == pytest.approx((complex_["delta_g"] - solvent["delta_g"]) / 4.184)
+    assert edge["conditions"]["water_moves"] == complex_["water_moves"]
+    assert edge["lomap_score"] == pytest.approx(info["lomap_score"])
     summary = combine_network(out_dir, ["toluene", "phenol"], [("toluene", "phenol")], 1,
                               {"toluene": -5.0, "phenol": -5.6})
     dg = summary["dg"]["values"]
@@ -649,4 +690,68 @@ def test_start_configurations_made_again_are_the_start_of_samples_started_anew_l
     with pytest.raises(WorkflowError, match="no schedule.yaml"):
         run_rbfe(full, log=lambda line: None, only_legs=["solvent"])
     assert (leg_dir / "result.json").read_bytes() == result
+
+
+def test_a_directory_made_without_the_water_moves_is_refused_before_a_run_with_them_writes(tmp_path, monkeypatch):
+    """Review of PR #21 (P2): a relative run of a version before the grand canonical moves of water, run again with
+    the same YAML (the moves are on by default now): every leg refused its pre-equilibration, after the run had
+    replaced resolved_config.yaml and the leg had set its result aside, and the edge that had a ddG had none. The
+    pre-equilibrations of the legs are checked before the run writes or starts anything, and the refusal says how
+    the directory is continued as it was made; with the moves off it is not refused."""
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe import run as rbfe_run
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.prep import edge_made_from
+    from cufep.rbfe.run import run_rbfe, write_run_files
+    from cufep.workflow import WorkflowError, equil_made_with, leg_seed
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = {**_config(tmp_path, out_dir, "fixed").model_dump(mode="json"),
+            "network": {"edges": [["toluene", "phenol"]]}}
+    without = RbfeConfig.model_validate({**data, "sampling": {**data["sampling"], "gcmc": {"enabled": False}}})
+    with_moves = RbfeConfig.model_validate(data)
+    assert with_moves.sampling.gcmc.enabled is True
+    # the directory as the run without the moves left it
+    write_run_files(out_dir, without, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    (edge_dir / "prep").mkdir(parents=True)
+    legs = {leg: {"barostat": "isotropic", "n_atoms_a": 100} for leg in ("complex", "solvent")}
+    (edge_dir / "prep" / "prep.json").write_text(json.dumps(
+        {"made_from": edge_made_from(without, ligands[0], ligands[1], "cube"), "legs": legs}))
+    for leg in ("complex", "solvent"):
+        leg_dir = edge_dir / "repeat_0" / leg
+        leg_dir.mkdir(parents=True)
+        np.savez(leg_dir / "equil.npz", timestep_fs=4.0,
+                 made_with=json.dumps(equil_made_with(without, leg, False, leg_seed(without, 0, leg))))
+        (leg_dir / "result.json").write_text(json.dumps({"delta_g": 1.0, "delta_g_error": 0.1}))
+    before = {path: path.read_bytes() for path in sorted(out_dir.rglob("*")) if path.is_file()}
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+
+    def not_to_be_reached(*args, **kwargs):
+        raise AssertionError("the run went on to its legs")
+
+    monkeypatch.setattr(run_module, "execute_jobs", not_to_be_reached)
+    monkeypatch.setattr(rbfe_run, "write_run_files", not_to_be_reached)
+    with pytest.raises(WorkflowError) as refused:
+        run_rbfe(with_moves, log=lambda line: None)
+    message = str(refused.value)
+    assert "the pre-equilibration of this leg" in message and "gcmc" in message
+    assert message.endswith("with sampling.gcmc.enabled: false the calculation is continued as it was made.")
+    after = {path: path.read_bytes() for path in sorted(out_dir.rglob("*"))
+             if path.is_file() and path.name != ".cufep.lock"}                 # (the lock of the directory)
+    assert after == before
+    assert not list(out_dir.rglob("result.previous.json"))
+    # with the moves off, as the directory was made, the check passes (the run goes on to write and to its legs)
+    monkeypatch.undo()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+
+    def stop_at_the_first_write(*args, **kwargs):
+        raise RuntimeError("the run began to write")
+
+    monkeypatch.setattr(rbfe_run, "write_run_files", stop_at_the_first_write)
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(without, log=lambda line: None)
 

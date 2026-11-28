@@ -241,6 +241,11 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     run_dir = Path(run_dir)
     reference = read_reference(name)
     summary = json.loads((run_dir / "summary.json").read_text())
+    # a directory none of whose ligands is of the set is a run of another set: refused before anything is written
+    # or removed (review of PR #21; ligands the set does not know next to its own are left out, as before)
+    from cufep.benchmarks.relative import check_run_is_of_the_set
+
+    check_run_is_of_the_set(name, [s["ligand"] for s in summary], run_dir, every=False)
     rows, without = [], []
     unreliable: set[str] = set()                       # ligands whose result is NOT RELIABLE (overlap)
     unchecked: set[str] = set()                        # ligands whose checks this version did not make

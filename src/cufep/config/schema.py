@@ -809,7 +809,7 @@ def gcmc_problems(cfg) -> list[str]:
     gcmc = cfg.sampling.gcmc
     if not gcmc.enabled:
         return []
-    from cufep.prep.water import bulk_water_values
+    from cufep.prep.water import BULK_WATER_CONDITIONS, bulk_water_values
 
     problems = []
     if cfg.sampling.relocation_mc.enabled:
@@ -826,13 +826,29 @@ def gcmc_problems(cfg) -> list[str]:
         problems.append(f"sampling.gcmc.batch_size = {gcmc.batch_size} is more than sampling.gcmc.attempts = "
                         f"{gcmc.attempts}, the trials of one move")
     known = bulk_water_values(cfg.forcefield.water)
-    for name, value in (("excess_chemical_potential_kcal_per_mol", gcmc.excess_chemical_potential_kcal_per_mol),
-                        ("standard_volume_nm3", gcmc.standard_volume_nm3)):
-        if value == "auto" and known is None:
+    auto = [name for name, value in (
+        ("excess_chemical_potential_kcal_per_mol", gcmc.excess_chemical_potential_kcal_per_mol),
+        ("standard_volume_nm3", gcmc.standard_volume_nm3)) if value == "auto"]
+    for name in auto if known is None else ():
+        problems.append(
+            f"sampling.gcmc.{name} is auto and cuFEP has no value for forcefield.water = "
+            f"{cfg.forcefield.water!r}: give the number (docs/configuration.md says how it is determined), or "
+            "switch the moves off (sampling.gcmc.enabled: false)")
+    if auto and known is not None:
+        # the values cuFEP has are those of the conditions they were determined at
+        here = {"temperature_K": ("thermodynamics.temperature_K", cfg.thermodynamics.temperature_K),
+                "pressure_bar": ("thermodynamics.pressure_bar", cfg.thermodynamics.pressure_bar),
+                "cutoff_nm": ("dynamics.cutoff_nm", cfg.dynamics.cutoff_nm)}
+        other = [f"{setting} = {value:g}" for key, (setting, value) in here.items()
+                 if abs(float(value) - BULK_WATER_CONDITIONS[key]) > 1e-9]
+        if other:
+            at = BULK_WATER_CONDITIONS
             problems.append(
-                f"sampling.gcmc.{name} is auto and cuFEP has no value for forcefield.water = "
-                f"{cfg.forcefield.water!r}: give the number (docs/configuration.md says how it is determined), or "
-                "switch the moves off (sampling.gcmc.enabled: false)")
+                f"sampling.gcmc.{' and sampling.gcmc.'.join(auto)} {'is' if len(auto) == 1 else 'are'} auto, and the "
+                f"values cuFEP has for forcefield.water = {cfg.forcefield.water!r} were determined at "
+                f"{at['temperature_K']:g} K, {at['pressure_bar']:g} bar and a cutoff of {at['cutoff_nm']:g} nm; this "
+                f"run has {', '.join(other)}: give the numbers of these conditions (docs/configuration.md says how "
+                "they are determined), or switch the moves off (sampling.gcmc.enabled: false)")
     return problems
 
 

@@ -122,6 +122,8 @@ def _synthetic_run(tmp_path, dg: dict[str, float], edges: list[dict]):
     """A run directory as `cufep rbfe run` leaves it (summary.json, network.json), with the given dG and edges."""
     import json
 
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
     ligands = list(dg)
     summary = {"ligands": ligands, "edges": edges, "experiment_kcal_mol": experiment("tyk2"),
                "cycle_closures": [{"ligands": ligands[:3], "sum_kcal_mol": 0.25, "se_kcal_mol": 0.5}],
@@ -149,8 +151,8 @@ def test_the_report_compares_every_method_on_the_same_compounds_and_edges_in_the
     a published ddG computed the other way round is turned to the direction of the run (OpenFE and FEP+ computed
     ejm_49 -> ejm_31, the run ejm_31 -> ejm_49); an edge without a ddG is listed with the reason, a leg on stock
     OpenMM is named, and the dG differences of the network are given next to the ddG of each edge."""
-    from cufep.benchmarks.relative import centred, report
-    from cufep.benchmarks.stats import metrics
+    from cufep.benchmarks.relative import report
+    from cufep.benchmarks.stats import centred, metrics
 
     ref = read_reference("tyk2")
     dg = {"ejm_31": -9.0, "ejm_46": -11.5, "ejm_49": -8.5, "jmc_23": -11.8}
@@ -275,3 +277,147 @@ def test_every_method_is_centred_on_the_compounds_it_is_compared_on(tmp_path):
                "values": {n: {"dg": ref[n]["exp"] + 0.4 * (i % 3 - 1), "se": 0.2} for i, n in enumerate(names)}}}))
     row = next(line for line in report("a2a", tmp_path).splitlines() if line.startswith("| MUE (kcal/mol) |"))
     assert row.split("|")[3].strip().startswith(f"{mue:.2f} [")
+
+
+def test_the_interval_of_a_centred_statistic_centres_every_resample():
+    """Review of PR #21 (P2): the RMSE and MUE of the dG are of values centred on the compounds compared, and the
+    bootstrap kept the shift of all compounds while it resampled them. Four compounds with the errors -1, -1, +1,
+    +1: the RMSE is 1 and its interval was [1, 1]; a resample of one sign alone (2 of 16) is, centred on itself,
+    without error, so the interval begins at 0. Statistics that are not centred are resampled as before."""
+    import numpy as np
+
+    from cufep.benchmarks.stats import bootstrap, centred, metrics
+
+    exp = np.array([-10.0, -9.0, -8.0, -7.0])
+    pred = exp + np.array([-1.0, -1.0, 1.0, 1.0])
+    assert metrics(centred(pred, exp), exp)["rmse"] == pytest.approx(1.0)
+    assert bootstrap(pred, exp, n_boot=2000, seed=0)["rmse"] == (1.0, 1.0)
+    low, high = bootstrap(pred, exp, n_boot=2000, seed=0, centre=True)["rmse"]
+    assert low == 0.0 and high == pytest.approx(1.0)
+    # a constant offset is no error of centred values, in the estimate and in every resample
+    shifted = bootstrap(exp + 3.0, exp, n_boot=200, seed=1, centre=True)
+    assert shifted["rmse"] == pytest.approx((0.0, 0.0), abs=1e-12)
+    assert np.allclose(centred(exp + 3.0, exp), exp)
+
+
+def test_the_uncertainty_of_an_openfe_edge_is_named_as_it_is_computed(tmp_path):
+    """Review of PR #21 (P2): the published ``stdev DDG_bind`` of an OpenFE edge is sqrt(SD_complex^2 +
+    SD_solvent^2) of the three repeats of each leg, for all 22 edges of TYK2, and the report called it the standard
+    deviation of its three repeats (ejm_49 -> ejm_50: 0.1364 kcal/mol published, 0.0587 for the three ddG by repeat
+    number). The published value is kept and named as what it is."""
+    import csv
+    import math
+    import statistics
+
+    from cufep.benchmarks.relative import OPENFE_EDGE_ERROR, report
+
+    with open(data_root() / load_registry()["tyk2"]["openfe_edges"], newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 22
+    for row in rows:
+        legs = {leg: [float(row[f"{leg}_repeat_{k}_DG (kcal/mol)"]) for k in range(3)]
+                for leg in ("complex", "solvent")}
+        propagated = math.hypot(statistics.stdev(legs["complex"]), statistics.stdev(legs["solvent"]))
+        assert float(row["stdev DDG_bind (kcal/mol)"]) == pytest.approx(propagated, abs=1e-12)
+        if (row["ligand_A"], row["ligand_B"]) == ("ejm_49", "ejm_50"):
+            of_three = statistics.stdev([c - s for c, s in zip(legs["complex"], legs["solvent"])])
+            assert propagated == pytest.approx(0.1364, abs=5e-5) and of_three == pytest.approx(0.0587, abs=5e-5)
+    assert OPENFE_EDGE_ERROR == ("the standard deviation propagated from the three repeats of the complex and of the "
+                                 "solvent leg")
+    run = _synthetic_run(tmp_path, {"ejm_49": -8.0, "ejm_50": -9.0}, [_edge("ejm_49", "ejm_50", -1.0)])
+    text = report("tyk2", run)
+    assert text.count(OPENFE_EDGE_ERROR) == 2 and "± their standard deviation" not in text
+
+
+def test_the_report_gives_the_legs_with_few_independent_samples_and_the_score_of_the_summary(tmp_path):
+    """Review of PR #21 (P2): the comparison table gave the standard error of an edge and not that a leg of it has
+    a window with fewer independent samples than the level of the analysis (A2A 4b -> 4e: 31 in the complex leg),
+    and the LOMAP score was read from the prepared edges, which the recorded results do not hold, so that a report
+    made again from them had no score. Both come from the summary of the run."""
+    import csv
+
+    from cufep.benchmarks.relative import report
+
+    few = {**_edge("ejm_31", "ejm_46", -1.5), "lomap_score": 0.367879, "few_samples": ["complex"],
+           "fewest_independent_samples": {"complex": 31.0, "solvent": 1434.0}}
+    fine = {**_edge("ejm_31", "ejm_49", 1.7), "lomap_score": 0.272532, "few_samples": [], "not_reliable": ["solvent"],
+            "fewest_independent_samples": {"complex": 198.0, "solvent": 1605.0}}
+    run = _synthetic_run(tmp_path, {"ejm_31": -9.0, "ejm_46": -11.0, "ejm_49": -8.0}, [few, fine])
+    assert not (run / "edges").exists()                                      # as the recorded results: no prep
+    text = report("tyk2", run)
+    rows = {line.split("|")[1].strip(): [c.strip() for c in line.split("|")[1:-1]]
+            for line in text.splitlines() if line.startswith("| ejm_31 ->")}
+    assert rows["ejm_31 -> ejm_46"][1] == "0.37" and rows["ejm_31 -> ejm_46"][11] == "31, 1434"
+    assert rows["ejm_31 -> ejm_46"][13] == "few independent samples: complex"
+    assert rows["ejm_31 -> ejm_49"][1] == "0.27" and rows["ejm_31 -> ejm_49"][13] == "NOT RELIABLE: solvent"
+    assert "Edges with a flag: NOT RELIABLE: ejm_31~ejm_49; few independent samples: ejm_31~ejm_46." in text
+    with open(run / "rbfe_report_edges.csv") as fh:
+        table = {r["edge"]: r for r in csv.DictReader(fh)}
+    assert float(table["ejm_31~ejm_46"]["lomap_score"]) == pytest.approx(0.367879)
+    assert float(table["ejm_31~ejm_46"]["fewest_independent_samples_complex"]) == 31.0
+    assert table["ejm_31~ejm_46"]["few_independent_samples"] == "complex"
+    assert table["ejm_31~ejm_49"]["few_independent_samples"] == ""
+
+
+@pytest.mark.parametrize("name", ["tyk2", "a2a"])
+def test_the_recorded_reports_are_those_the_code_makes_of_the_recorded_files(name, tmp_path):
+    """The report of a recorded relative run, made again from the files that are kept of it
+    (``benchmarks/results/<set>_rbfe``: the summary, the network and the configuration, without the directories of
+    the edges), is the recorded one: the statistics with their intervals, every compound and every edge with its
+    LOMAP score, its samples and its flags (review of PR #21: made again, the scores of all 43 edges were empty)."""
+    import shutil
+
+    from cufep.benchmarks.relative import report
+
+    recorded = data_root() / "benchmarks" / "results" / f"{name}_rbfe"
+    again = tmp_path / name
+    shutil.copytree(recorded, again)
+    for made in again.glob("rbfe_report*"):
+        made.unlink()
+    report(name, again)
+    for table in ("rbfe_report.md", "rbfe_report_ligands.csv", "rbfe_report_edges.csv"):
+        assert (again / table).read_text() == (recorded / table).read_text(), table
+    import csv
+
+    with open(recorded / "rbfe_report_edges.csv") as fh:
+        scores = [row["lomap_score"] for row in csv.DictReader(fh)]
+    assert len(scores) == {"tyk2": 22, "a2a": 21}[name] and all(float(score) > 0.2 for score in scores)
+
+
+def test_a_report_of_the_run_of_another_set_writes_nothing(tmp_path):
+    """Review of PR #21 (P2): `cufep benchmark report tyk2 <results of A2A> --protocol rbfe` left out all 17
+    compounds (none is one of TYK2), wrote an empty report under the name of TYK2 over the one of A2A and removed
+    its two figures. A directory with ligands that are not compounds of the set is refused before anything is
+    written; a run of some compounds of the set (the smoke tier) is reported. The absolute report refuses a
+    directory none of whose ligands is of the set."""
+    import json
+    import shutil
+
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep.benchmarks.relative import report
+    from cufep.benchmarks.runner import report as absolute_report
+
+    recorded = data_root() / "benchmarks" / "results"
+    a2a = tmp_path / "a2a_rbfe"
+    shutil.copytree(recorded / "a2a_rbfe", a2a)
+    before = {path.name: path.read_bytes() for path in a2a.iterdir()}
+    with pytest.raises(ValueError, match="is not a run of the benchmark tyk2: its ligands 4g, 4h, 4j, 4k, 4l ... are "
+                                         "not compounds of that set. Nothing was written."):
+        report("tyk2", a2a)
+    result = CliRunner().invoke(cli.main, ["benchmark", "report", "tyk2", str(a2a), "--protocol", "rbfe"])
+    assert result.exit_code != 0 and "is not a run of the benchmark tyk2" in result.output
+    assert {path.name: path.read_bytes() for path in a2a.iterdir()} == before
+    # a run of two compounds of the set
+    part = _synthetic_run(tmp_path / "part", {"ejm_31": -9.0, "ejm_46": -11.0}, [_edge("ejm_31", "ejm_46", -2.0)])
+    assert "compounds with a dG: 2 of 2" in report("tyk2", part)
+    # the absolute report
+    absolute = tmp_path / "a2a"
+    shutil.copytree(recorded / "a2a", absolute)
+    before = {path.name: path.read_bytes() for path in absolute.iterdir()}
+    with pytest.raises(ValueError, match="is not a run of the benchmark tyk2"):
+        absolute_report("tyk2", absolute)
+    assert {path.name: path.read_bytes() for path in absolute.iterdir()} == before
+    assert json.loads((absolute / "summary.json").read_text())[0]["ligand"] in absolute_report("a2a", absolute)
+

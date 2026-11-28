@@ -107,6 +107,14 @@ def test_a_relative_run_makes_grand_canonical_moves_of_water_in_the_complex_leg_
     assert Config.model_validate({"system": {"protein": "p.pdb", "ligand": "l.sdf"}}).sampling.gcmc.enabled is False
     off = RbfeConfig.model_validate(_minimal(sampling={"gcmc": {"enabled": False}}))
     assert not gcmc_in(off, "complex")
+    # the values of the water that auto gives are those of 298.15 K, 1 bar and a cutoff of 0.9 nm (review of PR #21):
+    # a relative run under other conditions, whose moves are on by default, is told what it can do
+    with pytest.raises(ValueError, match="were determined at 298.15 K, 1 bar and a cutoff of 0.9 nm; this run has "
+                                         "thermodynamics.temperature_K = 310") as refused:
+        RbfeConfig.model_validate(_minimal(thermodynamics={"temperature_K": 310.0}))
+    assert "give the numbers of these conditions" in str(refused.value)
+    assert "sampling.gcmc.enabled: false" in str(refused.value)
+    RbfeConfig.model_validate(_minimal(thermodynamics={"temperature_K": 310.0}, sampling={"gcmc": {"enabled": False}}))
     # a YAML that gives only some of the settings of the moves keeps them on (they were switched off so before)
     some = RbfeConfig.model_validate(_minimal(sampling={"gcmc": {"attempts": 5000}}))
     assert gcmc_in(some, "complex") and some.sampling.gcmc.attempts == 5000

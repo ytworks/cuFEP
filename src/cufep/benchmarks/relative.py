@@ -141,6 +141,10 @@ FEPPLUS_SETTINGS = ("the published FEP+ predictions of the public benchmark (Ros
 OPENFE_SETTINGS = ("the published results of the OpenFE benchmark (IndustryBenchmarks2024 v1.0.0, Baumann et al.): "
                    "OpenFE 1.0.1, relative hybrid topology protocol, 11 lambda windows of 5 ns, three repeats per edge "
                    "averaged, the LOMAP network of the set")
+#: the published uncertainty of the ddG of an OpenFE edge (``stdev DDG_bind``): sqrt(SD_complex^2 + SD_solvent^2) of
+#: the standard deviations of the three repeats of each leg (so for all 22 edges of TYK2), not the standard deviation
+#: of three ddG (ejm_49 -> ejm_50: 0.1364 against 0.0587 kcal/mol; review of PR #21)
+OPENFE_EDGE_ERROR = "the standard deviation propagated from the three repeats of the complex and of the solvent leg"
 OPENFE_COLOUR = "#1baf7a"                              # categorical slot 3 of the palette of the ABFE figures
 LIGAND_COLUMNS = ("ligand", "exp", "cufep", "cufep_error", "fepplus", "openfe", "openfe_error", "cufep_minus_exp",
                   "fepplus_minus_exp", "openfe_minus_exp")
@@ -148,7 +152,8 @@ EDGE_COLUMNS = ("edge", "ligand_a", "ligand_b", "lomap_score", "exp_ddg", "cufep
                 "cufep_network_ddg", "in_published_map", "fepplus_bennett_ddg", "fepplus_bennett_error",
                 "fepplus_ccc_ddg", "in_openfe_network", "openfe_ddg", "openfe_error", "windows_complex",
                 "windows_solvent", "lowest_overlap_complex", "lowest_overlap_solvent", "backend_complex",
-                "backend_solvent", "not_reliable", "why_no_ddg")
+                "backend_solvent", "not_reliable", "fewest_independent_samples_complex",
+                "fewest_independent_samples_solvent", "few_independent_samples", "why_no_ddg")
 
 
 def openfe_results(name: str) -> tuple[dict[str, dict], dict[frozenset, dict]]:
@@ -170,14 +175,35 @@ def openfe_results(name: str) -> tuple[dict[str, dict], dict[frozenset, dict]]:
     return dg, edges
 
 
-def _lomap_score(run_dir: Path, edge: str) -> float | None:
+def _lomap_score(run_dir: Path, edge: dict) -> float | None:
+    """The LOMAP score of the mapping of an edge: as the summary of the run records it; for a summary that does not
+    (a version before the record), from the prepared edge, where the directory has it. A report made again from
+    the files that are kept of a run (``benchmarks/results/``, without the prepared edges) has the scores (review
+    of PR #21: all of them were empty there)."""
     import json
 
-    f = run_dir / "edges" / edge / "prep" / "prep.json"
+    if edge.get("lomap_score") is not None:
+        return float(edge["lomap_score"])
+    f = run_dir / "edges" / edge["edge"] / "prep" / "prep.json"
     if not f.exists():
         return None
     score = json.loads(f.read_text()).get("lomap_score")
     return None if score is None else float(score)
+
+
+def check_run_is_of_the_set(name: str, ligands: list[str], run_dir: Path, every: bool = True) -> None:
+    """Refuses, before a report writes or removes anything, a run directory that is not of the benchmark ``name``:
+    one with ligands that are not compounds of the set (``every``: all of them must be; else at least one, for
+    the absolute report, which lists ligands it does not know apart). Review of PR #21: `cufep benchmark report
+    tyk2 <the A2A results>` skipped all 17 compounds, wrote an empty report under the name of TYK2 over the
+    report of A2A and removed its figures. A run of some compounds of the set (the smoke tier) is one of the
+    set."""
+    reference = read_reference(name)
+    unknown = [ligand for ligand in ligands if ligand not in reference]
+    if (unknown and every) or (ligands and len(unknown) == len(ligands)):
+        shown = ", ".join(unknown[:5]) + (" ..." if len(unknown) > 5 else "")
+        raise ValueError(f"{run_dir} is not a run of the benchmark {name}: its ligands {shown} are not compounds of "
+                         "that set. Nothing was written.")
 
 
 def _why_no_ddg(e: dict) -> str:
@@ -219,8 +245,9 @@ def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dic
         windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
         exp = None if a not in reference or b not in reference else reference[b]["exp"] - reference[a]["exp"]
         network = values[b]["dg"] - values[a]["dg"] if a in values and b in values else None
+        fewest = e.get("fewest_independent_samples") or {}
         edges.append({
-            "edge": e["edge"], "ligand_a": a, "ligand_b": b, "lomap_score": _lomap_score(run_dir, e["edge"]),
+            "edge": e["edge"], "ligand_a": a, "ligand_b": b, "lomap_score": _lomap_score(run_dir, e),
             "exp_ddg": exp, "cufep_ddg": e.get("ddg"), "cufep_error": e.get("se"), "cufep_network_ddg": network,
             "in_published_map": fep is not None,
             "fepplus_bennett_ddg": None if fep is None else oriented(fep["bennett_ddg"], fep, a, b),
@@ -235,18 +262,26 @@ def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dic
             "backend_complex": "/".join(backend.get("complex") or []),
             "backend_solvent": "/".join(backend.get("solvent") or []),
             "not_reliable": "; ".join(e.get("not_reliable") or []),
+            # the window with the fewest independent samples of each leg, and the legs below the level of the
+            # analysis (review of PR #21: the table gave the standard error alone)
+            "fewest_independent_samples_complex": fewest.get("complex"),
+            "fewest_independent_samples_solvent": fewest.get("solvent"),
+            "few_independent_samples": "; ".join(e.get("few_samples") or []),
             "why_no_ddg": "" if e.get("ddg") is not None else _why_no_ddg(e)})
     return ligands, edges, shifted
 
 
-def _statistics(series: dict[str, list], exp: list, keys) -> dict[str, dict[str, str]]:
-    """Each method's statistics against experiment, with 95 % bootstrap intervals (four or more values), as text."""
+def _statistics(series: dict[str, list], exp: list, keys, centre: bool = False) -> dict[str, dict[str, str]]:
+    """Each method's statistics against experiment, with 95 % bootstrap intervals (four or more values), as text.
+    ``centre``: of each method's values with their mean set to the experimental mean of the values compared, in the
+    estimate and in every resample of its interval (:func:`cufep.benchmarks.stats.bootstrap`)."""
     from cufep.benchmarks.stats import bootstrap, metrics
+    from cufep.benchmarks.stats import centred as centred_values
 
     out = {}
     for method, pred in series.items():
-        m = metrics(pred, exp)
-        ci = bootstrap(pred, exp) if len(pred) >= 4 else {}
+        m = metrics(centred_values(pred, exp) if centre else pred, exp)
+        ci = bootstrap(pred, exp, centre=centre) if len(pred) >= 4 else {}
         out[method] = {}
         for key, _label in keys:
             if m[key] is None:
@@ -256,10 +291,10 @@ def _statistics(series: dict[str, list], exp: list, keys) -> dict[str, dict[str,
     return out
 
 
-def centred(values: list[float], exp: list[float]) -> list[float]:
-    """The values shifted so that their mean is the mean of the experimental values of the same compounds."""
-    shift = sum(exp) / len(exp) - sum(values) / len(values)
-    return [v + shift for v in values]
+def _flags(e: dict) -> str:
+    """The flags of an edge in the table: the legs that do not meet a level of the two checks of the analysis."""
+    return "; ".join(f"{name}: {e[key].replace('; ', ', ')}" for key, name in (
+        ("not_reliable", "NOT RELIABLE"), ("few_independent_samples", "few independent samples")) if e[key])
 
 
 def _f(value, fmt: str = ".2f", missing: str = "") -> str:
@@ -288,6 +323,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
 
     run_dir = Path(run_dir)
     summary = json.loads((run_dir / "summary.json").read_text())
+    check_run_is_of_the_set(name, list(summary["ligands"]), run_dir)
     network = run_dir / "network.json"
     edges_from = json.loads(network.read_text()).get("edges_from") if network.exists() else None
     ligands, edges, shifted = _rows(name, run_dir, summary)
@@ -313,16 +349,15 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     compared = [r for r in ligands if r["cufep"] is not None and (not of_dg or r["openfe"] is not None)]
     if compared:
         exp = [r["exp"] for r in compared]
-        series = {"cuFEP": centred([r["cufep"] for r in compared], exp),
-                  "FEP+": centred([r["fepplus"] for r in compared], exp)}
+        series = {"cuFEP": [r["cufep"] for r in compared], "FEP+": [r["fepplus"] for r in compared]}
         if of_dg:
-            series["OpenFE"] = centred([r["openfe"] for r in compared], exp)
-        stats = _statistics(series, exp, DG_STATISTICS)
+            series["OpenFE"] = [r["openfe"] for r in compared]
+        stats = _statistics(series, exp, DG_STATISTICS, centre=True)
         lines += ["## dG of the compounds against experiment", "",
                   f"The same {len(compared)} compounds for every method, each method centred on them (its mean set to "
                   "the mean of their experimental values, as cinnabar's plots of dG centre them), so that RMSE and MUE "
                   "compare like with like; pairwise RMSE, R^2 and Kendall tau do not depend on it. 95 % bootstrap "
-                  "intervals over compounds in brackets.", "",
+                  "intervals over compounds in brackets, each resample centred on its own compounds.", "",
                   "| statistic | " + " | ".join(series) + " |", "|---|" + "---|" * len(series)]
         lines += [f"| {label} | " + " | ".join(stats[m][key] for m in series) + " |" for key, label in DG_STATISTICS]
         lines.append("")
@@ -339,9 +374,8 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
     lines += ["## ddG of the edges against experiment", "",
               "cuFEP: the ddG of the edge itself; from the network: the difference of the two dG of the estimate. "
               "FEP+ Bennett: the ddG of the edge as published; cycle closure: the published ddG after the correction "
-              "of the cycles. OpenFE: the mean of its three repeats (± their standard deviation, as published). "
-              "Every ddG in the direction of the edge of this run; 95 % bootstrap intervals over edges in brackets.",
-              "",
+              f"of the cycles. OpenFE: the mean of its three repeats (± {OPENFE_EDGE_ERROR}, as published). Every "
+              "ddG in the direction of the edge of this run; 95 % bootstrap intervals over edges in brackets.", "",
               "| edges | n | statistic | " + " | ".join(column) + " |", "|---|---|---|" + "---|" * len(column)]
     for label, members, methods in groups:
         members = [e for e in members if e["exp_ddg"] is not None and all(e[column[m]] is not None for m in methods)]
@@ -361,13 +395,15 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
                      f"{r['fepplus']:.2f} | {_f(r['openfe'], '.2f', '-')} | {_f(r['cufep_minus_exp'], '+.2f')} | "
                      f"{r['fepplus_minus_exp']:+.2f} | {_f(r['openfe_minus_exp'], '+.2f', '-')} |")
     lines += ["", "## Edges (kcal/mol)", "",
-              "Windows, lowest overlap of neighbouring windows (all iterations) and backend of the complex and the "
-              "solvent leg; SE: standard error of cuFEP's ddG; OpenFE: mean ± standard deviation of its three "
-              "repeats; NOT RELIABLE names a leg whose overlap is below the level of the analysis (Klimovich et "
-              "al. 2015). `-`: the edge is not in that network.", "",
+              "Windows, lowest overlap of neighbouring windows (all iterations), fewest independent samples in a "
+              "window and backend, each of the complex and the solvent leg; SE: standard error of cuFEP's ddG; "
+              f"OpenFE: mean of its three repeats ± {OPENFE_EDGE_ERROR}. Flags, the two checks of the analysis: NOT "
+              "RELIABLE names a leg whose overlap is below its level (Klimovich et al. 2015); few independent "
+              "samples names a leg with a window below the level of the analysis (50 by default, Mey et al. 2020), "
+              "for which more sampling is advisable. `-`: the edge is not in that network.", "",
               "| edge | LOMAP score | experiment | cuFEP | SE | from the network | FEP+ Bennett | FEP+ cycle closure | "
-              "OpenFE | windows | lowest overlap | backend | NOT RELIABLE |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "OpenFE | windows | lowest overlap | fewest independent samples | backend | flags |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for e in edges:
         ddg = _f(e["cufep_ddg"], '+.2f') if e["cufep_ddg"] is not None else f"no ddG ({e['why_no_ddg']})"
         of = "" if not of_edges else _f(e["openfe_ddg"], "+.2f", "-") + (
@@ -378,9 +414,15 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             f"{_f(e['fepplus_bennett_ddg'], '+.2f', '-')} | {_f(e['fepplus_ccc_ddg'], '+.2f', '-')} | {of} | "
             f"{e['windows_complex']}, {e['windows_solvent']} | "
             f"{_f(e['lowest_overlap_complex'], '.3f')}, {_f(e['lowest_overlap_solvent'], '.3f')} | "
-            f"{e['backend_complex']}, {e['backend_solvent']} | {e['not_reliable']} |")
+            f"{_f(e['fewest_independent_samples_complex'], '.0f')}, "
+            f"{_f(e['fewest_independent_samples_solvent'], '.0f')} | "
+            f"{e['backend_complex']}, {e['backend_solvent']} | {_flags(e)} |")
     stock = [e["edge"] for e in edges if any(b and b != "cupotential" for b in
                                               (e["backend_complex"], e["backend_solvent"]))]
+    flagged = {name: [e["edge"] for e in edges if e[key]] for key, name in (
+        ("not_reliable", "NOT RELIABLE"), ("few_independent_samples", "few independent samples"))}
+    lines += ["", "Edges with a flag: " + "; ".join(
+        f"{name}: {', '.join(found) if found else 'none'}" for name, found in flagged.items()) + "."]
     lines += ["", "Legs on another backend than the cuPotential plugin (the fallback to stock OpenMM, whose reason "
                   f"the log of the leg gives): {', '.join(stock) if stock else 'none'}."]
     closures = summary.get("cycle_closures") or []
@@ -454,13 +496,14 @@ def _scatter(rows: list[dict], path: Path, title: str, exp_key: str, series: lis
 def _plot_dg(rows: list[dict], path: Path, name: str, with_openfe: bool) -> None:
     """The dG of every method, each centred on the compounds it is shown for, as the statistics centre them."""
     from cufep.benchmarks.runner import CUFEP_COLOUR, FEPPLUS_COLOUR
+    from cufep.benchmarks.stats import centred
 
     rows = [dict(r) for r in rows]
     for key in ("cufep", "fepplus", "openfe"):
         shown = [r for r in rows if r.get(key) is not None]
         if shown:
             for r, v in zip(shown, centred([r[key] for r in shown], [r["exp"] for r in shown])):
-                r[key] = v
+                r[key] = float(v)
     series = [("cufep", "cufep_error", "cuFEP (relative; standard error)", CUFEP_COLOUR, "o", True),
               ("fepplus", None, "FEP+ (published)", FEPPLUS_COLOUR, "s", False)]
     if with_openfe:
@@ -476,6 +519,6 @@ def _plot_edges(rows: list[dict], path: Path, name: str, with_openfe: bool) -> N
               ("fepplus_bennett_ddg", "fepplus_bennett_error", "FEP+ Bennett (published map)", FEPPLUS_COLOUR, "s",
                False)]
     if with_openfe:
-        series.append(("openfe_ddg", "openfe_error", "OpenFE (published; mean ± SD of 3 repeats)", OPENFE_COLOUR,
-                       "^", False))
+        series.append(("openfe_ddg", "openfe_error", "OpenFE (published; mean of 3 repeats, SD propagated from the "
+                       "legs)", OPENFE_COLOUR, "^", False))
     _scatter(rows, path, f"{name}: ddG of the edges", "exp_ddg", series, "experiment ddG (kcal/mol)")

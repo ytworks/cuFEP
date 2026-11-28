@@ -764,15 +764,53 @@ def electrostatics_annihilated(conditions: dict | None) -> bool:
     return bool(alchemy.get("annihilate_electrostatics", False)) if isinstance(alchemy, dict) else False
 
 
-def alchemical_box(eq, gcmc=None) -> np.ndarray:
+def alchemical_box(eq, gcmc=None, leg_dir: Path | None = None) -> np.ndarray:
     """The cell in which the alchemical run of a leg starts, from its pre-equilibration (the arrays
     of ``equil.npz``): the cell of its last configuration, which a leg with grand canonical moves of
     water (``gcmc``), without a barostat after that, keeps (grand's examples go on from the last frame
     of an MD at constant pressure). Before 2026-11-28 such a leg was fixed in the mean cell of the second
     half of the pre-equilibration, every molecule of the last configuration shifted whole into it: in a
     bilayer whose cell still drifted the molecules then overlapped (A2A 4b~4m, the mean cell 2.3 % shorter in
-    z than the last one: a CUDA failure on the plugin, NaN on stock OpenMM)."""
+    z than the last one: a CUDA failure on the plugin, NaN on stock OpenMM).
+
+    A leg with the moves that has run already (``leg_dir``) stays in the cell it has run in
+    (:func:`fixed_cell_of`): its System, whose checksum its samples record, has that cell, and a leg of
+    the earlier rule is continued in its mean cell (review of PR #21: with the last cell its samples were
+    refused as made with another System)."""
+    if gcmc is not None and leg_dir is not None:
+        kept = fixed_cell_of(leg_dir)
+        if kept is not None:
+            return kept
     return np.asarray(eq["box"], dtype=float)
+
+
+def positions_in_cell(positions, box, new_box, molecules) -> np.ndarray:
+    """A configuration moved into another cell as a barostat moves it: every molecule is shifted as
+    a whole, so that its centre keeps its fractional coordinates. No distance within a molecule
+    changes (constraints, virtual sites). For a cell that differs little from that of the configuration:
+    a leg of the earlier rule of :func:`alchemical_box` whose start configurations are made again in
+    the cell it has run in, and the check of the values of bulk water (``spikes/m35_bulk_water_gcmc.py``).
+    Between cells that differ by percent the molecules of a dense system overlap afterwards."""
+    x = np.array(positions, dtype=float)
+    transform = np.linalg.inv(np.asarray(box, dtype=float)) @ np.asarray(new_box, dtype=float)
+    for atoms in molecules:
+        index = np.fromiter(atoms, dtype=np.int64)
+        centre = x[index].mean(axis=0)
+        x[index] += centre @ transform - centre
+    return x
+
+
+def fixed_cell_of(leg_dir: Path) -> np.ndarray | None:
+    """The cell a leg without a barostat has run in so far: that of the start configurations of its lambda
+    windows, else that of the checkpoint of its replica exchange (all replicas of such a leg have one cell).
+    None for a leg that has neither."""
+    for path, key in ((Path(leg_dir) / "start_configs.npz", "boxes"),
+                      (Path(leg_dir) / "hrex" / "checkpoint.npz", "boxes")):
+        if path.exists():
+            with np.load(path, allow_pickle=False) as stored:
+                if key in stored.files and len(stored[key]):
+                    return np.asarray(stored[key][0], dtype=float)
+    return None
 
 
 def samples_settings(cfg: Config, leg: str | None = None) -> dict:
@@ -994,7 +1032,7 @@ def conditions_of_this_run(cfg: Config, lig_dir: Path, leg: str, repeat: int, pr
         if is_complex else None
     system, gcmc = leg_system(cfg, prep, leg)
     built = alchemical_leg(
-        cfg, system, prep, alchemical_box(eq, gcmc), restraint, is_complex, gcmc
+        cfg, system, prep, alchemical_box(eq, gcmc, leg_dir), restraint, is_complex, gcmc
     )
     states = [state.to_dict() for state in Schedule.load(leg_dir / "schedule.yaml").states]
     barostat = prep_info["complex_barostat"] if is_complex else "isotropic"
@@ -2826,7 +2864,7 @@ def run_leg(job: LegJob) -> dict:
         + (time.perf_counter() - t_restraint) - md_seconds
 
     # ---- 3. alchemical System ------------------------------------------------------------------
-    built = alchemical_leg(cfg, system, prep, alchemical_box(eq, gcmc), restraint, is_complex, gcmc)
+    built = alchemical_leg(cfg, system, prep, alchemical_box(eq, gcmc, leg_dir), restraint, is_complex, gcmc)
     alch, alch_xml = built.alch, built.xml
     rest2 = cfg.sampling.rest2
     rest2_on, hot_atoms, hot_residues = built.rest2_on, built.hot_atoms, built.hot_residues
@@ -2918,9 +2956,14 @@ def run_leg(job: LegJob) -> dict:
                 gcmc=built.gcmc,
             )
             # (with grand canonical moves the cell is fixed, alchemical_box, and the spec has no barostat)
-            start_box = alchemical_box(eq, gcmc)
-            ctx, integ = leg_context(pool_spec, alch.system, start_box, eq["positions"], eq["velocities"], device0,
-                                     seed)
+            # (a leg that has run in another cell than the last one of its pre-equilibration, the mean cell of the
+            # earlier rule, has its start configurations made in that cell, the configuration moved into it)
+            start_box = alchemical_box(eq, gcmc, leg_dir)
+            ctx, integ = leg_context(
+                pool_spec, alch.system, start_box,
+                eq["positions"] if np.array_equal(start_box, np.asarray(eq["box"], dtype=float)) else
+                (lambda c: positions_in_cell(eq["positions"], eq["box"], start_box, c.getMolecules())),
+                eq["velocities"], device0, seed)
             t0 = time.perf_counter()
             # a replica exchange that goes on from samples (or the checkpoint of their start) keeps their windows:
             # checked before anything is written, as the replica exchange would refuse them only afterwards
@@ -2959,29 +3002,10 @@ def run_leg(job: LegJob) -> dict:
             else:
                 als = als_settings(cfg, job.leg, rest2.scale)
 
-                def inline_mover():
-                    """The water moves of a window made by a mover on this Context, for the windows that run in
-                    this process."""
-                    mover, interval_steps = None, 0
-                    if built.relocation is not None:
-                        from cufep.sampling.relocation_mc import RelocationMover
-                        from cufep.sampling.worker import RELOCATION_STREAM, stream_seed
-                        from cufep.steps import md_steps
-
-                        mover = RelocationMover(built.relocation, ctx, stream_seed(seed + 23, 0, 0, RELOCATION_STREAM))
-                        interval_steps = md_steps(built.relocation.interval_ps, timestep_fs)
-                    if built.gcmc is not None:                 # (and the grand canonical moves of water)
-                        from cufep.sampling.gcmc import GcmcMover
-                        from cufep.sampling.worker import GCMC_STREAM, stream_seed
-                        from cufep.steps import md_steps
-
-                        mover = GcmcMover(built.gcmc, ctx, stream_seed(seed + 23, 0, 0, GCMC_STREAM))
-                        interval_steps = md_steps(built.gcmc.interval_ps, timestep_fs)
-                    return mover, interval_steps
-
-                # the windows of an iteration run at the same time on the GPUs the scheduler grants
+                # the windows of an iteration run at the same time on the GPUs the scheduler grants (in this
+                # process, with the water moves of the leg made on its Context, where it has no workers for them)
                 schedule, cfgs = adaptive_windows(run, pool_spec, ctx, integ, stages, als,
-                                                  alch.system.getNumParticles(), inline_mover)
+                                                  alch.system.getNumParticles())
                 made_with = {"start_configurations": als.start_configurations,
                              **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {}),
                              "windows": "chosen by this precalculation"}
@@ -4498,6 +4522,24 @@ def pressure_of_samples(conditions: dict) -> float | None:
     if pressure is None and isinstance(settings.get("gcmc"), dict):
         pressure = settings["gcmc"].get("cell_pressure_bar")
     return pressure
+
+
+def water_moves_of(conditions: dict | None) -> dict | None:
+    """The grand canonical moves of water that samples with these recorded conditions were made with:
+    ``{"enabled": False}`` for samples without the moves, else the excess chemical potential of water and
+    its standard volume as they were used, which with the temperature are the activity of the water the leg
+    was in equilibrium with. None if the conditions are not recorded. Free energies of legs made with other
+    values of them are not of one thermodynamic state of the water and are not combined
+    (:func:`cufep.rbfe.run.edge_result`)."""
+    if not isinstance(conditions, dict):
+        return None
+    settings = conditions.get("settings") if isinstance(conditions.get("settings"), dict) else {}
+    moves = settings.get("gcmc")
+    if not isinstance(moves, dict):
+        return {"enabled": False}
+    return {"enabled": True,
+            "excess_chemical_potential_kcal_per_mol": float(moves["excess_chemical_potential_kcal_per_mol"]),
+            "standard_volume_nm3": float(moves["standard_volume_nm3"])}
 
 
 def gcmc_numbers(samples: dict, start: int) -> dict | None:

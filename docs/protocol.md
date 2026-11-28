@@ -741,7 +741,12 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   the one recorded.
 - **The move.** With probability 1/2 an insertion, else a deletion. An insertion puts the oxygen
   of a ghost at a point drawn uniformly in the sphere, the molecule turned at random; a deletion
-  takes one of the N waters that interact and have their oxygen in the sphere. The acceptance is
+  takes one of the N waters that interact and have their oxygen in the sphere. An inserted water
+  keeps the velocity of its centre of mass, and its velocities relative to it are turned with the
+  molecule, as in the water relocation moves (one function for both): they stay those of a rigid
+  body, with the kinetic energy they had. (Until 2026-11-28 they were left as they were, with
+  components along the bonds of the turned molecule, which the constraints of the next MD step
+  took out.) The acceptance is
 
       P(insert) = min[1, exp(B) exp(-beta dE) / (N + 1)]
       P(delete) = min[1, N exp(-B) exp(-beta dE)]
@@ -763,6 +768,9 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   cell of the last configuration of the pre-equilibration (grand's examples go on from the last frame
   of an MD at constant pressure). Until 2026-11-28 it was the mean cell of the second half, every
   molecule shifted whole into it; in a bilayer whose cell still drifted the molecules then overlapped.
+  A leg that has run under that rule stays in the cell it has run in (that of the start
+  configurations of its windows, else of its checkpoint), so that it is continued with the System
+  its samples record.
   The solvent leg is as without the moves, at constant pressure. The free energy of the complex
   leg is then one at constant volume and constant chemical potential of the water in the sphere,
   that of the solvent leg one at constant pressure; the result records the pressure at which the

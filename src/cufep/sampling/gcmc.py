@@ -51,8 +51,11 @@ cuFEP's own (the sources are silent or do it otherwise)
   them in the pre-equilibration, which runs with a barostat).
 - A water with a virtual site (a 4-site model) is switched and placed as one body with it (grand
   takes TIP3P only).
-- An inserted water keeps the velocities it had as a ghost (grand's sampler sets positions only;
-  a ghost is integrated and thermostatted like every other molecule).
+- An inserted water keeps the velocity of its centre of mass that it had as a ghost (a ghost is
+  integrated and thermostatted like every other molecule), and its velocities relative to it are
+  turned with the molecule (:func:`cufep.sampling.relocation_mc.turn_velocities`, as the water
+  relocation moves do). grand's sampler sets positions only; a rigid water whose sites are turned
+  and whose velocities are not has velocities along its bonds.
 - The sphere is that of the water relocation moves: centred on the geometric centre of the heavy
   atoms of the ligand, radius half the largest distance between two of them in the prepared pose
   plus ``radius_margin_nm``.
@@ -81,6 +84,7 @@ from cufep.sampling.relocation_mc import (
     image_within_half_a_cell,
     random_rotations,
     relocation_spec,
+    turn_velocities,
 )
 
 #: what a move reports, in this order in the samples of a leg (``gcmc``): trials of an insertion,
@@ -433,15 +437,17 @@ class GcmcMover:
         """``k`` trials from a configuration (:meth:`configuration`), each with the logarithm of its
         acceptance by the stand-in energy: ``insert`` (per trial), ``log_p``, ``u`` (the change of
         the stand-in energy, kJ/mol), ``ghost`` (the water an insertion switches on), ``poses`` (of
-        its sites, per insertion), ``delete`` (the water of each deletion; -1 where the sphere is
-        empty) and ``uniform`` (the number each is accepted by)."""
+        its sites, per insertion) and ``rotations`` (the matrix each pose turns the molecule with),
+        ``delete`` (the water of each deletion; -1 where the sphere is empty) and ``uniform`` (the
+        number each is accepted by)."""
         spec, rng = self.spec, self.rng
         x, inside = configuration["x"], configuration["inside"]
         n = len(inside)
         insert = rng.integers(2, size=k) == 1
         n_in = int(insert.sum())
         out = {"insert": insert, "log_p": np.full(k, -np.inf), "u": np.zeros(k), "n": n, "ghost": -1,
-               "poses": np.zeros((0, self.waters.shape[1], 3)), "delete": np.full(k, -1, dtype=np.int64)}
+               "poses": np.zeros((0, self.waters.shape[1], 3)), "rotations": np.zeros((0, 3, 3)),
+               "delete": np.full(k, -1, dtype=np.int64)}
         if n_in:
             ghosts = configuration["ghosts"]
             if not len(ghosts):
@@ -455,9 +461,10 @@ class GcmcMover:
             direction /= np.linalg.norm(direction, axis=1, keepdims=True)
             points = configuration["centre"] + direction * (
                 float(spec.radius_nm) * rng.random(n_in) ** (1.0 / 3.0))[:, None]
-            poses = points[:, None, :] + np.einsum("kij,sj->ksi", random_rotations(rng, n_in), local)
+            rotations = random_rotations(rng, n_in)
+            poses = points[:, None, :] + np.einsum("kij,sj->ksi", rotations, local)
             u_in = configuration["energy"].pose_energies(poses, ghost, spec.cutoff_nm)
-            out["ghost"], out["poses"] = ghost, poses
+            out["ghost"], out["poses"], out["rotations"] = ghost, poses, rotations
             out["u"][insert] = u_in
             out["log_p"][insert] = self.b - np.log(n + 1.0) - self.beta * u_in
         n_out = k - n_in
@@ -505,10 +512,11 @@ class GcmcMover:
                     if energy_x is None:
                         energy_x = self._potential()
                     new_on, y = on.copy(), x
+                    which = int(batch["insert"][:j].sum())          # the number of this trial among the insertions
                     if batch["insert"][j]:
                         new_on[batch["ghost"]] = True
                         y = x.copy()
-                        y[self.waters[batch["ghost"]]] = batch["poses"][int(batch["insert"][:j].sum())]
+                        y[self.waters[batch["ghost"]]] = batch["poses"][which]
                         self.context.setPositions(y)
                         displaced = True
                     else:
@@ -517,6 +525,10 @@ class GcmcMover:
                     energy_y = self._potential()
                     log_r = -self.beta * ((energy_y - energy_x) - batch["u"][j])
                     if np.isfinite(log_r) and np.log(self.rng.random()) < log_r:
+                        if batch["insert"][j]:
+                            # the inserted water was turned: its velocities turn with it
+                            turn_velocities(self.context, self.waters[batch["ghost"]], spec.mass,
+                                            batch["rotations"][which])
                         displaced = displaced and not batch["insert"][j]
                         on, x, energy_x, configuration = new_on, y, energy_y, None
                         self._on = on.copy()

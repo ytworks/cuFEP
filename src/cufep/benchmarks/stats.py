@@ -70,8 +70,21 @@ def metrics(pred, exp) -> dict[str, float | None]:
             "pearson_r2": pearson_r2(pred, exp)}
 
 
-def bootstrap(pred, exp, n_boot: int = 2000, seed: int = 0, level: float = 0.95) -> dict[str, tuple[float, float]]:
+def centred(values, exp) -> np.ndarray:
+    """The values shifted so that their mean is the mean of the experimental values of the same ligands."""
+    values, exp = np.asarray(values, dtype=float), np.asarray(exp, dtype=float)
+    return values + (exp.mean() - values.mean())
+
+
+def bootstrap(pred, exp, n_boot: int = 2000, seed: int = 0, level: float = 0.95,
+              centre: bool = False) -> dict[str, tuple[float, float]]:
     """Percentile confidence intervals from resampling ligands with replacement.
+
+    ``centre``: the statistics are of values whose mean is set to the experimental mean of the ligands they are
+    compared on (:func:`centred`; the dG of relative calculations, which fix only differences). The shift is then
+    a part of the statistic and is made again for every resample, on its ligands (review of PR #21: the shift of
+    all ligands was kept, and four ligands with the errors -1, -1, +1, +1 had an RMSE between 1 and 1, where a
+    resample of one sign alone, one in eight, has an RMSE of 0).
 
     Every resample counts for every statistic it defines: the errors are defined for every
     resample, a correlation only where the resample has two different values in both series, and
@@ -86,7 +99,7 @@ def bootstrap(pred, exp, n_boot: int = 2000, seed: int = 0, level: float = 0.95)
     n = len(pred)
     for _ in range(n_boot):
         idx = rng.integers(0, n, n)
-        m = metrics(pred[idx], exp[idx])
+        m = metrics(centred(pred[idx], exp[idx]) if centre else pred[idx], exp[idx])
         for k in keys:
             if m[k] is not None and np.isfinite(m[k]):
                 samples[k].append(m[k])

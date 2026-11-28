@@ -130,15 +130,16 @@ def granted_devices(job, n_windows: int, work_per_window: float, what: str) -> l
     return devices
 
 
-def adaptive_windows(run: LegRun, pool_spec, ctx, integ, stages, als, n_atoms: int, inline_mover=None):
+def adaptive_windows(run: LegRun, pool_spec, ctx, integ, stages, als, n_atoms: int):
     """The lambda windows of a precalculation of adaptive lambda scheduling and the start configurations of their
     replicas, from the configuration of ``ctx``. The windows of an iteration run at the same time on the GPUs the
     scheduler grants; without workers one after another on ``ctx`` (the same windows from the same start
-    configurations either way, :func:`cufep.alchemy.schedule.adaptive_schedule`). ``inline_mover`` makes the
-    moves of water of the windows on ``ctx`` in that case: a function that returns ``(mover, interval in steps)``."""
+    configurations either way, :func:`cufep.alchemy.schedule.adaptive_schedule`), with the water moves of the leg
+    made on ``ctx`` as a worker makes them (:func:`cufep.sampling.worker.window_mover_on`)."""
     from cufep.alchemy.candidates import initial_window_indices
     from cufep.alchemy.schedule import adaptive_schedule
     from cufep.sampling.hrex import WindowPool
+    from cufep.sampling.worker import window_mover_on
     from cufep.workflow import md_work
 
     cfg, job = run.cfg, run.job
@@ -149,7 +150,7 @@ def adaptive_windows(run: LegRun, pool_spec, ctx, integ, stages, als, n_atoms: i
     devices = granted_devices(job, n_first, work,
                               f"the precalculation of the lambda schedule ({n_first} lambda windows)")
     if job.inline or len(devices) < 2:
-        mover, interval_steps = inline_mover() if inline_mover is not None else (None, 0)
+        mover, interval_steps = window_mover_on(pool_spec, ctx)
         return adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, run.log, mover=mover,
                                  interval_steps=interval_steps)
     with WindowPool(pool_spec, devices[:n_first], run.log) as pool:
@@ -161,9 +162,12 @@ def starts_from(run: LegRun, start_spec, schedule, start: tuple, system, n_atoms
     """The start configurations of windows that a leg does not choose itself, from one configuration ``start``
     (positions, box, velocities): each minimised in the state of its window (``minimize_steps``) and ``md_ps`` of
     MD in it, all windows at the same time on the GPUs the leg is granted (in this process one after another
-    where it has no workers), on the backend of ``start_spec``."""
+    where it has no workers), on the backend of ``start_spec``. The water moves of the leg are made in that MD
+    either way (:func:`cufep.sampling.worker.window_mover_on`), and a configuration of a leg with grand canonical
+    moves of water comes with the waters that interact in it."""
     from cufep.alchemy.schedule import run_window
     from cufep.sampling.hrex import WindowPool
+    from cufep.sampling.worker import window_mover_on
     from cufep.steps import md_steps
     from cufep.workflow import md_work
 
@@ -178,8 +182,9 @@ def starts_from(run: LegRun, start_spec, schedule, start: tuple, system, n_atoms
             done = pool.run(tasks)
     else:
         ctx, integ = leg_context(start_spec, system, start[1], start[0], start[2], run.device0, run.seed)
-        done = [run_window(ctx, integ, task) for task in tasks]
-        del ctx, integ
+        mover, interval_steps = window_mover_on(start_spec, ctx)
+        done = [run_window(ctx, integ, task, mover, interval_steps) for task in tasks]
+        del ctx, integ, mover
     return [d["config"] for d in done]
 
 

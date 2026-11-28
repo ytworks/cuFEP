@@ -308,18 +308,6 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                        box_safety=1.3 if barostat == "membrane" and gcmc is None else None, settings=settings,
                        mps_thread_percentage=thread_percentage(job.oversubscription), gcmc=gcmc, **more)
 
-    def inline_mover():
-        """The grand canonical moves of the windows that the precalculation runs on the Context of this process."""
-        if gcmc is None:
-            return None, 0
-        from cufep.sampling.gcmc import GcmcMover
-        from cufep.sampling.worker import GCMC_STREAM, stream_seed
-        from cufep.steps import md_steps
-
-        return GcmcMover(gcmc, ctx_of_this_process[0], stream_seed(seed + 23, 0, 0, GCMC_STREAM)), \
-            md_steps(gcmc.interval_ps, timestep_fs)
-
-    ctx_of_this_process: list = [None]
 
     def from_pre_equilibration(schedule) -> list:
         """The start of every window that the leg does not choose itself: the end of the pre-equilibration,
@@ -390,9 +378,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                 pool_spec = spec_of(ends, backend, seed=seed + 23)
                 # the Context of this process, which walks through the windows of the first iteration
                 ctx, integ = leg_context(pool_spec, hybrid.system, start[1], start[0], start[2], run.device0, seed)
-                ctx_of_this_process[0] = ctx
-                schedule, cfgs = adaptive_windows(run, pool_spec, ctx, integ, STAGES, als, n_atoms, inline_mover)
-                ctx_of_this_process[0] = None
+                schedule, cfgs = adaptive_windows(run, pool_spec, ctx, integ, STAGES, als, n_atoms)
                 del ctx, integ
                 how = {"start_configurations": als.start_configurations,
                        **({"walk_ps": float(als.walk_ps)} if als.start_configurations == "walk" else {}),
@@ -443,12 +429,15 @@ def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLe
     free energy along the path (``delta_g``) is that of transforming A into B in the leg, and what the hybrid
     topology is made of."""
     from cufep.engine.leg import path_result
-    from cufep.workflow import gcmc_numbers
+    from cufep.workflow import gcmc_numbers, water_moves_of
 
     result, of = path_result(leg_dir, analysis, run_record, {"edge": run_record.get("edge")}, samples=samples,
                              schedule=schedule, command=RBFE_COMMAND)
     # the grand canonical moves of water of the production that is analysed, by lambda window (None: none)
     result["gcmc"] = gcmc_numbers(of["samples"], of["first"])
+    # and what the samples were made with: whether the leg made the moves, and with which chemical potential and
+    # standard volume of water. The complex legs of one network must agree in it (cufep.rbfe.run)
+    result["water_moves"] = water_moves_of(of["attrs"].get("conditions"))
     if built is not None:
         h = built.hybrid
         result["hybrid"] = {"ligand_a": built.info["ligand_a"], "ligand_b": built.info["ligand_b"],

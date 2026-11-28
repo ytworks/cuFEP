@@ -38,7 +38,9 @@ relative example (5 ns of production per lambda window, adaptive lambda scheduli
 moves of water in the complex leg), every
 compound of the set on the LOMAP network of `cufep rbfe`, one calculation per edge; `resolved_config.yaml` holds
 every setting. The report compares the run with experiment, FEP+ (Ross et al. 2023) and OpenFE (IndustryBenchmarks2024,
-TYK2 only); `cufep benchmark report <set> <run directory> --protocol rbfe` gives it again from the run's files.
+TYK2 only); `cufep benchmark report <set> <run directory> --protocol rbfe` gives it again from the run's files, and
+from the files kept here (a unit test holds the recorded reports to that). The uncertainty of an OpenFE edge is the
+published one: the standard deviation propagated from the three repeats of its complex and of its solvent leg.
 
 | set | directory | edges with a ddG | compounds with a dG | calculation | report |
 |---|---|---|---|---|---|

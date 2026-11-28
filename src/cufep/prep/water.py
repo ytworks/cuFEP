@@ -76,6 +76,14 @@ BULK_WATER: dict[str, tuple[float, float]] = {
 }
 
 
+#: the conditions the values of :data:`BULK_WATER` were determined at (and checked at: ``spikes/m34``, ``m35``).
+#: The excess chemical potential and the standard volume of a water depend on the temperature, the pressure and
+#: how its interactions are cut, and enter the acceptance of every insertion and deletion; with ``auto`` cuFEP
+#: gives them only to a run under these conditions, and a run under others gives its own numbers
+#: (:func:`cufep.config.schema.gcmc_problems`; review of PR #21: TIP3P at 310 K got the values of 298.15 K)
+BULK_WATER_CONDITIONS = {"temperature_K": 298.15, "pressure_bar": 1.0, "cutoff_nm": 0.9}
+
+
 def bulk_water_values(water_file: str) -> tuple[float, float] | None:
     """(excess chemical potential in kcal/mol, standard volume in nm^3) of the water model, or None."""
     return BULK_WATER.get(str(water_file))
