@@ -141,5 +141,13 @@ def test_the_windows_and_the_production_of_a_relative_run_are_given_for_both_leg
                              ({"complex": 9}, "solvent")):
         with pytest.raises(ValueError, match=message):
             RbfeConfig.model_validate(_minimal(lambda_schedule={"windows": windows}))
+    assert each.lambda_schedule.windows_text() == "[0.0, 0.25, 0.5, 1.0] (complex leg) and 9 (solvent leg)"
+    assert both.lambda_schedule.windows_text() == "11"
+    # review of 3367749: given windows are started as a precalculation that walks starts its first windows; with a
+    # precalculation that starts them one from the other there is no such start, and the two settings are refused
+    with pytest.raises(ValueError, match="with sequential there is no such start for given windows"):
+        RbfeConfig.model_validate(_minimal(lambda_schedule={
+            "start_configurations": "precalculation", "adaptive": {"start_configurations": "sequential"}}))
+    RbfeConfig.model_validate(_minimal(lambda_schedule={"adaptive": {"start_configurations": "sequential"}}))
     with pytest.raises(ValueError, match="start_configurations"):
         RbfeConfig.model_validate(_minimal(lambda_schedule={"start_configurations": "walk"}))

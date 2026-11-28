@@ -1419,6 +1419,11 @@ def test_terminal_flips_are_attempted_once_an_interval_and_recorded_with_the_sam
     assert (flips["rule"], flips["interval_ps"], flips["groups"]) == (FLIP_RULE, 0.25, recorded["groups"])
     leg_dir = edge_dir / "repeat_0" / "solvent"
     assert stored_conditions(leg_dir / "hrex")[1]["settings"]["terminal_flip"] == recorded
+    # the windows and their start configurations are made without the moves, and their record does not hold the
+    # setting (review of 3367749: it did, and a leg with windows and no samples was refused when it changed)
+    from cufep.workflow import start_record_of
+
+    assert "terminal_flip" not in start_record_of(leg_dir / "start_configs.npz")["settings"]
     # the same run again takes the leg as it is; a run without the moves does not go on from these samples
     assert run_hybrid_leg_safe(job(rcfg))["delta_g"] == result["delta_g"]
     refused = run_hybrid_leg_safe(job(without))
@@ -1443,3 +1448,44 @@ def test_a_leg_without_a_terminal_group_is_sampled_as_without_the_setting(tmp_pa
         assert ligand_flip_groups(edge_dir, leg)[0] == []
         assert hybrid_settings(rcfg, leg, edge_dir) == hybrid_settings(RbfeConfig.model_validate(data), leg, edge_dir)
         assert build_leg(rcfg, edge_dir, leg).flip is None
+
+
+def test_the_md_of_a_leg_is_counted_only_where_its_record_tells_it(tmp_path):
+    """Review of 3367749: the MD that made the windows of a leg (``md_ps``) is what the record of its start
+    configurations tells, as integrated: the precalculation that chose the windows with its walk; the start of
+    given windows; both where the start configurations of chosen windows were made again and the samples started
+    from them; and nothing (None, and no sum) for a leg that kept windows it had, whose record does not say what
+    made them. The first version counted only the start made again for such legs, and the walk as it was asked."""
+    from types import SimpleNamespace
+
+    from cufep.rbfe.leg import md_of_leg
+
+    schedule = SimpleNamespace(states=[0, 1, 2, 3], provenance={
+        "initial_windows": {"morph": 3}, "start_configurations": "walk", "walk_ps": 0.201, "windows_simulated": 5,
+        "window_ps_integrated": 0.5, "equilibration_ps_integrated": 0.1})
+    # 30 iterations of four replicas of 0.248 ps; a time step of 4 fs: a walk of 0.201 ps is 50 steps, 0.2 ps
+    samples = {"u": np.zeros((30, 4, 4)), "attrs": {"iteration_ps": 0.248, "conditions": {"timestep_fs": 4.0}}}
+    exchange = 30 * 4 * 0.248
+
+    def md(record: dict | None) -> dict:
+        leg_dir = tmp_path / f"leg_{len(list(tmp_path.iterdir()))}"
+        leg_dir.mkdir()
+        if record is not None:
+            np.savez(leg_dir / "start_configs.npz", positions=np.zeros((4, 1, 3)), made_with=json.dumps(record))
+        return md_of_leg(leg_dir, schedule, samples)
+
+    chosen = {"start_configurations": "walk", "walk_ps": 0.201, "windows": "chosen by this precalculation"}
+    precalculation = 3 * 0.2 + 5 * (0.5 + 0.1)
+    assert md(chosen) == pytest.approx({"lambda_windows": precalculation, "replica_exchange": exchange,
+                                        "total": precalculation + exchange})
+    assert md({"start_configurations": "x", "walk_ps": 0.2, "window_md_ps": 0.6, "windows": "given"})[
+        "lambda_windows"] == pytest.approx(4 * 0.8)
+    assert md({"start_configurations": "x", "start_md_ps": 10.0, "windows": "those of the solvent leg"})[
+        "lambda_windows"] == pytest.approx(40.0)
+    # chosen windows whose start configurations were made again, and the samples started from those
+    assert md({"start_configurations": "x", "start_md_ps": 10.0, "minimize_steps": 5000,
+               "windows": "chosen by this precalculation"})["lambda_windows"] == pytest.approx(precalculation + 40.0)
+    # not told by the record: windows the leg kept, a start made again beside that of the samples, no record
+    for record in ({"start_configurations": "x", "start_md_ps": 10.0, "windows": "those this leg had"},
+                   {**chosen, "start_configurations_made_again": {"start_md_ps": 10.0}}, {"windows": "given"}, None):
+        assert md(record) == {"lambda_windows": None, "replica_exchange": pytest.approx(exchange), "total": None}

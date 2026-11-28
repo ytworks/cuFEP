@@ -147,12 +147,15 @@ class HybridLambdaSchedule(_Section):
     #: fixed mode: a number of evenly spaced windows (OpenFE's 11) or the lambda values, for both legs or
     #: {complex: ..., solvent: ...}
     windows: int | list[float] | LegWindows = 11
-    #: fixed mode: what the replicas of the given windows start from. pre_equilibration: the end of the
+    #: what the replicas of windows start from that a leg does not choose itself: the windows of fixed mode, those
+    #: the complex leg takes from the solvent leg (``adaptive.legs: solvent``), and windows a leg keeps whose start
+    #: configurations are made again. pre_equilibration: the end of the
     #: pre-equilibration, minimised in each window, and 10 ps of MD in it. precalculation: what the windows of the
     #: first iteration of adaptive lambda scheduling start from (a walk through the windows with
     #: ``adaptive.walk_ps`` in each, then in each window the MD of a window of the precalculation,
     #: ``adaptive.equilibration_ps`` and ``adaptive.window_ps``), so that given windows and windows that the
-    #: precalculation chose differ in their lambda values alone
+    #: precalculation chose differ in their lambda values alone (with ``adaptive.start_configurations: walk``, the
+    #: start this is made as)
     start_configurations: Literal["pre_equilibration", "precalculation"] = "pre_equilibration"
     adaptive: HybridAdaptiveConfig = Field(default_factory=HybridAdaptiveConfig)
 
@@ -165,6 +168,12 @@ class HybridLambdaSchedule(_Section):
     def windows_of(self, leg: str) -> int | list[float]:
         """The windows of ``leg`` in fixed mode."""
         return getattr(self.windows, leg) if isinstance(self.windows, LegWindows) else self.windows
+
+    def windows_text(self) -> str:
+        """The windows of fixed mode as a run says them: one value, or that of each leg."""
+        if isinstance(self.windows, LegWindows):
+            return f"{self.windows.complex} (complex leg) and {self.windows.solvent} (solvent leg)"
+        return str(self.windows)
 
     @field_validator("windows")
     @classmethod
@@ -268,6 +277,13 @@ class RbfeConfig(CommonConfig):
             problems.append("membrane.complex_leg: water is a setting of the ABFE; a relative calculation runs the "
                             "complex leg in the bilayer")
         problems += initial_window_problems(self.lambda_schedule)
+        schedule = self.lambda_schedule
+        if schedule.start_configurations == "precalculation" and schedule.adaptive.start_configurations != "walk":
+            # (review of 3367749: such windows were started by the walk whatever the precalculation was set to)
+            problems.append("lambda_schedule.start_configurations: precalculation starts the windows as a "
+                            "precalculation with lambda_schedule.adaptive.start_configurations: walk starts "
+                            f"its first windows; with {schedule.adaptive.start_configurations} there is no such "
+                            "start for given windows")
         problems += gcmc_problems(self)
         if problems:
             raise ValueError("; ".join(problems))

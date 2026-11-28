@@ -28,8 +28,9 @@ cuFEP's rule (:func:`terminal_groups`, :func:`hybrid_flip_groups`)
     * The two orientations differ: the two ring neighbours of the pivot are not equivalent atoms of the molecule
       (canonical ranks without tie breaking). A phenyl or a 2,6-dichlorophenyl ring is not turned: its half turn
       gives the configuration it had with the names of equivalent atoms exchanged.
-    * In a hybrid of two ligands the ring of the pivot and the anchor are core atoms (the ring is in both
-      ligands), the group is terminal in both, and the two orientations differ in at least one. The mobile atoms
+    * In a hybrid of two ligands the anchor and the ring system of the pivot, that of each ligand, are core atoms
+      (the whole ring system is in both ligands), the group is terminal in both, and the two orientations differ
+      in at least one. The mobile atoms
       are those beyond the pivot in the bond graph of the hybrid: the unique atoms of both ligands turn with the
       ring. A group whose mobile atoms reach the anchor another way (a ring closed in one ligand only) or are
       held by a constraint to an atom that does not turn is left out.
@@ -208,19 +209,26 @@ def hybrid_flip_groups(mol_a, mol_b, mapping: dict[int, int], to_hybrid_a: dict[
                        "hybrid_axis": None if hybrid_axis is None else [int(hybrid_axis[0]), int(hybrid_axis[1])],
                        "used": why_not is None, "why_not": why_not, "mobile_atoms": len(mobile)})
 
-    for ligand, mine, other, core, to_hybrid, to_other in (
-            ("A", of_a, of_b, core_a, to_hybrid_a, mapping), ("B", of_b, of_a, core_b, to_hybrid_b, b_to_a)):
+    for ligand, mine, other, core, other_core, to_hybrid, to_other in (
+            ("A", of_a, of_b, core_a, core_b, to_hybrid_a, mapping),
+            ("B", of_b, of_a, core_b, core_a, to_hybrid_b, b_to_a)):
         for (anchor, pivot), g in mine.items():
-            if anchor not in core or not set(g["ring"]) <= core:
-                note(ligand, g, None, "the ring or the anchor is in one ligand only")
-                continue
+            # one decision and one record per bond of the hybrid, whichever ligand it is found in first
             axis = (to_hybrid[anchor], to_hybrid[pivot])
             if axis in seen:
-                continue                                              # found in A already
+                continue
             seen.add(axis)
+            if anchor not in core or not set(g["ring"]) <= core:
+                note(ligand, g, axis, "the ring or the anchor is in one ligand only")
+                continue
             twin = other.get((to_other[anchor], to_other[pivot]))
             if twin is None:
                 note(ligand, g, axis, "not a terminal group of the other ligand")
+                continue
+            # the ring system of the other ligand too (review of 3367749: a naphthyl of A on the ring of a phenyl
+            # of B was taken from B, and the whole naphthyl turned)
+            if not set(twin["ring"]) <= other_core:
+                note(ligand, g, axis, "the ring or the anchor is in one ligand only")
                 continue
             if not (g["distinct"] or twin["distinct"]):
                 note(ligand, g, axis, "the two orientations do not differ in either ligand")

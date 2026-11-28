@@ -232,3 +232,21 @@ def test_an_accepted_flip_turns_the_velocities_with_the_group_and_a_rejected_one
     assert not move["accepted"]
     y, w, _ = state(context)
     assert np.array_equal(y, x) and np.array_equal(w, v)
+
+
+def test_a_ring_system_that_only_one_ligand_has_is_not_turned_in_either_direction():
+    """Review of 3367749. One ligand has a 2-naphthyl group where the other has a 3-chlorophenyl ring; the six atoms
+    of the ring on the nitrogen are mapped and the second ring of the naphthyl is unique. The ring system of the
+    naphthyl is not in both ligands, so the group is left whichever ligand is A, with one record that says why. The
+    first version held only the ligand a group was found in to the rule: it took the group from the phenyl ligand
+    and turned the whole naphthyl with it, and its record of the bond said both that it was used and why not."""
+    from rdkit import Chem
+
+    naphthyl, phenyl = _mol("O=C(C1CCC(CCCC)CC1)Nc1ccc2ccccc2c1"), _mol("O=C(C1CCC(CCCC)CC1)Nc1cccc(Cl)c1")
+    shared = Chem.MolFromSmarts("O=C(C1CCC(CCCC)CC1)Nc1ccccc1")
+    mapping = dict(zip(naphthyl.GetSubstructMatch(shared), phenyl.GetSubstructMatch(shared)))
+    assert len(mapping) == 19
+    for a, b, core in ((naphthyl, phenyl, mapping), (phenyl, naphthyl, {j: i for i, j in mapping.items()})):
+        groups, record = hybrid_flip_groups(a, b, core, *ligand_graph(a, b, core))
+        assert groups == []
+        assert [(r["used"], r["why_not"]) for r in record] == [(False, "the ring or the anchor is in one ligand only")]

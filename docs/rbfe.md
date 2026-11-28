@@ -140,7 +140,10 @@ moves, without a minimisation and without recording energies. Given windows and 
 chose then differ in their lambda values alone, which is what a comparison of the two needs (cuFEP's own; a unit
 test holds the two starts equal to the bit). The result of a leg gives its MD after the pre-equilibration in ps
 (`md_ps`: what made its windows, and its replica exchange), so that a leg with given windows can be given the MD
-of one whose precalculation chose them, with `sampling.production_ns` (one number, or one for each leg).
+of one whose precalculation chose them, with `sampling.production_ns` (one number, or one for each leg); where the
+record of the start configurations does not tell what made the windows (a leg that kept windows it had), the
+number is not given. The start is that of a precalculation that walks (`adaptive.start_configurations: walk`, the
+default); with `sequential` the setting is refused.
 
 ### Sampling
 
@@ -185,7 +188,8 @@ not read). cuFEP's rule is narrower, and where it differs it is cuFEP's own (the
   (the terminal side of the bond is the smaller one; with as many on both sides neither is turned);
 - the two ring neighbours of the pivot are not equivalent atoms (a phenyl or a 2,6-dichlorophenyl ring is not
   turned: half a turn gives the configuration it had);
-- in the hybrid the ring and the anchor are core atoms, the group is terminal in both ligands and its orientations
+- in the hybrid the anchor and the whole ring system of each ligand are core atoms, the group is terminal in both
+  ligands and its orientations
   differ in at least one; the unique atoms of both ligands beyond the pivot turn with the ring;
 - the angle is half a turn for every group, fixed when the leg is set up (the exocyclic bond of an aromatic atom
   lies in the plane of its ring); the velocities of the turned atoms are turned with them.

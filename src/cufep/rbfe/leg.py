@@ -379,7 +379,9 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
     if start_file.exists():
         made = start_record_of(start_file)
         if starts_are_of(made, schedule):                  # start configurations of other windows are made again
-            check_windows_settings(made, settings, start_file, quiet)
+            # (the windows and their start configurations are made without terminal flip moves: their record
+            # holds the settings without them)
+            check_windows_settings(made, hybrid_settings(rcfg, leg), start_file, quiet)
     n_stored, conditions = stored_conditions(hrex)
     if n_stored == 0:
         # no samples. A leg stopped at the checkpoint of the start of its replica exchange, whose start
@@ -525,7 +527,9 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
-    settings = hybrid_settings(rcfg, job.leg, edge_dir)
+    # (the terminal flip moves are not among them: the windows and their start configurations are made without
+    # the moves, and a leg keeps them when the setting changes; the samples record the moves, hybrid_leg_spec)
+    settings = hybrid_settings(rcfg, job.leg)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more):
@@ -685,12 +689,15 @@ def flip_numbers(samples: dict, start: int, conditions: dict | None = None) -> d
 
 
 def md_of_leg(leg_dir: Path, schedule, samples: dict) -> dict:
-    """The MD of a leg after its pre-equilibration, as its files record it, in ps (numbers, no verdict): the lambda
-    windows (what the record of the start configurations says made them: the precalculation that chose the windows,
-    with its walk, or the start of given windows), the replica exchange (every window, equilibration and
-    production, as stored) and their sum. A part that the files do not record is None, and so is the sum then.
-    With it a calculation with given windows can be given the MD of one whose precalculation chose them
-    (``sampling.production_ns`` of each leg); nothing is derived from it."""
+    """The MD of a leg after its pre-equilibration, as its files record it, in ps as integrated (numbers, no
+    verdict): the lambda windows (what the record of the start configurations says made them and their starts: the
+    precalculation that chose the windows, with its walk, and the start of windows the leg did not choose or whose
+    start configurations were made again), the replica exchange (every window, equilibration and production, as
+    stored) and their sum. A part that the files do not record is None, and so is the sum then: the windows of a
+    leg that kept windows it had (their record says how the start configurations were made again, not what made
+    the windows before). With it a calculation with given windows can be given the MD of one whose precalculation
+    chose them (``sampling.production_ns`` of each leg); nothing is derived from it."""
+    from cufep.steps import md_steps
     from cufep.workflow import start_record_of
 
     def recorded(read):
@@ -703,17 +710,26 @@ def md_of_leg(leg_dir: Path, schedule, samples: dict) -> dict:
         file = Path(leg_dir) / "start_configs.npz"
         made = start_record_of(file) if file.exists() else {}
         n = len(schedule.states)
+        if made.get("windows") == "those this leg had" or "start_configurations_made_again" in made:
+            return None
+        ps = 0.0
         if made.get("windows") == "chosen by this precalculation":
             p = schedule.provenance
             first = sum(int(v) for v in p["initial_windows"].values()) - (len(p["initial_windows"]) - 1)
-            walk = first * float(p["walk_ps"]) if p.get("start_configurations") == "walk" else 0.0
-            return float(walk + int(p["windows_simulated"]) * (float(p["window_ps_integrated"])
-                                                               + float(p["equilibration_ps_integrated"])))
+            if p.get("start_configurations") == "walk":
+                dt = float(samples["attrs"]["conditions"]["timestep_fs"])
+                ps += first * md_steps(float(p["walk_ps"]), dt) * dt / 1000.0
+            ps += int(p["windows_simulated"]) * (float(p["window_ps_integrated"])
+                                                 + float(p["equilibration_ps_integrated"]))
+        # the start of windows the leg did not choose, or start configurations made again for the windows it chose
+        # (the record then holds how they were made, cufep.engine.leg.record_the_start_used)
         if "window_md_ps" in made:
-            return float(n * (float(made["walk_ps"]) + float(made["window_md_ps"])))
-        if "start_md_ps" in made:
-            return float(n * float(made["start_md_ps"]))
-        return None
+            ps += n * (float(made["walk_ps"]) + float(made["window_md_ps"]))
+        elif "start_md_ps" in made:
+            ps += n * float(made["start_md_ps"])
+        elif made.get("windows") != "chosen by this precalculation":
+            return None
+        return float(ps)
 
     def replica_exchange():
         u = samples["u"]
