@@ -286,8 +286,10 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
     if kept is None:
         # no summary that can be read: of the edges this run does not run, the tables are the record (the run
         # writes them again when it ends, with what the legs of those edges give then)
+        reused = [(a, b) for a, b in edges if edge_name(a, b) not in chosen]
         changed = tables_changed(out_dir, [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats)
-                                           for a, b in edges if edge_name(a, b) not in chosen], ligands=False)
+                                           for a, b in reused], ligands=False,
+                                 only={edge_name(a, b) for a, b in reused})
         if changed:
             shown = "; ".join(changed[:3]) + (" ..." if len(changed) > 3 else "")
             raise WorkflowError(
@@ -930,12 +932,16 @@ def table_values(out_dir: Path, name: str, key: str, value: str) -> dict[str, tu
         return {}
 
 
-def tables_changed(out_dir: Path, results: list[dict], dg: dict | None = None, ligands: bool = True) -> list[str]:
+def tables_changed(out_dir: Path, results: list[dict], dg: dict | None = None, ligands: bool = True,
+                   only: set[str] | None = None) -> list[str]:
     """What the tables of a directory hold and the results of its legs, made again (``results``: edges as
     :func:`edge_result` gives them; ``dg``: the dG of a summary), would give otherwise: the ddG of an edge of
     ``edges.csv`` and, with ``ligands``, the dG of a ligand of ``ligands.csv``, each with its standard error, as
-    the tables write them. For a directory whose summary cannot be read (or is not there): the tables are then
-    the record of what it had, and they are made again only from legs that give the same. Sixth review of PR
+    the tables write them. ``only``: the edges that are compared (a run: those it does not run; the others it
+    samples again, whatever the table holds of them. Eighth review of PR #21: every row of the table was read,
+    and an edge the run was to run again, with a ddG in the table, stopped the run). For a directory whose
+    summary cannot be read (or is not there): the tables are then the record of what it had, and they are made
+    again only from legs that give the same. Sixth review of PR
     #21: a truncated summary.json in a copy of benchmarks/results/tyk2_rbfe let `cufep rbfe analyze --write`
     empty the ddG of 22 edges and the dG of 16 compounds; and its review: so would a table whose edge had the
     mean of two repeats, with one of them moved away, get the value of the other."""
@@ -945,6 +951,8 @@ def tables_changed(out_dir: Path, results: list[dict], dg: dict | None = None, l
     out = []
     made = {e["edge"]: (table_number(e.get("ddg")), table_number(e.get("se"))) for e in results}
     for name, held in table_values(out_dir, "edges.csv", "edge", "ddg_kcal_mol").items():
+        if only is not None and name not in only:
+            continue
         if name in made and made[name] != held or name not in made and held[0]:
             out.append(f"the ddG of {name}: {said(held)} in edges.csv, {said(made.get(name, ('', '')))} from the legs")
     if ligands:

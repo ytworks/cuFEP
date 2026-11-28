@@ -1193,3 +1193,16 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
                                            "edges.csv, -1.700 ± .* from the legs.*Nothing was changed"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     assert files() == before
+    # ... and only of those. Eighth review (P2): an edge that the run is to run again was held to the table too.
+    # With a ddG of toluene~phenol in edges.csv (its two repeats made alike) and a summary that cannot be read,
+    # a run of every edge, and one of that edge alone, were refused for the value the table holds of it
+    (tmp_path / "aside").rename(hrex)
+    (hrex / MANIFEST).write_text(json.dumps({"parts": [], "attrs": {"conditions": {"settings": {"gcmc": water}}}}))
+    for name in ("summary.json", "edges.csv", "ligands.csv"):          # (the results as these legs give them)
+        (out_dir / name).unlink()
+    assert rewrite_results(out_dir)["edges"][0]["ddg"] == pytest.approx(-1.7)
+    assert "toluene~phenol,toluene,phenol,-1.700,0.200," in (out_dir / "edges.csv").read_text()
+    (out_dir / "summary.json").write_text("{")
+    for chosen in (None, ["toluene~phenol"], ["phenol~aniline"]):
+        with pytest.raises(RuntimeError, match="the run began to write"):
+            run_rbfe(rcfg, log=lambda line: None, only_edges=chosen)
