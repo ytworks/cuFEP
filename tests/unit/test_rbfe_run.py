@@ -926,3 +926,12 @@ def test_a_leg_stopped_at_the_checkpoint_of_its_start_is_checked_before_a_run_wr
     edit_attributes(leg_dir / "hrex", set={"conditions": recorded})
     with pytest.raises(RuntimeError, match="the run began to write"):
         run_rbfe(rcfg, log=lambda line: None)
+    # ... and its pre-equilibration too (the leg makes it again, with the time step of the configuration): the
+    # checkpoint is held to the run all the same, and the leg is not said to hold samples
+    (leg_dir / "equil.npz").rename(leg_dir / "equil.aside.npz")
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None)
+    edit_attributes(leg_dir / "hrex", set={"conditions": {**recorded, "system_sha256": "0" * 64}})
+    monkeypatch.setattr(rbfe_run, "write_run_files", not_to_be_reached)
+    with pytest.raises(WorkflowError, match="wrote the checkpoint of its start.*the System"):
+        run_rbfe(rcfg, log=lambda line: None)

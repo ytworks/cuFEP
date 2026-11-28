@@ -1147,6 +1147,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     """
     from cufep.alchemy.schedule import Schedule
     from cufep.sampling.storage import (
+        CONDITIONS_OF_EARLIER_VERSIONS,
         ConditionsError,
         _same,
         conditions_differences,
@@ -1266,11 +1267,21 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
             refuse_unrecorded_samples(leg_dir, n_stored, problems)
         samples_have_their_windows()
         return
+    # the conditions that follow from the configuration alone, as the leg gives them to its samples (leg_spec):
+    # compared here without building the System (the independent review of e28e6e6: another sampling.exchange
+    # was refused by the leg only, after the run had written its record)
     current = {"temperature_K": float(cfg.thermodynamics.temperature_K),
                "pressure_bar": None if gcmc_in(cfg, leg) else float(cfg.thermodynamics.pressure_bar),
-               "friction_per_ps": float(cfg.dynamics.friction_per_ps)}
-    differing = [f"{key}: {conditions[key]} -> {value}" for key, value in current.items()
-                 if key in conditions and not _same(conditions[key], value)]
+               "friction_per_ps": float(cfg.dynamics.friction_per_ps),
+               "exchange": str(cfg.sampling.exchange),
+               "barostat_frequency": int(cfg.dynamics.barostat_frequency),
+               # (the samples of a leg stay on the backend they were made with)
+               "precision": _precision(cfg, str(conditions.get("backend") or cfg.backend.name))}
+    # what versions before a condition was recorded always had (conditions_differences)
+    recorded = {**{key: value for key, value in CONDITIONS_OF_EARLIER_VERSIONS.items() if key in current},
+                **conditions}
+    differing = [f"{key}: {recorded[key]} -> {value}" for key, value in current.items()
+                 if key in recorded and not _same(recorded[key], value)]
     if isinstance(conditions.get("settings"), dict):
         differing += settings_differences(conditions["settings"], samples_settings(cfg, leg))
     elif not differing:

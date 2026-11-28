@@ -155,7 +155,18 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
     (旧規則が ΔΔG をどれだけ変えるかは未測定)。どの辺も規則を記録していないネットワーク(記録済みの TYK2・A2A)は、その旨を
     注記に出す(報告にも出る)。ABFE の脚の結果は `water_moves` を持たないままで、反復間の GCMC 条件の比較と合わせて
     issue #20 に残る。
-  - 記録(`benchmarks/results/tyk2_rbfe`、`a2a_rbfe`)は f38e8df のイメージで `cufep rbfe analyze <run> --write` と報告を
+  - e28e6e6 を書いていない者のレビュー(約 15 分)で残りが見つかり、追加で直した(どれも修正前に失敗するテストつき):
+    ABFE の事前検査は設定だけで決まる条件(`sampling.exchange`、バロスタットの頻度、サンプルのバックエンドでの精度)も
+    比べる(exchange を変えた再実行は、サンプルがある脚でも初期チェックポイントだけの脚でも、書き込みの後に脚で拒否
+    されていた。main からあった穴)。規則の記録が無い脚の注記は、その脚が旧 mover のものだと断定しない文にした
+    (結果だけ残ってサンプルが無い脚は、修正後の mover でも規則が読めない)。`rbfe analyze --write` は ΔΔG のある辺の
+    `prep/prep.json` を summary の形式によらず必要とする(無いと、辺どうしの調製条件の照合から黙って外れる)。RBFE の
+    事前検査は、0 行で `equil.npz` も無い脚を「サンプルがある」と言って拒否していた(脚は平衡化を作り直して通る)ので、
+    設定の時間刻みで照合する。
+  - 残り(記録): ABFE の事前検査は、設定を記録したサンプルの System のチェックサムを比べない(main のまま。脚がサンプルを
+    開くときに比べる)。`rbfe analyze --write` は、ネットワークと反復数をディレクトリの今の記録(`network.json`、
+    `resolved_config.yaml`)から取る(実行と同じ)。
+  - 記録(`benchmarks/results/tyk2_rbfe`、`a2a_rbfe`)は RECORDSHA のイメージで `cufep rbfe analyze <run> --write` と報告を
     やり直して差し替えた。ΔΔG・dG・SE と CSV・図はすべて前と同じで、変わったのは `summary.json`(各辺・各反復の
     `water_moves` に規則 null、`water_rule_not_recorded`、注記 1 件)と `rbfe_report.md`(その注記 1 行)だけ。
 

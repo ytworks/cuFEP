@@ -1127,7 +1127,9 @@ def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the
     exchange wrote the checkpoint of its start, before its first sample, has no samples, and the check before a
     run ended there. Where its start configurations are made again the leg holds the conditions recorded with
     that checkpoint against those of the run (check_kept_windows), after the run has written its record: another
-    soft-core was refused only then. They are compared before the run writes, as those of samples are."""
+    soft-core was refused only then. They are compared before the run writes, as those of samples are. And what
+    is compared of both without building the System is every condition that follows from the configuration alone
+    (the independent review of that fix: another sampling.exchange passed the check and was refused by the leg)."""
     from cufep.config.schema import Config
     from cufep.sampling.storage import ConditionsError, LegStorage
     from cufep.workflow import check_leg_reuse, prep_made_from, samples_settings
@@ -1147,6 +1149,7 @@ def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the
     hrex = lig_dir / "repeat_0" / "solvent" / "hrex"
     storage = LegStorage(hrex, 2, 2)
     storage.check_conditions({"temperature_K": 298.15, "pressure_bar": 1.0, "friction_per_ps": 1.0,
+                              "barostat_frequency": int(first.dynamics.barostat_frequency),
                               "settings": samples_settings(first)})
     storage.close()
     np.savez(hrex / "checkpoint.npz", iteration=0, extra=json.dumps({"rows": 0}))
@@ -1157,8 +1160,21 @@ def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the
                                               "0.5 -> 0.8\\). It is left as it is"):
         check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0)
     check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)             # as it was made
+    independent = config(sampling={"exchange": "none"})     # (these conditions record no exchange: hrex, as then)
+    with pytest.raises(ConditionsError, match="wrote the checkpoint of its start.*\\(exchange: hrex -> none\\)"):
+        check_leg_reuse(independent, lig_dir, "solvent", 0, prep_info, 10.0)
     (hrex / "checkpoint.npz").unlink()                                         # nothing to go on from
     check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0)
+    # with samples: the same conditions are compared
+    storage = LegStorage(hrex, 2, 2)
+    for _ in range(6):
+        storage.append(np.zeros((2, 2)), np.arange(2), np.ones(2))
+    storage.close()
+    check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
+    with pytest.raises(ConditionsError, match="the 6 iterations of samples.*\\(exchange: hrex -> none\\)"):
+        check_leg_reuse(independent, lig_dir, "solvent", 0, prep_info, 10.0)
+    with pytest.raises(ConditionsError, match="barostat_frequency: 25 -> 50"):
+        check_leg_reuse(config(dynamics={"barostat_frequency": 50}), lig_dir, "solvent", 0, prep_info, 10.0)
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")

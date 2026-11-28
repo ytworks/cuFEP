@@ -287,11 +287,15 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
             raise other_conditions(n_stored, hrex, differing)
     # then every condition, with the checksum of the System this run would sample: the hybrid System is built
     equil_file = leg_dir / "equil.npz"
-    if not equil_file.exists():
+    if equil_file.exists():
+        with np.load(equil_file) as eq:
+            timestep_fs = float(eq["timestep_fs"])
+    elif n_stored:
         raise WorkflowError(f"{hrex} holds samples of this leg but {equil_file}, which they started from, is not "
                             "there. Nothing was changed; run the calculation in a new output.dir")
-    with np.load(equil_file) as eq:
-        timestep_fs = float(eq["timestep_fs"])
+    else:
+        # a leg without samples makes its pre-equilibration again, with the time step of the configuration
+        timestep_fs = float(rcfg.dynamics.timestep_fs)
     built = build_leg(rcfg, Path(edge_dir), leg)
     gcmc = hybrid_gcmc(rcfg, built, leg, quiet)
     plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),

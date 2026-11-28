@@ -568,7 +568,8 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     # review of PR #21: an edge finished by the mover before 2026-11-28 and one added by this version gave one set of
     # dG, and nothing told them apart); so is a network none of whose edges records a rule
     rules = water_rules(results)
-    earlier = "(a version before the record of 2026-11-28, whose earlier movers left them as they were)"
+    # (what is known of a leg without a rule: nothing but that; said with what the movers did until the rule)
+    earlier = "(until 2026-11-28 the mover left those velocities as they were)"
     if len(rules) > 1:
         water_notes.append(
             f"{WATER_MOVES}: the edges with a ddG were not sampled under one rule for the velocities of an inserted "
@@ -696,13 +697,12 @@ def files_gone(out_dir: Path, edge: dict) -> list[str]:
     """Of an edge with a ddG in the summary a directory has: the files which that ddG, and what the summary holds
     of the edge, were made from and which the directory does not have, by their path in the directory of the edge.
     They are the result of both legs of every repeat the ddG was made from, and the record of the prepared edge
-    where the summary holds what is read there (the LOMAP score; the edges of a network are also compared by it).
-    For a summary that does not name the repeats of its ddG: any result of a leg."""
+    (its LOMAP score is read there, and the edges of a network are compared by it: an edge without it would be
+    left out of that comparison). For a summary that does not name the repeats of its ddG: any result of a leg."""
     edge_dir = Path(out_dir) / "edges" / edge["edge"]
     repeats = [r["repeat"] for r in edge.get("repeats") or [] if "ddg" in r and "repeat" in r]
     needed = [f"repeat_{r}/{leg}/result.json" for r in repeats for leg in ("complex", "solvent")]
-    if "lomap_score" in edge:
-        needed.append("prep/prep.json")
+    needed.append("prep/prep.json")
     missing = [name for name in needed if not (edge_dir / name).exists()]
     if not repeats and not list(edge_dir.glob("repeat_*/*/result.json")):
         missing.insert(0, "repeat_*/*/result.json")
@@ -717,7 +717,9 @@ def rewrite_results(out_dir: Path) -> dict:
     the summary the directory has holds the ddG of an edge and the directory not every file it was made from
     (:func:`files_gone`): written again, such an edge would have no ddG, or that of the repeats that are left.
     (Second review of PR #21: a copy of the results without the directories of the edges,
-    ``benchmarks/results/``; third: one leg of a repeat set aside, which left the other leg and passed.)"""
+    ``benchmarks/results/``; third: one leg of a repeat set aside, which left the other leg and passed.) The
+    network and the number of repeats are those the directory records now (``network.json``,
+    ``resolved_config.yaml``), as for the run."""
     from cufep.run import lock_output_directory
 
     out_dir = Path(out_dir)

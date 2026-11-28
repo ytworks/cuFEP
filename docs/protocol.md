@@ -1220,6 +1220,16 @@ belong together:
   continued from such a checkpoint: the run is refused before anything is written, with what to
   do (`--reschedule` starts the leg anew and keeps its samples in `previous_<n>/`). A leg that
   holds all its iterations is analysed as it is.
+- Before a run writes anything, the samples a leg would go on from are held to the run: the
+  conditions that follow from the configuration alone (temperature, pressure, friction,
+  `sampling.exchange`, the frequency of the barostat, the precision on the backend of the
+  samples) and the settings behind the System. A leg stopped at the checkpoint of the start of
+  its replica exchange, before its first sample, is held to the conditions recorded with that
+  checkpoint in the same way where its start configurations have to be made again. The checksum
+  of the System itself is compared before the run only for samples that do not record their
+  settings (the table below); otherwise the leg compares it when it opens its samples. A
+  relative run builds the hybrid System of its legs and compares every condition before it
+  writes (`docs/rbfe.md`).
 - Workers are started by one function for the replica exchange, the lambda precalculation and a
   change of GPUs: if one does not start, every worker that was started is stopped before the
   error is raised, and the workers and the GPUs the sampler names agree.

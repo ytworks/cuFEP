@@ -465,6 +465,7 @@ def _run_directory(tmp_path, edges: dict) -> None:
                                                        "experiment_kcal_mol": {}}))
     for edge, (complex_dg, solvent_dg) in edges.items():
         _write_legs(tmp_path, edge, 0, _with_moves(complex_dg, _moves()), _with_moves(solvent_dg, NO_MOVES))
+        _prepared(tmp_path, edge, *edge.split("~"))
 
 
 def test_the_results_of_a_run_are_made_again_only_from_legs_it_has_and_under_its_lock(tmp_path):
@@ -501,7 +502,8 @@ def test_the_results_of_a_run_are_made_again_only_from_legs_it_has_and_under_its
     before = {path.name: path.read_bytes() for path in copy.iterdir()}
     with pytest.raises(WorkflowError, match="holds the ddG of 2 edge\\(s\\) made from files that are not in the "
                                            "directory \\(a~b: repeat_0/complex/result.json, repeat_0/solvent/"
-                                           "result.json; b~c: .*Nothing was written.*cufep benchmark report"):
+                                           "result.json, prep/prep.json; b~c: .*Nothing was written.*cufep "
+                                           "benchmark report"):
         rewrite_results(copy)
     assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == before
     # one edge whose legs are gone, among edges that have theirs
@@ -538,8 +540,9 @@ def test_results_are_not_made_again_without_every_file_their_ddg_was_made_from(t
     """Third review of PR #21 (P2): with the solvent leg of a repeat set aside after its ddG was written, the complex
     leg that was left passed the check of `cufep rbfe analyze --write`: an edge of one repeat lost its ddG, and an
     edge of two repeats got the ddG and the standard error of the repeat that was left. Every repeat the ddG of the
-    summary was made from must have the result of both legs, and the edge the record of its preparation where the
-    summary holds what is read there; else nothing is written. With every file there the results are made again."""
+    summary was made from must have the result of both legs, and the edge the record of its preparation (the
+    edges of a network are compared by it); else nothing is written. With every file there the results are made
+    again."""
     import yaml
 
     from cufep.rbfe.run import rewrite_results
@@ -549,10 +552,8 @@ def test_results_are_not_made_again_without_every_file_their_ddg_was_made_from(t
     _run_directory(run, {"a~b": (-12.0, -10.5), "b~c": (-8.0, -9.0)})
     (run / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 2}}))
     _write_legs(run, "a~b", 1, _with_moves(-12.4, _moves()), _with_moves(-10.5, NO_MOVES))    # b~c: one repeat
-    _prepared(run, "b~c", "b", "c")
     made = {e["edge"]: e for e in rewrite_results(run)["edges"]}
     assert made["a~b"]["ddg"] == pytest.approx(-1.7) and made["b~c"]["ddg"] == pytest.approx(1.0)
-    assert "lomap_score" in made["b~c"] and "lomap_score" not in made["a~b"]
     names = ("summary.json", "edges.csv", "ligands.csv")
     before = {name: (run / name).read_bytes() for name in names}
 
@@ -595,8 +596,8 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     assert edges["a~b"]["water_rule_not_recorded"] == [0] and edges["b~c"]["water_rule_not_recorded"] == []
     assert edges["b~c"]["conditions"]["water_moves"][RULE] == "turned with it"
     note = ("grand canonical moves of water in the complex leg: the edges with a ddG were not sampled under one "
-            "rule for the velocities of an inserted water: turned with it for b~c; no rule recorded (a version "
-            "before the record of 2026-11-28, whose earlier movers left them as they were) for a~b")
+            "rule for the velocities of an inserted water: turned with it for b~c; no rule recorded (until "
+            "2026-11-28 the mover left those velocities as they were) for a~b")
     assert summary["notes"] == [note] and f"note: {note}" in result_lines(summary)
     # with an edge without the moves there is no network; the note stays
     summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c"), ("a", "c")], 1, {"a": -9.0})
@@ -610,8 +611,8 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     assert [e["water_rule_not_recorded"] for e in summary["edges"]] == [[0], [0]]
     assert summary["notes"] == [
         "grand canonical moves of water in the complex leg: no rule for the velocities of an inserted water is "
-        "recorded for any of the 2 edge(s) with a ddG whose complex legs made the moves (a version before the record "
-        "of 2026-11-28, whose earlier movers left them as they were)"]
+        "recorded for any of the 2 edge(s) with a ddG whose complex legs made the moves (until 2026-11-28 the mover "
+        "left those velocities as they were)"]
     # the repeats of one edge are not of one rule: named with their repeats
     repeats = tmp_path / "repeats"
     _write_legs(repeats, "a~b", 0, _with_moves(-12.0, _moves(rule=None)), _with_moves(-10.5, NO_MOVES))
@@ -622,3 +623,16 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     assert edge["water_rule_not_recorded"] == [0]
     assert any("turned with it for a~b (repeat 1); no rule recorded" in item and item.endswith("for a~b (repeat 0)")
                for item in summary["notes"])
+
+
+def test_the_record_of_a_prepared_edge_is_needed_whatever_the_summary_holds_of_it(tmp_path):
+    """The independent review of that fix: an edge of a summary of an earlier version (no LOMAP score) was made again
+    without the record of its preparation, and was then left out of the comparison of the prepared systems of the
+    network without a word. The record is one of the files a stored ddG needs."""
+    from cufep.rbfe.run import files_gone
+
+    _run_directory(tmp_path, {"a~b": (-12.0, -10.5)})
+    earlier = {"edge": "a~b", "ddg": -1.5, "repeats": [{"repeat": 0, "ddg": -1.5}]}
+    assert files_gone(tmp_path, earlier) == []
+    (tmp_path / "edges" / "a~b" / "prep" / "prep.json").unlink()
+    assert files_gone(tmp_path, earlier) == ["prep/prep.json"]
