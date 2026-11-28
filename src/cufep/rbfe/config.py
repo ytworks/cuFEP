@@ -203,11 +203,23 @@ class RbfeGcmcConfig(GcmcConfig):
     enabled: bool = True
 
 
+class TerminalFlipConfig(_Section):
+    """Terminal flip Monte Carlo (:mod:`cufep.sampling.terminal_flip`): half a turn of a terminal aromatic group of
+    the hybrid ligand whose two orientations differ, accepted with the potential energy of the replica's state;
+    in both legs. Off by default (the owner decides the default, plan of 2026-11-28)."""
+
+    enabled: bool = False
+    #: MD of a replica for which one move is attempted: 2.5 ps, one move per iteration of the default length
+    #: (SOMD2 attempts one move per cycle of its replica exchange)
+    interval_ps: float = Field(default=2.5, gt=0.0)
+
+
 class RbfeSampling(SamplingConfig):
     #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol; one number or
     #: {complex: ..., solvent: ...}
     production_ns: float | LegLengths = 5.0
     gcmc: RbfeGcmcConfig = Field(default_factory=RbfeGcmcConfig)
+    terminal_flip: TerminalFlipConfig = Field(default_factory=TerminalFlipConfig)
 
     @model_validator(mode="after")
     def _no_water_moves(self):

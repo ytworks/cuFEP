@@ -24,7 +24,7 @@ Grand canonical moves of water (``sampling.gcmc``, on by default in the complex 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
@@ -125,10 +125,19 @@ class HybridLeg:
     barostat: str
     membrane_info: dict
     info: dict
+    #: the atoms of ligand A and of ligand B in their end-state Systems, in the order of the atoms of the ligands
+    ligand_a: list = field(default_factory=list)
+    ligand_b: list = field(default_factory=list)
+    #: the directory of the edge the leg is of, and its terminal flip moves (a FlipSpec of
+    #: cufep.sampling.terminal_flip; None: none)
+    edge_dir: Path | None = None
+    flip: object | None = None
 
 
-def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
-    """The hybrid System of a leg from its prepared end states, and a prepared system of it."""
+def build_leg(rcfg, edge_dir: Path, leg: str, log=None) -> HybridLeg:
+    """The hybrid System of a leg from its prepared end states, and a prepared system of it; with
+    ``sampling.terminal_flip`` also the terminal flip moves of the leg (``log``: where to say which groups they
+    turn)."""
     import openmm as mm
 
     from cufep.rbfe.hybrid import make_hybrid_system
@@ -154,14 +163,111 @@ def build_leg(rcfg, edge_dir: Path, leg: str) -> HybridLeg:
             "positions": hybrid.positions, "box": a["box"], "ligand": list(hybrid.ligand_atoms),
             "solute": sorted(set(a["solute"]) | set(hybrid.unique_new)), "protein": list(a["protein"])}
     leg_info = info["legs"][leg]
-    return HybridLeg(hybrid=hybrid, xml=xml, prep=prep, hot_atoms=hot_atoms, hot_residues=hot_residues,
-                     barostat=leg_info["barostat"], membrane_info=leg_info.get("membrane_info") or {}, info=info)
+    built = HybridLeg(hybrid=hybrid, xml=xml, prep=prep, hot_atoms=hot_atoms, hot_residues=hot_residues,
+                     barostat=leg_info["barostat"], membrane_info=leg_info.get("membrane_info") or {}, info=info,
+                     ligand_a=[int(i) for i in a["ligand"]], ligand_b=[int(j) for j in b["ligand"]],
+                     edge_dir=Path(edge_dir))
+    built.flip = hybrid_flip_spec(rcfg, Path(edge_dir), built, leg, log or (lambda _line: None))
+    return built
 
 
-def hybrid_settings(rcfg, leg: str | None = None) -> dict:
+def edge_ligands(edge_dir: Path, leg: str) -> tuple:
+    """The two ligands of a prepared edge as RDKit molecules with their hydrogens, and the atom mapping of ``leg``
+    (atom of A -> atom of B)."""
+    from openff.toolkit import Molecule
+
+    from cufep.rbfe.prep import prep_record
+
+    prep_dir = Path(edge_dir) / "prep"
+    mol_a = Molecule.from_json((prep_dir / "ligand_a.json").read_text()).to_rdkit()
+    mol_b = Molecule.from_json((prep_dir / "ligand_b.json").read_text()).to_rdkit()
+    mapping = {int(i): int(j) for i, j in prep_record(edge_dir)["legs"][leg]["mapping"].items()}
+    return mol_a, mol_b, mapping
+
+
+def ligand_flip_groups(edge_dir: Path, leg: str) -> tuple[list, list]:
+    """The terminal groups that terminal flip moves turn in a leg of a prepared edge, from its two ligands and its
+    atom mapping alone (no System is built): ``(groups, record)`` of
+    :func:`cufep.sampling.terminal_flip.hybrid_flip_groups` on the graph of the two ligands
+    (:func:`cufep.sampling.terminal_flip.ligand_graph`; the bonds to hydrogen are the constraints). Whether a leg
+    has such groups is asked before its System is built (:func:`hybrid_settings`); the groups the moves turn are
+    those of the System (:func:`hybrid_flips`), which a leg holds against these."""
+    from cufep.sampling.terminal_flip import hybrid_flip_groups, ligand_graph
+
+    mol_a, mol_b, mapping = edge_ligands(edge_dir, leg)
+    to_a, to_b, bonds, with_hydrogen = ligand_graph(mol_a, mol_b, mapping)
+    return hybrid_flip_groups(mol_a, mol_b, mapping, to_a, to_b, bonds, with_hydrogen)
+
+
+def hybrid_flips(edge_dir: Path, built: HybridLeg, leg: str) -> tuple[list, list]:
+    """The terminal groups of the hybrid ligand of a leg that terminal flip moves turn
+    (:class:`cufep.sampling.terminal_flip.FlipGroup`, atoms of the hybrid System), and the record of every terminal
+    group of either ligand with what was decided of it (:func:`cufep.sampling.terminal_flip.hybrid_flip_groups`):
+    from the two ligands as they were prepared, the atom mapping of the leg, and the bonds and constraints of the
+    hybrid System."""
+    from cufep.sampling.terminal_flip import hybrid_flip_groups
+
+    mol_a, mol_b, mapping = edge_ligands(edge_dir, leg)
+    hybrid = built.hybrid
+    to_a = {k: hybrid.a_to_hybrid[i] for k, i in enumerate(built.ligand_a)}
+    to_b = {k: hybrid.b_to_hybrid[j] for k, j in enumerate(built.ligand_b)}
+    ligand = set(hybrid.ligand_atoms)
+    system = hybrid.system
+    constraints = [(i, j) for i, j, _d in (system.getConstraintParameters(k) for k in range(system.getNumConstraints()))
+                   if i in ligand or j in ligand]
+    bonds = [(i, j) for i, j in hybrid.bonds if i in ligand and j in ligand]
+    return hybrid_flip_groups(mol_a, mol_b, mapping, to_a, to_b, bonds, constraints)
+
+
+def flip_settings(rcfg, edge_dir: Path | None, leg: str | None) -> dict | None:
+    """What the settings of the samples of a leg say of terminal flip moves (``sampling.terminal_flip``): the rule
+    and the interval, where the moves are on and the hybrid ligand of the leg has a group they turn; None where
+    they are off or there is no such group. A leg without a group is sampled as without the setting, so its samples
+    are those of a calculation without it and are kept as such."""
+    from cufep.sampling.terminal_flip import FLIP_RULE
+
+    flip = rcfg.sampling.terminal_flip
+    if not flip.enabled or edge_dir is None or leg is None:
+        return None
+    groups = ligand_flip_groups(edge_dir, leg)[0]
+    if not groups:
+        return None
+    # the groups in the numbers of the ligands: the atoms of A as its record has them, the unique atoms of B after them
+    return {"rule": FLIP_RULE, "interval_ps": float(flip.interval_ps), "groups": [g.to_dict() for g in groups]}
+
+
+def hybrid_flip_spec(rcfg, edge_dir: Path, built: HybridLeg, leg: str, log=print):
+    """The terminal flip moves of a leg (:class:`cufep.sampling.terminal_flip.FlipSpec`, atoms of its hybrid
+    System), or None for a leg without them: the setting is off, or the hybrid ligand has no group that the moves
+    turn (the log says which terminal groups it has and why they are left)."""
+    from cufep.sampling.terminal_flip import FlipSpec
+
+    if not rcfg.sampling.terminal_flip.enabled:
+        return None
+    groups, record = hybrid_flips(edge_dir, built, leg)
+    if len(groups) != len(ligand_flip_groups(edge_dir, leg)[0]):
+        raise WorkflowError("the terminal groups of the hybrid System are not those of the two ligands (a constraint "
+                            "of the System holds an atom of a group to one that does not turn with it); "
+                            "sampling.terminal_flip cannot be used with this edge")
+    left = sorted({r["why_not"] for r in record if not r["used"]})
+    if not groups:
+        log("terminal flip moves: no terminal aromatic group of the hybrid ligand is turned"
+            + (f" ({'; '.join(left)})" if left else " (it has none)") + "; the leg is sampled without the moves")
+        return None
+    log(f"terminal flip moves: {len(groups)} group(s) of {[len(g.mobile) for g in groups]} atoms, half a turn about "
+        f"the bond of atoms {[(g.anchor, g.pivot) for g in groups]}, one attempt per replica every "
+        f"{rcfg.sampling.terminal_flip.interval_ps:g} ps" + (f"; left: {'; '.join(left)}" if left else ""))
+    return FlipSpec(groups=groups, temperature_K=rcfg.thermodynamics.temperature_K,
+                    interval_ps=rcfg.sampling.terminal_flip.interval_ps)
+
+
+def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None) -> dict:
     """The settings of a relative run that the samples of a leg depend on beyond its System; for the leg that makes
     grand canonical moves of water (the complex leg) also those of the moves, as the ABFE records them
-    (:func:`cufep.workflow.gcmc_record`; the pressure of the samples is that of the cell they are fixed in)."""
+    (:func:`cufep.workflow.gcmc_record`; the pressure of the samples is that of the cell they are fixed in), and
+    for a leg of ``edge_dir`` with terminal flip moves those (:func:`flip_settings`). Settings that came after the
+    first records are in the record only where they change the samples, so that the samples made before them are
+    those of their defaults."""
     from cufep.workflow import gcmc_in, gcmc_record
 
     settings = {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"),
@@ -169,6 +275,9 @@ def hybrid_settings(rcfg, leg: str | None = None) -> dict:
                 "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
     if gcmc_in(rcfg, leg):
         settings["gcmc"] = gcmc_record(rcfg)
+    flips = flip_settings(rcfg, edge_dir, leg)
+    if flips is not None:
+        settings["terminal_flip"] = flips
     return settings
 
 
@@ -228,7 +337,7 @@ def hybrid_leg_spec(rcfg, built: HybridLeg, gcmc, leg: str, name: str, states: l
                    friction_per_ps=rcfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
                    steps_per_iteration=steps_per_iteration, cpu_threads=rcfg.resources.cpu_threads_per_worker,
                    box_safety=1.3 if barostat == "membrane" and gcmc is None else None,
-                   settings=hybrid_settings(rcfg, leg), gcmc=gcmc, **more)
+                   settings=hybrid_settings(rcfg, leg, built.edge_dir), gcmc=gcmc, flip=built.flip, **more)
 
 
 def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
@@ -260,7 +369,7 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
     if not sched_file.exists():
         return                 # no windows yet (samples without their windows: check_samples_have_their_windows)
     quiet = lambda _message: None                                    # noqa: E731  the leg logs it when it runs
-    settings = hybrid_settings(rcfg, leg)
+    settings = hybrid_settings(rcfg, leg, edge_dir)
     schedule = _schedule_of_this_leg(sched_file, leg, STAGES)
     rest2_scale = rcfg.sampling.rest2.scale if rcfg.sampling.rest2.scale > 1.0 else 1.0
     if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -384,7 +493,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     run = open_leg(job, rcfg)
     leg_dir, log, seed = run.leg_dir, run.log, run.seed
     edge_dir = Path(job.edge_dir)
-    built = build_leg(rcfg, edge_dir, job.leg)
+    built = build_leg(rcfg, edge_dir, job.leg, log)
     gcmc = hybrid_gcmc(rcfg, built, job.leg, log)          # with the moves: the ghosts of the start switched off
     hybrid, prep, barostat = built.hybrid, built.prep, built.barostat
     n_atoms = hybrid.system.getNumParticles()
@@ -416,7 +525,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     frame_ligand = [where[i] for i in hybrid.atoms_a if atoms[i].element is not None and atoms[i].element.symbol != "H"]
     frame_ca = [where[i] for i in prep["protein"] if atoms[i].name == "CA" and i in where] if is_complex else []
     # the settings the samples and the windows of the leg depend on beyond its System
-    settings = hybrid_settings(rcfg, job.leg)
+    settings = hybrid_settings(rcfg, job.leg, edge_dir)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
     def spec_of(states: list[dict], backend: str, **more):
@@ -562,6 +671,19 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     return result
 
 
+def flip_numbers(samples: dict, start: int, conditions: dict | None = None) -> dict | None:
+    """The terminal flip moves of the iterations from ``start`` on, by lambda window, as numbers without a verdict:
+    attempted and accepted, with the rule, the interval and the groups the samples record. None for samples of a
+    leg without the moves."""
+    if "flips" not in samples:
+        return None
+    data = np.asarray(samples["flips"][int(start):], dtype=np.int64)
+    recorded = ((conditions or {}).get("settings") or {}).get("terminal_flip")
+    return {**(dict(recorded) if isinstance(recorded, dict) else {}),
+            "attempted": [int(n) for n in data[:, :, 0].sum(axis=0)],
+            "accepted": [int(n) for n in data[:, :, 1].sum(axis=0)]}
+
+
 def md_of_leg(leg_dir: Path, schedule, samples: dict) -> dict:
     """The MD of a leg after its pre-equilibration, as its files record it, in ps (numbers, no verdict): the lambda
     windows (what the record of the start configurations says made them: the precalculation that chose the windows,
@@ -623,6 +745,9 @@ def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLe
 
         schedule = Schedule.load(leg_dir / "schedule.yaml")
     result["md_ps"] = md_of_leg(leg_dir, schedule, of["samples"])
+    # the terminal flip moves of the production that is analysed, by lambda window, and what the samples record of
+    # the moves (None: the leg made none)
+    result["terminal_flip"] = flip_numbers(of["samples"], of["first"], of["conditions"])
     if built is not None:
         h = built.hybrid
         result["hybrid"] = {"ligand_a": built.info["ligand_a"], "ligand_b": built.info["ligand_b"],

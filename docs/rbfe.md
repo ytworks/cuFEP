@@ -168,6 +168,35 @@ others gives its own numbers or switches the moves off. A directory of a version
 its YAML, is refused before anything is written (the pre-equilibration of its complex legs was made without
 ghosts), and says that `sampling.gcmc.enabled: false` continues it as it was made.
 
+Terminal flip moves (`sampling.terminal_flip`, off by default; `src/cufep/sampling/terminal_flip.py`): a terminal
+aromatic group of the hybrid ligand is turned by half a turn about the bond that joins it to the rest of the
+ligand, and the move is accepted with the potential energy of the replica's state (lambda and REST2 as set), so
+each window keeps its distribution. A ring whose two orientations differ (a substituent in one ortho or meta
+position, a ring atom of another element) is rarely turned by MD in a pocket; the move proposes the other
+orientation directly. The method is terminal flip Monte Carlo as SOMD2 implements it (OpenBioSim/somd2,
+`runner/_samplers/_terminal_flip.py`: an anchor outside rings, a ring atom as pivot, everything beyond the pivot
+turned by a multiple of 360/n degrees taken from the ring, the Metropolis criterion on the potential energy of the
+Context, one attempt per cycle; its papers, doi:10.1021/acs.jctc.6c00177 and doi:10.1021/acs.jctc.6c00593, were
+not read). cuFEP's rule is narrower, and where it differs it is cuFEP's own (the first scope of issue #27):
+
+- the axis is a bond in no ring and the pivot an atom of an aromatic ring (the anchor may be an atom of another
+  ring, as in a biaryl);
+- beyond the axis lies one ring system and atoms in no ring, with fewer heavy atoms than on the side of the anchor
+  (the terminal side of the bond is the smaller one; with as many on both sides neither is turned);
+- the two ring neighbours of the pivot are not equivalent atoms (a phenyl or a 2,6-dichlorophenyl ring is not
+  turned: half a turn gives the configuration it had);
+- in the hybrid the ring and the anchor are core atoms, the group is terminal in both ligands and its orientations
+  differ in at least one; the unique atoms of both ligands beyond the pivot turn with the ring;
+- the angle is half a turn for every group, fixed when the leg is set up (the exocyclic bond of an aromatic atom
+  lies in the plane of its ring); the velocities of the turned atoms are turned with them.
+
+One move per replica is attempted for every `interval_ps` of its MD (2.5 ps: one per iteration), in both legs,
+by the replica exchange (the windows of a precalculation and the start of given windows make none). The moves and
+their acceptance are in the result of a leg by lambda window (`terminal_flip`), and the samples record the rule,
+the interval and the groups. A leg whose hybrid ligand has no such group is sampled as without the setting, and
+its samples are those of a calculation without it. In the recorded benchmarks no edge of TYK2 has such a group
+and 13 of the 21 edges of A2A have one (`spikes/m40_rbfe_edge_classes.py`).
+
 ### Membrane proteins
 
 `membrane.enabled` builds the complex leg in a POPC bilayer (Lipid21) as the ABFE does, with the membrane
@@ -292,6 +321,9 @@ sampling:
     ghost_waters: auto
     excess_chemical_potential_kcal_per_mol: auto
     standard_volume_nm3: auto
+  terminal_flip:
+    enabled: false
+    interval_ps: 2.5
 analysis:
   lrc: none
 output:
@@ -312,6 +344,7 @@ output:
 | `lambda_schedule.start_configurations` | pre_equilibration | windows a leg does not choose start from the end of its pre-equilibration, minimised in their own state, as OpenFE minimises every replica; `precalculation` (the start of the windows of the first iteration of adaptive lambda scheduling, Midgley et al. 2025, for given windows) is cuFEP's own, for comparisons of given windows with chosen ones |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
 | `sampling.gcmc.enabled` | true (the complex leg) | the owner's decision of 2026-11-28; the moves and their other settings are those of the ABFE, with their basis (`docs/configuration.md`), where they are off by default |
+| `sampling.terminal_flip.enabled`, `interval_ps` | false; 2.5 ps | off until the owner decides (plan of 2026-11-28, issue #27); one attempt per replica and iteration of the default length, as SOMD2 attempts one move per cycle of its replica exchange |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |
 | `analysis.lrc` | none | OpenFE's `use_dispersion_correction: False` for the hybrid |
 | the constant of the dG (no setting) | the mean of the experimental values, else the mean of the network | the dG of the public benchmark (Ross et al. 2023) and of the OpenFE benchmark (Baumann et al. 2026) are referenced to the mean of the experimental values; cinnabar gives estimates of mean 0 |

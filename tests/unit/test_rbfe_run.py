@@ -1329,3 +1329,117 @@ def test_each_leg_of_a_relative_run_gets_its_production(tmp_path, monkeypatch):
         with pytest.raises(Captured) as jobs:
             run_rbfe(rcfg, log=lambda line: None)
         assert jobs.value.args[0] == pytest.approx(expected)
+
+
+def _benzamides(tmp_path, out_dir):
+    """N-(3,3-dimethylbutyl)benzamide and its 3-fluoro compound in one frame (the fluorine where the hydrogen is),
+    0.6 nm from the peptide, with Gasteiger charges in the cache: the benzoyl ring is a terminal group of both, and
+    its two orientations differ in the second."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from cufep.prep.ligand import load_ligands
+
+    a = Chem.AddHs(Chem.MolFromSmiles("O=C(NCCC(C)(C)C)c1ccccc1"))
+    AllChem.EmbedMolecule(a, randomSeed=13)
+    xyz = a.GetConformer().GetPositions()
+    for i, row in enumerate(xyz + np.array([16.0, 14.0, 16.0]) - xyz.mean(axis=0)):
+        a.GetConformer().SetAtomPosition(i, row.tolist())
+    ipso, ortho, meta = a.GetSubstructMatch(Chem.MolFromSmarts("[c;$(cC=O)]:c:c"))[:3]
+    hydrogen = next(n.GetIdx() for n in a.GetAtomWithIdx(meta).GetNeighbors() if n.GetAtomicNum() == 1)
+    b = Chem.RWMol(a)
+    b.GetAtomWithIdx(hydrogen).SetAtomicNum(9)
+    b = b.GetMol()
+    Chem.SanitizeMol(b)
+    writer = Chem.SDWriter(str(tmp_path / "ligands.sdf"))
+    for name, mol, dg in (("benzamide", a, -5.0), ("fluorobenzamide", b, -5.4)):
+        mol.SetProp("_Name", name)
+        mol.SetProp("r_exp_dg", str(dg))
+        writer.write(mol)
+    writer.close()
+    ligands = load_ligands(tmp_path / "ligands.sdf")
+    (out_dir / "cache").mkdir(parents=True, exist_ok=True)
+    for lig in ligands:
+        mol = lig.offmol
+        mol.assign_partial_charges("gasteiger")
+        charges = [float(q) for q in mol.partial_charges.m_as("elementary_charge")]
+        shift = sum(charges) / len(charges)
+        (out_dir / "cache" / f"charges_am1bcc_{lig.digest()}.json").write_text(
+            json.dumps({"charges": [q - shift for q in charges]}))
+    return ligands
+
+
+def test_terminal_flips_are_attempted_once_an_interval_and_recorded_with_the_samples(tmp_path, monkeypatch,
+                                                                                    deterministic_cpu):
+    """Item 2 of the plan of 2026-11-28 (issue #27). ``sampling.terminal_flip``: every replica of a leg whose hybrid
+    ligand has a terminal group that the moves turn attempts one move for every interval of its MD; the result
+    gives the moves of the production by lambda window, and the samples record the rule, the interval and the
+    groups, so that a run without the setting does not go on from them. A leg without such a group is sampled as
+    without the setting, and its record says nothing of the moves."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import EdgeLegJob, build_leg, hybrid_settings, ligand_flip_groups, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.sampling.storage import stored_conditions
+    from cufep.sampling.terminal_flip import FLIP_RULE
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _benzamides(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    without = RbfeConfig.model_validate(data)
+    rcfg = RbfeConfig.model_validate(
+        {**data, "sampling": {**data["sampling"], "terminal_flip": {"enabled": True, "interval_ps": 0.25}}})
+    edge_dir = out_dir / "edges" / "benzamide~fluorobenzamide"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    groups, record = ligand_flip_groups(edge_dir, "solvent")
+    assert len(groups) == 1 and len(groups[0].mobile) == 11 and [r["used"] for r in record] == [True]
+    recorded = hybrid_settings(rcfg, "solvent", edge_dir)["terminal_flip"]
+    assert recorded == {"rule": FLIP_RULE, "interval_ps": 0.25, "groups": [groups[0].to_dict()]}
+    assert "terminal_flip" not in hybrid_settings(without, "solvent", edge_dir)
+    built = build_leg(rcfg, edge_dir, "solvent")
+    assert built.flip is not None and len(built.flip.groups) == 1
+    assert build_leg(without, edge_dir, "solvent").flip is None
+    # the group of the System is that of the two ligands, in the atoms of the System
+    assert len(built.flip.groups[0].mobile) == 11
+
+    def job(config) -> EdgeLegJob:
+        return EdgeLegJob(edge="benzamide~fluorobenzamide", leg="solvent", repeat=0, edge_dir=str(edge_dir),
+                          devices=[None], config=config.model_dump(mode="json"),
+                          production_ns=config.sampling.production("solvent"), inline=True)
+
+    result = run_hybrid_leg_safe(job(rcfg))
+    assert "error" not in result, result
+    flips = result["terminal_flip"]
+    # 20 iterations of production of 0.25 ps, three windows: one move per replica and iteration
+    assert flips["attempted"] == [20, 20, 20]
+    assert all(0 <= n <= 20 for n in flips["accepted"]) and sum(flips["accepted"]) > 0
+    assert (flips["rule"], flips["interval_ps"], flips["groups"]) == (FLIP_RULE, 0.25, recorded["groups"])
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    assert stored_conditions(leg_dir / "hrex")[1]["settings"]["terminal_flip"] == recorded
+    # the same run again takes the leg as it is; a run without the moves does not go on from these samples
+    assert run_hybrid_leg_safe(job(rcfg))["delta_g"] == result["delta_g"]
+    refused = run_hybrid_leg_safe(job(without))
+    assert "terminal_flip" in refused["error"]
+
+
+def test_a_leg_without_a_terminal_group_is_sampled_as_without_the_setting(tmp_path):
+    """Toluene to phenol: the ring is the larger side of its bond, no group is turned. With
+    ``sampling.terminal_flip`` on, the leg has no moves and the settings of its samples say nothing of them: its
+    samples are those of a run without the setting, which can go on from them and the other way round."""
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import build_leg, hybrid_settings, ligand_flip_groups
+    from cufep.rbfe.prep import prepare_edge
+
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = _config(tmp_path, out_dir, "fixed").model_dump(mode="json")
+    rcfg = RbfeConfig.model_validate({**data, "sampling": {**data["sampling"], "terminal_flip": {"enabled": True}}})
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    for leg in ("solvent", "complex"):
+        assert ligand_flip_groups(edge_dir, leg)[0] == []
+        assert hybrid_settings(rcfg, leg, edge_dir) == hybrid_settings(RbfeConfig.model_validate(data), leg, edge_dir)
+        assert build_leg(rcfg, edge_dir, leg).flip is None
