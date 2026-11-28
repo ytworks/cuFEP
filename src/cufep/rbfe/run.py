@@ -200,6 +200,24 @@ def check_legs_reuse(rcfg: RbfeConfig, out_dir: Path, edges, infos: dict, only_l
             raise WorkflowError(problem)
 
 
+def read_leg_result(file: Path) -> dict | None:
+    """The result of a leg (``result.json``), or None for a leg without one. Raises WorkflowError, with the name
+    of the file, for one that cannot be read (truncated, or not the record of a leg): the results of a directory
+    are combined from every leg, and a file that fails there fails for all of them."""
+    file = Path(file)
+    if not file.exists():
+        return None
+    try:
+        result = json.loads(file.read_text())
+    except (OSError, ValueError) as exc:
+        raise WorkflowError(f"{file} cannot be read ({type(exc).__name__}: {exc}); it is damaged. Put the file "
+                            "back, or run the leg again") from exc
+    if not isinstance(result, dict):
+        raise WorkflowError(f"{file} is not the result of a leg; it is damaged. Put the file back, or run the leg "
+                            "again")
+    return result
+
+
 def read_summary(stored: Path) -> dict | None:
     """The summary a directory has, or None: there is none, or it cannot be read."""
     try:
@@ -256,7 +274,9 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
     that this run combines (those of its ``sampling.repeats``). Sixth review of PR #21: with --leg solvent, a
     complex leg whose record was gone was not looked at while the solvent leg of its repeat had no result, and
     was combined when that leg had finished; a result moved away passed for the ``result.previous.json`` of an
-    earlier, finished run of the leg; a repeat beyond those of the configuration was asked for. Where the summary
+    earlier, finished run of the leg; a repeat beyond those of the configuration was asked for. Seventh: a result
+    that cannot be read (a truncated file) was looked at only for a complex leg of a repeat the summary read; the
+    run sampled the other edge and failed when it combined the results. Where the summary
     cannot be read, the ddG that ``edges.csv`` holds of the edges this run does not run must be those their legs
     give (:func:`tables_changed`). Raises WorkflowError."""
     out_dir = Path(out_dir)
@@ -287,34 +307,35 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
             files.append("prep/prep.json")
         held = had.get(name) or {}
         read = set(repeats_read(held))
-        for entry in held.get("repeats") or []:
-            repeat = entry.get("repeat")
-            if repeat not in read or repeat >= repeats:          # (not read then, or not combined now)
-                continue
+        entries = {entry.get("repeat"): entry for entry in held.get("repeats") or [] if entry.get("repeat") in read}
+        for repeat in range(repeats):                             # the repeats this run combines
+            entry = entries.get(repeat)                           # what the summary read of the repeat, if it did
             for leg in ("complex", "solvent"):
                 leg_dir = edge_dir / f"repeat_{repeat}" / leg
                 if sampled(name, leg):
                     continue
                 if not (leg_dir / "result.json").exists():
-                    if not leg_being_run(leg_dir):
+                    if entry is not None and not leg_being_run(leg_dir):
                         files.append(f"repeat_{repeat}/{leg}/result.json")
                     continue
-                if leg == "complex" and isinstance(entry.get("water_moves"), dict):
-                    try:
-                        result = json.loads((leg_dir / "result.json").read_text())
-                    except ValueError:
-                        files.append(f"repeat_{repeat}/{leg}/result.json (it cannot be read)")
-                        continue
-                    if water_moves_lost(entry["water_moves"], water_moves_of_leg(result, leg_dir)):
-                        files.append(f"repeat_{repeat}/complex/hrex {WATER_RECORD}")
+                # every result the run will combine must be one it can read then, whatever the summary holds of it
+                try:
+                    result = read_leg_result(leg_dir / "result.json")
+                except WorkflowError:
+                    files.append(f"repeat_{repeat}/{leg}/result.json (it cannot be read)")
+                    continue
+                if leg == "complex" and entry is not None and water_moves_lost(
+                        entry.get("water_moves"), water_moves_of_leg(result, leg_dir)):
+                    files.append(f"repeat_{repeat}/complex/hrex {WATER_RECORD}")
         if files:
             gone.append((name, files))
     if gone:
         shown = "; ".join(f"{edge}: {', '.join(files)}" for edge, files in gone[:3]) + (" ..." if len(gone) > 3 else "")
         raise WorkflowError(
             f"{out_dir} holds the results of {len(gone)} edge(s) which this run would combine without sampling them, "
-            f"made from files that are not in the directory ({shown}): combined again, they would not be compared "
-            "as they were. Nothing was changed. Put the files back, or run the calculation in a new output.dir")
+            f"made from files that are not in the directory or cannot be read ({shown}): combined again, they would "
+            "not be compared as they were. Nothing was changed. Put the files back, or run the calculation in a "
+            "new output.dir")
 
 
 def run_rbfe(rcfg: RbfeConfig, reschedule: bool = False, log=None, only_edges=None, only_legs=None,
@@ -505,8 +526,7 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     for r in range(repeats):
         legs = {}
         for leg in ("complex", "solvent"):
-            f = Path(edge_dir) / f"repeat_{r}" / leg / "result.json"
-            legs[leg] = json.loads(f.read_text()) if f.exists() else None
+            legs[leg] = read_leg_result(Path(edge_dir) / f"repeat_{r}" / leg / "result.json")
         if not all(legs.values()) or any(legs[leg].get("delta_g") is None for leg in legs):
             out["repeats"].append({"repeat": r, "missing": [leg for leg in legs if not legs[leg]
                                                              or legs[leg].get("delta_g") is None]})

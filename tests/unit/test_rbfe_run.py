@@ -1169,6 +1169,17 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
                                            "repeat_1/solvent/result.json"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     (tmp_path / "repeat_1").rename(edge_dir / "repeat_1")
+    # a result that cannot be read (seventh review, P2: a truncated result of a solvent leg passed, the run
+    # sampled the other edge and failed when it combined the results, beside the summary of the run before)
+    damaged = edge_dir / "repeat_0" / "solvent" / "result.json"
+    whole = damaged.read_text()
+    damaged.write_text("{")
+    before = files()
+    with pytest.raises(WorkflowError, match="would combine without sampling them.*toluene~phenol: "
+                                           "repeat_0/solvent/result.json \\(it cannot be read\\)"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    assert files() == before
+    damaged.write_text(whole)
     # a summary that cannot be read: the tables are the record of the edges this run does not run. With the legs
     # they were made from the run goes on; with the record of repeat 0 moved away the legs give toluene~phenol a ddG
     # where edges.csv has none (the review of the fixes of the sixth review: nothing was held then)

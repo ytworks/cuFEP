@@ -49,7 +49,8 @@ the summary has the grand canonical moves of water of a complex leg (a result of
 there) was set aside; the result of a leg that the summary read is gone (not where a run began the leg again and
 did not finish it: its `started.json` or `error.json` is there); or an edge has results and no record of its
 prepared systems. Each such leg is held to the summary by itself, whatever the other leg of its repeat has now,
-and only the repeats that the run combines (`sampling.repeats`). Where the summary of the directory cannot be
+and only the repeats that the run combines (`sampling.repeats`); every result the run will combine must be one
+that can be read. Where the summary of the directory cannot be
 read, `edges.csv` is the record of the edges the run does not run: their legs must give the ddG it holds. The
 directory, its record of the configuration and the results of its legs then stay as they were.
 

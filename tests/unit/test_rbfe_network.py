@@ -876,3 +876,42 @@ def test_results_made_again_ask_for_the_repeats_that_the_directory_combines(tmp_
     (run / "edges" / "a~b" / "repeat_0" / "solvent" / "result.json").unlink()
     with pytest.raises(WorkflowError, match="a~b: repeat_0/solvent/result.json"):
         rewrite_results(run)
+
+
+def test_tables_without_a_summary_are_made_again_only_to_the_values_they_hold(tmp_path):
+    """Sixth review of PR #21 (P2) and what was left of it: two repeats of a~b give -1.5 and -1.9 kcal/mol, and
+    edges.csv holds their mean, -1.700 with a standard error of 0.200. With repeat 1 moved away and a summary that
+    cannot be read, repeat 0 alone gave the edge and the ligands values under the same names, and `cufep rbfe
+    analyze --write` replaced the mean by -1.500 with the error of one repeat. The tables are made again only to
+    the values they hold; a result that cannot be read is named, and nothing is written."""
+    import yaml
+
+    from cufep.rbfe.run import rewrite_results
+    from cufep.workflow import WorkflowError
+
+    run = tmp_path / "run"
+    _run_directory(run, {"a~b": (-12.0, -10.5)})
+    (run / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 2}}))
+    _write_legs(run, "a~b", 1, _with_moves(-12.4, _moves()), _with_moves(-10.5, NO_MOVES))
+    edge = rewrite_results(run)["edges"][0]
+    assert (edge["ddg"], edge["se"]) == pytest.approx((-1.7, 0.2))
+    assert "a~b,a,b,-1.700,0.200," in (run / "edges.csv").read_text()
+    names = ("summary.json", "edges.csv", "ligands.csv")
+    (run / "summary.json").write_text("{")
+    before = {name: (run / name).read_bytes() for name in names}
+    (run / "edges" / "a~b" / "repeat_1").rename(tmp_path / "repeat_1")
+    with pytest.raises(WorkflowError, match="the ddG of a~b: -1.700 ± 0.200 in edges.csv, -1.500 ± 0.424 from the "
+                                           "legs.*Nothing was written"):
+        rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == before
+    (tmp_path / "repeat_1").rename(run / "edges" / "a~b" / "repeat_1")
+    # a result that cannot be read: named, and nothing is written
+    damaged = run / "edges" / "a~b" / "repeat_1" / "solvent" / "result.json"
+    whole = damaged.read_text()
+    damaged.write_text("{")
+    with pytest.raises(WorkflowError, match="repeat_1/solvent/result.json cannot be read"):
+        rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == before
+    damaged.write_text(whole)
+    assert rewrite_results(run)["edges"][0]["ddg"] == pytest.approx(-1.7)
+    assert {name: (run / name).read_bytes() for name in names[1:]} == {name: before[name] for name in names[1:]}
