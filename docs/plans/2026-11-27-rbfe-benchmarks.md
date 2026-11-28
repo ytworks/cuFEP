@@ -155,4 +155,7 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
     (旧規則が ΔΔG をどれだけ変えるかは未測定)。どの辺も規則を記録していないネットワーク(記録済みの TYK2・A2A)は、その旨を
     注記に出す(報告にも出る)。ABFE の脚の結果は `water_moves` を持たないままで、反復間の GCMC 条件の比較と合わせて
     issue #20 に残る。
+  - 記録(`benchmarks/results/tyk2_rbfe`、`a2a_rbfe`)は f38e8df のイメージで `cufep rbfe analyze <run> --write` と報告を
+    やり直して差し替えた。ΔΔG・dG・SE と CSV・図はすべて前と同じで、変わったのは `summary.json`(各辺・各反復の
+    `water_moves` に規則 null、`water_rule_not_recorded`、注記 1 件)と `rbfe_report.md`(その注記 1 行)だけ。
 

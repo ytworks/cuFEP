@@ -53,7 +53,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -104,10 +105,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -1.943999999999999
   },
   {
@@ -144,7 +149,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -195,10 +201,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 0.5259999999999998
   },
   {
@@ -237,7 +247,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -293,10 +304,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -2.115
   },
   {
@@ -333,7 +348,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -384,10 +400,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.5910000000000011
   },
   {
@@ -424,7 +444,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -475,10 +496,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 0.9550000000000001
   },
   {
@@ -515,7 +540,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -566,10 +592,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.08999999999999986
   },
   {
@@ -606,7 +636,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "openmm",
@@ -662,10 +693,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.940999999999999
   },
   {
@@ -702,7 +737,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -753,10 +789,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.6280000000000001
   },
   {
@@ -795,7 +835,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -850,10 +891,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 0.5589999999999993
   },
   {
@@ -890,7 +935,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -941,10 +987,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 0.75
   },
   {
@@ -981,7 +1031,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1032,10 +1083,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 0.1769999999999996
   },
   {
@@ -1072,7 +1127,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1123,10 +1179,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.47799999999999976
   },
   {
@@ -1163,7 +1223,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1214,10 +1275,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.31400000000000006
   },
   {
@@ -1254,7 +1319,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1305,10 +1371,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.48600000000000065
   },
   {
@@ -1345,7 +1415,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1396,10 +1467,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.7230000000000008
   },
   {
@@ -1436,7 +1511,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1487,10 +1563,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.8070000000000004
   },
   {
@@ -1527,7 +1607,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1578,10 +1659,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 0.5730000000000004
   },
   {
@@ -1618,7 +1703,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1669,10 +1755,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 0.08000000000000007
   },
   {
@@ -1709,7 +1799,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1760,10 +1851,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -1.0
   },
   {
@@ -1800,7 +1895,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1851,10 +1947,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": 1.6630000000000003
   },
   {
@@ -1891,7 +1991,8 @@
      "water_moves": {
       "enabled": true,
       "excess_chemical_potential_kcal_per_mol": -6.09,
-      "standard_volume_nm3": 0.030345
+      "standard_volume_nm3": 0.030345,
+      "velocities_of_an_inserted_water": null
      },
      "backend": {
       "complex": "cupotential",
@@ -1942,10 +2043,14 @@
     "water_moves": {
      "enabled": true,
      "excess_chemical_potential_kcal_per_mol": -6.09,
-     "standard_volume_nm3": 0.030345
+     "standard_volume_nm3": 0.030345,
+     "velocities_of_an_inserted_water": null
     }
    },
    "water_values_not_recorded": [],
+   "water_rule_not_recorded": [
+    0
+   ],
    "exp_ddg": -0.7170000000000005
   }
  ],
@@ -2119,5 +2224,7 @@
    }
   }
  },
- "notes": []
+ "notes": [
+  "grand canonical moves of water in the complex leg: no rule for the velocities of an inserted water is recorded for any of the 21 edge(s) with a ddG whose complex legs made the moves (a version before the record of 2026-11-28, whose earlier movers left them as they were)"
+ ]
 }

@@ -44,15 +44,17 @@ published one: the standard deviation propagated from the three repeats of its c
 
 | set | directory | edges with a ddG | compounds with a dG | calculation | report |
 |---|---|---|---|---|---|
-| TYK2 (`tyk2`) | [tyk2_rbfe](tyk2_rbfe) | 22 of 22 | 16 of 16 | 2026-11-28, commit faa65e0 (grand canonical moves of water in the complex leg) | made again from the legs of the run by the code of f24342b |
-| A2A (`a2a`) | [a2a_rbfe](a2a_rbfe) | 21 of 21 | 17 of 17 | 2026-11-28, commit cd15025 (grand canonical moves of water in the complex leg; started on five GPUs, resumed from its checkpoints on eight with the same image) | made again from the legs of the run by the code of f24342b |
+| TYK2 (`tyk2`) | [tyk2_rbfe](tyk2_rbfe) | 22 of 22 | 16 of 16 | 2026-11-28, commit faa65e0 (grand canonical moves of water in the complex leg) | made again from the legs of the run by the code of f38e8df |
+| A2A (`a2a`) | [a2a_rbfe](a2a_rbfe) | 21 of 21 | 17 of 17 | 2026-11-28, commit cd15025 (grand canonical moves of water in the complex leg; started on five GPUs, resumed from its checkpoints on eight with the same image) | made again from the legs of the run by the code of f38e8df |
 
-- Made again (`cufep rbfe analyze <run directory> --write`, then the report; image of f24342b) after the reviews of PR
+- Made again (`cufep rbfe analyze <run directory> --write`, then the report; image of f38e8df) after the reviews of PR
   #21: every ddG and dG is the one the run gave; the summary also records the LOMAP score of every edge, the window with
   the fewest independent samples of each leg and the grand canonical moves of water of the complex legs (the same in
   all edges of a set), and the intervals of the RMSE and MUE of the dG centre every resample. Both runs were made
   before the fix of the velocities of an inserted water (c2f6903): their samples record no rule of the mover, so this
-  version analyses them and does not extend them. They are not run again.
+  version analyses them and does not extend them. The summary says so of every edge (`water_rule_not_recorded`, and
+  `velocities_of_an_inserted_water` of its `water_moves`) and in a note, which the report repeats. They are not run
+  again.
 - Files: `rbfe_report.md` (statistics and tables), `rbfe_report_ligands.csv`, `rbfe_report_edges.csv`,
   `rbfe_report.png` (dG of the compounds), `rbfe_report_edges.png` (ddG of the edges), and the run's `summary.json`,
   `edges.csv`, `ligands.csv`, `network.json`, `resolved_config.yaml`.

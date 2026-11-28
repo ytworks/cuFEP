@@ -12,6 +12,8 @@ Compared with:
 
 The table of the compounds gives the dG as estimated and as published: cuFEP's maximum likelihood estimate from its edges referenced to the mean of the experimental values of the compounds of this run, FEP+ and OpenFE referenced to that of their own sets. The statistics and the figure of the dG centre every method on the compounds compared. The numbers are given without a verdict.
 
+Note of the run: grand canonical moves of water in the complex leg: no rule for the velocities of an inserted water is recorded for any of the 22 edge(s) with a ddG whose complex legs made the moves (a version before the record of 2026-11-28, whose earlier movers left them as they were)
+
 ## dG of the compounds against experiment
 
 The same 16 compounds for every method, each method centred on them (its mean set to the mean of their experimental values, as cinnabar's plots of dG centre them), so that RMSE and MUE compare like with like; pairwise RMSE, R^2 and Kendall tau do not depend on it. 95 % bootstrap intervals over compounds in brackets, each resample centred on its own compounds.
