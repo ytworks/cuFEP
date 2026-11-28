@@ -1223,7 +1223,8 @@ belong together:
 - Before a run writes anything, the samples a leg would go on from are held to the run: the
   conditions that follow from the configuration alone (temperature, pressure, friction,
   `sampling.exchange`, the frequency of the barostat, the precision on the backend of the
-  samples) and the settings behind the System. A leg stopped at the checkpoint of the start of
+  samples), the time step of the pre-equilibration the leg has or will make again with the
+  steps of an iteration at it, and the settings behind the System. A leg stopped at the checkpoint of the start of
   its replica exchange, before its first sample, is held to the conditions recorded with that
   checkpoint in the same way where its start configurations have to be made again. The checksum
   of the System itself is compared before the run only for samples that do not record their

@@ -600,7 +600,7 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     assert edges["b~c"]["conditions"]["water_moves"][RULE] == "turned with it"
     note = ("grand canonical moves of water in the complex leg: no rule for the velocities of an inserted water is "
             "recorded for a~b (until 2026-11-28 the mover left those velocities as they were); whether every edge "
-            "with a ddG was sampled under one rule cannot be told (the other edges record: turned with it)")
+            "with a ddG was sampled under one rule cannot be told (turned with it for b~c)")
     assert summary["notes"] == [note] and f"note: {note}" in result_lines(summary)
     assert not any("were not sampled under one rule" in item for item in summary["notes"])
     # with an edge without the moves there is no network; the note stays
@@ -625,8 +625,8 @@ def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
     edge = summary["edges"][0]
     assert edge["ddg"] == pytest.approx(-1.7) and edge["conditions"]["water_moves"][RULE] is None
     assert edge["water_rule_not_recorded"] == [0]
-    assert any("is recorded for a~b (repeat 0) (until" in item and "cannot be told" in item
-               for item in summary["notes"])
+    assert any("is recorded for a~b (repeat 0) (until" in item
+               and item.endswith("cannot be told (turned with it for a~b (repeat 1))") for item in summary["notes"])
     # rules that are known to differ (another rule than this version's): reported as that, with the edges of each,
     # and the edge without a rule apart
     other = tmp_path / "other"
@@ -699,3 +699,46 @@ def test_a_result_whose_samples_were_set_aside_is_combined_from_the_record_that_
     counts_only = _with_moves(-8.0, None) | {"gcmc": {"insertions_accepted": [1]}}
     assert water_moves_of_leg(counts_only, leg("a~b")) == _moves()
     assert water_moves_of_leg(counts_only, leg("b~c")) == {"enabled": True}
+
+
+def test_results_are_not_made_again_without_the_record_of_samples_that_their_summary_cites(tmp_path):
+    """The independent review of the fixes of the fourth review: the complex leg of a~b has a result of a version
+    before a leg recorded its moves (their counts alone), and the summary has the values of its water from the
+    record of its samples; they are not those of b~c, so the summary gives no network. With the directory of
+    the samples moved away the values are not recorded any more, are not compared, and `cufep rbfe analyze
+    --write` put one network and its dG in the place of that summary. What the summary holds of the moves of a
+    repeat must still be read, or nothing is written."""
+    import json
+    import shutil
+
+    from cufep.rbfe.run import rewrite_results
+    from cufep.sampling.storage import MANIFEST
+    from cufep.workflow import WorkflowError
+
+    run = tmp_path / "run"
+    _run_directory(run, {"a~b": (-12.0, -10.5), "b~c": (-8.0, -9.0)})
+    leg = run / "edges" / "a~b" / "repeat_0" / "complex"
+    (leg / "result.json").write_text(json.dumps(_with_moves(-12.0, None) | {"gcmc": {"insertions_accepted": [1]}}))
+    (leg / "hrex").mkdir()
+    (leg / "hrex" / MANIFEST).write_text(json.dumps({"parts": [], "attrs": {"conditions": {"settings": {"gcmc": {
+        "enabled": True, "excess_chemical_potential_kcal_per_mol": -5.0, "standard_volume_nm3": 0.030345}}}}}))
+    summary = rewrite_results(run)
+    assert summary["dg"] is None and summary["notes"][0].startswith("NO NETWORK")
+    assert summary["edges"][0]["conditions"]["water_moves"]["excess_chemical_potential_kcal_per_mol"] == -5.0
+    names = ("summary.json", "edges.csv", "ligands.csv")
+    before = {name: (run / name).read_bytes() for name in names}
+    shutil.move(leg / "hrex", tmp_path / "aside")
+    with pytest.raises(WorkflowError, match="holds the ddG of 1 edge\\(s\\) made from files that are not in the "
+                                           "directory \\(a~b: repeat_0/complex/hrex \\(the record of its samples"):
+        rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == before
+    # a summary that holds the moves of the edge alone, not of its repeats
+    of_the_edge = json.loads(before["summary.json"])
+    del of_the_edge["edges"][0]["repeats"][0]["water_moves"]
+    (run / "summary.json").write_text(json.dumps(of_the_edge))
+    with pytest.raises(WorkflowError, match="a~b: repeat_\\*/complex/hrex \\(the record of its samples"):
+        rewrite_results(run)
+    (run / "summary.json").write_bytes(before["summary.json"])
+    shutil.move(tmp_path / "aside", leg / "hrex")
+    rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == before

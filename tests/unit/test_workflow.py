@@ -1129,7 +1129,8 @@ def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the
     that checkpoint against those of the run (check_kept_windows), after the run has written its record: another
     soft-core was refused only then. They are compared before the run writes, as those of samples are. And what
     is compared of both without building the System is every condition that follows from the configuration alone
-    (the independent review of that fix: another sampling.exchange passed the check and was refused by the leg)."""
+    (the independent review of that fix: another sampling.exchange passed the check and was refused by the leg),
+    and the time step of the pre-equilibration the leg has or will make again (the review of the fourth fixes)."""
     from cufep.config.schema import Config
     from cufep.sampling.storage import ConditionsError, LegStorage
     from cufep.workflow import check_leg_reuse, prep_made_from, samples_settings
@@ -1148,9 +1149,17 @@ def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the
                  "box_shape": "dodecahedron", "made_from": prep_made_from(first, lig, False, "dodecahedron")}
     hrex = lig_dir / "repeat_0" / "solvent" / "hrex"
     storage = LegStorage(hrex, 2, 2)
-    storage.check_conditions({"temperature_K": 298.15, "pressure_bar": 1.0, "friction_per_ps": 1.0,
-                              "barostat_frequency": int(first.dynamics.barostat_frequency),
-                              "settings": samples_settings(first)})
+    from conftest import edit_attributes
+
+    from cufep.workflow import planned_iterations
+
+    def steps(timestep_fs: float) -> int:
+        return planned_iterations(first.sampling.time_per_iteration_ps, timestep_fs, 0.0, 0.0).steps_per_iteration
+
+    recorded = {"temperature_K": 298.15, "pressure_bar": 1.0, "friction_per_ps": 1.0,
+                "barostat_frequency": int(first.dynamics.barostat_frequency),
+                "timestep_fs": 4.0, "steps_per_iteration": steps(4.0), "settings": samples_settings(first)}
+    storage.check_conditions(recorded)
     storage.close()
     np.savez(hrex / "checkpoint.npz", iteration=0, extra=json.dumps({"rows": 0}))
     _schedule_of_the_samples(hrex.parent, first.sampling.rest2.scale)      # its windows, without their starts
@@ -1163,6 +1172,14 @@ def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the
     independent = config(sampling={"exchange": "none"})     # (these conditions record no exchange: hrex, as then)
     with pytest.raises(ConditionsError, match="wrote the checkpoint of its start.*\\(exchange: hrex -> none\\)"):
         check_leg_reuse(independent, lig_dir, "solvent", 0, prep_info, 10.0)
+    # the time step: that of the pre-equilibration the leg has or will make again (it has none here). Another one
+    # in the YAML is refused; a record of the lowered one is what the same YAML made (kept_time_step)
+    slower = config(dynamics={"timestep_fs": 2.0})
+    with pytest.raises(ConditionsError, match="wrote the checkpoint of its start.*timestep_fs: 4.0 -> 2.0"):
+        check_leg_reuse(slower, lig_dir, "solvent", 0, prep_info, 10.0)
+    edit_attributes(hrex, set={"conditions": {**recorded, "timestep_fs": 2.0, "steps_per_iteration": steps(2.0)}})
+    check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)
+    edit_attributes(hrex, set={"conditions": recorded})
     (hrex / "checkpoint.npz").unlink()                                         # nothing to go on from
     check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0)
     # with samples: the same conditions are compared
@@ -1175,6 +1192,8 @@ def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the
         check_leg_reuse(independent, lig_dir, "solvent", 0, prep_info, 10.0)
     with pytest.raises(ConditionsError, match="barostat_frequency: 25 -> 50"):
         check_leg_reuse(config(dynamics={"barostat_frequency": 50}), lig_dir, "solvent", 0, prep_info, 10.0)
+    with pytest.raises(ConditionsError, match="the 6 iterations of samples.*timestep_fs: 4.0 -> 2.0"):
+        check_leg_reuse(slower, lig_dir, "solvent", 0, prep_info, 10.0)
 
 
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")

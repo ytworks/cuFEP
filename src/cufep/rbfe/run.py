@@ -583,11 +583,11 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
             "water: " + "; ".join(f"{rule} for {', '.join(edges)}" for rule, edges in known.items())
             + (f"; no rule recorded {earlier} for {', '.join(unrecorded)}" if unrecorded else ""))
     elif known and unrecorded:
-        (rule,) = known
+        ((rule, edges),) = known.items()
         water_notes.append(
             f"{WATER_MOVES}: no rule for the velocities of an inserted water is recorded for "
             f"{', '.join(unrecorded)} {earlier}; whether every edge with a ddG was sampled under one rule cannot be "
-            f"told (the other edges record: {rule})")
+            f"told ({rule} for {', '.join(edges)})")
     elif unrecorded:
         water_notes.append(
             f"{WATER_MOVES}: no rule for the velocities of an inserted water is recorded for any of the "
@@ -721,13 +721,47 @@ def files_gone(out_dir: Path, edge: dict) -> list[str]:
     return missing
 
 
+def not_made_again(stored: Path, gone: list[tuple[str, list[str]]]) -> str:
+    """The refusal of :func:`rewrite_results`: the edges of the summary ``stored`` with the files that are gone."""
+    shown = "; ".join(f"{edge}: {', '.join(files)}" for edge, files in gone[:3]) + (" ..." if len(gone) > 3 else "")
+    return (f"{stored} holds the ddG of {len(gone)} edge(s) made from files that are not in the directory "
+            f"({shown}): made again from what is there, such an edge would have no ddG, or another one, or not all "
+            "the summary holds of it. Nothing was written. A report of the summary as it is: cufep benchmark report "
+            "NAME DIRECTORY --protocol rbfe")
+
+
+def water_record_gone(stored: dict, made: dict | None) -> list[str]:
+    """Of an edge with a ddG in the summary a directory has (``stored``) and the same edge made again from the
+    results of its legs (``made``): the repeats of whose complex leg the summary holds something of the grand
+    canonical moves of water (a value of the water, the rule of the mover) that is not read any more. A result
+    that does not record it itself has it from the record of its samples (:func:`water_moves_of_leg`), so that
+    record is gone; named by its path in the directory of the edge. (The review of 7f4a1e6: with the samples of
+    such a leg moved away the values of its water were not recorded and not compared any more, and a summary
+    without a network, for other values of the water, was replaced by one with a network.)"""
+    def lost(held, read) -> bool:
+        return isinstance(held, dict) and isinstance(read, dict) and any(
+            held.get(key) is not None and read.get(key) is None for key in (*WATER_VALUES, WATER_RULE))
+
+    what = "(the record of its samples, from which the summary has the grand canonical moves of water of the leg)"
+    again = {r["repeat"]: r for r in (made or {}).get("repeats") or [] if "repeat" in r}
+    gone = [f"repeat_{repeat['repeat']}/complex/hrex {what}" for repeat in stored.get("repeats") or []
+            if "ddg" in repeat and lost(repeat.get("water_moves"),
+                                        (again.get(repeat.get("repeat")) or {}).get("water_moves"))]
+    # a summary that holds them of the edge alone
+    if not gone and lost((stored.get("conditions") or {}).get("water_moves"),
+                         ((made or {}).get("conditions") or {}).get("water_moves")):
+        gone.append(f"repeat_*/complex/hrex {what}")
+    return gone
+
+
 def rewrite_results(out_dir: Path) -> dict:
     """`cufep rbfe analyze --write`: the tables and the summary of a run made again from the results its legs have
     (:func:`analyse_directory`), as the run writes them. Under the lock of the directory from before the legs are
     read until the files are written, as a run holds it: a run in the directory could else finish a leg between the
     two, and its new summary be replaced by one that does not have the leg. Refused, with nothing written, where
     the summary the directory has holds the ddG of an edge and the directory not every file it was made from
-    (:func:`files_gone`): written again, such an edge would have no ddG, or that of the repeats that are left.
+    (:func:`files_gone`, :func:`water_record_gone`): written again, such an edge would have no ddG, that of the
+    repeats that are left, or conditions that are compared no more.
     (Second review of PR #21: a copy of the results without the directories of the edges,
     ``benchmarks/results/``; third: one leg of a repeat set aside, which left the other leg and passed.) The
     network and the number of repeats are those the directory records now (``network.json``,
@@ -743,14 +777,14 @@ def rewrite_results(out_dir: Path) -> dict:
             gone = [(e["edge"], files_gone(out_dir, e)) for e in had]
             gone = [(edge, files) for edge, files in gone if files]
             if gone:
-                shown = "; ".join(f"{edge}: {', '.join(files)}" for edge, files in gone[:3]) + (
-                    " ..." if len(gone) > 3 else "")
-                raise WorkflowError(
-                    f"{stored} holds the ddG of {len(gone)} edge(s) made from files that are not in the directory "
-                    f"({shown}): made again from what is there, such an edge would have no ddG, or another one, or "
-                    "not all the summary holds of it. Nothing was written. A report of the summary as it is: cufep "
-                    "benchmark report NAME DIRECTORY --protocol rbfe")
+                raise WorkflowError(not_made_again(stored, gone))
         summary = analyse_directory(out_dir)
+        if stored.exists():
+            made = {e["edge"]: e for e in summary["edges"]}
+            gone = [(e["edge"], water_record_gone(e, made.get(e["edge"]))) for e in had]
+            gone = [(edge, files) for edge, files in gone if files]
+            if gone:
+                raise WorkflowError(not_made_again(stored, gone))
         write_results(out_dir, summary)
         return summary
     finally:

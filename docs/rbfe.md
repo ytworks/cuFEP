@@ -22,7 +22,8 @@ cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have
 cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv and summary.json again, under the
                                        # lock of the directory; refused where the summary holds a ddG and the
                                        # directory not every file it was made from (both legs of each of its
-                                       # repeats, the record of the prepared edge)
+                                       # repeats, the record of the prepared edge, the record of the samples
+                                       # where the summary has the water moves of a leg from it)
 ```
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
@@ -169,8 +170,8 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   alone, so that a result whose HDF5 parts were set aside is still combined). Edges of rules that are known to
   differ are combined into one network, and a note of the summary names the edges of each rule (what the earlier
   rule does to a ddG has not been measured). An edge without a recorded rule is named as one of which it cannot
-  be told whether it was sampled under the rule of the others; a network none of whose edges records a rule has
-  a note that says so.
+  be told whether it was sampled under the rule of the edges that record one, which the note names too; a network
+  none of whose edges records a rule has a note that says so.
 - `edges.csv` gives the lowest overlap of all iterations and that among the samples of the estimate, the two
   checks behind NOT RELIABLE, the window with the fewest independent samples of each leg and the legs below the
   level of the analysis (`few_independent_samples`; Mey et al. 2020), and the LOMAP score of the mapping.

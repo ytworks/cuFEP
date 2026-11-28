@@ -1276,7 +1276,13 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
                "exchange": str(cfg.sampling.exchange),
                "barostat_frequency": int(cfg.dynamics.barostat_frequency),
                # (the samples of a leg stay on the backend they were made with)
-               "precision": _precision(cfg, str(conditions.get("backend") or cfg.backend.name))}
+               "precision": _precision(cfg, str(conditions.get("backend") or cfg.backend.name)),
+               # the time step of the pre-equilibration the leg has, or will make again (kept_time_step), and the
+               # steps of an iteration at it (the review of 7f4a1e6: without equil.npz, which holds a run to the
+               # time step it was made for, another dynamics.timestep_fs was refused by the leg only)
+               "timestep_fs": float(used_timestep),
+               "steps_per_iteration": int(planned_iterations(cfg.sampling.time_per_iteration_ps, used_timestep,
+                                                             0.0, 0.0).steps_per_iteration)}
     # what versions before a condition was recorded always had (conditions_differences)
     recorded = {**{key: value for key, value in CONDITIONS_OF_EARLIER_VERSIONS.items() if key in current},
                 **conditions}
