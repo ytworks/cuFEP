@@ -56,7 +56,15 @@ def junctions(mol_phys, mol_dummy, phys_of_dummy: dict[int, int]) -> list[dict]:
         if len(bridges) == 1:
             p_dummy = mol_dummy.GetAtomWithIdx(bridges[0])
             p_phys = mol_phys.GetAtomWithIdx(phys_of_dummy[bridges[0]])
-            entry.update(physical_neighbours=p_phys.GetDegree(),
+            # the terms of the dummies are those of their own ligand, in which the bridge is bonded to these core
+            # atoms: no term of the hybrid joins unique atoms of both ligands. Their number is what the junction is in
+            # the words of Fleck et al. (1 terminal, 2 dual, 3 triple; a triple junction can be separated exactly
+            # only where the bridge is planar in the ligand of the dummies)
+            core_neighbours = sum(n.GetIdx() in core for n in p_dummy.GetNeighbors())
+            planar = str(p_dummy.GetHybridization()) in ("SP", "SP2") or p_dummy.GetIsAromatic()
+            kind = {1: "terminal", 2: "dual", 3: "triple, planar" if planar else "triple, not planar"}.get(
+                core_neighbours, f"{core_neighbours} core neighbours")
+            entry.update(physical_neighbours=p_phys.GetDegree(), core_neighbours=core_neighbours, junction=kind,
                          bridge_element=p_phys.GetSymbol(),
                          bridge_hybridisation=[str(p_phys.GetHybridization()), str(p_dummy.GetHybridization())],
                          hybridisation_changes=p_phys.GetHybridization() != p_dummy.GetHybridization(),

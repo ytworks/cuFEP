@@ -93,6 +93,11 @@ class MappingConfig(_Section):
 class HybridAlchemyConfig(_Section):
     #: alpha of the soft-core Lennard-Jones of Gapsys et al. 2012 (OpenFE's softcore_alpha)
     softcore_alpha: float = Field(default=0.85, gt=0.0, le=1.0)
+    #: the bonded terms between the atoms that are dummies at an end and the physical atoms. all: every term is kept
+    #: (OpenFE's hybrid topology). separated: at the junctions the rule treats, those that would make the dummies'
+    #: contribution depend on physical coordinates go to zero towards that end (Fleck, Wieder and Boresch 2021;
+    #: cufep.rbfe.junctions)
+    dummy_bonded_terms: Literal["all", "separated"] = "all"
 
 
 class HybridAdaptiveConfig(_Section):

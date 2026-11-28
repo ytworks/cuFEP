@@ -23,7 +23,10 @@ Bonded terms (OpenFE's rules)
       ``lambda_torsions``;
     * every term with a unique atom, and every environment term, stays on at full strength throughout:
       the unique atoms are dummies that keep their bonded terms at the end where they do not interact,
-      in both legs alike.
+      in both legs alike. With ``dummy_bonded_terms="separated"`` the torsions between dummies and physical
+      atoms that the rule of Fleck, Wieder and Boresch (2021) removes at a junction go to zero towards the
+      end at which their unique atoms are dummies, as a core torsion of one end does
+      (:mod:`cufep.rbfe.junctions`; terminal junctions only so far).
 
 Nonbonded terms (OpenFE's rules)
     * charges: core q_A + lambda_electrostatics_core (q_B - q_A); unique old q_A (1 -
@@ -203,6 +206,10 @@ class HybridSystem:
     rest2_torsions: int = 0
     #: pairs of bonded atoms of the hybrid System (bonds and constraints of both end states)
     bonds: frozenset = field(default_factory=frozenset)
+    #: with dummy_bonded_terms "separated": the junctions of both ends (cufep.rbfe.junctions.Junction.to_dict) and
+    #: the number of torsion terms that go to zero towards the end at which their unique atoms are dummies
+    junctions: tuple = ()
+    torsions_off_at_an_end: int = 0
 
     @property
     def ligand_atoms(self) -> tuple[int, ...]:
@@ -258,7 +265,7 @@ def _same_environment_term(what: str, key, in_a, in_b) -> None:
 
 def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.System, positions_b, ligand_b,
                        core_map: dict[int, int], softcore_alpha: float = SOFTCORE_ALPHA, rest2: bool = False,
-                       rest2_atoms=()) -> HybridSystem:
+                       rest2_atoms=(), dummy_bonded_terms: str = "all") -> HybridSystem:
     """The hybrid System of two end states.
 
     ``system_a`` and ``system_b`` hold the same environment, atom for atom in the same order, and the
@@ -466,8 +473,45 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
         if "PeriodicTorsionForce" in forces_a else ([], {})
     new_unique, new_terms = torsion_terms(forces_b["PeriodicTorsionForce"], b_to_h, "new") \
         if "PeriodicTorsionForce" in forces_b else ([], {})
-    for atoms, per, phase, kk in old_unique + new_unique:
-        standard_torsions.addTorsion(*atoms, per, phase, kk)
+    # the bonded terms between dummies and physical atoms that are kept at each end (cufep.rbfe.junctions): with
+    # "separated" the torsions the rule removes go to zero towards the end at which their unique atoms are dummies
+    if dummy_bonded_terms not in ("all", "separated"):
+        raise AlchemyError(f"dummy_bonded_terms is all or separated, not {dummy_bonded_terms!r}")
+    junctions: list = []
+    off_at_a: set[int] = set()               # positions in new_unique: terms of B alone, off at the end of A
+    off_at_b: set[int] = set()               # positions in old_unique
+    if dummy_bonded_terms == "separated":
+        from cufep.rbfe.junctions import junctions_of, removed_torsions
+
+        def ligand_bonds(system, forces, to_h, members) -> set:
+            """The bonded pairs of a ligand (bonds and constraints of its System), atoms of the hybrid."""
+            pairs = set()
+            if "HarmonicBondForce" in forces:
+                f = forces["HarmonicBondForce"]
+                for k in range(f.getNumBonds()):
+                    i, j, _r0, _kk = f.getBondParameters(k)
+                    pairs.add(_pair(to_h[i], to_h[j]))
+            for k in range(system.getNumConstraints()):
+                i, j, _d = system.getConstraintParameters(k)
+                pairs.add(_pair(to_h[i], to_h[j]))
+            return {p for p in pairs if p[0] in members and p[1] in members}
+
+        # at the end of A the atoms unique to B are the dummies, and their terms are those of B
+        at_a = junctions_of("A", ligand_bonds(system_b, forces_b, b_to_h, core_set | new_set), core_set, new_set)
+        at_b = junctions_of("B", ligand_bonds(system_a, forces_a, a_to_h, core_set | old_set), core_set, old_set)
+        junctions = at_a + at_b
+        off_at_a = set(removed_torsions(at_a, [term[0] for term in new_unique]))
+        off_at_b = set(removed_torsions(at_b, [term[0] for term in old_unique]))
+    for k, (atoms, per, phase, kk) in enumerate(old_unique):
+        if k in off_at_b:
+            core_torsions.append((atoms, [per, phase, kk, 0.0, 0.0, 0.0]))
+        else:
+            standard_torsions.addTorsion(*atoms, per, phase, kk)
+    for k, (atoms, per, phase, kk) in enumerate(new_unique):
+        if k in off_at_a:
+            core_torsions.append((atoms, [0.0, 0.0, 0.0, per, phase, kk]))
+        else:
+            standard_torsions.addTorsion(*atoms, per, phase, kk)
     # a term both ends have (as many times as both have it) is standard; the others go from one end to the other
     for key in sorted(old_terms.keys() & new_terms.keys()):
         for atoms, per, phase, kk in new_terms[key][:len(old_terms[key])]:
@@ -734,7 +778,8 @@ def make_hybrid_system(system_a: mm.System, positions_a, ligand_a, system_b: mm.
                         unique_new=tuple(unique_new), a_to_hybrid=a_to_h, b_to_hybrid=b_to_h,
                         parameters_a=params_a, parameters_b=params_b, softcore_alpha=float(softcore_alpha),
                         rest2=bool(rest2), rest2_atoms=hot_env, rest2_torsions=n_rest2_torsions,
-                        bonds=frozenset(bonds_hybrid))
+                        bonds=frozenset(bonds_hybrid), junctions=tuple(j.to_dict() for j in junctions),
+                        torsions_off_at_an_end=len(off_at_a) + len(off_at_b))
 
 
 def _copy_virtual_site(site):

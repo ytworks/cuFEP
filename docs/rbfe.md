@@ -108,6 +108,34 @@ The rules of the HybridTopologyFactory of OpenFE's relative protocol (openfe 1.1
 - a bonded term that a System has twice counts twice (OpenFE keeps one of them); the bonds, angles and torsions
   of the environment are those of A, and an edge whose B has other ones is refused.
 
+Junctions (`alchemy.dummy_bonded_terms`, default `all`; `src/cufep/rbfe/junctions.py`): at an end the atoms unique
+to the other ligand are dummies that keep their bonded terms. The free energy is that of the physical ligand only
+if the dummies contribute a constant to the partition function whatever the physical atoms do, and redundant terms
+between dummies and physical atoms break that (Fleck, Wieder and Boresch, J. Chem. Theory Comput. 2021, 17, 4403:
+a naive treatment gave errors of up to 0.6 kcal/mol in relative solvation free energies at triple junctions, and
+none that was apparent at terminal and dual ones). With `separated` the rule of the paper is applied where it
+gives an exact separation and this version implements it:
+
+- what a junction is in this hybrid (cuFEP's reading): no term joins atoms unique to A with atoms unique to B, and
+  the terms of a dummy are those of its own ligand, so the physical groups on the bridge atom that the rule counts
+  are the core atoms bonded to it in the ligand of the dummies;
+- terminal junction (one core atom R on the bridge X): "one can always keep all bond angle terms"; of the dihedrals
+  Q-R-X-D, "for one of them [the physical atoms two bonds away from the bridge], all dihedral angles reaching into
+  the dummy group(s) can be kept. Any dihedral angle terms that originate from the respective other physical atoms
+  and reach into the dummy group(s) have to be deleted." The torsions through the other atoms go to zero towards
+  the end at which D is a dummy, as a core torsion of one end does. Which atom is kept is cuFEP's choice where the
+  paper leaves it free: the one with the most bonds, then the lowest number;
+- dual and triple junctions and dummies bonded to more than one core atom are left as they are and named in the
+  result of the leg (`hybrid.junctions`). A dual junction needs two angles moved to 90 degrees (or a dihedral of
+  periodicity 1), a planar triple junction the same; a triple junction that is not planar has no exact separation
+  in the paper.
+
+In the recorded benchmarks (`spikes/m40_rbfe_edge_classes.py`) the 63 groups of dummies of the 22 TYK2 edges are at
+15 terminal, 36 dual and 12 non-planar triple junctions (the last in 6 edges), the 79 of the 21 A2A edges at 45
+terminal and 34 dual ones. A unit test holds the rule to its known answer: the integral over the turn of a dummy
+about the bridge bond is the analytic constant with `separated` and changes by 2.0 kT with the angle between two
+physical atoms with `all`.
+
 How the energy is carried (cuFEP's own; the energies are those of the rules): the NonbondedForce, which the
 cuPotential plugin replaces, holds only the charges of the ligand, as particle parameter offsets under the
 three electrostatic lambdas and REST2 (`spikes/m36`: the plugin gives the differences between states within
@@ -293,6 +321,7 @@ mapping:
   allow_bond_breaks: false
 alchemy:
   softcore_alpha: 0.85
+  dummy_bonded_terms: all
 lambda_schedule:
   mode: adaptive
   windows: 11
@@ -340,6 +369,7 @@ output:
 |---|---|---|
 | `mapping.*` | Kartograf's defaults | Kartograf (Ries et al. 2024); the defaults of OpenFE's relative protocol (since openfe 1.7) |
 | `alchemy.softcore_alpha` | 0.85 | Gapsys et al. 2012; OpenFE's `softcore_alpha` |
+| `alchemy.dummy_bonded_terms` | all | every bonded term of a dummy kept, as OpenFE's hybrid topology keeps them; `separated` (the rule of Fleck, Wieder and Boresch 2021 at terminal junctions) is off until the owner decides (plan of 2026-11-28, issue #27) |
 | `network.*` | LOMAP, score 0.4, every ligand in a cycle, paths of at most 6 edges | lomap2's defaults of `generate_lomap_network`, with which the OpenFE benchmark (Baumann et al. 2026) planned its networks |
 | `lambda_schedule.adaptive.*` | 9 windows, 0.04, 101 candidates, the matrix of the stage | Midgley et al. 2025: the values and the rule of the paper, which is about relative transformations |
 | `lambda_schedule.adaptive.legs` | each | the owner's choice of 2026-11-25: the paper's (`solvent`, the windows of the ligand in solution for both legs) left a pair of windows of the ejm_31 -> ejm_49 complex leg of TYK2 at an overlap of 0.013 (where a precalculation of the solvent leg of another run had added a window); each leg its own precalculation, as the ABFE |

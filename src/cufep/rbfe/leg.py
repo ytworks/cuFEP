@@ -155,7 +155,7 @@ def build_leg(rcfg, edge_dir: Path, leg: str, log=None) -> HybridLeg:
     hybrid = make_hybrid_system(mm.XmlSerializer.deserialize(a["system_xml"]), a["positions"], a["ligand"],
                                 mm.XmlSerializer.deserialize(b["system_xml"]), b["positions"], b["ligand"],
                                 end["core_map"], softcore_alpha=rcfg.alchemy.softcore_alpha, rest2=rest2_on,
-                                rest2_atoms=hot_atoms)
+                                rest2_atoms=hot_atoms, dummy_bonded_terms=rcfg.alchemy.dummy_bonded_terms)
     unique_b = sorted(j for j in b["ligand"] if j not in set(end["core_map"].values()))
     topology = hybrid_topology(a["topology"], b["topology"], unique_b)
     xml = mm.XmlSerializer.serialize(hybrid.system)
@@ -270,7 +270,10 @@ def hybrid_settings(rcfg, leg: str | None = None, edge_dir: Path | None = None) 
     those of their defaults."""
     from cufep.workflow import gcmc_in, gcmc_record
 
-    settings = {"rbfe": {"alchemy": rcfg.alchemy.model_dump(mode="json"),
+    alchemy = rcfg.alchemy.model_dump(mode="json")
+    if alchemy.get("dummy_bonded_terms") == "all":
+        del alchemy["dummy_bonded_terms"]               # the default, which the records before the setting are of
+    settings = {"rbfe": {"alchemy": alchemy,
                          "mapping": rcfg.mapping.model_dump(mode="json")},
                 "sampling.rest2": rcfg.sampling.rest2.model_dump(mode="json")}
     if gcmc_in(rcfg, leg):
@@ -768,5 +771,8 @@ def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLe
         h = built.hybrid
         result["hybrid"] = {"ligand_a": built.info["ligand_a"], "ligand_b": built.info["ligand_b"],
                             "core_atoms": len(h.core), "unique_old_atoms": len(h.unique_old),
-                            "unique_new_atoms": len(h.unique_new), "lomap_score": built.info.get("lomap_score")}
+                            "unique_new_atoms": len(h.unique_new), "lomap_score": built.info.get("lomap_score"),
+                            # with alchemy.dummy_bonded_terms: separated, the junctions and the torsion terms
+                            # that go to zero at an end (cufep.rbfe.junctions)
+                            "junctions": list(h.junctions), "torsions_off_at_an_end": h.torsions_off_at_an_end}
     return result
