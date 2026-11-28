@@ -1122,6 +1122,45 @@ def test_a_run_that_is_refused_leaves_the_record_of_the_directory_as_it_was(tmp_
                         prep_info, 0.01)
 
 
+def test_the_checkpoint_of_a_start_is_held_to_the_run_before_it_writes_where_the_leg_would_hold_it(tmp_path, ligands):
+    """Third review of PR #21 (the finding of the relative leg, in the ABFE): a leg stopped after its replica
+    exchange wrote the checkpoint of its start, before its first sample, has no samples, and the check before a
+    run ended there. Where its start configurations are made again the leg holds the conditions recorded with
+    that checkpoint against those of the run (check_kept_windows), after the run has written its record: another
+    soft-core was refused only then. They are compared before the run writes, as those of samples are."""
+    from cufep.config.schema import Config
+    from cufep.sampling.storage import ConditionsError, LegStorage
+    from cufep.workflow import check_leg_reuse, prep_made_from, samples_settings
+
+    lig = ligands[0]
+    out = tmp_path / "out"
+
+    def config(**sections):
+        return Config.model_validate({"system": {"protein": str(tmp_path / "p.pdb"), "ligand": "l.sdf"},
+                                      "output": {"dir": str(out)}, "resources": {"gpus": []},
+                                      "solvation": {"box_shape": "dodecahedron"}, **sections})
+
+    first = config()
+    lig_dir = out / lig.name
+    prep_info = {"ligand": lig.name, "complex_barostat": "isotropic", "membrane": False,
+                 "box_shape": "dodecahedron", "made_from": prep_made_from(first, lig, False, "dodecahedron")}
+    hrex = lig_dir / "repeat_0" / "solvent" / "hrex"
+    storage = LegStorage(hrex, 2, 2)
+    storage.check_conditions({"temperature_K": 298.15, "pressure_bar": 1.0, "friction_per_ps": 1.0,
+                              "settings": samples_settings(first)})
+    storage.close()
+    np.savez(hrex / "checkpoint.npz", iteration=0, extra=json.dumps({"rows": 0}))
+    _schedule_of_the_samples(hrex.parent, first.sampling.rest2.scale)      # its windows, without their starts
+    other = config(alchemy={"softcore_alpha": 0.8})
+    with pytest.raises(ConditionsError, match="wrote the checkpoint of its start \\(it has no samples yet\\) under "
+                                              "other conditions than this run asks for \\(alchemy.softcore_alpha: "
+                                              "0.5 -> 0.8\\). It is left as it is"):
+        check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0)
+    check_leg_reuse(first, lig_dir, "solvent", 0, prep_info, 10.0)             # as it was made
+    (hrex / "checkpoint.npz").unlink()                                         # nothing to go on from
+    check_leg_reuse(other, lig_dir, "solvent", 0, prep_info, 10.0)
+
+
 @pytest.mark.needs("openff.toolkit", "rdkit", "pdbfixer")
 def test_samples_without_a_record_of_their_settings_are_checked_before_anything_is_written(
     tmp_path, monkeypatch, ligands

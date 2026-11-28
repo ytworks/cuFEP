@@ -748,7 +748,9 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   components along the bonds of the turned molecule, which the constraints of the next MD step
   took out. The samples of a leg record the rule of the mover, `velocities_of_an_inserted_water`
   in their settings; samples of the earlier rule record none, are analysed as they are, and are
-  not continued by this version, so that no estimate is made of both.) The acceptance is
+  not continued by this version, so that no estimate is made of both. A relative run records the
+  rule with the result of every complex leg and names the edges of each rule where a network has
+  edges of both, `docs/rbfe.md`.) The acceptance is
 
       P(insert) = min[1, exp(B) exp(-beta dE) / (N + 1)]
       P(delete) = min[1, N exp(-B) exp(-beta dE)]

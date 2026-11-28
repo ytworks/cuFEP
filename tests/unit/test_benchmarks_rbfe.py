@@ -462,3 +462,51 @@ def test_a_summary_of_an_earlier_version_keeps_its_few_samples_or_says_that_they
     text = report("a2a", run)
     assert "few independent samples: none." in text
     assert "Few independent samples: not recorded for 4b~4e, 4a~4o, 4a~4q" in text
+
+
+def test_the_summary_of_an_earlier_run_alone_gives_the_legs_its_analysis_noted_for_few_samples(tmp_path):
+    """Third review of PR #21 (P2): the summary of the A2A run as e7a61bd recorded it (tests/unit/data), reported
+    from that file alone, without the configuration of the run. The repeat of 4b -> 4e holds the note of the
+    analysis that its complex leg has 31 independent samples where 50 are recommended; the report said "not
+    recorded" of the edge and "none" of the edges with few samples. The notes of the repeats of the ddG are read:
+    4b~4e and 4g~4d are named, the other 19 edges have no such leg, none is "not recorded". A leg for which no
+    repeat gives a ground is not recorded, alone where the other leg of the edge is named."""
+    import csv
+    import json
+    from pathlib import Path
+
+    from cufep.benchmarks.relative import independent_samples_of, report
+
+    earlier = json.loads((Path(__file__).parent / "data" / "a2a_rbfe_summary_e7a61bd.json").read_text())
+    run = tmp_path / "a2a"
+    run.mkdir()
+    (run / "summary.json").write_text(json.dumps(earlier))
+    text = report("a2a", run)
+    def edge_rows(text: str) -> dict:
+        return {line.split("|")[1].strip(): [c.strip() for c in line.split("|")[1:-1]]
+                for line in text.splitlines() if line.startswith("| 4") and line.split("|")[1].count(" -> ") == 1}
+
+    rows = edge_rows(text)
+    assert len(rows) == 21
+    assert rows["4b -> 4e"][11] == "31, 1000" and rows["4b -> 4e"][13] == "few independent samples: complex"
+    assert rows["4g -> 4d"][11] == "35, 1000" and rows["4g -> 4d"][13] == "few independent samples: complex"
+    assert rows["4b -> 4m"][11] == "80, 1000" and rows["4b -> 4m"][13] == ""
+    assert "Edges with a flag: NOT RELIABLE: none; few independent samples: 4b~4e, 4g~4d." in text
+    assert "Few independent samples: not recorded" not in text
+    with open(run / "rbfe_report_edges.csv") as fh:
+        table = {row["edge"]: row["few_independent_samples"] for row in csv.DictReader(fh)}
+    assert table["4b~4e"] == table["4g~4d"] == "complex" and sorted(table.values())[:19] == [""] * 19
+    # a repeat without the notes of its legs gives no ground; the leg another repeat names stays named
+    edges = {e["edge"]: e for e in earlier["edges"]}
+    del edges["4b~4m"]["repeats"][0]["warnings"]
+    edges["4g~4d"]["repeats"].append({"repeat": 1, "ddg": -1.0, "se": 0.2})
+    assert independent_samples_of(edges["4g~4d"], None) == ({"complex": edges["4g~4d"]["repeats"][0][
+        "fewest_independent_samples"]["complex"], "solvent": 1000.0}, ["complex"], ["solvent"])
+    (run / "summary.json").write_text(json.dumps(earlier))
+    text = report("a2a", run)
+    rows = edge_rows(text)
+    assert rows["4g -> 4d"][13] == "few independent samples: complex, solvent not recorded"
+    assert rows["4b -> 4m"][13] == "few independent samples: not recorded"
+    assert "few independent samples: 4b~4e, 4g~4d." in text
+    (line,) = [line for line in text.splitlines() if line.startswith("Few independent samples: not recorded for ")]
+    assert "4g~4d (solvent leg)" in line and "4b~4m (" not in line and "4b~4m" in line

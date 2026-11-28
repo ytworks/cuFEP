@@ -138,4 +138,21 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   - P2(前回 9 の残り)旧形式の summary は ΔΔG に使った反復の数値を読み、材料が無ければ「not recorded」。
   - P2(新規 2 件)`rbfe analyze --write` は出力ロックを読む前から書き終わるまで持ち、summary に ddG があるのに脚の結果が
     1 つも無い辺があれば書く前に拒否(`rewrite_results`)。
+- 2026-11-28 オーナーの 3 回目のレビュー(review 6095212888、d605f12: 前回 7 件のうち 5 件は解決、2 件が一部未解決、新規 2 件、
+  すべて P2)。4 件とも今のコードで再現し、修正前に失敗するテストにしてから直した:
+  - (前回の残り)サンプル 0 行で初期チェックポイントだけがある脚 → 開始配置を作り直すとき、脚はそのチェックポイントに記録
+    された条件を今回の実行と照合する(`check_kept_windows`)のに、事前検査は「サンプルなし」で終わっていた。事前検査でも同じ
+    照合をする(`engine.leg.start_conditions`、開始配置がその窓のものかは `workflow.has_starts_of` の 1 つの規則)。同じ穴が
+    ABFE の事前検査にもあったので同じく直した。開始配置がそろっている脚は、脚自身が照合しないので事前検査でも拒否しない。
+  - (前回の残り)旧形式の summary だけからの報告 → ΔΔG に使った反復の `warnings`(両脚の解析の注記)にある「few independent
+    samples」を読む。旧 A2A(e7a61bd)の実ファイルで 4b~4e・4g~4d(complex)が出て、他の 19 辺は該当なし。反復に注記も数値+閾値も
+    無い脚だけを「not recorded」とし、片方の脚だけのときはその脚を名指しする。
+  - (新規)片脚だけ退避した反復 → `rbfe analyze --write` は、保存済みの ΔΔG に使われた各反復の両脚の result.json と、
+    summary が LOMAP score を持つ辺の prep/prep.json がそろっていなければ書く前に拒否(`files_gone`)。
+  - (新規)速度規則が結果に残らない → `water_moves_of` が規則(`velocities_of_an_inserted_water`、記録なしは null)も返し、
+    脚の結果・反復・辺(`conditions.water_moves`、`water_rule_not_recorded`)に残る。規則が 1 つでない辺が同じネットワークに
+    入るときは、規則ごとの辺(反復で割れる辺は反復番号つき)を summary の注記に出す(NO NETWORK のときも)。拒否はしない
+    (旧規則が ΔΔG をどれだけ変えるかは未測定)。どの辺も規則を記録していないネットワーク(記録済みの TYK2・A2A)は、その旨を
+    注記に出す(報告にも出る)。ABFE の脚の結果は `water_moves` を持たないままで、反復間の GCMC 条件の比較と合わせて
+    issue #20 に残る。
 

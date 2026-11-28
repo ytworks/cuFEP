@@ -233,23 +233,45 @@ def samples_level(run_dir: Path) -> float | None:
     return float(level) if isinstance(level, (int, float)) and not isinstance(level, bool) else None
 
 
-def independent_samples_of(edge: dict, level: float | None) -> tuple[dict, list[str] | None]:
-    """(the window with the fewest independent samples of each leg, the legs below the level of the analysis) of
-    an edge of a summary: as the summary records them; for a summary of a version before that record, from the
-    repeats of its ddG, which hold the numbers of their legs, against ``level``. The legs are None, not recorded,
-    where the summary gives no ground for them: no repeat with the numbers, or no level (second review of PR #21:
-    a report of such a summary said that no edge had few independent samples, of an edge with 31)."""
+#: how the note begins that the analysis of a leg writes when a window is below its level of independent samples
+#: (cufep.workflow: written exactly when that check of the leg fails)
+FEW_SAMPLES_NOTE = "few independent samples"
+LEGS = ("complex", "solvent")
+
+
+def _few_in_repeat(repeat: dict, leg: str, level: float | None) -> bool | None:
+    """Whether a leg of a repeat of a ddG had a window below the level of independent samples of its analysis, as
+    a summary records it: the legs the repeat names (``few_samples``); in a summary of a version before that
+    record, the note of the analysis of the leg among the warnings of the repeat, which hold the notes of both
+    legs; without them, the number of the leg against ``level``. None where the repeat gives no ground."""
+    if isinstance(repeat.get("few_samples"), list):
+        return leg in repeat["few_samples"]
+    if isinstance(repeat.get("warnings"), list):
+        return any(str(note).startswith(f"{leg}: {FEW_SAMPLES_NOTE}") for note in repeat["warnings"])
+    counted = repeat.get("fewest_independent_samples")
+    count = counted.get(leg) if isinstance(counted, dict) else None
+    return None if count is None or level is None else count < level
+
+
+def independent_samples_of(edge: dict, level: float | None) -> tuple[dict, list[str], list[str]]:
+    """(the window with the fewest independent samples of each leg, the legs below the level of the analysis, the
+    legs of which the summary does not say) of an edge of a summary: as the summary records them; for a summary of
+    a version before that record, from the repeats of its ddG (:func:`_few_in_repeat`). A leg is not recorded
+    where a repeat of the ddG gives no ground for it and no other repeat names it. Second review of PR #21: a
+    report of such a summary said that no edge had few independent samples, of an edge with 31; third: it still
+    did without the configuration of the run, though the repeat holds the note of the analysis of that leg."""
     if "few_samples" in edge and "fewest_independent_samples" in edge:
-        return edge["fewest_independent_samples"] or {}, list(edge["few_samples"] or [])
+        return edge["fewest_independent_samples"] or {}, list(edge["few_samples"] or []), []
     if edge.get("ddg") is None:
-        return {}, []                                       # no ddG: no repeat was taken
-    counted = [r["fewest_independent_samples"] for r in edge.get("repeats", [])
-               if "ddg" in r and isinstance(r.get("fewest_independent_samples"), dict)]
-    fewest = {leg: min((c[leg] for c in counted if c.get(leg) is not None), default=None)
-              for leg in ("complex", "solvent")}
-    if not counted or level is None or any(value is None for value in fewest.values()):
-        return fewest, None
-    return fewest, [leg for leg in ("complex", "solvent") if fewest[leg] < level]
+        return {}, [], []                                   # no ddG: no repeat was taken
+    done = [r for r in edge.get("repeats", []) if "ddg" in r]
+    counted = [r["fewest_independent_samples"] for r in done
+               if isinstance(r.get("fewest_independent_samples"), dict)]
+    fewest = {leg: min((c[leg] for c in counted if c.get(leg) is not None), default=None) for leg in LEGS}
+    grounds = {leg: [_few_in_repeat(r, leg, level) for r in done] for leg in LEGS}
+    few = [leg for leg in LEGS if any(ground is True for ground in grounds[leg])]
+    return fewest, few, [leg for leg in LEGS if leg not in few
+                         and (not grounds[leg] or any(ground is None for ground in grounds[leg]))]
 
 
 def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dict], bool]:
@@ -281,7 +303,7 @@ def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dic
         windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
         exp = None if a not in reference or b not in reference else reference[b]["exp"] - reference[a]["exp"]
         network = values[b]["dg"] - values[a]["dg"] if a in values and b in values else None
-        fewest, few = independent_samples_of(e, level)
+        fewest, few, unknown = independent_samples_of(e, level)
         edges.append({
             "edge": e["edge"], "ligand_a": a, "ligand_b": b, "lomap_score": _lomap_score(run_dir, e),
             "exp_ddg": exp, "cufep_ddg": e.get("ddg"), "cufep_error": e.get("se"), "cufep_network_ddg": network,
@@ -302,7 +324,10 @@ def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dic
             # analysis (review of PR #21: the table gave the standard error alone)
             "fewest_independent_samples_complex": fewest.get("complex"),
             "fewest_independent_samples_solvent": fewest.get("solvent"),
-            "few_independent_samples": NOT_RECORDED if few is None else "; ".join(few),
+            "few_independent_samples": NOT_RECORDED if len(unknown) == len(LEGS) else "; ".join(
+                few + [f"{leg} {NOT_RECORDED}" for leg in unknown]),
+            # (the two lists behind that text; not columns of the table)
+            "few_samples": few, "few_samples_not_recorded": unknown,
             "why_no_ddg": "" if e.get("ddg") is not None else _why_no_ddg(e)})
     return ligands, edges, shifted
 
@@ -455,14 +480,17 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             f"{e['backend_complex']}, {e['backend_solvent']} | {_flags(e)} |")
     stock = [e["edge"] for e in edges if any(b and b != "cupotential" for b in
                                               (e["backend_complex"], e["backend_solvent"]))]
-    flagged = {name: [e["edge"] for e in edges if e[key] and e[key] != NOT_RECORDED] for key, name in (
-        ("not_reliable", "NOT RELIABLE"), ("few_independent_samples", "few independent samples"))}
+    flagged = {name: [e["edge"] for e in edges if e[key]] for key, name in (
+        ("not_reliable", "NOT RELIABLE"), ("few_samples", "few independent samples"))}
     lines += ["", "Edges with a flag: " + "; ".join(
         f"{name}: {', '.join(found) if found else 'none'}" for name, found in flagged.items()) + "."]
-    unknown = [e["edge"] for e in edges if e["few_independent_samples"] == NOT_RECORDED]
+    unknown = [e["edge"] + ("" if len(e["few_samples_not_recorded"]) == len(LEGS) else
+                            f" ({' and '.join(e['few_samples_not_recorded'])} leg)")
+               for e in edges if e["few_samples_not_recorded"]]
     if unknown:
         lines += ["", f"Few independent samples: {NOT_RECORDED} for {', '.join(unknown)} (the summary of the run "
-                      "does not hold the numbers of their legs, or the directory not the level of its analysis)."]
+                      "holds neither the legs below the level nor the notes of the analysis of their legs, and not "
+                      "the numbers of the legs with the level of the analysis in the directory)."]
     lines += ["", "Legs on another backend than the cuPotential plugin (the fallback to stock OpenMM, whose reason "
                   f"the log of the leg gives): {', '.join(stock) if stock else 'none'}."]
     closures = summary.get("cycle_closures") or []
@@ -483,7 +511,7 @@ def _save(run_dir: Path, name: str, text: str, ligands: list[dict], edges: list[
     for path, rows, columns in ((run_dir / "rbfe_report_ligands.csv", ligands, LIGAND_COLUMNS),
                                 (run_dir / "rbfe_report_edges.csv", edges, EDGE_COLUMNS)):
         def table(fh, rows=rows, columns=columns) -> None:
-            w = csv.DictWriter(fh, fieldnames=list(columns), restval="")
+            w = csv.DictWriter(fh, fieldnames=list(columns), restval="", extrasaction="ignore")
             w.writeheader()
             w.writerows(rows)
 

@@ -229,20 +229,22 @@ def hybrid_leg_spec(rcfg, built: HybridLeg, gcmc, leg: str, name: str, states: l
 
 
 def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
-    """Before a run writes or samples anything: the lambda windows and the samples that the directory of a leg
-    holds must be ones this run can go on from. The checks the leg makes where it uses the files
-    (:func:`run_hybrid_leg`: the settings its windows were chosen with, and every condition of its samples with the
-    checksum of the System, for which the hybrid System of this run is built), made first from the files alone, so
-    that a run that will be refused leaves the directory, its record of the configuration and the results of its
-    legs as they were. Second review of PR #21: a finished edge run again with another chemical potential of
-    water, or a run of an earlier version of the hybrid continued, was refused by its legs after the run had
-    replaced ``resolved_config.yaml`` and the legs had set their results aside. Raises WorkflowError or
-    ConditionsError."""
-    from cufep.engine.leg import check_kept_windows
+    """Before a run writes or samples anything: the lambda windows and the samples (or the checkpoint of their
+    start) that the directory of a leg holds must be ones this run can go on from. The checks the leg makes where
+    it uses the files (:func:`run_hybrid_leg`: the settings its windows were chosen with, and every condition of
+    its samples with the checksum of the System, for which the hybrid System of this run is built), made first
+    from the files alone, so that a run that will be refused leaves the directory, its record of the configuration
+    and the results of its legs as they were. Second review of PR #21: a finished edge run again with another
+    chemical potential of water, or a run of an earlier version of the hybrid continued, was refused by its legs
+    after the run had replaced ``resolved_config.yaml`` and the legs had set their results aside. Raises
+    WorkflowError or ConditionsError."""
+    from cufep.engine.leg import check_kept_windows, start_conditions
     from cufep.sampling.storage import other_conditions, stored_conditions
     from cufep.workflow import (
+        _choose_backend,
         _schedule_of_this_leg,
         check_windows_settings,
+        has_starts_of,
         planned_iterations,
         settings_differences,
         start_record_of,
@@ -267,7 +269,15 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
             check_windows_settings(made, settings, start_file, quiet)
     n_stored, conditions = stored_conditions(hrex)
     if n_stored == 0:
-        return
+        # no samples. A leg stopped at the checkpoint of the start of its replica exchange, whose start
+        # configurations are made again, holds the conditions recorded with that checkpoint against those of this
+        # run (check_kept_windows in run_hybrid_leg), as it does those of samples: they are compared here too
+        # (third review of PR #21: such a leg of a System this version builds otherwise was refused after the run
+        # had replaced resolved_config.yaml). With its start configurations the replica exchange takes the
+        # conditions of this run for a leg without samples (LegStorage.check_conditions)
+        if not (hrex / "checkpoint.npz").exists() or has_starts_of(leg_dir, schedule):
+            return
+        conditions = start_conditions(leg_dir)
     if conditions is None:
         raise WorkflowError(f"the samples in {hrex} do not record their conditions; nothing was changed")
     # the settings first: no System has to be built to compare them
@@ -286,8 +296,10 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
     gcmc = hybrid_gcmc(rcfg, built, leg, quiet)
     plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
                               rcfg.sampling.production_ns)
-    # the samples of a leg stay on the backend they were made with (cufep.engine.leg.chosen_backend)
-    backend = str(conditions.get("backend") or rcfg.backend.name)
+    # the samples of a leg stay on the backend they were made with; a leg without samples runs on the one this
+    # run chooses for its System (cufep.engine.leg.chosen_backend)
+    backend = (str(conditions.get("backend") or rcfg.backend.name) if n_stored else
+               _choose_backend(rcfg, built.hybrid.system, quiet)[0])
     spec = hybrid_leg_spec(rcfg, built, gcmc, leg, f"{Path(edge_dir).name}/r{repeat}/{leg}",
                            [state.to_dict() for state in schedule.states], backend, timestep_fs,
                            plan.steps_per_iteration)

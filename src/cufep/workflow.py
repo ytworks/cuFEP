@@ -721,7 +721,7 @@ def gcmc_record(cfg: Config) -> dict:
     return {**cfg.sampling.gcmc.model_dump(mode="json"), "excess_chemical_potential_kcal_per_mol": mu,
             # the pressure at which the cell the leg is fixed in was equilibrated
             "cell_pressure_bar": float(cfg.thermodynamics.pressure_bar),
-            "standard_volume_nm3": volume, "velocities_of_an_inserted_water": INSERTED_WATER_VELOCITIES}
+            "standard_volume_nm3": volume, WATER_RULE: INSERTED_WATER_VELOCITIES}
 
 
 def leg_system(cfg: Config, prep: dict, leg: str):
@@ -826,12 +826,8 @@ def fixed_cell_of(leg_dir: Path) -> np.ndarray | None:
         if found is not None:
             return found
     start_file, sched_file = leg_dir / "start_configs.npz", leg_dir / "schedule.yaml"
-    if start_file.exists() and sched_file.exists():
-        schedule = Schedule.load(sched_file)
-        with np.load(start_file) as start:
-            n_configs = len(start["positions"]) if "positions" in start.files else 0
-        if starts_are_of(start_record_of(start_file), schedule) and n_configs == len(schedule.states):
-            return cell(start_file)
+    if sched_file.exists() and has_starts_of(leg_dir, Schedule.load(sched_file)):
+        return cell(start_file)
     return None
 
 
@@ -883,6 +879,19 @@ def starts_are_of(made: dict, schedule) -> bool:
     ``schedule``. A record that does not name its windows (an earlier version) does not say they
     are others."""
     return made.get("states") is None or made["states"] == [state.to_dict() for state in schedule.states]
+
+
+def has_starts_of(leg_dir: Path, schedule) -> bool:
+    """Whether a leg has the start configurations of the lambda windows of ``schedule``: the file is there, its
+    record does not name other windows (:func:`starts_are_of`) and it holds one configuration per window. A leg
+    that does not has them made again for the windows it has (:func:`stored_windows`). The one rule of the run
+    of a leg, of the cell a leg has run in (:func:`fixed_cell_of`) and of the checks before a run."""
+    start_file = Path(leg_dir) / "start_configs.npz"
+    if not start_file.exists():
+        return False
+    with np.load(start_file) as start:
+        n_configs = len(start["positions"]) if "positions" in start.files else 0
+    return starts_are_of(start_record_of(start_file), schedule) and n_configs == len(schedule.states)
 
 
 def check_windows_settings(made: dict, settings: dict, where: Path, log=print) -> bool:
@@ -1199,7 +1208,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
     # given; checked here, before begin_leg sets the result of the leg aside (fifth review of PR #18), after the
     # checks of the samples below, whose refusals say more of them (the windows of samples that are refused for
     # their conditions do not matter)
-    from cufep.engine.leg import check_samples_have_their_windows
+    from cufep.engine.leg import check_samples_have_their_windows, start_conditions
 
     src = given_schedule_file(cfg, lig_dir.name, leg, repeat)
     windows = sched_file if sched_file.exists() else (src if src is not None and src.exists() else None)
@@ -1208,6 +1217,7 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
         check_samples_have_their_windows(leg_dir, None if windows is None
                                          else [state.to_dict() for state in Schedule.load(windows).states])
 
+    has_starts = False                               # the start configurations of the windows of the leg
     if sched_file.exists():
         schedule = Schedule.load(sched_file)
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -1220,10 +1230,17 @@ def check_leg_reuse(cfg: Config, lig_dir: Path, leg: str, repeat: int, prep_info
             made = start_record_of(start_file)
             if starts_are_of(made, schedule):         # start configurations of other windows are made again
                 check_windows_settings(made, windows_settings(cfg), start_file, quiet)
+        has_starts = has_starts_of(leg_dir, schedule)
     n_stored, conditions = stored_conditions(leg_dir / "hrex")
     if n_stored == 0:
-        samples_have_their_windows()                 # a checkpoint of the start without samples
-        return
+        # a checkpoint of the start without samples. Where the start configurations of the windows are made
+        # again the leg holds the conditions recorded with that checkpoint against those of this run
+        # (cufep.engine.leg.check_kept_windows), after the run has written its record: they are compared here,
+        # as those of samples are (third review of PR #21, the class of the relative leg's)
+        conditions = None if has_starts or windows is None else start_conditions(leg_dir)
+        if conditions is None:
+            samples_have_their_windows()
+            return
     # a leg that is to be continued from a checkpoint of an earlier version (run_leg analyses a leg
     # that has all its iterations as it is, without its checkpoint)
     used_timestep = (
@@ -3363,7 +3380,7 @@ def stored_windows(leg_dir: Path, leg: str, stages: list[str], settings: dict, l
     with np.load(start_file) as start:
         configs = (start["positions"], start["boxes"], start["velocities"],
                    *((start["water_on"],) if "water_on" in start.files else ()))
-    if not starts_are_of(made, schedule) or len(configs[0]) != len(schedule.states):
+    if not has_starts_of(leg_dir, schedule):
         log(f"the start configurations in {start_file} are not those of the lambda windows in {sched_file} "
             f"({len(configs[0])} configurations, {len(schedule.states)} windows): they are made again for these "
             "windows")
@@ -4546,13 +4563,20 @@ def pressure_of_samples(conditions: dict) -> float | None:
     return pressure
 
 
+#: the rule of the mover that the samples of a leg with grand canonical moves of water record (gcmc_record)
+WATER_RULE = "velocities_of_an_inserted_water"
+
+
 def water_moves_of(conditions: dict | None) -> dict | None:
     """The grand canonical moves of water that samples with these recorded conditions were made with:
     ``{"enabled": False}`` for samples without the moves, else the excess chemical potential of water and
     its standard volume as they were used, which with the temperature are the activity of the water the leg
-    was in equilibrium with. None if the conditions are not recorded. Free energies of legs made with other
-    values of them are not of one thermodynamic state of the water and are not combined
-    (:func:`cufep.rbfe.run.edge_result`)."""
+    was in equilibrium with, and the rule of the mover for the velocities of an inserted water
+    (:data:`cufep.sampling.gcmc.INSERTED_WATER_VELOCITIES`; None for samples that record none: a version
+    before the record, 2026-11-28, whose earlier movers left those velocities as they were). None if the
+    conditions are not recorded. Free energies of legs made with other values of the water are not of one
+    thermodynamic state of the water and are not combined; legs of another rule of the mover are named
+    (:func:`cufep.rbfe.run.edge_result`, :func:`cufep.rbfe.run.combine_network`)."""
     if not isinstance(conditions, dict):
         return None
     settings = conditions.get("settings") if isinstance(conditions.get("settings"), dict) else {}
@@ -4561,7 +4585,8 @@ def water_moves_of(conditions: dict | None) -> dict | None:
         return {"enabled": False}
     return {"enabled": True,
             "excess_chemical_potential_kcal_per_mol": float(moves["excess_chemical_potential_kcal_per_mol"]),
-            "standard_volume_nm3": float(moves["standard_volume_nm3"])}
+            "standard_volume_nm3": float(moves["standard_volume_nm3"]),
+            WATER_RULE: moves.get(WATER_RULE)}
 
 
 def gcmc_numbers(samples: dict, start: int) -> dict | None:

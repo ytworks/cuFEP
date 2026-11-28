@@ -227,6 +227,23 @@ def goes_on_from_its_samples(leg_dir: Path) -> bool:
     return stored_conditions(Path(leg_dir) / "hrex")[0] > 0 or (Path(leg_dir) / "hrex" / "checkpoint.npz").exists()
 
 
+def start_conditions(leg_dir: Path) -> dict | None:
+    """The conditions recorded with the checkpoint of the start of a leg that has no samples yet (the replica
+    exchange records them before it writes that checkpoint); None for a leg without that checkpoint, with
+    samples, or whose record holds no conditions. A leg whose start configurations are made again holds them
+    against the conditions of the run (:func:`check_kept_windows`); the checks before a run read them here, to
+    do so before the run writes anything (third review of PR #21: a relative leg stopped at that checkpoint was
+    refused for another System only after the run had replaced its record of the configuration)."""
+    from cufep.sampling.storage import stored_attributes
+
+    hrex = Path(leg_dir) / "hrex"
+    if not (hrex / "checkpoint.npz").exists():
+        return None
+    n_stored, attrs = stored_attributes(hrex)
+    conditions = attrs.get("conditions")
+    return conditions if n_stored == 0 and isinstance(conditions, dict) else None
+
+
 #: the keys of the record of start configurations that say how they were made
 START_KEYS = ("start_configurations", "walk_ps", "start_md_ps", "minimize_steps", "start_backend")
 

@@ -180,12 +180,16 @@ def conditions_differences(stored: dict, current: dict) -> list[str]:
 
 
 def other_conditions(n_iterations: int, directory, differing: list[str]) -> "ConditionsError":
-    """The refusal to continue samples under other conditions than they were made under."""
+    """The refusal to continue samples under other conditions than they were made under; with no iteration,
+    that of a replica exchange which has written only the checkpoint of its start."""
+    what, kept = ((f"the {n_iterations} iterations of samples in {directory} were made", "They are left as they are")
+                  if n_iterations else
+                  (f"the replica exchange in {directory} wrote the checkpoint of its start (it has no samples yet)",
+                   "It is left as it is"))
     return ConditionsError(
-        f"the {n_iterations} iterations of samples in {directory} were made under other conditions than "
-        f"this run asks for ({'; '.join(differing)}). They are left as they are. A calculation under other "
-        "conditions needs a new output.dir; only the lambda windows of a leg can be determined again in "
-        "place, with --reschedule.")
+        f"{what} under other conditions than this run asks for ({'; '.join(differing)}). {kept}. A calculation "
+        "under other conditions needs a new output.dir; only the lambda windows of a leg can be determined again "
+        "in place, with --reschedule.")
 
 
 def equilibration_boundary(attrs: dict, leg_dir: str | Path | None = None) -> int | None:

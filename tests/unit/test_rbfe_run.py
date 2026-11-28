@@ -180,8 +180,10 @@ def test_an_edge_runs_from_its_preparation_to_its_ddg_and_again_to_the_same(tmp_
         assert len(solvent["lambda_windows"]["morph"]) == 3
     # the complex leg makes the grand canonical moves of water, the solvent leg none; its result says what its
     # samples were made with (review of PR #21: the edges of a network are compared by it)
+    # (third review: with the rule of the mover for the velocities of an inserted water)
     assert complex_["water_moves"] == {"enabled": True, "excess_chemical_potential_kcal_per_mol": -6.09,
-                                       "standard_volume_nm3": 0.030345}
+                                       "standard_volume_nm3": 0.030345,
+                                       "velocities_of_an_inserted_water": "turned with it"}
     assert solvent["water_moves"] == {"enabled": False} and solvent["gcmc"] is None
     assert sum(complex_["gcmc"]["insertions_attempted"]) + sum(complex_["gcmc"]["deletions_attempted"]) > 0
     with np.load(edge_dir / "repeat_0" / "complex" / "start_configs.npz") as start:
@@ -839,5 +841,88 @@ def test_windows_and_samples_a_run_cannot_go_on_from_are_refused_before_it_write
         raise RuntimeError("the run began to write")
 
     monkeypatch.setattr(rbfe_run, "write_run_files", stop_at_the_first_write)
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None)
+
+
+def test_a_leg_stopped_at_the_checkpoint_of_its_start_is_checked_before_a_run_writes(tmp_path, monkeypatch,
+                                                                                    deterministic_cpu):
+    """Third review of PR #21 (P2): a leg stopped after its replica exchange wrote the checkpoint of its start, before
+    its first sample, whose start configurations have to be made again, is held by the leg to the conditions
+    recorded with that checkpoint (check_kept_windows). The check before the run ended at "no samples": a leg of a
+    System this version builds otherwise was refused only after the run had replaced resolved_config.yaml and
+    network.json. It is refused before the run writes anything; as the run made it, and with the start
+    configurations of its windows (the replica exchange then takes the conditions of the run), it passes."""
+    from conftest import edit_attributes
+
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe import run as rbfe_run
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.rbfe.run import run_rbfe, write_run_files
+    from cufep.sampling import hrex
+    from cufep.sampling.storage import read_manifest, stored_conditions
+    from cufep.workflow import WorkflowError
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = {**_config(tmp_path, out_dir, "fixed").model_dump(mode="json"),
+            "network": {"edges": [["toluene", "phenol"]]}}
+    rcfg = RbfeConfig.model_validate(data)
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+
+    def stopped(self, *args, **kwargs):
+        raise RuntimeError("stopped after the checkpoint of the start")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(hrex.ReplicaExchangeSampler, "run", stopped)
+        assert "stopped" in run_hybrid_leg_safe(EdgeLegJob(
+            edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+            config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True))["error"]
+    leg_dir = edge_dir / "repeat_0" / "solvent"
+    assert (leg_dir / "hrex" / "checkpoint.npz").exists() and stored_conditions(leg_dir / "hrex")[0] == 0
+    write_run_files(out_dir, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
+    starts = (leg_dir / "start_configs.npz").read_bytes()
+    with np.load(leg_dir / "start_configs.npz") as start:
+        kept = {key: start[key] for key in start.files}
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})        # one window short
+    recorded = read_manifest(leg_dir / "hrex")["attrs"]["conditions"]
+    edit_attributes(leg_dir / "hrex", set={"conditions": {**recorded, "system_sha256": "0" * 64}})
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+
+    def not_to_be_reached(*args, **kwargs):
+        raise AssertionError("the run went on to write")
+
+    def stop_at_the_first_write(*args, **kwargs):
+        raise RuntimeError("the run began to write")
+
+    def files() -> dict:
+        return {path: path.read_bytes() for path in sorted(out_dir.rglob("*"))
+                if path.is_file() and path.name != ".cufep.lock"}
+
+    monkeypatch.setattr(run_module, "execute_jobs", not_to_be_reached)
+    monkeypatch.setattr(rbfe_run, "write_run_files", not_to_be_reached)
+    before = files()
+    with pytest.raises(WorkflowError, match="wrote the checkpoint of its start \\(it has no samples yet\\) under "
+                                           "other conditions than this run asks for \\(the System"):
+        run_rbfe(rcfg, log=lambda line: None)
+    assert files() == before
+    monkeypatch.setattr(rbfe_run, "write_run_files", stop_at_the_first_write)
+    # with the start configurations of its windows the leg does not hold that checkpoint against the run
+    (leg_dir / "start_configs.npz").write_bytes(starts)
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None)
+    # and as the run made it, its start configurations to be made again
+    np.savez(leg_dir / "start_configs.npz", **{key: (value[:-1] if key != "made_with" else value)
+                                               for key, value in kept.items()})
+    edit_attributes(leg_dir / "hrex", set={"conditions": recorded})
     with pytest.raises(RuntimeError, match="the run began to write"):
         run_rbfe(rcfg, log=lambda line: None)

@@ -22,7 +22,7 @@ from cufep.files import publish_text, publish_with
 from cufep.rbfe.config import RbfeConfig, RbfeSampling
 from cufep.rbfe.network import Edge, cycle_closures, edge_ddg, ligand_dg
 from cufep.rbfe.prep import edge_name
-from cufep.workflow import KCAL, WorkflowError, _Log, select_ligands
+from cufep.workflow import KCAL, WATER_RULE, WorkflowError, _Log, select_ligands
 
 
 def ligands_of(rcfg: RbfeConfig) -> list:
@@ -308,16 +308,23 @@ def water_moves_of_leg(result: dict, leg_dir: Path) -> dict:
     them. A result with the counts of the moves whose samples are not there was made with them, and with which
     values of the water is not recorded: ``{"enabled": True}`` alone. Whether the moves were made is so known
     for every leg, apart from the values (second review of PR #21: such a leg was not compared at all and went
-    into one network with legs without the moves)."""
+    into one network with legs without the moves). The rule of the mover for the velocities of an inserted water
+    (:data:`cufep.workflow.WATER_RULE`) is that of the result, or for a result of a version before it was recorded
+    there, that of its samples; None (or no such key) where neither records one (third review of PR #21: the rule
+    did not reach the result of a leg, and the results did not tell the edges of the earlier mover)."""
     from cufep.sampling.storage import stored_conditions
     from cufep.workflow import water_moves_of
 
-    if isinstance(result.get("water_moves"), dict):
-        return result["water_moves"]
-    if "gcmc" not in result or result["gcmc"] is None:
+    recorded = result.get("water_moves")
+    if isinstance(recorded, dict) and (not recorded.get("enabled") or WATER_RULE in recorded):
+        return recorded
+    if not isinstance(recorded, dict) and ("gcmc" not in result or result["gcmc"] is None):
         return {"enabled": False}
-    recorded = water_moves_of(stored_conditions(Path(leg_dir) / "hrex")[1])
-    return recorded if recorded is not None else {"enabled": True}
+    of_samples = water_moves_of(stored_conditions(Path(leg_dir) / "hrex")[1])
+    if isinstance(recorded, dict):
+        # a result of a version that recorded the values of the water and not yet the rule of the mover
+        return {**recorded, WATER_RULE: (of_samples or {}).get(WATER_RULE)}
+    return of_samples if of_samples is not None else {"enabled": True}
 
 
 def water_values_recorded(moves: dict) -> bool:
@@ -460,9 +467,33 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
             recorded = [value[key] for _repeat, value in moves if value.get(key) is not None]
             if recorded and merged["enabled"]:
                 merged[key] = recorded[0]
+        if merged["enabled"]:
+            # the rule of the mover for the velocities of an inserted water, where all repeats of the ddG record one
+            # rule (None: none recorded, or not one rule; the repeats say which, and those without one are named)
+            rules = {value.get(WATER_RULE) for _repeat, value in moves}
+            merged[WATER_RULE] = rules.pop() if len(rules) == 1 else None
         out["conditions"]["water_moves"] = merged
         out["water_values_not_recorded"] = [repeat for repeat, value in moves
                                             if not water_values_recorded(value)]
+        out["water_rule_not_recorded"] = [repeat for repeat, value in moves
+                                          if value.get("enabled") and value.get(WATER_RULE) is None]
+    return out
+
+
+def water_rules(results: list[dict]) -> dict[str | None, list[str]]:
+    """The rules of the mover for the velocities of an inserted water under which the complex legs of the edges
+    with a ddG made their grand canonical moves (None: a leg that records none), each with its edges; an edge
+    whose repeats are not of one rule is named with the repeats of each. Edges without the moves have none."""
+    out: dict[str | None, list[str]] = {}
+    for r in results:
+        by_rule: dict[str | None, list[int]] = {}
+        for repeat in r["repeats"] if "ddg" in r else []:
+            moves = repeat.get("water_moves") if "ddg" in repeat else None
+            if isinstance(moves, dict) and moves.get("enabled"):
+                by_rule.setdefault(moves.get(WATER_RULE), []).append(repeat["repeat"])
+        for rule, repeats in by_rule.items():
+            out.setdefault(rule, []).append(r["edge"] if len(by_rule) == 1 else
+                                            f"{r['edge']} (repeat {', '.join(str(n) for n in repeats)})")
     return out
 
 
@@ -529,10 +560,25 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
     # what could not be compared is said whatever comes of the comparison
     unknown = [f"{r['edge']} (repeat {', '.join(str(n) for n in r['water_values_not_recorded'])})"
                for r in results if "ddg" in r and r.get("water_values_not_recorded")]
-    not_compared = [] if not unknown else [
+    water_notes = [] if not unknown else [
         f"{WATER_MOVES}: made, and the excess chemical potential and the standard volume of the water not "
         f"recorded, for {', '.join(unknown)} (results of an earlier version whose samples are not there); those "
         "values were not compared for them"]
+    # edges whose movers were not of one rule give their ddG to one network, and which are of which is said (third
+    # review of PR #21: an edge finished by the mover before 2026-11-28 and one added by this version gave one set of
+    # dG, and nothing told them apart); so is a network none of whose edges records a rule
+    rules = water_rules(results)
+    earlier = "(a version before the record of 2026-11-28, whose earlier movers left them as they were)"
+    if len(rules) > 1:
+        water_notes.append(
+            f"{WATER_MOVES}: the edges with a ddG were not sampled under one rule for the velocities of an inserted "
+            "water: " + "; ".join(
+                (f"{rule} for " if rule is not None else f"no rule recorded {earlier} for ") + ", ".join(edges)
+                for rule, edges in sorted(rules.items(), key=lambda item: item[0] is None)))
+    elif None in rules:
+        water_notes.append(
+            f"{WATER_MOVES}: no rule for the velocities of an inserted water is recorded for any of the "
+            f"{len(rules[None])} edge(s) with a ddG whose complex legs made the moves {earlier}")
     differing = network_differences(out_dir, results)
     if differing:
         # each edge gives its ddG; no dG and no cycle closure is made from edges of other conditions
@@ -540,10 +586,10 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
                 "dg": None, "inconsistent_edges": differing,
                 "notes": ["NO NETWORK: the edges with a ddG were not made under the same conditions ("
                           + "; ".join(differing) + "); their ddG are given one by one, without cycle closures "
-                          "and without dG", *not_compared]}
+                          "and without dG", *water_notes]}
     measured = [Edge(r["ligand_a"], r["ligand_b"], r["ddg"], r["se"]) for r in results if "ddg" in r]
     summary = {"ligands": ligands, "edges": results, "experiment_kcal_mol": experiment,
-               "cycle_closures": cycle_closures(measured), "dg": None, "notes": list(not_compared)}
+               "cycle_closures": cycle_closures(measured), "dg": None, "notes": list(water_notes)}
     import networkx as nx
 
     graph = nx.Graph([(e.ligand_a, e.ligand_b) for e in measured])
@@ -646,14 +692,32 @@ def failed_edges(summary: dict) -> list[str]:
     return [e["edge"] for e in summary["edges"] if "ddg" not in e]
 
 
+def files_gone(out_dir: Path, edge: dict) -> list[str]:
+    """Of an edge with a ddG in the summary a directory has: the files which that ddG, and what the summary holds
+    of the edge, were made from and which the directory does not have, by their path in the directory of the edge.
+    They are the result of both legs of every repeat the ddG was made from, and the record of the prepared edge
+    where the summary holds what is read there (the LOMAP score; the edges of a network are also compared by it).
+    For a summary that does not name the repeats of its ddG: any result of a leg."""
+    edge_dir = Path(out_dir) / "edges" / edge["edge"]
+    repeats = [r["repeat"] for r in edge.get("repeats") or [] if "ddg" in r and "repeat" in r]
+    needed = [f"repeat_{r}/{leg}/result.json" for r in repeats for leg in ("complex", "solvent")]
+    if "lomap_score" in edge:
+        needed.append("prep/prep.json")
+    missing = [name for name in needed if not (edge_dir / name).exists()]
+    if not repeats and not list(edge_dir.glob("repeat_*/*/result.json")):
+        missing.insert(0, "repeat_*/*/result.json")
+    return missing
+
+
 def rewrite_results(out_dir: Path) -> dict:
     """`cufep rbfe analyze --write`: the tables and the summary of a run made again from the results its legs have
     (:func:`analyse_directory`), as the run writes them. Under the lock of the directory from before the legs are
     read until the files are written, as a run holds it: a run in the directory could else finish a leg between the
     two, and its new summary be replaced by one that does not have the leg. Refused, with nothing written, where
-    the summary the directory has holds the ddG of an edge of which the directory has no leg result at all (a copy
-    of the results without the directories of the edges, ``benchmarks/results/``): written again, such an edge
-    would have none. (Second review of PR #21.)"""
+    the summary the directory has holds the ddG of an edge and the directory not every file it was made from
+    (:func:`files_gone`): written again, such an edge would have no ddG, or that of the repeats that are left.
+    (Second review of PR #21: a copy of the results without the directories of the edges,
+    ``benchmarks/results/``; third: one leg of a repeat set aside, which left the other leg and passed.)"""
     from cufep.run import lock_output_directory
 
     out_dir = Path(out_dir)
@@ -661,14 +725,17 @@ def rewrite_results(out_dir: Path) -> dict:
     try:
         stored = out_dir / "summary.json"
         if stored.exists():
-            had = [e["edge"] for e in json.loads(stored.read_text()).get("edges", []) if e.get("ddg") is not None]
-            gone = [edge for edge in had if not list((out_dir / "edges" / edge).glob("repeat_*/*/result.json"))]
+            had = [e for e in json.loads(stored.read_text()).get("edges", []) if e.get("ddg") is not None]
+            gone = [(e["edge"], files_gone(out_dir, e)) for e in had]
+            gone = [(edge, files) for edge, files in gone if files]
             if gone:
-                shown = ", ".join(gone[:5]) + (" ..." if len(gone) > 5 else "")
+                shown = "; ".join(f"{edge}: {', '.join(files)}" for edge, files in gone[:3]) + (
+                    " ..." if len(gone) > 3 else "")
                 raise WorkflowError(
-                    f"{stored} holds the ddG of {len(gone)} edge(s) whose legs are not in the directory ({shown}): "
-                    "made again from the legs, they would have none. Nothing was written. A report of the summary "
-                    "as it is: cufep benchmark report NAME DIRECTORY --protocol rbfe")
+                    f"{stored} holds the ddG of {len(gone)} edge(s) made from files that are not in the directory "
+                    f"({shown}): made again from what is there, such an edge would have no ddG, or another one, or "
+                    "not all the summary holds of it. Nothing was written. A report of the summary as it is: cufep "
+                    "benchmark report NAME DIRECTORY --protocol rbfe")
         summary = analyse_directory(out_dir)
         write_results(out_dir, summary)
         return summary
