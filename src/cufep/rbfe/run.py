@@ -200,15 +200,41 @@ def check_legs_reuse(rcfg: RbfeConfig, out_dir: Path, edges, infos: dict, only_l
             raise WorkflowError(problem)
 
 
-def stored_edges(stored: Path) -> list[dict]:
-    """The edges of the summary a directory has that were made from the results of their legs
-    (:func:`made_from_results`); none where there is no summary, or one that cannot be read (it is written again
-    from the legs, and nothing of it is there to keep)."""
+def read_summary(stored: Path) -> dict | None:
+    """The summary a directory has, or None: there is none, or it cannot be read."""
     try:
-        edges = json.loads(Path(stored).read_text()).get("edges", [])
-        return [e for e in edges if isinstance(e, dict) and "edge" in e and made_from_results(e)]
-    except (OSError, ValueError, AttributeError, TypeError):
-        return []
+        summary = json.loads(Path(stored).read_text())
+    except (OSError, ValueError):
+        return None
+    return summary if isinstance(summary, dict) and isinstance(summary.get("edges"), list) else None
+
+
+def stored_edges(summary: dict | None) -> list[dict]:
+    """The edges of the summary a directory has (:func:`read_summary`) that were made from the results of their
+    legs (:func:`made_from_results`)."""
+    return [e for e in (summary or {}).get("edges", [])
+            if isinstance(e, dict) and "edge" in e and made_from_results(e)]
+
+
+#: what the grand canonical moves of water of a complex leg are named by where their record is gone
+WATER_RECORD = "(the record of its samples, from which the summary has the grand canonical moves of water of the leg)"
+
+
+def water_moves_lost(held, read) -> bool:
+    """Whether what a summary holds of the grand canonical moves of water of a complex leg (``held``: a value of
+    the water, the rule of the mover) is not given any more by what is read of the leg now (``read``)."""
+    return isinstance(held, dict) and isinstance(read, dict) and any(
+        held.get(key) is not None and read.get(key) is None for key in (*WATER_VALUES, WATER_RULE))
+
+
+def leg_being_run(leg_dir: Path) -> bool:
+    """Whether a run began the leg and did not finish it: its marker of a started leg is there (the run was
+    stopped), or the error of a leg that failed. Such a leg has no result, which is an ordinary state of a
+    directory; ``result.previous.json`` does not say it, since it stays when the leg has finished again (sixth
+    review of PR #21)."""
+    from cufep.workflow import STARTED_FILE
+
+    return (Path(leg_dir) / STARTED_FILE).exists() or (Path(leg_dir) / "error.json").exists()
 
 
 def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: int) -> None:
@@ -221,15 +247,19 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
     - an edge with the result of a leg and without the record of its prepared systems (``prep/prep.json``): the
       prepared edges of a network are compared by that record, and an edge without it is left out;
     - a leg result that the summary of the directory read and that is gone, for a leg this run does not sample;
-      not where a run set it aside when it began the leg (``result.previous.json``: a leg that was stopped or
-      failed), which is an ordinary state of a directory;
+      not where a run began the leg and did not finish it (:func:`leg_being_run`), which is an ordinary state of
+      a directory;
     - what the summary holds of the grand canonical moves of water of a complex leg this run does not sample and
-      the results give no more (:func:`water_record_gone`).
+      the result of that leg, with the record of its samples, gives no more (:func:`water_moves_lost`).
 
-    Raises WorkflowError."""
+    Each leg is held to the summary by itself, whatever the other leg of its repeat has now, and only the repeats
+    that this run combines (those of its ``sampling.repeats``). Sixth review of PR #21: with --leg solvent, a
+    complex leg whose record was gone was not looked at while the solvent leg of its repeat had no result, and
+    was combined when that leg had finished; a result moved away passed for the ``result.previous.json`` of an
+    earlier, finished run of the leg; a repeat beyond those of the configuration was asked for. Raises
+    WorkflowError."""
     out_dir = Path(out_dir)
-    stored = out_dir / "summary.json"
-    had = {e["edge"]: e for e in stored_edges(stored)}
+    had = {e["edge"]: e for e in stored_edges(read_summary(out_dir / "summary.json"))}
     chosen = {edge_name(a, b) for a, b in selected}
 
     def sampled(name: str, leg: str) -> bool:
@@ -241,15 +271,28 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
         edge_dir, files = out_dir / "edges" / name, []
         if not (edge_dir / "prep" / "prep.json").exists() and list(edge_dir.glob("repeat_*/*/result.json")):
             files.append("prep/prep.json")
-        if name in had:
-            for repeat in repeats_read(had[name]):
-                for leg in ("complex", "solvent"):
-                    leg_dir = edge_dir / f"repeat_{repeat}" / leg
-                    if not sampled(name, leg) and not (leg_dir / "result.json").exists() \
-                            and not (leg_dir / "result.previous.json").exists():
+        held = had.get(name) or {}
+        read = set(repeats_read(held))
+        for entry in held.get("repeats") or []:
+            repeat = entry.get("repeat")
+            if repeat not in read or repeat >= repeats:          # (not read then, or not combined now)
+                continue
+            for leg in ("complex", "solvent"):
+                leg_dir = edge_dir / f"repeat_{repeat}" / leg
+                if sampled(name, leg):
+                    continue
+                if not (leg_dir / "result.json").exists():
+                    if not leg_being_run(leg_dir):
                         files.append(f"repeat_{repeat}/{leg}/result.json")
-            if not sampled(name, "complex"):
-                files += water_record_gone(had[name], edge_result(edge_dir, a, b, repeats))
+                    continue
+                if leg == "complex" and isinstance(entry.get("water_moves"), dict):
+                    try:
+                        result = json.loads((leg_dir / "result.json").read_text())
+                    except ValueError:
+                        files.append(f"repeat_{repeat}/{leg}/result.json (it cannot be read)")
+                        continue
+                    if water_moves_lost(entry["water_moves"], water_moves_of_leg(result, leg_dir)):
+                        files.append(f"repeat_{repeat}/complex/hrex {WATER_RECORD}")
         if files:
             gone.append((name, files))
     if gone:
@@ -781,15 +824,17 @@ def made_from_results(edge: dict) -> bool:
     return edge.get("ddg") is not None or bool(repeats_read(edge))
 
 
-def files_gone(out_dir: Path, edge: dict) -> list[str]:
+def files_gone(out_dir: Path, edge: dict, combined: int | None = None) -> list[str]:
     """Of an edge of the summary a directory has that was made from the results of its legs
     (:func:`made_from_results`): the files which its ddG, or the refusal of one, and what the summary holds of
     the edge were made from and which the directory does not have, by their path in the directory of the edge.
     They are the result of both legs of every repeat that was read, and the record of the prepared edge (its
     LOMAP score is read there, and the edges of a network are compared by it: an edge without it would be left
-    out of that comparison). For a summary that does not name the repeats of its ddG: any result of a leg."""
+    out of that comparison). For a summary that does not name the repeats of its ddG: any result of a leg.
+    ``combined``: the number of repeats the directory combines now (``sampling.repeats`` of its record); a
+    repeat beyond them is not read again and its files are not asked for."""
     edge_dir = Path(out_dir) / "edges" / edge["edge"]
-    repeats = repeats_read(edge)
+    repeats = [r for r in repeats_read(edge) if combined is None or r < combined]
     needed = [f"repeat_{r}/{leg}/result.json" for r in repeats for leg in ("complex", "solvent")]
     needed.append("prep/prep.json")
     missing = [name for name in needed if not (edge_dir / name).exists()]
@@ -818,22 +863,37 @@ def water_record_gone(stored: dict, made: dict | None) -> list[str]:
     without a network, for other values of the water, was replaced by one with a network. Fifth review of PR #21,
     P1: the same for the repeats of one edge, which the summary had refused a ddG for their other values of the
     water; that edge was not looked at, having no ddG, and got the mean of the two repeats.)"""
-    def lost(held, read) -> bool:
-        return isinstance(held, dict) and isinstance(read, dict) and any(
-            held.get(key) is not None and read.get(key) is None for key in (*WATER_VALUES, WATER_RULE))
-
-    what = "(the record of its samples, from which the summary has the grand canonical moves of water of the leg)"
     again = {r["repeat"]: r for r in (made or {}).get("repeats") or [] if "repeat" in r}
-    gone = [f"repeat_{repeat['repeat']}/complex/hrex {what}" for repeat in stored.get("repeats") or []
-            if "ddg" in repeat and lost(repeat.get("water_moves"),
-                                        (again.get(repeat.get("repeat")) or {}).get("water_moves"))]
+    gone = [f"repeat_{repeat['repeat']}/complex/hrex {WATER_RECORD}" for repeat in stored.get("repeats") or []
+            if "ddg" in repeat and water_moves_lost(repeat.get("water_moves"),
+                                                    (again.get(repeat.get("repeat")) or {}).get("water_moves"))]
     # a summary that holds them of the edge alone, not of its repeats (with them, a repeat that is read no more,
     # its result set aside by a run, takes its values out of the edge's without any record being gone)
     of_repeats = any(isinstance(repeat.get("water_moves"), dict) for repeat in stored.get("repeats") or [])
-    if not of_repeats and lost((stored.get("conditions") or {}).get("water_moves"),
-                               ((made or {}).get("conditions") or {}).get("water_moves")):
-        gone.append(f"repeat_*/complex/hrex {what}")
+    if not of_repeats and water_moves_lost((stored.get("conditions") or {}).get("water_moves"),
+                                           ((made or {}).get("conditions") or {}).get("water_moves")):
+        gone.append(f"repeat_*/complex/hrex {WATER_RECORD}")
     return gone
+
+
+def tables_lost(out_dir: Path, summary: dict) -> list[str]:
+    """What the tables of a directory hold and ``summary``, made again from the results of its legs, does not
+    give: the edges with a ddG in ``edges.csv`` and the ligands with a dG in ``ligands.csv``. For a directory
+    whose summary cannot be read (or is not there), where the tables are the record of what it had: with the
+    legs the results are made again, and without them (an archive of the results) nothing must be replaced
+    (sixth review of PR #21: a truncated summary.json in a copy of benchmarks/results/tyk2_rbfe let `cufep rbfe
+    analyze --write` empty the ddG of 22 edges and the dG of 16 compounds in the two tables)."""
+    def held(name: str, key: str, value: str) -> list[str]:
+        try:
+            with open(Path(out_dir) / name, newline="") as fh:
+                return [row[key] for row in csv.DictReader(fh) if row.get(key) and (row.get(value) or "").strip()]
+        except (OSError, csv.Error):
+            return []
+
+    ddg = {e["edge"] for e in summary["edges"] if e.get("ddg") is not None}
+    dg = set(((summary.get("dg") or {}).get("values") or {}))
+    return ([f"the ddG of {name}" for name in held("edges.csv", "edge", "ddg_kcal_mol") if name not in ddg]
+            + [f"the dG of {name}" for name in held("ligands.csv", "ligand", "dg_kcal_mol") if name not in dg])
 
 
 def rewrite_results(out_dir: Path) -> dict:
@@ -855,8 +915,10 @@ def rewrite_results(out_dir: Path) -> dict:
     lock = lock_output_directory(out_dir)
     try:
         stored = out_dir / "summary.json"
-        had = stored_edges(stored)
-        gone = [(e["edge"], files_gone(out_dir, e)) for e in had]
+        kept = read_summary(stored)
+        had = stored_edges(kept)
+        repeats = recorded_repeats(out_dir)
+        gone = [(e["edge"], files_gone(out_dir, e, repeats)) for e in had]
         gone = [(edge, files) for edge, files in gone if files]
         if gone:
             raise WorkflowError(not_made_again(stored, gone))
@@ -866,10 +928,30 @@ def rewrite_results(out_dir: Path) -> dict:
         gone = [(edge, files) for edge, files in gone if files]
         if gone:
             raise WorkflowError(not_made_again(stored, gone))
+        if kept is None:
+            # no summary that can be read: the tables say what the directory had
+            lost = tables_lost(out_dir, summary)
+            if lost:
+                shown = ", ".join(lost[:5]) + (" ..." if len(lost) > 5 else "")
+                raise WorkflowError(
+                    f"{stored} cannot be read or is not there, and the tables of the directory hold {len(lost)} "
+                    f"value(s) that the results of the legs in it do not give ({shown}): made again from what is "
+                    "there, the tables would lose them. Nothing was written.")
         write_results(out_dir, summary)
         return summary
     finally:
         lock.close()
+
+
+def recorded_repeats(out_dir: Path) -> int:
+    """The number of repeats that the record of a run directory gives (``sampling.repeats`` of
+    ``resolved_config.yaml``): those its results are combined from."""
+    stored = yaml.safe_load((Path(out_dir) / "resolved_config.yaml").read_text()) or {}
+    repeats = (stored.get("sampling") or {}).get("repeats", RbfeSampling.model_fields["repeats"].default)
+    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
+        raise WorkflowError(f"{Path(out_dir) / 'resolved_config.yaml'}: sampling.repeats is {repeats!r}, not a "
+                            "number of repeats")
+    return repeats
 
 
 def analyse_directory(out_dir: Path) -> dict:
@@ -878,11 +960,7 @@ def analyse_directory(out_dir: Path) -> dict:
     number of repeats): the checks of a configuration are for a run that simulates, and a directory that an
     earlier version wrote under other checks is analysed all the same (review of PR #18)."""
     out_dir = Path(out_dir)
-    stored = yaml.safe_load((out_dir / "resolved_config.yaml").read_text()) or {}
-    repeats = (stored.get("sampling") or {}).get("repeats", RbfeSampling.model_fields["repeats"].default)
-    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
-        raise WorkflowError(f"{out_dir / 'resolved_config.yaml'}: sampling.repeats is {repeats!r}, not a number of "
-                            "repeats")
+    repeats = recorded_repeats(out_dir)
     network = json.loads((out_dir / "network.json").read_text())
     return combine_network(out_dir, network["ligands"], [tuple(e) for e in network["edges"]], repeats,
                            {k: float(v) for k, v in network.get("experiment_kcal_mol", {}).items()})

@@ -534,6 +534,17 @@ def test_analyze_write_refuses_the_recorded_results_which_have_no_legs(tmp_path)
     result = CliRunner().invoke(cli.main, ["rbfe", "analyze", str(copy)])
     assert result.exit_code == 0
     assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == before
+    # sixth review of PR #21 (P2): the summary of that copy truncated, or gone. It holds nothing that can be read,
+    # and the two tables still hold the ddG of 22 edges and the dG of 16 compounds: without the legs they would
+    # be written empty
+    for damage in (lambda path: path.write_text("{"), lambda path: path.unlink()):
+        damage(copy / "summary.json")
+        kept = {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"}
+        result = CliRunner().invoke(cli.main, ["rbfe", "analyze", str(copy), "--write"])
+        assert result.exit_code != 0
+        assert "cannot be read or is not there, and the tables of the directory hold 38 value(s)" in result.output
+        assert "the ddG of ejm_31~ejm_42" in result.output and "Nothing was written" in result.output
+        assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == kept
 
 
 def test_results_are_not_made_again_without_every_file_their_ddg_was_made_from(tmp_path):
@@ -822,3 +833,28 @@ def test_a_repeat_that_is_read_no_more_is_not_a_record_that_is_gone():
     assert water_record_gone(stored, made) == [
         "repeat_1/complex/hrex (the record of its samples, from which the summary has the grand canonical moves of "
         "water of the leg)"]
+
+
+def test_results_made_again_ask_for_the_repeats_that_the_directory_combines(tmp_path):
+    """Sixth review of PR #21 (P2, found in the check before a run): the summary read two repeats of a~b, the
+    record of the directory now gives one (``sampling.repeats``), and repeat 1 was moved away. Its files were
+    asked for, though the results are combined from repeat 0 alone. Only the repeats that are combined are held
+    to their files; one of those that is gone is still refused."""
+    import yaml
+
+    from cufep.rbfe.run import rewrite_results
+    from cufep.workflow import WorkflowError
+
+    run = tmp_path / "run"
+    _run_directory(run, {"a~b": (-12.0, -10.5)})
+    (run / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 2}}))
+    _write_legs(run, "a~b", 1, _with_moves(-12.4, _moves()), _with_moves(-10.5, NO_MOVES))
+    assert rewrite_results(run)["edges"][0]["ddg"] == pytest.approx(-1.7)
+    (run / "edges" / "a~b" / "repeat_1").rename(tmp_path / "repeat_1")
+    with pytest.raises(WorkflowError, match="a~b: repeat_1/complex/result.json, repeat_1/solvent/result.json"):
+        rewrite_results(run)
+    (run / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 1}}))
+    assert rewrite_results(run)["edges"][0]["ddg"] == pytest.approx(-1.5)
+    (run / "edges" / "a~b" / "repeat_0" / "solvent" / "result.json").unlink()
+    with pytest.raises(WorkflowError, match="a~b: repeat_0/solvent/result.json"):
+        rewrite_results(run)

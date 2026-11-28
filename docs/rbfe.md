@@ -24,7 +24,8 @@ cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv a
                                        # edge, or repeats for which it refused the edge one, and the directory
                                        # not every file that was made from (both legs of each such repeat, the
                                        # record of the prepared edge, the record of the samples where the
-                                       # summary has the water moves of a leg from it)
+                                       # summary has the water moves of a leg from it), or where the summary
+                                       # cannot be read and the legs do not give what the two tables hold
 ```
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
@@ -43,9 +44,11 @@ its start configurations have to be made again. A run is also refused if results
 without sampling them (those of the edges or legs it does not run) are not what the directory made them from any
 more, so that they would be combined without the comparisons made before: the record of the samples from which
 the summary has the grand canonical moves of water of a complex leg (a result of an earlier version has them
-there) was set aside; the result of a leg that the summary read is gone (not where a run set it aside when it
-began the leg again, `result.previous.json`); or an edge has results and no record of its prepared systems. The
-directory, its record of the configuration and the results of its legs then stay as they were.
+there) was set aside; the result of a leg that the summary read is gone (not where a run began the leg again and
+did not finish it: its `started.json` or `error.json` is there); or an edge has results and no record of its
+prepared systems. Each such leg is held to the summary by itself, whatever the other leg of its repeat has now,
+and only the repeats that the run combines (`sampling.repeats`). The directory, its record of the configuration
+and the results of its legs then stay as they were.
 
 ## Inputs
 

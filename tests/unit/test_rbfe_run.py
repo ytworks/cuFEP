@@ -1032,8 +1032,9 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
     The results a run combines without sampling them are held to what the summary has of them before the run
     writes anything; with the record there the run goes on. The same for the result of a leg that the summary read
     and that was moved away (the repeat would be left out, and the refused edge get the ddG of the other), though
-    not for one that a run set aside when it began the leg, and for the record of the prepared edge (the edge
-    would be left out of the comparison of the prepared systems). A summary that cannot be read holds nothing."""
+    not for the leg that a run began again and did not finish, and for the record of the prepared edge (the edge
+    would be left out of the comparison of the prepared systems). A summary that cannot be read holds nothing.
+    Each leg is held to the summary by itself, and only the repeats this run combines (sixth review)."""
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
@@ -1064,7 +1065,8 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
     edge_dir = out_dir / "edges" / "toluene~phenol"
     (edge_dir / "prep").mkdir(parents=True)
     (edge_dir / "prep" / "prep.json").write_text(json.dumps(
-        {"made_from": edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"), "legs": {}}))
+        {"made_from": edge_made_from(rcfg, ligands["toluene"], ligands["phenol"], "cube"),
+         "legs": {leg: {"barostat": "isotropic", "n_atoms_a": 100} for leg in ("complex", "solvent")}}))
 
     def result(dg_kcal: float, **moves) -> dict:
         return {"delta_g": dg_kcal * 4.184, "delta_g_error": 0.3 * 4.184, "temperature_K": 298.15,
@@ -1121,16 +1123,52 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
     result_of_a_leg = edge_dir / "repeat_0" / "complex" / "result.json"
     refused_without(result_of_a_leg, "repeat_0/complex/result.json")
     refused_without(edge_dir / "prep" / "prep.json", "prep/prep.json")
-    # a result that a run set aside when it began the leg (the leg was stopped): an ordinary state, not refused
-    result_of_a_leg.rename(result_of_a_leg.with_name("result.previous.json"))
-    with pytest.raises(RuntimeError, match="the run began to write"):
-        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
-    result_of_a_leg.with_name("result.previous.json").rename(result_of_a_leg)
+    # a leg that a run began again and did not finish, stopped (its marker of a started leg) or failed (its error),
+    # has no result: an ordinary state, not refused. The backup of the result it had does not say that: it stays
+    # when the leg has finished again (sixth review, P2: the current result of such a leg, moved away, passed for
+    # it, and the mean of two repeats became the value of the other)
+    backup = result_of_a_leg.with_name("result.previous.json")
+    backup.write_text(result_of_a_leg.read_text())
+    refused_without(result_of_a_leg, "repeat_0/complex/result.json")
+    for marker in ("started.json", "error.json"):
+        result_of_a_leg.rename(tmp_path / "aside")
+        result_of_a_leg.with_name(marker).write_text("{}")
+        with pytest.raises(RuntimeError, match="the run began to write"):
+            run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+        result_of_a_leg.with_name(marker).unlink()
+        (tmp_path / "aside").rename(result_of_a_leg)
+    backup.unlink()
     # the edge itself run again: its legs are sampled, and nothing of them is held to the summary
     hrex.rename(tmp_path / "aside")
     with pytest.raises(RuntimeError, match="the run began to write"):
         run_rbfe(rcfg, log=lambda line: None)
+    # ... but with --leg solvent its complex legs are used as they are. Sixth review (P1): the solvent leg of repeat
+    # 0 was stopped when it was run again and has no result, so the repeat was not complete when the run began; its
+    # complex leg was not looked at, and both repeats were combined when the solvent leg had finished
+    solvent = edge_dir / "repeat_0" / "solvent"
+    (solvent / "result.json").rename(solvent / "result.previous.json")
+    (solvent / "started.json").write_text("{}")
+    before = files()
+    with pytest.raises(WorkflowError, match="would combine without sampling them.*toluene~phenol: "
+                                           "repeat_0/complex/hrex"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["toluene~phenol"], only_legs=["solvent"])
+    assert files() == before
     (tmp_path / "aside").rename(hrex)
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["toluene~phenol"], only_legs=["solvent"])
+    (solvent / "started.json").unlink()
+    (solvent / "result.previous.json").rename(solvent / "result.json")
+    # one repeat asked for where the summary read two (sixth review, P2): repeat 1 is not combined by this run, and
+    # its files are not asked for; with two repeats they are
+    settings = rcfg.model_dump(mode="json")
+    one = RbfeConfig.model_validate({**settings, "sampling": {**settings["sampling"], "repeats": 1}})
+    (edge_dir / "repeat_1").rename(tmp_path / "repeat_1")
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(one, log=lambda line: None, only_edges=["phenol~aniline"])
+    with pytest.raises(WorkflowError, match="toluene~phenol: repeat_1/complex/result.json, "
+                                           "repeat_1/solvent/result.json"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    (tmp_path / "repeat_1").rename(edge_dir / "repeat_1")
     # a summary that cannot be read: there is nothing to hold the results to
     (out_dir / "summary.json").write_text("{")
     hrex.rename(tmp_path / "aside")
