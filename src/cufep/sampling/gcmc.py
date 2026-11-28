@@ -93,6 +93,14 @@ COUNTS = ("insertions_attempted", "insertions_accepted", "deletions_attempted", 
           "waters_in_the_sphere")
 
 
+#: what the samples of a leg record of how the mover treats an inserted water (:func:`cufep.workflow.gcmc_record`).
+#: Samples of a mover of another rule are another sampling procedure and are not continued by this one: versions
+#: before 2026-11-28 left the velocities of an inserted water as they were, and their samples, which record no such
+#: rule, can be analysed as they are and are not extended (second review of PR #21: 5 ns of the earlier rule
+#: extended to 10 ns went into one estimate). A change of how the mover samples changes this value.
+INSERTED_WATER_VELOCITIES = "turned with it"
+
+
 class GcmcError(RelocationError):
     """The moves cannot be made in this system as they are asked for."""
 

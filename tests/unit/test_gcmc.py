@@ -431,7 +431,14 @@ def test_the_moves_are_a_setting_of_the_complex_leg_and_combinations_they_cannot
     assert record["gcmc"] == {"enabled": True, "interval_ps": 4.0, "attempts": 2500, "batch_size": 1000,
                               "radius_margin_nm": 0.3, "ghost_waters": "auto",
                               "excess_chemical_potential_kcal_per_mol": -6.0, "standard_volume_nm3": 0.03,
-                              "cell_pressure_bar": 1.0}
+                              "cell_pressure_bar": 1.0, "velocities_of_an_inserted_water": "turned with it"}
+    # second review of PR #21 (P1): samples of the mover before 2026-11-28, which left the velocities of an
+    # inserted water as they were, record no such rule; a run of this version does not continue them (5 ns of them
+    # extended to 10 ns went into one estimate), and says why. They are analysed as they are
+    earlier = {**record, "gcmc": {key: value for key, value in record["gcmc"].items()
+                                  if key != "velocities_of_an_inserted_water"}}
+    assert settings_differences(earlier, record) == [
+        "gcmc.velocities_of_an_inserted_water: not recorded -> turned with it"]
     assert settings_differences(samples_settings(default, "complex"), record)[0].startswith("gcmc: not recorded -> ")
     # the pressure of such samples is that of the cell they are fixed in; of others that of their barostat
     assert pressure_of_samples({"pressure_bar": None, "settings": record}) == 1.0
@@ -697,8 +704,13 @@ def test_a_leg_that_has_run_in_a_fixed_cell_keeps_it(tmp_path):
     """Review of PR #21 (P2): a leg with the moves of the rule before 2026-11-28 ran in the mean cell of its
     pre-equilibration; with the cell of the last configuration its alchemical System had another checksum than its
     samples record, and the same YAML could not continue it. The cell of such a leg is the one it has run in: that
-    of the start configurations of its windows, else that of the checkpoint of its replica exchange. A leg that has
-    not run yet, and every leg without the moves, has the cell of the last configuration."""
+    of the checkpoint of its replica exchange, where it goes on from; without one, that of the start
+    configurations of its windows, if they are those of its windows (second review: start configurations of other
+    windows, which are made again, were taken before the checkpoint, and the leg could not be continued). A leg
+    that has not run yet, and every leg without the moves, has the cell of the last configuration."""
+    import json
+
+    from cufep.alchemy.schedule import fixed_schedule
     from cufep.workflow import alchemical_box, fixed_cell_of
 
     last, mean = np.eye(3) * 3.0, np.diag([3.02, 3.02, 2.95])
@@ -711,12 +723,24 @@ def test_a_leg_that_has_run_in_a_fixed_cell_keeps_it(tmp_path):
     leg = tmp_path / "leg"
     leg.mkdir()
     assert fixed_cell_of(leg) is None and np.array_equal(alchemical_box(eq, moves, leg), last)
-    (leg / "hrex").mkdir()
-    np.savez(leg / "hrex" / "checkpoint.npz", boxes=np.stack([mean, mean]), iteration=3)
-    assert np.array_equal(alchemical_box(eq, moves, leg), mean)            # the checkpoint of its samples
+    schedule = fixed_schedule(["discharge", "vanish"], {"discharge": 2, "vanish": 2})
+    schedule.save(leg / "schedule.yaml")
+    states = [state.to_dict() for state in schedule.states]
     other = np.diag([3.01, 3.01, 2.97])
-    np.savez(leg / "start_configs.npz", boxes=np.stack([other, other]), positions=np.zeros((2, 1, 3)))
-    assert np.array_equal(alchemical_box(eq, moves, leg), other)           # the start configurations first
+
+    def start_configurations(of_states) -> None:
+        np.savez(leg / "start_configs.npz", boxes=np.stack([other] * len(states)),
+                 positions=np.zeros((len(states), 1, 3)), made_with=json.dumps({"states": of_states}))
+
+    start_configurations(states)
+    assert np.array_equal(alchemical_box(eq, moves, leg), other)           # those of its windows: their cell
+    start_configurations(states[:-1] + [{**states[-1], "lambda_sterics": 0.123}])
+    assert fixed_cell_of(leg) is None                                      # of other windows: made again
+    (leg / "hrex").mkdir()
+    np.savez(leg / "hrex" / "checkpoint.npz", boxes=np.stack([mean] * len(states)), iteration=3)
+    assert np.array_equal(alchemical_box(eq, moves, leg), mean)            # the checkpoint, whatever the others say
+    start_configurations(states)
+    assert np.array_equal(alchemical_box(eq, moves, leg), mean)            # ... also before start configurations
     assert np.array_equal(alchemical_box(eq, None, leg), last)             # a leg without the moves
     assert np.array_equal(alchemical_box(eq, moves), last)                 # (no leg: the rule of a new one)
 

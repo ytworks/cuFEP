@@ -217,7 +217,43 @@ def _why_no_ddg(e: dict) -> str:
     return "no result"
 
 
+#: what the table says of a check whose numbers the summary of a run does not hold
+NOT_RECORDED = "not recorded"
+
+
+def samples_level(run_dir: Path) -> float | None:
+    """The level of independent samples of the analysis of a run (``analysis.min_effective_samples`` of its
+    recorded configuration), or None where the directory does not say."""
+    import yaml
+
+    f = run_dir / "resolved_config.yaml"
+    if not f.exists():
+        return None
+    level = ((yaml.safe_load(f.read_text()) or {}).get("analysis") or {}).get("min_effective_samples")
+    return float(level) if isinstance(level, (int, float)) and not isinstance(level, bool) else None
+
+
+def independent_samples_of(edge: dict, level: float | None) -> tuple[dict, list[str] | None]:
+    """(the window with the fewest independent samples of each leg, the legs below the level of the analysis) of
+    an edge of a summary: as the summary records them; for a summary of a version before that record, from the
+    repeats of its ddG, which hold the numbers of their legs, against ``level``. The legs are None, not recorded,
+    where the summary gives no ground for them: no repeat with the numbers, or no level (second review of PR #21:
+    a report of such a summary said that no edge had few independent samples, of an edge with 31)."""
+    if "few_samples" in edge and "fewest_independent_samples" in edge:
+        return edge["fewest_independent_samples"] or {}, list(edge["few_samples"] or [])
+    if edge.get("ddg") is None:
+        return {}, []                                       # no ddG: no repeat was taken
+    counted = [r["fewest_independent_samples"] for r in edge.get("repeats", [])
+               if "ddg" in r and isinstance(r.get("fewest_independent_samples"), dict)]
+    fewest = {leg: min((c[leg] for c in counted if c.get(leg) is not None), default=None)
+              for leg in ("complex", "solvent")}
+    if not counted or level is None or any(value is None for value in fewest.values()):
+        return fewest, None
+    return fewest, [leg for leg in ("complex", "solvent") if fewest[leg] < level]
+
+
 def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dict], bool]:
+    level = samples_level(run_dir)
     reference = read_reference(name)
     fep_edges = published_edges(name)
     of_dg, of_edges = openfe_results(name)
@@ -245,7 +281,7 @@ def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dic
         windows, overlap, backend = e.get("windows") or {}, e.get("lowest_overlap") or {}, e.get("backend") or {}
         exp = None if a not in reference or b not in reference else reference[b]["exp"] - reference[a]["exp"]
         network = values[b]["dg"] - values[a]["dg"] if a in values and b in values else None
-        fewest = e.get("fewest_independent_samples") or {}
+        fewest, few = independent_samples_of(e, level)
         edges.append({
             "edge": e["edge"], "ligand_a": a, "ligand_b": b, "lomap_score": _lomap_score(run_dir, e),
             "exp_ddg": exp, "cufep_ddg": e.get("ddg"), "cufep_error": e.get("se"), "cufep_network_ddg": network,
@@ -266,7 +302,7 @@ def _rows(name: str, run_dir: Path, summary: dict) -> tuple[list[dict], list[dic
             # analysis (review of PR #21: the table gave the standard error alone)
             "fewest_independent_samples_complex": fewest.get("complex"),
             "fewest_independent_samples_solvent": fewest.get("solvent"),
-            "few_independent_samples": "; ".join(e.get("few_samples") or []),
+            "few_independent_samples": NOT_RECORDED if few is None else "; ".join(few),
             "why_no_ddg": "" if e.get("ddg") is not None else _why_no_ddg(e)})
     return ligands, edges, shifted
 
@@ -419,10 +455,14 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
             f"{e['backend_complex']}, {e['backend_solvent']} | {_flags(e)} |")
     stock = [e["edge"] for e in edges if any(b and b != "cupotential" for b in
                                               (e["backend_complex"], e["backend_solvent"]))]
-    flagged = {name: [e["edge"] for e in edges if e[key]] for key, name in (
+    flagged = {name: [e["edge"] for e in edges if e[key] and e[key] != NOT_RECORDED] for key, name in (
         ("not_reliable", "NOT RELIABLE"), ("few_independent_samples", "few independent samples"))}
     lines += ["", "Edges with a flag: " + "; ".join(
         f"{name}: {', '.join(found) if found else 'none'}" for name, found in flagged.items()) + "."]
+    unknown = [e["edge"] for e in edges if e["few_independent_samples"] == NOT_RECORDED]
+    if unknown:
+        lines += ["", f"Few independent samples: {NOT_RECORDED} for {', '.join(unknown)} (the summary of the run "
+                      "does not hold the numbers of their legs, or the directory not the level of its analysis)."]
     lines += ["", "Legs on another backend than the cuPotential plugin (the fallback to stock OpenMM, whose reason "
                   f"the log of the leg gives): {', '.join(stock) if stock else 'none'}."]
     closures = summary.get("cycle_closures") or []

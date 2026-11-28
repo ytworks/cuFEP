@@ -19,7 +19,8 @@ the hybrid topology. The sections that mean the same in both YAMLs are one schem
 cufep rbfe plan config.yaml      # ligands, edges and atom mappings, without simulating
 cufep rbfe run config.yaml       # run (or resume) every edge
 cufep rbfe analyze runs/rbfe     # the ddG and dG from the results the legs have; writes nothing
-cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv and summary.json again
+cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv and summary.json again, under the
+                                       # lock of the directory; refused where results are there without their legs
 ```
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
@@ -27,7 +28,13 @@ samples do not connect), 0 otherwise (also when some edges have no
 ddG yet because only some legs were run, `--leg`). A run in a directory that holds results is refused before it
 writes anything if a prepared edge of the network (one it runs, or one whose results it combines) was made
 from other inputs or settings (protein, ligands, force
-field, solvation, bilayer, cutoff, ionic strength, pH ...).
+field, solvation, bilayer, cutoff, ionic strength, pH ...), or if a leg it runs has a pre-equilibration, lambda
+windows or samples it cannot go on from: made with other settings (the grand canonical moves of water and their
+values of the water among them), by a mover of another rule (samples of versions before 2026-11-28, whose moves
+left the velocities of an inserted water as they were, are analysed as they are and not extended), or of another
+System than this version builds (its checksum; the hybrid System of every leg with samples is built for that
+before the run starts, several legs at a time). The directory, its record of the configuration and the results of
+its legs then stay as they were.
 
 ## Inputs
 
@@ -149,7 +156,9 @@ lipid patch and given the water of the run afterwards, as in the ABFE.
   preparation besides their ligands (protein, force field, solvation, bilayer, pH ...), and a ligand of one name
   must be one molecule in all of them; otherwise each edge gives its ddG and the run says what differs, without
   cycle closures and without dG. The repeats of an edge whose complex legs were sampled with other moves give no
-  ddG. `edges.csv` gives the lowest overlap of all iterations and that among the samples of the estimate, the two
+  ddG. Whether a complex leg made the moves is known of every result (a result of an earlier version with the
+  counts of the moves made them); where the values of the water are not recorded (such a result without its
+  samples), the edge is compared by the moves alone and the summary names it and its repeats. `edges.csv` gives the lowest overlap of all iterations and that among the samples of the estimate, the two
   checks behind NOT RELIABLE, the window with the fewest independent samples of each leg and the legs below the
   level of the analysis (`few_independent_samples`; Mey et al. 2020), and the LOMAP score of the mapping.
 - dG of every ligand, from the edges alone: the maximum likelihood estimate of Xu (J. Chem. Inf. Model.
@@ -177,8 +186,9 @@ two figures): the dG of the compounds and the ddG of the edges of every method o
 with 95 % bootstrap intervals (for the dG, each method centred on the compounds compared, in every resample), and
 for every edge its LOMAP score, its windows, lowest overlap, fewest independent samples, the backend of its legs
 and its flags (NOT RELIABLE, few independent samples). The report is made from `summary.json` of the run, so it
-can be made again from the files that are kept of a run (`benchmarks/results/`); a directory that is not a run of
-the set named is refused before anything is written (`benchmarks/README.md`).
+can be made again from the files that are kept of a run (`benchmarks/results/`); of a summary of an earlier
+version the samples are read from the repeats of each ddG, and "not recorded" is said where it has none. A
+directory that is not a run of the set named is refused before anything is written (`benchmarks/README.md`).
 
 ## Not in this version
 

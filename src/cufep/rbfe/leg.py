@@ -204,6 +204,109 @@ def hybrid_gcmc(rcfg, built: HybridLeg, leg: str, log=print):
     return spec
 
 
+def hybrid_leg_spec(rcfg, built: HybridLeg, gcmc, leg: str, name: str, states: list[dict], backend: str,
+                    timestep_fs: float, steps_per_iteration: int, **more):
+    """What the workers of a relative leg are given (:class:`cufep.sampling.worker.LegSpec`), from the configuration
+    and the hybrid System of the leg (``built``, with its ghosts off where ``gcmc`` gives the moves). Its
+    ``conditions()`` are what the samples record, so the run of a leg and the check before a run
+    (:func:`check_leg_reuse`) make it here, in one place. ``timestep_fs`` is the time step of the pre-equilibration,
+    ``more`` what only a run needs (seed, frame atoms, the share of the GPU)."""
+    from cufep.engine.protocol import HYBRID
+    from cufep.sampling.worker import LegSpec
+    from cufep.workflow import _precision
+
+    barostat = built.barostat
+    return LegSpec(name=name, system_xml=built.xml, states=states, n_atoms=built.hybrid.system.getNumParticles(),
+                   protocol=HYBRID, backend=backend, precision=_precision(rcfg, backend),
+                   platform=rcfg.backend.platform, temperature_K=rcfg.thermodynamics.temperature_K,
+                   pressure_bar=None if gcmc is not None else rcfg.thermodynamics.pressure_bar,
+                   barostat="none" if gcmc is not None else barostat,
+                   barostat_frequency=rcfg.dynamics.barostat_frequency, exchange=rcfg.sampling.exchange,
+                   friction_per_ps=rcfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
+                   steps_per_iteration=steps_per_iteration, cpu_threads=rcfg.resources.cpu_threads_per_worker,
+                   box_safety=1.3 if barostat == "membrane" and gcmc is None else None,
+                   settings=hybrid_settings(rcfg, leg), gcmc=gcmc, **more)
+
+
+def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
+    """Before a run writes or samples anything: the lambda windows and the samples that the directory of a leg
+    holds must be ones this run can go on from. The checks the leg makes where it uses the files
+    (:func:`run_hybrid_leg`: the settings its windows were chosen with, and every condition of its samples with the
+    checksum of the System, for which the hybrid System of this run is built), made first from the files alone, so
+    that a run that will be refused leaves the directory, its record of the configuration and the results of its
+    legs as they were. Second review of PR #21: a finished edge run again with another chemical potential of
+    water, or a run of an earlier version of the hybrid continued, was refused by its legs after the run had
+    replaced ``resolved_config.yaml`` and the legs had set their results aside. Raises WorkflowError or
+    ConditionsError."""
+    from cufep.engine.leg import check_kept_windows
+    from cufep.sampling.storage import other_conditions, stored_conditions
+    from cufep.workflow import (
+        _schedule_of_this_leg,
+        check_windows_settings,
+        planned_iterations,
+        settings_differences,
+        start_record_of,
+        starts_are_of,
+    )
+
+    leg_dir = Path(edge_dir) / f"repeat_{repeat}" / leg
+    sched_file, start_file, hrex = leg_dir / "schedule.yaml", leg_dir / "start_configs.npz", leg_dir / "hrex"
+    if not sched_file.exists():
+        return                 # no windows yet (samples without their windows: check_samples_have_their_windows)
+    quiet = lambda _message: None                                    # noqa: E731  the leg logs it when it runs
+    settings = hybrid_settings(rcfg, leg)
+    schedule = _schedule_of_this_leg(sched_file, leg, STAGES)
+    rest2_scale = rcfg.sampling.rest2.scale if rcfg.sampling.rest2.scale > 1.0 else 1.0
+    if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
+        raise WorkflowError(f"the lambda schedule in {sched_file} was made with a REST2 scale of "
+                            f"{schedule.rest2_scale:g} but sampling.rest2.scale is {rcfg.sampling.rest2.scale:g}. "
+                            "Nothing was changed. Use the same value, or start the leg anew with --reschedule.")
+    if start_file.exists():
+        made = start_record_of(start_file)
+        if starts_are_of(made, schedule):                  # start configurations of other windows are made again
+            check_windows_settings(made, settings, start_file, quiet)
+    n_stored, conditions = stored_conditions(hrex)
+    if n_stored == 0:
+        return
+    if conditions is None:
+        raise WorkflowError(f"the samples in {hrex} do not record their conditions; nothing was changed")
+    # the settings first: no System has to be built to compare them
+    if isinstance(conditions.get("settings"), dict):
+        differing = settings_differences(conditions["settings"], settings)
+        if differing:
+            raise other_conditions(n_stored, hrex, differing)
+    # then every condition, with the checksum of the System this run would sample: the hybrid System is built
+    equil_file = leg_dir / "equil.npz"
+    if not equil_file.exists():
+        raise WorkflowError(f"{hrex} holds samples of this leg but {equil_file}, which they started from, is not "
+                            "there. Nothing was changed; run the calculation in a new output.dir")
+    with np.load(equil_file) as eq:
+        timestep_fs = float(eq["timestep_fs"])
+    built = build_leg(rcfg, Path(edge_dir), leg)
+    gcmc = hybrid_gcmc(rcfg, built, leg, quiet)
+    plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
+                              rcfg.sampling.production_ns)
+    # the samples of a leg stay on the backend they were made with (cufep.engine.leg.chosen_backend)
+    backend = str(conditions.get("backend") or rcfg.backend.name)
+    spec = hybrid_leg_spec(rcfg, built, gcmc, leg, f"{Path(edge_dir).name}/r{repeat}/{leg}",
+                           [state.to_dict() for state in schedule.states], backend, timestep_fs,
+                           plan.steps_per_iteration)
+    check_kept_windows(leg_dir, schedule, spec.conditions())
+
+
+def leg_reuse_problem(config: dict, edge_dir: str, leg: str, repeat: int) -> str | None:
+    """:func:`check_leg_reuse` for a process of its own (the legs of a run are checked at the same time): the
+    refusal as text, or None."""
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.sampling.storage import ConditionsError
+
+    try:
+        check_leg_reuse(RbfeConfig.model_validate(config), Path(edge_dir), leg, repeat)
+    except (WorkflowError, ConditionsError) as exc:
+        return str(exc)
+    return None
+
+
 def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None):
     """The windows of the solvent leg of the edge, when it has them; waits for them."""
     from cufep.alchemy.schedule import Schedule
@@ -244,12 +347,10 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         starts_from,
         with_fallback,
     )
-    from cufep.engine.protocol import HYBRID, stage_state
+    from cufep.engine.protocol import stage_state
     from cufep.mps import thread_percentage
     from cufep.rbfe.config import RbfeConfig
-    from cufep.sampling.worker import LegSpec
     from cufep.workflow import (
-        _precision,
         _schedule_of_this_leg,
         planned_iterations,
         publish_windows,
@@ -266,7 +367,6 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     hybrid, prep, barostat = built.hybrid, built.prep, built.barostat
     n_atoms = hybrid.system.getNumParticles()
     is_complex = job.leg == "complex"
-    T = rcfg.thermodynamics.temperature_K
     rest2 = rcfg.sampling.rest2
     rest2_scale = rest2.scale if rest2.scale > 1.0 else 1.0
     log(f"hybrid: {len(hybrid.core)} core atoms, {len(hybrid.unique_old)} unique to "
@@ -297,16 +397,10 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     settings = hybrid_settings(rcfg, job.leg)
     ends = [stage_state(STAGES[0], 0.0).to_dict(), stage_state(STAGES[-1], 1.0).to_dict()]
 
-    def spec_of(states: list[dict], backend: str, **more) -> LegSpec:
-        return LegSpec(name=job.tag, system_xml=built.xml, states=states, n_atoms=n_atoms, protocol=HYBRID,
-                       backend=backend, precision=_precision(rcfg, backend), platform=rcfg.backend.platform,
-                       temperature_K=T, pressure_bar=None if gcmc is not None else rcfg.thermodynamics.pressure_bar,
-                       barostat="none" if gcmc is not None else barostat,
-                       barostat_frequency=rcfg.dynamics.barostat_frequency, exchange=rcfg.sampling.exchange,
-                       friction_per_ps=rcfg.dynamics.friction_per_ps, timestep_fs=timestep_fs,
-                       steps_per_iteration=plan.steps_per_iteration, cpu_threads=rcfg.resources.cpu_threads_per_worker,
-                       box_safety=1.3 if barostat == "membrane" and gcmc is None else None, settings=settings,
-                       mps_thread_percentage=thread_percentage(job.oversubscription), gcmc=gcmc, **more)
+    def spec_of(states: list[dict], backend: str, **more):
+        return hybrid_leg_spec(rcfg, built, gcmc, job.leg, job.tag, states, backend, timestep_fs,
+                               plan.steps_per_iteration, mps_thread_percentage=thread_percentage(job.oversubscription),
+                               **more)
 
 
     def from_pre_equilibration(schedule) -> list:

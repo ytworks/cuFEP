@@ -712,12 +712,16 @@ def gcmc_water_values(cfg: Config) -> tuple[float, float]:
 
 def gcmc_record(cfg: Config) -> dict:
     """What of ``sampling.gcmc`` the files of a leg with the moves depend on, the two numbers of the
-    water as they are used (``auto`` resolved)."""
+    water as they are used (``auto`` resolved), and the rule of the mover where versions differ in it
+    (:data:`cufep.sampling.gcmc.INSERTED_WATER_VELOCITIES`): samples that record another rule, or none,
+    are not continued by this version."""
+    from cufep.sampling.gcmc import INSERTED_WATER_VELOCITIES
+
     mu, volume = gcmc_water_values(cfg)
     return {**cfg.sampling.gcmc.model_dump(mode="json"), "excess_chemical_potential_kcal_per_mol": mu,
             # the pressure at which the cell the leg is fixed in was equilibrated
             "cell_pressure_bar": float(cfg.thermodynamics.pressure_bar),
-            "standard_volume_nm3": volume}
+            "standard_volume_nm3": volume, "velocities_of_an_inserted_water": INSERTED_WATER_VELOCITIES}
 
 
 def leg_system(cfg: Config, prep: dict, leg: str):
@@ -801,15 +805,33 @@ def positions_in_cell(positions, box, new_box, molecules) -> np.ndarray:
 
 
 def fixed_cell_of(leg_dir: Path) -> np.ndarray | None:
-    """The cell a leg without a barostat has run in so far: that of the start configurations of its lambda
-    windows, else that of the checkpoint of its replica exchange (all replicas of such a leg have one cell).
-    None for a leg that has neither."""
-    for path, key in ((Path(leg_dir) / "start_configs.npz", "boxes"),
-                      (Path(leg_dir) / "hrex" / "checkpoint.npz", "boxes")):
-        if path.exists():
-            with np.load(path, allow_pickle=False) as stored:
-                if key in stored.files and len(stored[key]):
-                    return np.asarray(stored[key][0], dtype=float)
+    """The cell a leg without a barostat has run in so far (all replicas of such a leg have one cell): that of
+    the checkpoint of its replica exchange, which is where the leg goes on from; for a leg without one, that of
+    the start configurations of its lambda windows, if they are those of its windows (start configurations of
+    other windows are made again, :func:`stored_windows`, and their cell is not the leg's: second review of PR
+    #21, such a file was taken before the checkpoint and the leg could not be continued). None for a leg that
+    has neither."""
+    from cufep.alchemy.schedule import Schedule
+
+    def cell(path: Path) -> np.ndarray | None:
+        with np.load(path, allow_pickle=False) as stored:
+            if "boxes" in stored.files and len(stored["boxes"]):
+                return np.asarray(stored["boxes"][0], dtype=float)
+        return None
+
+    leg_dir = Path(leg_dir)
+    checkpoint = leg_dir / "hrex" / "checkpoint.npz"
+    if checkpoint.exists():
+        found = cell(checkpoint)
+        if found is not None:
+            return found
+    start_file, sched_file = leg_dir / "start_configs.npz", leg_dir / "schedule.yaml"
+    if start_file.exists() and sched_file.exists():
+        schedule = Schedule.load(sched_file)
+        with np.load(start_file) as start:
+            n_configs = len(start["positions"]) if "positions" in start.files else 0
+        if starts_are_of(start_record_of(start_file), schedule) and n_configs == len(schedule.states):
+            return cell(start_file)
     return None
 
 

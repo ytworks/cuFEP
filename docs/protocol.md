@@ -746,7 +746,9 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   molecule, as in the water relocation moves (one function for both): they stay those of a rigid
   body, with the kinetic energy they had. (Until 2026-11-28 they were left as they were, with
   components along the bonds of the turned molecule, which the constraints of the next MD step
-  took out.) The acceptance is
+  took out. The samples of a leg record the rule of the mover, `velocities_of_an_inserted_water`
+  in their settings; samples of the earlier rule record none, are analysed as they are, and are
+  not continued by this version, so that no estimate is made of both.) The acceptance is
 
       P(insert) = min[1, exp(B) exp(-beta dE) / (N + 1)]
       P(delete) = min[1, N exp(-B) exp(-beta dE)]
@@ -768,9 +770,9 @@ J. Chem. Inf. Model. 2020, 60, 4436) with the theory of Ross et al. (J. Chem. Th
   cell of the last configuration of the pre-equilibration (grand's examples go on from the last frame
   of an MD at constant pressure). Until 2026-11-28 it was the mean cell of the second half, every
   molecule shifted whole into it; in a bilayer whose cell still drifted the molecules then overlapped.
-  A leg that has run under that rule stays in the cell it has run in (that of the start
-  configurations of its windows, else of its checkpoint), so that it is continued with the System
-  its samples record.
+  A leg that has run under that rule stays in the cell it has run in (that of the checkpoint
+  of its replica exchange, else of the start configurations of its windows), so that it is
+  continued with the System its samples record.
   The solvent leg is as without the moves, at constant pressure. The free energy of the complex
   leg is then one at constant volume and constant chemical potential of the water in the sphere,
   that of the solvent leg one at constant pressure; the result records the pressure at which the

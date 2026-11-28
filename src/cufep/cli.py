@@ -420,13 +420,12 @@ def rbfe_analyze(directory: str, write: bool) -> None:
     """Print the ddG of the edges and the dG of the ligands of the output DIRECTORY of a relative run, from the
     results its legs have. Writes nothing unless --write is given: then the tables and the summary of the run are
     made again by this version (what it records of an edge beyond an earlier one: the LOMAP score, the windows
-    with few independent samples, the grand canonical moves of water)."""
-    from cufep.rbfe.run import analyse_directory, result_lines, write_results
+    with few independent samples, the grand canonical moves of water), under the lock of the directory; refused
+    where the directory holds results whose legs are not in it."""
+    from cufep.rbfe.run import analyse_directory, result_lines, rewrite_results
 
     try:
-        summary = analyse_directory(Path(directory))
-        if write:
-            write_results(Path(directory), summary)
+        summary = rewrite_results(Path(directory)) if write else analyse_directory(Path(directory))
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
     for line in result_lines(summary):

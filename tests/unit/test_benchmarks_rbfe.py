@@ -421,3 +421,44 @@ def test_a_report_of_the_run_of_another_set_writes_nothing(tmp_path):
     assert {path.name: path.read_bytes() for path in absolute.iterdir()} == before
     assert json.loads((absolute / "summary.json").read_text())[0]["ligand"] in absolute_report("a2a", absolute)
 
+
+
+def test_a_summary_of_an_earlier_version_keeps_its_few_samples_or_says_that_they_are_not_recorded(tmp_path):
+    """Second review of PR #21 (P2): a summary of a version before the record of an edge (e7a61bd) has the numbers
+    of its legs in the repeats alone, and a report of it said "few independent samples: none" of A2A 4b -> 4e,
+    whose complex leg has 31. The repeats of the ddG are read, against the level of the analysis that the directory
+    records; where the summary has no such numbers, or the directory no level, the table says "not recorded"."""
+    import json
+
+    import yaml
+
+    from cufep.benchmarks.relative import report
+
+    def earlier(a, b, ddg, counts) -> dict:
+        edge = _edge(a, b, ddg)
+        edge["repeats"] = [{"repeat": 0, "ddg": ddg, "se": 0.2, **({} if counts is None else {
+            "fewest_independent_samples": counts})}]
+        return edge
+
+    edges = [earlier("4b", "4e", -2.35, {"complex": 31.0, "solvent": 1000.0}),
+             earlier("4a", "4o", -2.32, {"complex": 125.0, "solvent": 1000.0}),
+             earlier("4a", "4q", -2.30, None)]
+    run = tmp_path / "earlier"
+    run.mkdir()
+    (run / "summary.json").write_text(json.dumps({
+        "ligands": ["4a", "4b", "4e", "4o", "4q"], "edges": edges, "experiment_kcal_mol": experiment("a2a"),
+        "cycle_closures": [], "notes": [], "dg": None}))
+    (run / "resolved_config.yaml").write_text(yaml.safe_dump({"analysis": {"min_effective_samples": 50.0}}))
+    text = report("a2a", run)
+    rows = {line.split("|")[1].strip(): [c.strip() for c in line.split("|")[1:-1]]
+            for line in text.splitlines() if line.startswith("| 4")}
+    assert rows["4b -> 4e"][11] == "31, 1000" and rows["4b -> 4e"][13] == "few independent samples: complex"
+    assert rows["4a -> 4o"][11] == "125, 1000" and rows["4a -> 4o"][13] == ""
+    assert rows["4a -> 4q"][13] == "few independent samples: not recorded"
+    assert "Edges with a flag: NOT RELIABLE: none; few independent samples: 4b~4e." in text
+    assert "Few independent samples: not recorded for 4a~4q" in text
+    # without the level of the analysis nothing can be said of any edge
+    (run / "resolved_config.yaml").unlink()
+    text = report("a2a", run)
+    assert "few independent samples: none." in text
+    assert "Few independent samples: not recorded for 4b~4e, 4a~4o, 4a~4q" in text

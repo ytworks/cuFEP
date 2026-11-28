@@ -124,4 +124,18 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
     (最小の重なり 0.028。これまでの報告に書き落としていた)、独立サンプル 50 未満が ejm_31~ejm_45(complex 48)、ejm_42~ejm_54
     (solvent 25)、ejm_49~ejm_50(complex 36); A2A は NOT RELIABLE なし、50 未満が 4b~4e(complex 31)、4g~4d(complex 35)。
     水の移動の条件は両セットとも全辺で同じ(μ' −6.09 kcal/mol、V° 0.030345 nm³)。
+- 2026-11-28 オーナーの再レビュー(review 6095000582、81991ba: 前回 12 件のうち 8 件は解決、4 件が一部未解決、新規 3 件)。
+  7 件とも再現して、修正前に失敗するテストにしてから直した:
+  - P1(新規)速度修正前後の軌道の混在 → GCMC のサンプルの設定に mover の規則(`velocities_of_an_inserted_water`)を記録。
+    記録の無い旧サンプルは解析できるが、延長・再開は書く前に拒否(ABFE は既存の `check_leg_reuse`、RBFE は下の事前検査)。
+  - P1(前回 1 の残り)挿入回数だけ残る旧結果 → GCMC の有無と水の値の記録の有無を分けて持つ。有無の不一致は必ず拒否、値は
+    記録のある者どうしで比べ、値の無い反復は辺に残して注記(既知の反復の値で消えない)。
+  - P2(前回 4 の残り)サンプルや窓だけが不一致のとき書いた後に止まる → 実行する脚の窓の設定・サンプルの条件・System の
+    チェックサムを `write_run_files` の前に照合(`rbfe/leg.check_leg_reuse`、脚が後で行うのと同じ `hybrid_leg_spec` と
+    `check_kept_windows`)。チェックサムのために hybrid を組む(TYK2 の complex 6 秒、A2A 20 秒)ので、脚を別プロセスで
+    同時に(8 本まで)検査する。
+  - P2(前回 5 の残り)セルは checkpoint を優先、開始配置はその脚の窓のものと確認できるときだけ。
+  - P2(前回 9 の残り)旧形式の summary は ΔΔG に使った反復の数値を読み、材料が無ければ「not recorded」。
+  - P2(新規 2 件)`rbfe analyze --write` は出力ロックを読む前から書き終わるまで持ち、summary に ddG があるのに脚の結果が
+    1 つも無い辺があれば書く前に拒否(`rewrite_results`)。
 

@@ -755,3 +755,89 @@ def test_a_directory_made_without_the_water_moves_is_refused_before_a_run_with_t
     with pytest.raises(RuntimeError, match="the run began to write"):
         run_rbfe(without, log=lambda line: None)
 
+
+
+def test_windows_and_samples_a_run_cannot_go_on_from_are_refused_before_it_writes(tmp_path, monkeypatch,
+                                                                                   deterministic_cpu):
+    """Second review of PR #21 (P2, and its P1): a finished edge run again in its directory with another chemical
+    potential of water passed the check of its pre-equilibrations (which do not record that value); the run
+    replaced resolved_config.yaml, the legs set their results aside, and then the windows of the complex leg were
+    refused for their settings: the edge that had a ddG had none. The same for samples whose System this version
+    would build otherwise (a run of an earlier version of the hybrid), and for samples of the mover before
+    2026-11-28, which left the velocities of an inserted water as they were (extended by this version, both would
+    go into one estimate). Every such leg is refused before the run writes or starts anything, and the directory
+    stays as it was; the run as it was made passes the checks."""
+    from conftest import edit_attributes
+
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe import run as rbfe_run
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.rbfe.run import run_rbfe, write_run_files
+    from cufep.sampling.storage import read_manifest
+    from cufep.workflow import WorkflowError
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    out_dir = tmp_path / "run"
+    ligands = _ligands(tmp_path, out_dir)
+    data = {**_config(tmp_path, out_dir, "fixed").model_dump(mode="json"),
+            "network": {"edges": [["toluene", "phenol"]]}}
+    rcfg = RbfeConfig.model_validate(data)
+    edge_dir = out_dir / "edges" / "toluene~phenol"
+    prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+    for leg in ("solvent", "complex"):
+        result = run_hybrid_leg_safe(EdgeLegJob(
+            edge="toluene~phenol", leg=leg, repeat=0, edge_dir=str(edge_dir), devices=[None],
+            config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production_ns, inline=True))
+        assert "error" not in result, result
+    write_run_files(out_dir, rcfg, ["toluene", "phenol"], [("toluene", "phenol")], "given", {})
+
+    def files() -> dict:
+        return {path: path.read_bytes() for path in sorted(out_dir.rglob("*"))
+                if path.is_file() and path.name != ".cufep.lock"}
+
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+
+    def not_to_be_reached(*args, **kwargs):
+        raise AssertionError("the run went on to write")
+
+    monkeypatch.setattr(run_module, "execute_jobs", not_to_be_reached)
+    monkeypatch.setattr(rbfe_run, "write_run_files", not_to_be_reached)
+    before = files()
+
+    def refused(config: dict, match: str) -> None:
+        with pytest.raises(WorkflowError, match=match):
+            run_rbfe(RbfeConfig.model_validate(config), log=lambda line: None)
+        assert files() == before and not list(out_dir.rglob("result.previous.json"))
+
+    # 1. another chemical potential of water: the windows of the complex leg were chosen with the other one
+    other = {**data, "sampling": {**data["sampling"], "gcmc": {**data["sampling"]["gcmc"],
+                                                              "excess_chemical_potential_kcal_per_mol": -5.0}}}
+    refused(other, "gcmc.excess_chemical_potential_kcal_per_mol: -6.09 -> -5.0")
+    # 2. samples of the mover of the earlier rule (their record has none)
+    hrex = edge_dir / "repeat_0" / "complex" / "hrex"
+    recorded = read_manifest(hrex)["attrs"]["conditions"]
+    earlier = {**recorded, "settings": {**recorded["settings"], "gcmc": {
+        key: value for key, value in recorded["settings"]["gcmc"].items()
+        if key != "velocities_of_an_inserted_water"}}}
+    edit_attributes(hrex, set={"conditions": earlier})
+    before = files()
+    refused(data, "gcmc.velocities_of_an_inserted_water: not recorded -> turned with it")
+    # 3. samples of another System (as a version that builds the hybrid otherwise made them)
+    edit_attributes(hrex, set={"conditions": {**recorded, "system_sha256": "0" * 64}})
+    before = files()
+    refused(data, "the System")
+    # 4. the directory as the run made it passes the checks (in processes of their own, as a run makes them)
+    edit_attributes(hrex, set={"conditions": recorded})
+
+    def stop_at_the_first_write(*args, **kwargs):
+        raise RuntimeError("the run began to write")
+
+    monkeypatch.setattr(rbfe_run, "write_run_files", stop_at_the_first_write)
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None)

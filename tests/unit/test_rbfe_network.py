@@ -366,10 +366,9 @@ def test_the_water_moves_of_a_leg_are_those_of_its_result_or_else_of_its_samples
     """What a complex leg was sampled with is read where it is recorded: in the result of this version; for a
     result of the versions that made the moves and did not record them (it has their counts), in the conditions of
     its samples; a result of a version before a relative leg could make them (no ``gcmc`` at all) was made
-    without. A result with counts and without samples is not recorded, and the summary says that the edge was
-    combined without the comparison."""
-    from cufep.rbfe import run as run_module
-    from cufep.rbfe.run import combine_network, water_moves_of_leg
+    without. A result with counts and without samples was made with the moves, with values of the water that are
+    not recorded."""
+    from cufep.rbfe.run import water_moves_differ, water_moves_of_leg, water_values_recorded
     from cufep.workflow import water_moves_of
 
     record = {"enabled": True, "interval_ps": 4.0, "excess_chemical_potential_kcal_per_mol": -6.09,
@@ -380,17 +379,140 @@ def test_the_water_moves_of_a_leg_are_those_of_its_result_or_else_of_its_samples
     assert water_moves_of_leg({"water_moves": _moves(mu=-5.0), "gcmc": {}}, tmp_path) == _moves(mu=-5.0)
     assert water_moves_of_leg({"delta_g": 1.0}, tmp_path) == NO_MOVES            # a version before the moves
     assert water_moves_of_leg({"gcmc": None}, tmp_path) == NO_MOVES
-    assert water_moves_of_leg({"gcmc": {"insertions_accepted": [1]}}, tmp_path) is None   # no samples to ask
+    made = water_moves_of_leg({"gcmc": {"insertions_accepted": [1]}}, tmp_path)   # no samples to ask
+    assert made == {"enabled": True} and not water_values_recorded(made) and water_values_recorded(NO_MOVES)
+    assert water_moves_differ(made, NO_MOVES) and not water_moves_differ(made, _moves())
+    assert water_moves_differ(_moves(), _moves(mu=-5.0)) and not water_moves_differ(_moves(), _moves())
     import cufep.sampling.storage as storage
 
     monkeypatch.setattr(storage, "stored_conditions", lambda directory: (10, {"settings": {"gcmc": record}}))
     assert water_moves_of_leg({"gcmc": {"insertions_accepted": [1]}}, tmp_path) == _moves()
-    monkeypatch.undo()
-    _write_legs(tmp_path, "a~b", 0, _with_moves(-12.0, None) | {"gcmc": {"insertions_accepted": [1]}},
-                _with_moves(-10.5, NO_MOVES))
-    summary = combine_network(tmp_path, ["a", "b"], [("a", "b")], 1, {"a": -9.0})
-    assert summary["dg"] is not None and summary["edges"][0]["conditions"]["water_moves"] is None
-    assert summary["notes"] == ["grand canonical moves of water in the complex leg: not recorded for a~b (results "
-                                "of an earlier version whose samples are not there); they are combined without that "
-                                "comparison"]
-    assert run_module.WATER_MOVES == "grand canonical moves of water in the complex leg"
+
+
+def test_a_leg_known_to_have_made_the_moves_is_not_combined_with_one_without_them(tmp_path):
+    """Second review of PR #21 (P1): a result of an earlier version with the counts of the moves, whose samples
+    are not in the directory, was made with them for certain; it was "not recorded", left out of the comparison,
+    and went into one network with an edge whose complex leg made none. Whether the moves were made is compared
+    for every edge; the values of the water where they are recorded. An edge with repeats that record them and
+    repeats that do not keeps the latter named, with the values of the former."""
+    from cufep.rbfe.run import combine_network, result_lines
+
+    counts_only = _with_moves(-8.0, None) | {"gcmc": {"insertions_accepted": [1]}}
+    _write_legs(tmp_path, "a~b", 0, counts_only, _with_moves(-9.0, NO_MOVES))
+    _write_legs(tmp_path, "b~c", 0, _with_moves(-12.0, NO_MOVES), _with_moves(-10.5, NO_MOVES))
+    summary = combine_network(tmp_path, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {"a": -9.0})
+    assert summary["dg"] is None
+    assert summary["inconsistent_edges"] == ["grand canonical moves of water in the complex leg: a~b made, the "
+                                             "values of the water not recorded, b~c none"]
+    # with an edge that made the moves too: one network, and the note of what was not compared
+    known = tmp_path / "known"
+    _write_legs(known, "a~b", 0, counts_only, _with_moves(-9.0, NO_MOVES))
+    _write_legs(known, "b~c", 0, _with_moves(-12.0, _moves()), _with_moves(-10.5, NO_MOVES))
+    summary = combine_network(known, ["a", "b", "c"], [("a", "b"), ("b", "c")], 1, {"a": -9.0})
+    assert summary["dg"] is not None and "inconsistent_edges" not in summary
+    assert summary["edges"][0]["conditions"]["water_moves"] == {"enabled": True}
+    assert summary["edges"][0]["water_values_not_recorded"] == [0]
+    assert summary["edges"][1]["water_values_not_recorded"] == []
+    note = ("grand canonical moves of water in the complex leg: made, and the excess chemical potential and the "
+            "standard volume of the water not recorded, for a~b (repeat 0) (results of an earlier version whose "
+            "samples are not there); those values were not compared for them")
+    assert summary["notes"] == [note] and f"note: {note}" in result_lines(summary)
+    # repeats of one edge: one records the values, one does not
+    mixed = tmp_path / "mixed"
+    _write_legs(mixed, "a~b", 0, _with_moves(-8.0, _moves()), _with_moves(-9.0, NO_MOVES))
+    _write_legs(mixed, "a~b", 1, counts_only, _with_moves(-9.0, NO_MOVES))
+    _write_legs(mixed, "b~c", 0, _with_moves(-12.0, _moves(mu=-5.0)), _with_moves(-10.5, NO_MOVES))
+    summary = combine_network(mixed, ["a", "b", "c"], [("a", "b"), ("b", "c")], 2, {})
+    edge = summary["edges"][0]
+    assert edge["ddg"] == pytest.approx(1.0) and edge["conditions"]["water_moves"] == _moves()
+    assert edge["water_values_not_recorded"] == [1]                       # still named
+    assert summary["dg"] is None and "a~b excess chemical potential -6.09" in summary["inconsistent_edges"][0]
+    assert any("for a~b (repeat 1)" in item for item in summary["notes"])
+    # a repeat that made the moves and one that made none: no ddG
+    opposite = tmp_path / "opposite"
+    _write_legs(opposite, "a~b", 0, counts_only, _with_moves(-9.0, NO_MOVES))
+    _write_legs(opposite, "a~b", 1, _with_moves(-8.0, NO_MOVES), _with_moves(-9.0, NO_MOVES))
+    edge = combine_network(opposite, ["a", "b"], [("a", "b")], 2, {})["edges"][0]
+    assert "ddg" not in edge and edge["inconsistent_legs"] == [
+        "grand canonical moves of water in the complex leg: repeat 0 made, the values of the water not recorded, "
+        "repeat 1 none"]
+
+
+def _run_directory(tmp_path, edges: dict) -> None:
+    """The record of a run (configuration, network) around legs written by ``_write_legs``."""
+    import json
+
+    import yaml
+
+    names = sorted({name for edge in edges for name in edge.split("~")})
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "resolved_config.yaml").write_text(yaml.safe_dump({"sampling": {"repeats": 1}}))
+    (tmp_path / "network.json").write_text(json.dumps({"ligands": names, "edges": [edge.split("~") for edge in edges],
+                                                       "experiment_kcal_mol": {}}))
+    for edge, (complex_dg, solvent_dg) in edges.items():
+        _write_legs(tmp_path, edge, 0, _with_moves(complex_dg, _moves()), _with_moves(solvent_dg, NO_MOVES))
+
+
+def test_the_results_of_a_run_are_made_again_only_from_legs_it_has_and_under_its_lock(tmp_path):
+    """Second review of PR #21 (P2, twice): `cufep rbfe analyze --write` on a copy of the results without the
+    directories of the edges (benchmarks/results/tyk2_rbfe) found no leg, and replaced the ddG of 22 edges and the
+    dG of 16 compounds by nothing; and it wrote without the lock of the directory, so that a summary read while a
+    leg was running could replace the one the run wrote when the leg had finished. With the legs, the tables are
+    made again, with what this version records of an edge."""
+    import json
+    import shutil
+
+    from cufep.rbfe.run import rewrite_results
+    from cufep.run import lock_output_directory
+    from cufep.workflow import WorkflowError
+
+    run = tmp_path / "run"
+    _run_directory(run, {"a~b": (-12.0, -10.5), "b~c": (-8.0, -9.0)})
+    summary = rewrite_results(run)
+    assert [e["ddg"] for e in summary["edges"]] == pytest.approx([-1.5, 1.0])
+    written = json.loads((run / "summary.json").read_text())
+    assert written["edges"][0]["conditions"]["water_moves"] == _moves() and (run / "edges.csv").exists()
+    # the lock of the directory: a run that holds it is not written over
+    held = lock_output_directory(run)
+    before = (run / "summary.json").read_bytes()
+    with pytest.raises(WorkflowError, match="another cufep run is using the output directory"):
+        rewrite_results(run)
+    held.close()
+    assert (run / "summary.json").read_bytes() == before
+    # a copy of the results without the legs
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    for name in ("summary.json", "edges.csv", "ligands.csv", "network.json", "resolved_config.yaml"):
+        shutil.copy(run / name, copy / name)
+    before = {path.name: path.read_bytes() for path in copy.iterdir()}
+    with pytest.raises(WorkflowError, match="holds the ddG of 2 edge\\(s\\) whose legs are not in the directory "
+                                           "\\(a~b, b~c\\).*Nothing was written.*cufep benchmark report"):
+        rewrite_results(copy)
+    assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == before
+    # one edge whose legs are gone, among edges that have theirs
+    shutil.rmtree(run / "edges" / "b~c")
+    with pytest.raises(WorkflowError, match="holds the ddG of 1 edge\\(s\\) whose legs are not in the directory "
+                                           "\\(b~c\\)"):
+        rewrite_results(run)
+    assert (run / "summary.json").read_bytes() == before["summary.json"]
+
+
+def test_analyze_write_refuses_the_recorded_results_which_have_no_legs(tmp_path):
+    """The reviewer's command: `cufep rbfe analyze benchmarks/results/tyk2_rbfe --write` (on a copy) is refused
+    and leaves every file as it was; without --write the directory is read and nothing is written."""
+    import shutil
+
+    from click.testing import CliRunner
+
+    from cufep import cli
+    from cufep.benchmarks.runner import data_root
+
+    copy = tmp_path / "tyk2_rbfe"
+    shutil.copytree(data_root() / "benchmarks" / "results" / "tyk2_rbfe", copy)
+    before = {path.name: path.read_bytes() for path in copy.iterdir()}
+    result = CliRunner().invoke(cli.main, ["rbfe", "analyze", str(copy), "--write"])
+    assert result.exit_code != 0 and "holds the ddG of 22 edge(s) whose legs are not in the directory" in result.output
+    assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == before
+    result = CliRunner().invoke(cli.main, ["rbfe", "analyze", str(copy)])
+    assert result.exit_code == 0
+    assert {path.name: path.read_bytes() for path in copy.iterdir() if path.name != ".cufep.lock"} == before
