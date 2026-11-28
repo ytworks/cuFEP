@@ -106,6 +106,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.2400000000000002
   },
   {
@@ -196,6 +197,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 2.119999999999999
   },
   {
@@ -296,6 +298,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.02000000000000135
   },
   {
@@ -386,6 +389,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -1.7700000000000014
   },
   {
@@ -483,6 +487,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 0.5399999999999991
   },
   {
@@ -583,6 +588,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.75
   },
   {
@@ -677,6 +683,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -1.5199999999999996
   },
   {
@@ -767,6 +774,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.8399999999999999
   },
   {
@@ -857,6 +865,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 0.16000000000000014
   },
   {
@@ -949,6 +958,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 0.7199999999999989
   },
   {
@@ -1041,6 +1051,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -1.7899999999999991
   },
   {
@@ -1139,6 +1150,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -1.2300000000000004
   },
   {
@@ -1233,6 +1245,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.7999999999999989
   },
   {
@@ -1323,6 +1336,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.019999999999999574
   },
   {
@@ -1417,6 +1431,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.23000000000000043
   },
   {
@@ -1507,6 +1522,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -1.3199999999999985
   },
   {
@@ -1597,6 +1613,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 2.16
   },
   {
@@ -1687,6 +1704,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 0.41999999999999993
   },
   {
@@ -1777,6 +1795,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 0.7199999999999989
   },
   {
@@ -1867,6 +1886,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.030000000000001137
   },
   {
@@ -1957,6 +1977,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": 0.040000000000000924
   },
   {
@@ -2047,6 +2068,7 @@
      "standard_volume_nm3": 0.030345
     }
    },
+   "water_values_not_recorded": [],
    "exp_ddg": -0.370000000000001
   }
  ],
