@@ -251,3 +251,15 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
     summary は「読めない」として表との照合に回る(反復番号が "0" だと検査が黙って外れていた)。テキストでない表は記録なし。
   - `water_moves_lost` は、今の結果が「GCMC あり・値不明」のときだけを「記録が無くなった」と数える(GCMC なしでやり直した
     脚は別の結果で、脚どうしの照合が拾う)。
+- 2026-11-28 オーナーの決定(「ベンチマークを流し直す作業」への回答): 両セットを最終コミットのイメージ(cufep:957a9cf)で流し直す。
+  記録済みの 2 つの実行(faa65e0・cd15025)は、挿入した水の速度の修正(c2f6903)より前のコードで計算したものだった。今回は
+  GPU 6 枚まで(オーナーの指示)。TYK2 は GPU 0〜2 で 06:03 UTC 開始、A2A は GPU 3〜5 で 06:18 開始(TYK2 の終了後に GPU 0〜5 で
+  チェックポイントから再開)。
+- 2026-11-28 TYK2 full の流し直し(image cufep:957a9cf、`runs/rbfe_bench_tyk2_957a9cf`、`benchmarks/results/tyk2_rbfe/`): exit 0、
+  22/22 辺、16/16 化合物。dG(各手法を 16 化合物の上で中心合わせ): RMSE 0.72 [0.42, 0.89]、MUE 0.58 [0.33, 0.81]、
+  pairwise RMSE 1.04、R² 0.72、Kendall τ 0.65(FEP+ 0.47 / 0.37 / 0.69 / 0.86 / 0.81、OpenFE 0.59 / 0.48 / 0.86 / 0.80 / 0.68)。
+  辺の RMSE: 22 辺 0.89 [0.61, 1.15](OpenFE 0.61)、公開 map と共通の 11 辺 0.97(FEP+ Bennett 0.58)。NOT RELIABLE の脚なし
+  (最小の重なり 0.042、ejm_47~ejm_50)。独立サンプル 50 未満: ejm_42~ejm_54(complex 42、solvent 32)、jmc_30~ejm_46(complex 49)。
+  標準 OpenMM の辺は 5 つ(ejm_31~ejm_45、ejm_42~ejm_54、ejm_43~ejm_42、ejm_50~ejm_42、ejm_50~ejm_55)。全辺が速度の規則
+  「turned with it」を記録し、注記なし。修正前の実行(faa65e0)との差(新 − 旧、辺の ΔΔG): 平均 +0.16、RMS 0.44、最大 1.08
+  (ejm_31→ejm_45)。どちらも 1 回の計算で、差には実行ごとのばらつきが入っている(速度の修正だけの効果とは分けられない)。

@@ -94,7 +94,7 @@ resources:
   oversubscription_factor: auto
   cpu_threads_per_worker: 2
 output:
-  dir: runs/rbfe_bench_tyk2_faa65e0
+  dir: runs/rbfe_bench_tyk2_957a9cf
 system:
   protein: /opt/cufep/benchmarks/tyk2/inputs/tyk2_protein.pdb
   ligands: /opt/cufep/benchmarks/tyk2/ligands.sdf
