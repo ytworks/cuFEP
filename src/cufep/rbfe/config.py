@@ -21,6 +21,7 @@ from cufep.config.schema import (
     AnalysisConfig,
     CommonConfig,
     GcmcConfig,
+    LegLengths,
     OutputConfig,
     PrecalculationLengths,
     SamplingConfig,
@@ -126,11 +127,33 @@ class HybridAdaptiveConfig(_Section):
         return float(_of_leg(self.equilibration_ps, leg))
 
 
+class LegWindows(_Section):
+    """The lambda windows of each leg: a number of evenly spaced windows or the lambda values."""
+
+    complex: int | list[float]
+    solvent: int | list[float]
+
+    @field_validator("complex", "solvent")
+    @classmethod
+    def _windows(cls, v):
+        from cufep.config.schema import _check_stage
+
+        return _check_stage(v)
+
+
 class HybridLambdaSchedule(_Section):
     #: adaptive: adaptive lambda scheduling; fixed: the windows below
     mode: Literal["adaptive", "fixed"] = "adaptive"
-    #: fixed mode: a number of evenly spaced windows (OpenFE's 11) or the lambda values
-    windows: int | list[float] = 11
+    #: fixed mode: a number of evenly spaced windows (OpenFE's 11) or the lambda values, for both legs or
+    #: {complex: ..., solvent: ...}
+    windows: int | list[float] | LegWindows = 11
+    #: fixed mode: what the replicas of the given windows start from. pre_equilibration: the end of the
+    #: pre-equilibration, minimised in each window, and 10 ps of MD in it. precalculation: what the windows of the
+    #: first iteration of adaptive lambda scheduling start from (a walk through the windows with
+    #: ``adaptive.walk_ps`` in each, then in each window the MD of a window of the precalculation,
+    #: ``adaptive.equilibration_ps`` and ``adaptive.window_ps``), so that given windows and windows that the
+    #: precalculation chose differ in their lambda values alone
+    start_configurations: Literal["pre_equilibration", "precalculation"] = "pre_equilibration"
     adaptive: HybridAdaptiveConfig = Field(default_factory=HybridAdaptiveConfig)
 
     def precalculated_legs(self) -> list[str]:
@@ -139,12 +162,16 @@ class HybridLambdaSchedule(_Section):
             return []
         return ["complex", "solvent"] if self.adaptive.legs == "each" else ["solvent"]
 
+    def windows_of(self, leg: str) -> int | list[float]:
+        """The windows of ``leg`` in fixed mode."""
+        return getattr(self.windows, leg) if isinstance(self.windows, LegWindows) else self.windows
+
     @field_validator("windows")
     @classmethod
     def _windows(cls, v):
         from cufep.config.schema import _check_stage
 
-        return _check_stage(v)
+        return v if isinstance(v, LegWindows) else _check_stage(v)
 
 
 def initial_window_problems(schedule: HybridLambdaSchedule) -> list[str]:
@@ -177,8 +204,9 @@ class RbfeGcmcConfig(GcmcConfig):
 
 
 class RbfeSampling(SamplingConfig):
-    #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol
-    production_ns: float = 5.0
+    #: per lambda window, used for the estimate: 5 ns, the default of OpenFE's relative protocol; one number or
+    #: {complex: ..., solvent: ...}
+    production_ns: float | LegLengths = 5.0
     gcmc: RbfeGcmcConfig = Field(default_factory=RbfeGcmcConfig)
 
     @model_validator(mode="after")
@@ -189,6 +217,12 @@ class RbfeSampling(SamplingConfig):
         if not isinstance(self.equilibration_ns, (int, float)):
             raise ValueError("sampling.equilibration_ns is one value for both legs")
         return self
+
+    def production_text(self) -> str:
+        """The production per lambda window (ns) as a run says it: one length, or that of each leg."""
+        if isinstance(self.production_ns, LegLengths):
+            return f"{self.production('complex'):g} (complex leg) and {self.production('solvent'):g} (solvent leg)"
+        return f"{float(self.production_ns):g}"
 
 
 class RbfeAnalysis(AnalysisConfig):

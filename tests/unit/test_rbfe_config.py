@@ -119,3 +119,27 @@ def test_a_relative_run_makes_grand_canonical_moves_of_water_in_the_complex_leg_
     some = RbfeConfig.model_validate(_minimal(sampling={"gcmc": {"attempts": 5000}}))
     assert gcmc_in(some, "complex") and some.sampling.gcmc.attempts == 5000
 
+
+
+def test_the_windows_and_the_production_of_a_relative_run_are_given_for_both_legs_or_for_each():
+    """``lambda_schedule.windows`` and ``sampling.production_ns``: one value for both legs, or one for each
+    (``{complex: ..., solvent: ...}``); the windows of a leg are a number or lambda values from 0 to 1."""
+    both = RbfeConfig.model_validate(_minimal())
+    assert both.lambda_schedule.windows_of("complex") == both.lambda_schedule.windows_of("solvent") == 11
+    assert both.lambda_schedule.start_configurations == "pre_equilibration"
+    assert both.sampling.production("complex") == both.sampling.production("solvent") == 5.0
+    assert both.sampling.production_text() == "5"
+    each = RbfeConfig.model_validate(_minimal(
+        lambda_schedule={"mode": "fixed", "start_configurations": "precalculation",
+                         "windows": {"complex": [0.0, 0.25, 0.5, 1.0], "solvent": 9}},
+        sampling={"production_ns": {"complex": 4.5, "solvent": 6.0}}))
+    assert each.lambda_schedule.windows_of("complex") == [0.0, 0.25, 0.5, 1.0]
+    assert each.lambda_schedule.windows_of("solvent") == 9
+    assert (each.sampling.production("complex"), each.sampling.production("solvent")) == (4.5, 6.0)
+    assert each.sampling.production_text() == "4.5 (complex leg) and 6 (solvent leg)"
+    for windows, message in (({"complex": [0.0, 0.5], "solvent": 9}, "from 0.0"), ({"complex": 1, "solvent": 9}, "two"),
+                             ({"complex": 9}, "solvent")):
+        with pytest.raises(ValueError, match=message):
+            RbfeConfig.model_validate(_minimal(lambda_schedule={"windows": windows}))
+    with pytest.raises(ValueError, match="start_configurations"):
+        RbfeConfig.model_validate(_minimal(lambda_schedule={"start_configurations": "walk"}))

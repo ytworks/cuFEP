@@ -42,6 +42,9 @@ WAIT_SECONDS = 20.0
 PRE_EQUILIBRATION_START = "the end of the pre-equilibration, minimised in each window"
 MINIMIZE_STEPS = 5000
 START_MD_PS = 10.0
+#: and with lambda_schedule.start_configurations: precalculation, as a precalculation of adaptive lambda scheduling
+#: starts the windows of its first iteration (cufep.alchemy.schedule.precalculation_starts)
+PRECALCULATION_START = "walk, then the MD of a window of a precalculation"
 #: how the result of a leg tells the user to run it again
 RBFE_COMMAND = "cufep rbfe run CONFIG --edge NAME"
 
@@ -301,7 +304,7 @@ def check_leg_reuse(rcfg, edge_dir: Path, leg: str, repeat: int) -> None:
     built = build_leg(rcfg, Path(edge_dir), leg)
     gcmc = hybrid_gcmc(rcfg, built, leg, quiet)
     plan = planned_iterations(rcfg.sampling.time_per_iteration_ps, timestep_fs, rcfg.sampling.equilibration(leg),
-                              rcfg.sampling.production_ns)
+                              rcfg.sampling.production(leg))
     # the samples of a leg stay on the backend they were made with; a leg without samples runs on the one this
     # run chooses for its System (cufep.engine.leg.chosen_backend)
     backend = (str(conditions.get("backend") or rcfg.backend.name) if n_stored else
@@ -349,7 +352,7 @@ def _schedule_from_solvent(rcfg, edge_dir: Path, repeat: int, log, control=None)
 
 def run_hybrid_leg(job: EdgeLegJob) -> dict:
     """Run (or resume, or extend) one leg of an edge and return its result."""
-    from cufep.alchemy.schedule import AlsSettings, schedule_from_windows
+    from cufep.alchemy.schedule import AlsSettings, precalculation_md_ps, schedule_from_windows
     from cufep.engine.leg import (
         adaptive_windows,
         check_kept_windows,
@@ -362,6 +365,7 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         pre_equilibrated,
         record_of_kept_windows,
         refuse_samples_without_windows,
+        starts_as_a_precalculation,
         starts_from,
         with_fallback,
     )
@@ -421,6 +425,10 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                                **more)
 
 
+    #: how windows that the leg does not choose itself start by default (lambda_schedule.start_configurations)
+    starting = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
+                "minimize_steps": MINIMIZE_STEPS, "start_backend": "openmm"}
+
     def from_pre_equilibration(schedule) -> list:
         """The start of every window that the leg does not choose itself: the end of the pre-equilibration,
         minimised in the state of the window (OpenFE's minimisation, ``MINIMIZE_STEPS``) and ``START_MD_PS`` of MD
@@ -433,6 +441,31 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         the samples are of the backend of the leg."""
         return starts_from(run, spec_of(ends, "openmm", seed=seed + 29), schedule, start, hybrid.system, n_atoms,
                            MINIMIZE_STEPS, START_MD_PS)
+
+    def als_of_leg() -> AlsSettings:
+        """The settings of a precalculation of this leg (``lambda_schedule.adaptive``)."""
+        a = rcfg.lambda_schedule.adaptive
+        return AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
+                           candidates=a.candidates, initial_windows={"morph": a.initial_windows},
+                           window_ps=a.window(job.leg), equilibration_ps=a.equilibration(job.leg),
+                           sample_interval_ps=a.sample_interval_ps, start_configurations=a.start_configurations,
+                           walk_ps=a.walk_ps, max_windows=a.max_windows, rest2_scale=float(rest2_scale))
+
+    def starts_of_given_windows(schedule, backend: str) -> tuple[list, dict]:
+        """The start configurations of windows that the leg does not choose itself, and how they were made
+        (``lambda_schedule.start_configurations``): from the end of the pre-equilibration
+        (:func:`from_pre_equilibration`), or as a precalculation of adaptive lambda scheduling starts the windows
+        of its first iteration (:func:`cufep.engine.leg.starts_as_a_precalculation`: on the backend of the leg,
+        without a minimisation, as the precalculation), so that such windows and windows the precalculation chose
+        differ in their lambda values alone."""
+        if rcfg.lambda_schedule.start_configurations == "pre_equilibration":
+            return from_pre_equilibration(schedule), dict(starting)
+        als = als_of_leg()
+        pool_spec = spec_of(ends, backend, seed=seed + 23)
+        ctx, integ = leg_context(pool_spec, hybrid.system, start[1], start[0], start[2], run.device0, seed)
+        cfgs = starts_as_a_precalculation(run, pool_spec, ctx, integ, schedule, als, n_atoms)
+        del ctx, integ
+        return cfgs, {"start_configurations": PRECALCULATION_START, **precalculation_md_ps(als, timestep_fs)}
 
     def check_scale(schedule) -> None:
         if abs(schedule.rest2_scale - rest2_scale) > 1e-9:
@@ -449,8 +482,6 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
         else:
             t0 = time.perf_counter()
             a = ls.adaptive
-            starting = {"start_configurations": PRE_EQUILIBRATION_START, "start_md_ps": START_MD_PS,
-                        "minimize_steps": MINIMIZE_STEPS, "start_backend": "openmm"}
             if (leg_dir / "schedule.yaml").exists():
                 # the windows this leg has, without start configurations of them (none, or of other windows): its
                 # samples are of these windows, so they are kept and only their start configurations are made
@@ -463,30 +494,26 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                 check_kept_windows(leg_dir, schedule, production.conditions())
                 record_of_kept_windows(leg_dir, schedule, settings, log)   # the settings the windows were chosen with
                 log(f"lambda schedule ({schedule.mode}): the {len(schedule.states)} windows this leg has, without "
-                    "the start configurations of them; they are made again for these windows (the settings of "
-                    "lambda_schedule are not applied to them; cufep rbfe run --reschedule determines the windows "
+                    "the start configurations of them; they are made again for these windows (the windows are "
+                    "kept whatever lambda_schedule asks now; cufep rbfe run --reschedule determines the windows "
                     "again)")
-                cfgs = from_pre_equilibration(schedule)
+                cfgs, made = starts_of_given_windows(schedule, backend)
                 # samples taken up as they were made keep their start (unknown without a record of these windows),
                 # and how the file was made now is said apart; samples started anew start from these (reviews of
                 # PR #18)
-                how = kept_start_record(leg_dir, schedule, settings, {**starting, "windows": "those this leg had"},
+                how = kept_start_record(leg_dir, schedule, settings, {**made, "windows": "those this leg had"},
                                         log)
             elif goes_on_from_its_samples(leg_dir):
                 refuse_samples_without_windows(leg_dir)
             elif ls.mode == "fixed":
-                values = ls.windows
+                values = ls.windows_of(job.leg)
                 schedule = schedule_from_windows(STAGES, {"morph": values},
                                                  {"morph": values if isinstance(values, int) else len(values)},
                                                  rest2_scale)
-                cfgs = from_pre_equilibration(schedule)
-                how = {**starting, "windows": "given"}
+                cfgs, made = starts_of_given_windows(schedule, backend)
+                how = {**made, "windows": "given"}
             elif a.legs == "each" or job.leg == "solvent":
-                als = AlsSettings(overlap_threshold=a.overlap_threshold, overlap_matrix=a.overlap_matrix,
-                                  candidates=a.candidates, initial_windows={"morph": a.initial_windows},
-                                  window_ps=a.window(job.leg), equilibration_ps=a.equilibration(job.leg),
-                                  sample_interval_ps=a.sample_interval_ps, start_configurations=a.start_configurations,
-                                  walk_ps=a.walk_ps, max_windows=a.max_windows, rest2_scale=float(rest2_scale))
+                als = als_of_leg()
                 pool_spec = spec_of(ends, backend, seed=seed + 23)
                 # the Context of this process, which walks through the windows of the first iteration
                 ctx, integ = leg_context(pool_spec, hybrid.system, start[1], start[0], start[2], run.device0, seed)
@@ -497,8 +524,8 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
                        "windows": "chosen by this precalculation"}
             else:
                 schedule = _schedule_from_solvent(rcfg, edge_dir, job.repeat, log, job.control)
-                cfgs = from_pre_equilibration(schedule)
-                how = {**starting, "windows": "those of the solvent leg"}
+                cfgs, made = starts_of_given_windows(schedule, backend)
+                how = {**made, "windows": "those of the solvent leg"}
             record = {**how, "settings": settings, "states": [s.to_dict() for s in schedule.states]}
             configs = publish_windows(leg_dir, schedule, cfgs, record, leg=job.leg, edge=job.edge,
                                       repeat=job.repeat, seed=seed, backend=backend)
@@ -535,6 +562,46 @@ def run_hybrid_leg(job: EdgeLegJob) -> dict:
     return result
 
 
+def md_of_leg(leg_dir: Path, schedule, samples: dict) -> dict:
+    """The MD of a leg after its pre-equilibration, as its files record it, in ps (numbers, no verdict): the lambda
+    windows (what the record of the start configurations says made them: the precalculation that chose the windows,
+    with its walk, or the start of given windows), the replica exchange (every window, equilibration and
+    production, as stored) and their sum. A part that the files do not record is None, and so is the sum then.
+    With it a calculation with given windows can be given the MD of one whose precalculation chose them
+    (``sampling.production_ns`` of each leg); nothing is derived from it."""
+    from cufep.workflow import start_record_of
+
+    def recorded(read):
+        try:
+            return read()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    def windows():
+        file = Path(leg_dir) / "start_configs.npz"
+        made = start_record_of(file) if file.exists() else {}
+        n = len(schedule.states)
+        if made.get("windows") == "chosen by this precalculation":
+            p = schedule.provenance
+            first = sum(int(v) for v in p["initial_windows"].values()) - (len(p["initial_windows"]) - 1)
+            walk = first * float(p["walk_ps"]) if p.get("start_configurations") == "walk" else 0.0
+            return float(walk + int(p["windows_simulated"]) * (float(p["window_ps_integrated"])
+                                                               + float(p["equilibration_ps_integrated"])))
+        if "window_md_ps" in made:
+            return float(n * (float(made["walk_ps"]) + float(made["window_md_ps"])))
+        if "start_md_ps" in made:
+            return float(n * float(made["start_md_ps"]))
+        return None
+
+    def replica_exchange():
+        u = samples["u"]
+        return float(u.shape[0] * u.shape[1] * float(samples["attrs"]["iteration_ps"]))
+
+    parts = {"lambda_windows": recorded(windows), "replica_exchange": recorded(replica_exchange)}
+    known = all(v is not None for v in parts.values())
+    return {**parts, "total": float(sum(parts.values())) if known else None}
+
+
 def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLeg | None = None, samples=None,
                       schedule=None) -> dict:
     """The result of a leg of an edge: the analysis of its samples (:func:`cufep.engine.leg.path_result`), whose
@@ -550,6 +617,12 @@ def hybrid_leg_result(leg_dir: Path, analysis, run_record: dict, built: HybridLe
     # and what the samples were made with: whether the leg made the moves, and with which chemical potential and
     # standard volume of water. The complex legs of one network must agree in it (cufep.rbfe.run)
     result["water_moves"] = water_moves_of(of["attrs"].get("conditions"))
+    # the MD of the leg after its pre-equilibration, as its files record it (None: not recorded)
+    if schedule is None and (leg_dir / "schedule.yaml").exists():
+        from cufep.alchemy.schedule import Schedule
+
+        schedule = Schedule.load(leg_dir / "schedule.yaml")
+    result["md_ps"] = md_of_leg(leg_dir, schedule, of["samples"])
     if built is not None:
         h = built.hybrid
         result["hybrid"] = {"ligand_a": built.info["ligand_a"], "ligand_b": built.info["ligand_b"],

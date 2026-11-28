@@ -125,11 +125,22 @@ solvent leg (the paper's), 500 ps after 500 ps in the complex leg (the values of
 iteration at the same time on the GPUs of the leg. The paper decides the windows of both legs from the ligand
 in solution (`legs: solvent`); in the TYK2 example that left a pair of windows of a complex leg at an overlap of
 0.013. `mode: fixed` uses the windows of `windows` (11 evenly spaced, OpenFE's
-number). Windows that a leg does not choose itself all start from the end of its pre-equilibration, minimised
+number; a number or the lambda values, for both legs or `{complex: ..., solvent: ...}`). Windows that a leg does
+not choose itself all start from the end of its pre-equilibration, minimised
 in their own state (OpenFE minimises every replica, 5000 steps) and 10 ps of MD in it, all at the same time on
 the GPUs of the leg; the equilibration of the replica exchange then relaxes them further. (At lambda 0 the atoms
 unique to B do not interact, so water can move where they are; a window in which they interact must not start
 from that without a minimisation: cuFEP's first version did, and those windows went to NaN.)
+
+With `lambda_schedule.start_configurations: precalculation` such windows start as a precalculation of adaptive
+lambda scheduling starts the windows of its first iteration instead: a walk through the windows in order from the
+end of the pre-equilibration (`adaptive.walk_ps` in each), then in each window the MD of a window of the
+precalculation (`adaptive.equilibration_ps` and `adaptive.window_ps`), on the backend of the leg and with its water
+moves, without a minimisation and without recording energies. Given windows and windows that a precalculation
+chose then differ in their lambda values alone, which is what a comparison of the two needs (cuFEP's own; a unit
+test holds the two starts equal to the bit). The result of a leg gives its MD after the pre-equilibration in ps
+(`md_ps`: what made its windows, and its replica exchange), so that a leg with given windows can be given the MD
+of one whose precalculation chose them, with `sampling.production_ns` (one number, or one for each leg).
 
 ### Sampling
 
@@ -252,6 +263,7 @@ alchemy:
 lambda_schedule:
   mode: adaptive
   windows: 11
+  start_configurations: pre_equilibration
   adaptive:
     overlap_threshold: 0.04
     overlap_matrix: stage
@@ -297,6 +309,7 @@ output:
 | `lambda_schedule.adaptive.legs` | each | the owner's choice of 2026-11-25: the paper's (`solvent`, the windows of the ligand in solution for both legs) left a pair of windows of the ejm_31 -> ejm_49 complex leg of TYK2 at an overlap of 0.013 (where a precalculation of the solvent leg of another run had added a window); each leg its own precalculation, as the ABFE |
 | `lambda_schedule.adaptive.window_ps`, `equilibration_ps` | solvent 50 ps and 0; complex 500 ps after 500 ps | the solvent leg: the paper's; the complex leg: the values of the ABFE, measured on TYK2 (`docs/protocol.md`, "What was measured on TYK2") |
 | `lambda_schedule.windows` | 11 | OpenFE's relative protocol (`lambda_windows`) |
+| `lambda_schedule.start_configurations` | pre_equilibration | windows a leg does not choose start from the end of its pre-equilibration, minimised in their own state, as OpenFE minimises every replica; `precalculation` (the start of the windows of the first iteration of adaptive lambda scheduling, Midgley et al. 2025, for given windows) is cuFEP's own, for comparisons of given windows with chosen ones |
 | `sampling.production_ns`, `equilibration_ns` | 5 ns, 1 ns per window | OpenFE's relative protocol |
 | `sampling.gcmc.enabled` | true (the complex leg) | the owner's decision of 2026-11-28; the moves and their other settings are those of the ABFE, with their basis (`docs/configuration.md`), where they are off by default |
 | `sampling.rest2` | the ABFE's: 1.5 in the middle of a leg, the ligand and the pocket | REST2 (Wang, Friesner and Berne 2011) for relative binding free energies: Wang, Berne and Friesner, PNAS 2012, 109, 1937; the scale and the region are those of the ABFE (`docs/configuration.md`) |

@@ -370,7 +370,7 @@ def rbfe_plan(config: str) -> None:
                                                  if ls.mode == "adaptive" else f", {ls.windows}"))
     exp = experiment_of(rcfg, ligands)
     click.echo(f"per window {rcfg.sampling.equilibration('complex'):g} ns equilibration and "
-               f"{rcfg.sampling.production_ns:g} ns production; dG of every ligand from the edges, relative to the "
+               f"{rcfg.sampling.production_text()} ns production; dG of every ligand from the edges, relative to the "
                + ("mean of the experimental values of " + ", ".join(exp) if exp else "mean of the network"))
 
 

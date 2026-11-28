@@ -1234,3 +1234,98 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
     with pytest.raises(WorkflowError, match="prep/prep.json cannot be read"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     prepared.write_text(whole)
+
+
+def test_given_windows_start_as_a_precalculation_starts_them_and_the_md_of_a_leg_is_counted(tmp_path, monkeypatch,
+                                                                                         deterministic_cpu):
+    """Item 1 of the plan of 2026-11-28 (issue #27). ``lambda_schedule.start_configurations: precalculation``: the
+    windows a leg is given (here its own, ``windows: {complex: ..., solvent: ...}``) are started as a precalculation
+    of adaptive lambda scheduling starts the windows of its first iteration, and the record of the start
+    configurations and the result say so; by default they start from the end of the pre-equilibration. The MD of a
+    leg after its pre-equilibration is in its result (``md_ps``: what made its windows, and its replica exchange),
+    for a leg with given windows and for one whose precalculation chose them."""
+    from cufep.rbfe import leg as leg_module
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.leg import PRE_EQUILIBRATION_START, PRECALCULATION_START, EdgeLegJob, run_hybrid_leg_safe
+    from cufep.rbfe.prep import prepare_edge
+    from cufep.workflow import start_record_of
+
+    monkeypatch.setattr(leg_module, "MINIMIZE_STEPS", 100)
+    monkeypatch.setattr(leg_module, "START_MD_PS", 0.2)
+    given = {"mode": "fixed", "windows": {"complex": 4, "solvent": [0.0, 0.3, 1.0]}}
+    results, records = {}, {}
+    for name, more in (("precalculation", {**given, "start_configurations": "precalculation"}), ("default", given),
+                       ("adaptive", {})):
+        out_dir = tmp_path / name
+        ligands = _ligands(tmp_path, out_dir)
+        data = _config(tmp_path, out_dir, "adaptive").model_dump(mode="json")
+        rcfg = RbfeConfig.model_validate({**data, "lambda_schedule": {**data["lambda_schedule"], **more}})
+        edge_dir = out_dir / "edges" / "toluene~phenol"
+        prepare_edge(rcfg, ligands[0], ligands[1], _protein(), edge_dir, "cube", print)
+        results[name] = run_hybrid_leg_safe(EdgeLegJob(
+            edge="toluene~phenol", leg="solvent", repeat=0, edge_dir=str(edge_dir), devices=[None],
+            config=rcfg.model_dump(mode="json"), production_ns=rcfg.sampling.production("solvent"), inline=True))
+        assert "error" not in results[name], results[name]
+        records[name] = start_record_of(edge_dir / "repeat_0" / "solvent" / "start_configs.npz")
+
+    # the windows of the leg, and how their replicas were started
+    for name in ("precalculation", "default"):
+        assert results[name]["lambda_windows"] == {"morph": [0.0, 0.3, 1.0]}
+        assert records[name]["windows"] == "given"
+    made = records["precalculation"]
+    assert made["start_configurations"] == PRECALCULATION_START
+    assert (made["walk_ps"], made["window_md_ps"]) == pytest.approx((0.2, 0.5))
+    assert "start_md_ps" not in made and "minimize_steps" not in made
+    assert results["precalculation"]["start_configurations"] == (
+        f"{PRECALCULATION_START}, 0.2 ps in each window, then 0.5 ps in each window")
+    assert records["default"]["start_configurations"] == PRE_EQUILIBRATION_START
+    assert results["default"]["start_configurations"] == PRE_EQUILIBRATION_START
+    assert records["adaptive"]["windows"] == "chosen by this precalculation"
+
+    # the MD after the pre-equilibration: every window 10 iterations of equilibration and 20 of production, of
+    # 0.248 ps each as integrated (62 steps of 4 fs for the 0.25 ps asked)
+    per_window = 30 * 62 * 0.004
+    for name, windows_ps in (("precalculation", 3 * (0.2 + 0.5)), ("default", 3 * 0.2)):
+        assert results[name]["md_ps"] == pytest.approx({
+            "lambda_windows": windows_ps, "replica_exchange": 3 * per_window, "total": windows_ps + 3 * per_window})
+    adaptive = results["adaptive"]
+    n = adaptive["n_states"]
+    from cufep.alchemy.schedule import Schedule
+
+    simulated = Schedule.load(tmp_path / "adaptive" / "edges" / "toluene~phenol" / "repeat_0" / "solvent"
+                              / "schedule.yaml").provenance["windows_simulated"]
+    assert simulated >= 3
+    # the walk through the three windows of the first iteration, and every window the precalculation ran
+    assert adaptive["md_ps"]["lambda_windows"] == pytest.approx(3 * 0.2 + simulated * 0.5)
+    assert adaptive["md_ps"]["replica_exchange"] == pytest.approx(n * per_window)
+    assert adaptive["md_ps"]["total"] == pytest.approx(3 * 0.2 + simulated * 0.5 + n * per_window)
+
+
+def test_each_leg_of_a_relative_run_gets_its_production(tmp_path, monkeypatch):
+    """``sampling.production_ns: {complex: ..., solvent: ...}`` of a relative run: the job of each leg is given the
+    production of its leg (item 1 of the plan of 2026-11-28: a leg with given windows is given the MD of one whose
+    precalculation chose them, leg by leg); one number is that of both legs."""
+    from cufep import run as run_module
+    from cufep.config.auto import AutoReport
+    from cufep.rbfe.config import RbfeConfig
+    from cufep.rbfe.run import run_rbfe
+
+    class Captured(Exception):
+        pass
+
+    def capture(jobs, *args, **kwargs):
+        raise Captured({job.leg: job.production_ns for job in jobs})
+
+    protein = _protein()
+    monkeypatch.setattr(run_module, "prepare_protein_and_settings", lambda cfg, pdb, log: (cfg, AutoReport(), protein))
+    monkeypatch.setattr(run_module, "execute_jobs", capture)
+    for production, expected in (({"complex": 0.005, "solvent": 0.01}, {"complex": 0.005, "solvent": 0.01}),
+                                 (0.005, {"complex": 0.005, "solvent": 0.005})):
+        out_dir = tmp_path / f"run_{len(expected)}_{production if isinstance(production, float) else 'legs'}"
+        _ligands(tmp_path, out_dir)
+        data = {**_config(tmp_path, out_dir, "fixed").model_dump(mode="json"),
+                "network": {"edges": [["toluene", "phenol"]]}}
+        rcfg = RbfeConfig.model_validate({**data, "sampling": {**data["sampling"], "production_ns": production}})
+        with pytest.raises(Captured) as jobs:
+            run_rbfe(rcfg, log=lambda line: None)
+        assert jobs.value.args[0] == pytest.approx(expected)

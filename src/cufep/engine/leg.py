@@ -5,8 +5,9 @@ A leg is a System whose lambda states go from one end state to the other (:mod:`
 the pre-equilibration of the System at the first end (:func:`pre_equilibrated`), the backend
 (:func:`chosen_backend`), the lambda windows with the start configurations of their replicas (stored, chosen by a
 precalculation of adaptive lambda scheduling, :func:`adaptive_windows`, or given and started from a configuration,
-:func:`starts_from`), the replica exchange (:func:`cufep.workflow.sample_leg`), the repetition of the whole leg on
-stock OpenMM when the cuPotential plugin fails (:func:`with_fallback`), and the analysis of its samples
+:func:`starts_from`, or as a precalculation starts its windows, :func:`starts_as_a_precalculation`), the replica
+exchange (:func:`cufep.workflow.sample_leg`), the repetition of the whole leg on stock OpenMM when the cuPotential
+plugin fails (:func:`with_fallback`), and the analysis of its samples
 (:func:`path_result`): the free energy along the path of the leg (``delta_g``), its standard error, the checks of
 the analysis and the windows. What a protocol adds (the restraint of the ABFE, the hybrid topology of a relative
 leg) and how it names its result are its own.
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -139,23 +141,49 @@ def adaptive_windows(run: LegRun, pool_spec, ctx, integ, stages, als, n_atoms: i
     made on ``ctx`` as a worker makes them (:func:`cufep.sampling.worker.window_mover_on`)."""
     from cufep.alchemy.candidates import initial_window_indices
     from cufep.alchemy.schedule import adaptive_schedule
+
+    T, timestep_fs = pool_spec.temperature_K, pool_spec.timestep_fs
+    n_first = sum(len(initial_window_indices(als.initial_windows[st], als.candidates)) for st in stages) \
+        - (len(stages) - 1)
+    with window_workers(run, pool_spec, ctx, n_first, als.window_ps + als.equilibration_ps, n_atoms,
+                        f"the precalculation of the lambda schedule ({n_first} lambda windows)") as workers:
+        return adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, run.log, **workers)
+
+
+@contextmanager
+def window_workers(run: LegRun, pool_spec, ctx, n_windows: int, window_ps: float, n_atoms: int, what: str):
+    """What runs the windows of a precalculation, as the keyword arguments of
+    :func:`cufep.alchemy.schedule.adaptive_schedule` and :func:`cufep.alchemy.schedule.precalculation_starts`: a pool
+    of workers on the GPUs the scheduler grants for ``n_windows`` windows of ``window_ps`` at the same time; without
+    workers the windows run one after another on ``ctx``, with the water moves of the leg made on it as a worker
+    makes them (:func:`cufep.sampling.worker.window_mover_on`)."""
     from cufep.sampling.hrex import WindowPool
     from cufep.sampling.worker import window_mover_on
     from cufep.workflow import md_work
 
-    cfg, job = run.cfg, run.job
-    T, timestep_fs = pool_spec.temperature_K, pool_spec.timestep_fs
-    n_first = sum(len(initial_window_indices(als.initial_windows[st], als.candidates)) for st in stages) \
-        - (len(stages) - 1)
-    work = md_work(als.window_ps + als.equilibration_ps, n_atoms, cfg.sampling.time_per_iteration_ps)
-    devices = granted_devices(job, n_first, work,
-                              f"the precalculation of the lambda schedule ({n_first} lambda windows)")
+    job = run.job
+    devices = granted_devices(job, n_windows, md_work(window_ps, n_atoms, run.cfg.sampling.time_per_iteration_ps),
+                              what)
     if job.inline or len(devices) < 2:
         mover, interval_steps = window_mover_on(pool_spec, ctx)
-        return adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, run.log, mover=mover,
-                                 interval_steps=interval_steps)
-    with WindowPool(pool_spec, devices[:n_first], run.log) as pool:
-        return adaptive_schedule(ctx, integ, stages, T, timestep_fs, als, run.log, pool=pool)
+        yield {"mover": mover, "interval_steps": interval_steps}
+    else:
+        with WindowPool(pool_spec, devices[:n_windows], run.log) as pool:
+            yield {"pool": pool}
+
+
+def starts_as_a_precalculation(run: LegRun, pool_spec, ctx, integ, schedule, als, n_atoms: int) -> list:
+    """The start configurations of windows a leg does not choose itself, made as a precalculation of adaptive
+    lambda scheduling makes those of the windows of its first iteration, from the configuration of ``ctx``
+    (:func:`cufep.alchemy.schedule.precalculation_starts`): on the backend of the leg, with its water moves, the
+    windows at the same time on the GPUs the scheduler grants."""
+    from cufep.alchemy.schedule import precalculation_starts
+
+    n = len(schedule.states)
+    with window_workers(run, pool_spec, ctx, n, als.window_ps + als.equilibration_ps, n_atoms,
+                        f"the start of {n} lambda windows as a precalculation starts them") as workers:
+        return precalculation_starts(ctx, integ, list(schedule.states), pool_spec.temperature_K, pool_spec.timestep_fs,
+                                     als, **workers)
 
 
 def starts_from(run: LegRun, start_spec, schedule, start: tuple, system, n_atoms: int, minimize_steps: int,
@@ -246,7 +274,7 @@ def start_conditions(leg_dir: Path) -> dict | None:
 
 
 #: the keys of the record of start configurations that say how they were made
-START_KEYS = ("start_configurations", "walk_ps", "start_md_ps", "minimize_steps", "start_backend")
+START_KEYS = ("start_configurations", "walk_ps", "window_md_ps", "start_md_ps", "minimize_steps", "start_backend")
 
 
 def kept_start_record(leg_dir: Path, schedule, settings: dict, made_now: dict, log=print) -> dict:
