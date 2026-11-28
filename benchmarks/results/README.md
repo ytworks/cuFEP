@@ -44,10 +44,10 @@ published one: the standard deviation propagated from the three repeats of its c
 
 | set | directory | edges with a ddG | compounds with a dG | calculation | report |
 |---|---|---|---|---|---|
-| TYK2 (`tyk2`) | [tyk2_rbfe](tyk2_rbfe) | 22 of 22 | 16 of 16 | 2026-11-28, commit faa65e0 (grand canonical moves of water in the complex leg) | made again from the legs of the run by the code of f38e8df |
-| A2A (`a2a`) | [a2a_rbfe](a2a_rbfe) | 21 of 21 | 17 of 17 | 2026-11-28, commit cd15025 (grand canonical moves of water in the complex leg; started on five GPUs, resumed from its checkpoints on eight with the same image) | made again from the legs of the run by the code of f38e8df |
+| TYK2 (`tyk2`) | [tyk2_rbfe](tyk2_rbfe) | 22 of 22 | 16 of 16 | 2026-11-28, commit faa65e0 (grand canonical moves of water in the complex leg) | made again from the legs of the run by the code of 773e8f5 |
+| A2A (`a2a`) | [a2a_rbfe](a2a_rbfe) | 21 of 21 | 17 of 17 | 2026-11-28, commit cd15025 (grand canonical moves of water in the complex leg; started on five GPUs, resumed from its checkpoints on eight with the same image) | made again from the legs of the run by the code of 773e8f5 |
 
-- Made again (`cufep rbfe analyze <run directory> --write`, then the report; image of f38e8df) after the reviews of PR
+- Made again (`cufep rbfe analyze <run directory> --write`, then the report; image of 773e8f5) after the reviews of PR
   #21: every ddG and dG is the one the run gave; the summary also records the LOMAP score of every edge, the window with
   the fewest independent samples of each leg and the grand canonical moves of water of the complex legs (the same in
   all edges of a set), and the intervals of the RMSE and MUE of the dG centre every resample. Both runs were made

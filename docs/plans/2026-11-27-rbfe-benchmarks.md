@@ -166,7 +166,7 @@ Refs: `docs/rbfe.md`("Benchmarks"); `benchmarks/README.md`; IndustryBenchmarks20
   - 残り(記録): ABFE の事前検査は、設定を記録したサンプルの System のチェックサムを比べない(main のまま。脚がサンプルを
     開くときに比べる)。`rbfe analyze --write` は、ネットワークと反復数をディレクトリの今の記録(`network.json`、
     `resolved_config.yaml`)から取る(実行と同じ)。
-  - 記録(`benchmarks/results/tyk2_rbfe`、`a2a_rbfe`)は RECORDSHA のイメージで `cufep rbfe analyze <run> --write` と報告を
+  - 記録(`benchmarks/results/tyk2_rbfe`、`a2a_rbfe`)は 773e8f5 のイメージで `cufep rbfe analyze <run> --write` と報告を
     やり直して差し替えた。ΔΔG・dG・SE と CSV・図はすべて前と同じで、変わったのは `summary.json`(各辺・各反復の
     `water_moves` に規則 null、`water_rule_not_recorded`、注記 1 件)と `rbfe_report.md`(その注記 1 行)だけ。
 

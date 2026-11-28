@@ -12,7 +12,7 @@ Compared with:
 
 The table of the compounds gives the dG as estimated and as published: cuFEP's maximum likelihood estimate from its edges referenced to the mean of the experimental values of the compounds of this run, FEP+ and OpenFE referenced to that of their own sets. The statistics and the figure of the dG centre every method on the compounds compared. The numbers are given without a verdict.
 
-Note of the run: grand canonical moves of water in the complex leg: no rule for the velocities of an inserted water is recorded for any of the 21 edge(s) with a ddG whose complex legs made the moves (a version before the record of 2026-11-28, whose earlier movers left them as they were)
+Note of the run: grand canonical moves of water in the complex leg: no rule for the velocities of an inserted water is recorded for any of the 21 edge(s) with a ddG whose complex legs made the moves (until 2026-11-28 the mover left those velocities as they were)
 
 ## dG of the compounds against experiment
 
