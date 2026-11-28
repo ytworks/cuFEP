@@ -403,7 +403,7 @@ def report(name: str, run_dir: str | Path, write: bool = True) -> str:
              "FEP+ and OpenFE referenced to that of their own sets. The statistics and the figure of the dG centre "
              "every method on the compounds compared. The numbers are given without a verdict.", ""]
     for note in summary.get("notes") or []:
-        lines.append(f"Note of the run: {note}")
+        lines += [f"Note of the run: {note}", ""]              # (a paragraph of its own, before the next heading)
     if not shifted:
         lines += ["", "The run has no dG referenced to the mean of the experimental values: the compounds are compared "
                       "by their ddG alone.", ""]
