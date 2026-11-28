@@ -112,6 +112,14 @@ Open items:
 
 ## Change Log
 
+### 2026-11-28 — [amendment] RBFE: what the checks of kept results read is held to its shape
+- What: after an independent review of the fixes of the seventh and eighth review of PR #21: without a readable
+  summary a run holds every edge with a leg it does not sample to `edges.csv` (with --leg the edge it runs too);
+  a leg result, the record of a prepared edge and the summary are read by one reader each, which names a file
+  of another shape or counts the summary as not readable; a table that is not text is no record.
+- Why: a complex result moved away passed with --leg solvent; records of another shape raised errors of their own.
+- Refs: `docs/plans/2026-11-27-rbfe-benchmarks.md` (record); `docs/rbfe.md`
+
 ### 2026-11-28 — [amendment] Seventh review of PR #21: one finding fixed (P2), one completed
 - What: a run reads every leg result it will combine without sampling it before it writes (a truncated result of
   a solvent leg passed, and the run failed when it combined the results); a result that cannot be read is named.

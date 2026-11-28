@@ -21,7 +21,7 @@ from cufep import jsonio
 from cufep.files import publish_text, publish_with
 from cufep.rbfe.config import RbfeConfig, RbfeSampling
 from cufep.rbfe.network import Edge, cycle_closures, edge_ddg, ligand_dg
-from cufep.rbfe.prep import edge_name
+from cufep.rbfe.prep import edge_name, prep_record
 from cufep.workflow import KCAL, WATER_RULE, WorkflowError, _Log, select_ligands
 
 
@@ -212,19 +212,61 @@ def read_leg_result(file: Path) -> dict | None:
     except (OSError, ValueError) as exc:
         raise WorkflowError(f"{file} cannot be read ({type(exc).__name__}: {exc}); it is damaged. Put the file "
                             "back, or run the leg again") from exc
-    if not isinstance(result, dict):
-        raise WorkflowError(f"{file} is not the result of a leg; it is damaged. Put the file back, or run the leg "
-                            "again")
+    problem = leg_result_problem(result)
+    if problem:
+        raise WorkflowError(f"{file} is not the result of a leg ({problem}); it is damaged. Put the file back, or "
+                            "run the leg again")
     return result
 
 
+def leg_result_problem(result) -> str | None:
+    """Why a value read from ``result.json`` is not the result of a leg as the results of an edge are combined
+    from it (:func:`edge_result`), or None: its free energy and standard error are numbers (or not there: a leg
+    without them is not combined), and a leg with both has its lambda windows and the two checks of its
+    analysis. One place for what is read there (the review of 885fde5: a file that was a record and not such a
+    result passed the check before a run, and the run failed when it combined the results)."""
+    def number(x) -> bool:
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+    if not isinstance(result, dict):
+        return "it is not a record"
+    for key in ("delta_g", "delta_g_error"):
+        if result.get(key) is not None and not number(result[key]):
+            return f"{key} is not a number"
+    if result.get("delta_g") is None or result.get("delta_g_error") is None:
+        return None
+    quality = result.get("quality") if isinstance(result.get("quality"), dict) else {}
+    overlap, samples = quality.get("overlap"), quality.get("samples")
+    if "n_states" not in result:
+        return "it has no n_states"
+    if not isinstance(overlap, dict) or "lowest" not in overlap or "ok" not in overlap:
+        return "it has no quality.overlap with lowest and ok"
+    if not isinstance(samples, dict):
+        return "it has no quality.samples"
+    return None
+
+
 def read_summary(stored: Path) -> dict | None:
-    """The summary a directory has, or None: there is none, or it cannot be read."""
+    """The summary a directory has, or None: there is none, or it cannot be read. A summary can be read if it is
+    the record a run writes, as far as the checks of what is kept go by it: its edges have a name and a list of
+    repeats, each with its number (the review of 885fde5: a record of another shape raised errors of its own in
+    those checks, or switched one off without a word). One that cannot be read is no record, and the tables of
+    the directory are held instead."""
     try:
         summary = json.loads(Path(stored).read_text())
     except (OSError, ValueError):
         return None
-    return summary if isinstance(summary, dict) and isinstance(summary.get("edges"), list) else None
+    if not isinstance(summary, dict) or not isinstance(summary.get("edges"), list):
+        return None
+    for edge in summary["edges"]:
+        if not isinstance(edge, dict) or not isinstance(edge.get("edge"), str) \
+                or not isinstance(edge.get("repeats", []), list):
+            return None
+        for repeat in edge.get("repeats", []):
+            number = repeat.get("repeat") if isinstance(repeat, dict) else None
+            if not isinstance(number, int) or isinstance(number, bool):
+                return None
+    return summary
 
 
 def stored_edges(summary: dict | None) -> list[dict]:
@@ -241,7 +283,9 @@ WATER_RECORD = "(the record of its samples, from which the summary has the grand
 def water_moves_lost(held, read) -> bool:
     """Whether what a summary holds of the grand canonical moves of water of a complex leg (``held``: a value of
     the water, the rule of the mover) is not given any more by what is read of the leg now (``read``)."""
-    return isinstance(held, dict) and isinstance(read, dict) and any(
+    # (of a leg that is read as made with the moves: a leg read as made without them is another result, which
+    # the comparison of the legs tells)
+    return isinstance(held, dict) and isinstance(read, dict) and bool(read.get("enabled")) and any(
         held.get(key) is not None and read.get(key) is None for key in (*WATER_VALUES, WATER_RULE))
 
 
@@ -283,10 +327,18 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
     kept = read_summary(out_dir / "summary.json")
     had = {e["edge"]: e for e in stored_edges(kept)}
     chosen = {edge_name(a, b) for a, b in selected}
+
+    def sampled(name: str, leg: str) -> bool:
+        return name in chosen and (not only_legs or leg in only_legs)
+
     if kept is None:
-        # no summary that can be read: of the edges this run does not run, the tables are the record (the run
-        # writes them again when it ends, with what the legs of those edges give then)
-        reused = [(a, b) for a, b in edges if edge_name(a, b) not in chosen]
+        # no summary that can be read: the tables are the record of every edge with a leg this run does not
+        # sample (the edges it does not run; with --leg, every edge). No repeat of them can be held to a record
+        # of its own, so the legs as they are must give the ddG of the table, whatever the run samples of the
+        # edge (the review of ba1f056: with --leg solvent a complex result moved away passed, the edge being one
+        # the run runs)
+        reused = [(a, b) for a, b in edges
+                  if not all(sampled(edge_name(a, b), leg) for leg in ("complex", "solvent"))]
         changed = tables_changed(out_dir, [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats)
                                            for a, b in reused], ligands=False,
                                  only={edge_name(a, b) for a, b in reused})
@@ -294,12 +346,10 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
             shown = "; ".join(changed[:3]) + (" ..." if len(changed) > 3 else "")
             raise WorkflowError(
                 f"{out_dir / 'summary.json'} cannot be read or is not there, and edges.csv holds {len(changed)} "
-                f"value(s) of edges this run does not run that the results of their legs do not give ({shown}): "
-                "the run would write them again from what is there. Nothing was changed. Put the files back, run "
-                "those edges too, or run the calculation in a new output.dir")
-
-    def sampled(name: str, leg: str) -> bool:
-        return name in chosen and (not only_legs or leg in only_legs)
+                f"value(s) of edges with a leg this run does not sample that the results of their legs do not "
+                f"give ({shown}): the run would write them again from what is there. Nothing was changed. Put "
+                "the files back; or make the summary again from the legs the tables were made from (cufep rbfe "
+                "analyze DIRECTORY --write); or run those edges whole; or run the calculation in a new output.dir")
 
     gone = []
     for a, b in edges:
@@ -518,11 +568,11 @@ def edge_result(edge_dir: Path, a: str, b: str, repeats: int) -> dict:
     from cufep.workflow import cycle_differences
 
     out = {"edge": edge_name(a, b), "ligand_a": a, "ligand_b": b, "repeats": []}
-    prep = Path(edge_dir) / "prep" / "prep.json"
-    if prep.exists():
+    prepared = prep_record(edge_dir)
+    if prepared is not None:
         # the LOMAP score of the mapping the edge was prepared with: in the summary, so that a report made again from
         # the summary alone has it (review of PR #21)
-        score = json.loads(prep.read_text()).get("lomap_score")
+        score = prepared.get("lomap_score")
         out["lomap_score"] = None if score is None else float(score)
     complete = []
     for r in range(repeats):
@@ -673,8 +723,7 @@ def network_differences(out_dir: Path, results: list[dict]) -> list[str]:
         out.append(f"{WATER_MOVES}: " + ", ".join(f"{edge} {water_moves_text(value)}" for edge, value in moves))
     made, molecules = [], {}
     for r in done:
-        f = Path(out_dir) / "edges" / r["edge"] / "prep" / "prep.json"
-        record = json.loads(f.read_text()).get("made_from") if f.exists() else None
+        record = (prep_record(Path(out_dir) / "edges" / r["edge"]) or {}).get("made_from")
         if record is not None:
             made.append((r["edge"], {key: record.get(key) for key in SHARED_PREPARATION}))
             # the molecule (digest of its record) that each end of the edge is (third review of PR #17)
@@ -928,7 +977,7 @@ def table_values(out_dir: Path, name: str, key: str, value: str) -> dict[str, tu
         with open(Path(out_dir) / name, newline="") as fh:
             return {row[key]: ((row.get(value) or "").strip(), (row.get("standard_error") or "").strip())
                     for row in csv.DictReader(fh) if row.get(key)}
-    except (OSError, csv.Error):
+    except (OSError, csv.Error, ValueError):                # (ValueError: bytes that are not text)
         return {}
 
 

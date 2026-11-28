@@ -51,7 +51,10 @@ did not finish it: its `started.json` or `error.json` is there); or an edge has 
 prepared systems. Each such leg is held to the summary by itself, whatever the other leg of its repeat has now,
 and only the repeats that the run combines (`sampling.repeats`); every result the run will combine must be one
 that can be read. Where the summary of the directory cannot be
-read, `edges.csv` is the record of the edges the run does not run: their legs must give the ddG it holds. The
+read (truncated, or not the record a run writes), `edges.csv` is the record of every edge with a leg the run does
+not sample (the edges it does not run; with `--leg`, every edge): the legs as they are must give the ddG it holds,
+since no repeat can be held to a record of its own; `cufep rbfe analyze DIRECTORY --write` makes the summary again
+where they do. A result or a record of a prepared edge that cannot be read is named. The
 directory, its record of the configuration and the results of its legs then stay as they were.
 
 ## Inputs

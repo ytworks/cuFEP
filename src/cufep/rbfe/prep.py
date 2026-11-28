@@ -179,12 +179,31 @@ def prepared_edge(cfg, ligand_a, ligand_b, edge_dir: Path, box_shape: str) -> di
     from cufep.workflow import WorkflowError
 
     prep_dir = Path(edge_dir) / "prep"
-    done = prep_dir / "prep.json"
-    if not done.exists():
+    info = prep_record(edge_dir)
+    if info is None:
         return None
-    info = json.loads(done.read_text())
     if info.get("made_from") != edge_made_from(cfg, ligand_a, ligand_b, box_shape):
         raise WorkflowError(f"the prepared systems in {prep_dir} were made from other inputs or settings; "
+                            "remove the directory of the edge to prepare it again")
+    return info
+
+
+def prep_record(edge_dir: Path) -> dict | None:
+    """The record of the prepared systems of an edge (``prep/prep.json``), None if there is none. Raises
+    WorkflowError, with the name of the file, for one that cannot be read (truncated, or not such a record): the
+    run and the combination of the results read it for every edge, and a file that fails there fails for all."""
+    from cufep.workflow import WorkflowError
+
+    file = Path(edge_dir) / "prep" / "prep.json"
+    if not file.exists():
+        return None
+    try:
+        info = json.loads(file.read_text())
+    except (OSError, ValueError) as exc:
+        raise WorkflowError(f"{file} cannot be read ({type(exc).__name__}: {exc}); it is damaged. Put the file "
+                            "back, or remove the directory of the edge to prepare it again") from exc
+    if not isinstance(info, dict):
+        raise WorkflowError(f"{file} is not the record of a prepared edge; it is damaged. Put the file back, or "
                             "remove the directory of the edge to prepare it again")
     return info
 

@@ -915,3 +915,92 @@ def test_tables_without_a_summary_are_made_again_only_to_the_values_they_hold(tm
     damaged.write_text(whole)
     assert rewrite_results(run)["edges"][0]["ddg"] == pytest.approx(-1.7)
     assert {name: (run / name).read_bytes() for name in names[1:]} == {name: before[name] for name in names[1:]}
+
+
+def test_records_of_another_shape_are_named_or_count_as_not_read():
+    """The independent review of the fixes of the seventh and eighth review of PR #21: the checks of what is kept
+    read the summary, the results of the legs and the tables, and a file that was valid JSON of another shape
+    raised an error of its own in them, or switched a check off without a word (a repeat numbered "0"). A result
+    is held to what the results are combined from, and named; a summary of another shape cannot be read, so that
+    the tables are held instead."""
+    import json
+
+    from cufep.rbfe.run import leg_result_problem, read_summary, water_moves_lost
+
+    assert leg_result_problem(_leg_result(-12.0)) is None
+    assert leg_result_problem({"delta_g": None}) is None and leg_result_problem({}) is None    # a leg without one
+    assert leg_result_problem({"delta_g": -43.9, "delta_g_error": 1.2}) == "it has no n_states"
+    assert leg_result_problem({"delta_g": "x"}) == "delta_g is not a number"
+    assert leg_result_problem({"delta_g": 1.0, "delta_g_error": True}) == "delta_g_error is not a number"
+    assert leg_result_problem({"delta_g": 1.0, "delta_g_error": 0.1, "n_states": 3, "quality": {}}) \
+        == "it has no quality.overlap with lowest and ok"
+    assert leg_result_problem([1, 2]) == "it is not a record"
+
+    def summary(tmp, edges) -> dict | None:
+        tmp.write_text(json.dumps({"edges": edges}))
+        return read_summary(tmp)
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as directory:
+        file = Path(directory) / "summary.json"
+        good = [{"edge": "a~b", "ddg": -1.5, "repeats": [{"repeat": 0, "ddg": -1.5}]}]
+        assert summary(file, good) == {"edges": good}
+        for other in ([{"edge": "a~b", "repeats": [{"repeat": "0", "ddg": -1.5}]}],
+                      [{"edge": "a~b", "repeats": [{"repeat": None}]}], [{"edge": "a~b", "repeats": [{"repeat": 0.0}]}],
+                      [{"edge": "a~b", "repeats": [None]}], [{"edge": "a~b", "repeats": 3}],
+                      [{"edge": 7, "ddg": -1.5, "repeats": []}], [None]):
+            assert summary(file, other) is None
+        file.write_bytes(b"\xff\xfe{")
+        assert read_summary(file) is None
+    # a leg read as made without the moves is another result, not one whose record is gone
+    assert water_moves_lost(_moves(rule=None), {"enabled": True})
+    assert not water_moves_lost(_moves(rule=None), {"enabled": False})
+
+
+def test_damaged_records_stop_the_results_from_being_made_again_by_name(tmp_path):
+    """The same review: a result that is a record and not that of a leg, the record of a prepared edge that is
+    truncated, and a summary whose repeats are not numbered stop `cufep rbfe analyze --write` with the name of
+    the file (or count as a summary that cannot be read), and nothing is written; a table that is not text is no
+    record."""
+    import json
+
+    from cufep.rbfe.run import rewrite_results, table_values
+    from cufep.workflow import WorkflowError
+
+    run = tmp_path / "run"
+    _run_directory(run, {"a~b": (-12.0, -10.5)})
+    rewrite_results(run)
+    names = ("summary.json", "edges.csv", "ligands.csv")
+    before = {name: (run / name).read_bytes() for name in names}
+
+    def refused(path, content: str, said: str) -> None:
+        whole = path.read_text()
+        path.write_text(content)
+        with pytest.raises(WorkflowError, match=said):
+            rewrite_results(run)
+        assert {name: (run / name).read_bytes() for name in names} == before
+        path.write_text(whole)
+
+    edge_dir = run / "edges" / "a~b"
+    refused(edge_dir / "repeat_0" / "solvent" / "result.json", json.dumps({"delta_g": -43.9, "delta_g_error": 1.2}),
+            "repeat_0/solvent/result.json is not the result of a leg \\(it has no n_states\\)")
+    refused(edge_dir / "repeat_0" / "solvent" / "result.json", json.dumps({"delta_g": "x"}),
+            "delta_g is not a number")
+    refused(edge_dir / "prep" / "prep.json", "{", "prep/prep.json cannot be read")
+    # a summary whose repeat is numbered "0": it cannot be read, the tables are the record, and the legs give them
+    stored = json.loads(before["summary.json"])
+    stored["edges"][0]["repeats"][0]["repeat"] = "0"
+    (run / "summary.json").write_text(json.dumps(stored))
+    rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == before
+    # ... and with a leg gone they do not: refused as for a summary that is truncated
+    (run / "summary.json").write_text(json.dumps(stored))
+    refused_result = edge_dir / "repeat_0" / "solvent" / "result.json"
+    refused_result.rename(tmp_path / "aside.json")
+    with pytest.raises(WorkflowError, match="cannot be read or is not there, and the tables of the directory hold"):
+        rewrite_results(run)
+    (tmp_path / "aside.json").rename(refused_result)
+    (run / "edges.csv").write_bytes(b"\xff\xfe edge,ddg_kcal_mol\n")
+    assert table_values(run, "edges.csv", "edge", "ddg_kcal_mol") == {}

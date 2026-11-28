@@ -1189,8 +1189,8 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
     hrex.rename(tmp_path / "aside")
     before = files()
     with pytest.raises(WorkflowError, match="cannot be read or is not there, and edges.csv holds 1 value\\(s\\) of "
-                                           "edges this run does not run.*the ddG of toluene~phenol: none in "
-                                           "edges.csv, -1.700 ± .* from the legs.*Nothing was changed"):
+                                           "edges with a leg this run does not sample.*the ddG of toluene~phenol: "
+                                           "none in edges.csv, -1.700 ± .* from the legs.*Nothing was changed"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     assert files() == before
     # ... and only of those. Eighth review (P2): an edge that the run is to run again was held to the table too.
@@ -1206,3 +1206,31 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
     for chosen in (None, ["toluene~phenol"], ["phenol~aniline"]):
         with pytest.raises(RuntimeError, match="the run began to write"):
             run_rbfe(rcfg, log=lambda line: None, only_edges=chosen)
+    # ... but an edge of which the run samples one leg alone (--leg) uses the other as it is, and is held to the
+    # table as a whole: without a summary no repeat has a record of its own (the review of that fix: with --leg
+    # solvent, the complex result of repeat 1 moved away passed, and the mean of two repeats became -1.500)
+    with pytest.raises(RuntimeError, match="the run began to write"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["toluene~phenol"], only_legs=["solvent"])
+    moved = edge_dir / "repeat_1" / "complex" / "result.json"
+    moved.rename(tmp_path / "aside.json")
+    before = files()
+    with pytest.raises(WorkflowError, match="edges with a leg this run does not sample.*the ddG of toluene~phenol: "
+                                           "-1.700 ± 0.200 in edges.csv, -1.500 ± 0.424 from the legs"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["toluene~phenol"], only_legs=["solvent"])
+    assert files() == before
+    (tmp_path / "aside.json").rename(moved)
+    # a file that is a record and not the result of a leg (the same review): named before the run writes, where
+    # it failed with an error of its own when the results were combined
+    whole = moved.read_text()
+    moved.write_text(json.dumps({"delta_g": -43.9, "delta_g_error": 1.2}))
+    with pytest.raises(WorkflowError, match="repeat_1/complex/result.json is not the result of a leg \\(it has no "
+                                           "n_states\\)"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    moved.write_text(whole)
+    # the record of a prepared edge that cannot be read: named
+    prepared = edge_dir / "prep" / "prep.json"
+    whole = prepared.read_text()
+    prepared.write_text("{")
+    with pytest.raises(WorkflowError, match="prep/prep.json cannot be read"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    prepared.write_text(whole)
