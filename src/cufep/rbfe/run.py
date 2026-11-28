@@ -256,11 +256,25 @@ def check_results_combined(out_dir: Path, edges, selected, only_legs, repeats: i
     that this run combines (those of its ``sampling.repeats``). Sixth review of PR #21: with --leg solvent, a
     complex leg whose record was gone was not looked at while the solvent leg of its repeat had no result, and
     was combined when that leg had finished; a result moved away passed for the ``result.previous.json`` of an
-    earlier, finished run of the leg; a repeat beyond those of the configuration was asked for. Raises
-    WorkflowError."""
+    earlier, finished run of the leg; a repeat beyond those of the configuration was asked for. Where the summary
+    cannot be read, the ddG that ``edges.csv`` holds of the edges this run does not run must be those their legs
+    give (:func:`tables_changed`). Raises WorkflowError."""
     out_dir = Path(out_dir)
-    had = {e["edge"]: e for e in stored_edges(read_summary(out_dir / "summary.json"))}
+    kept = read_summary(out_dir / "summary.json")
+    had = {e["edge"]: e for e in stored_edges(kept)}
     chosen = {edge_name(a, b) for a, b in selected}
+    if kept is None:
+        # no summary that can be read: of the edges this run does not run, the tables are the record (the run
+        # writes them again when it ends, with what the legs of those edges give then)
+        changed = tables_changed(out_dir, [edge_result(out_dir / "edges" / edge_name(a, b), a, b, repeats)
+                                           for a, b in edges if edge_name(a, b) not in chosen], ligands=False)
+        if changed:
+            shown = "; ".join(changed[:3]) + (" ..." if len(changed) > 3 else "")
+            raise WorkflowError(
+                f"{out_dir / 'summary.json'} cannot be read or is not there, and edges.csv holds {len(changed)} "
+                f"value(s) of edges this run does not run that the results of their legs do not give ({shown}): "
+                "the run would write them again from what is there. Nothing was changed. Put the files back, run "
+                "those edges too, or run the calculation in a new output.dir")
 
     def sampled(name: str, leg: str) -> bool:
         return name in chosen and (not only_legs or leg in only_legs)
@@ -723,8 +737,7 @@ def combine_network(out_dir: Path, ligands: list[str], edges: list[tuple[str, st
 
 
 def write_results(out_dir: Path, summary: dict) -> None:
-    def fmt(x) -> str:
-        return "" if x is None else f"{x:.3f}"
+    fmt = table_number                 # (the one rounding of the tables, which a table read again is held to)
 
     def edges_table(fh) -> None:
         w = csv.writer(fh)
@@ -832,12 +845,17 @@ def files_gone(out_dir: Path, edge: dict, combined: int | None = None) -> list[s
     LOMAP score is read there, and the edges of a network are compared by it: an edge without it would be left
     out of that comparison). For a summary that does not name the repeats of its ddG: any result of a leg.
     ``combined``: the number of repeats the directory combines now (``sampling.repeats`` of its record); a
-    repeat beyond them is not read again and its files are not asked for."""
+    repeat beyond them is not read again and its files are not asked for. Nor is the result of a leg that a run
+    began and did not finish (:func:`leg_being_run`): its repeat is not combined, by the run and by
+    `cufep rbfe analyze --write` alike."""
     edge_dir = Path(out_dir) / "edges" / edge["edge"]
     repeats = [r for r in repeats_read(edge) if combined is None or r < combined]
-    needed = [f"repeat_{r}/{leg}/result.json" for r in repeats for leg in ("complex", "solvent")]
-    needed.append("prep/prep.json")
-    missing = [name for name in needed if not (edge_dir / name).exists()]
+    # (a leg that a run began and did not finish has no result: the state of the directory, as for a run)
+    missing = [f"repeat_{r}/{leg}/result.json" for r in repeats for leg in ("complex", "solvent")
+               if not (edge_dir / f"repeat_{r}" / leg / "result.json").exists()
+               and not leg_being_run(edge_dir / f"repeat_{r}" / leg)]
+    if not (edge_dir / "prep" / "prep.json").exists():
+        missing.append("prep/prep.json")
     if not repeats and not list(edge_dir.glob("repeat_*/*/result.json")):
         missing.insert(0, "repeat_*/*/result.json")
     return missing
@@ -876,24 +894,46 @@ def water_record_gone(stored: dict, made: dict | None) -> list[str]:
     return gone
 
 
-def tables_lost(out_dir: Path, summary: dict) -> list[str]:
-    """What the tables of a directory hold and ``summary``, made again from the results of its legs, does not
-    give: the edges with a ddG in ``edges.csv`` and the ligands with a dG in ``ligands.csv``. For a directory
-    whose summary cannot be read (or is not there), where the tables are the record of what it had: with the
-    legs the results are made again, and without them (an archive of the results) nothing must be replaced
-    (sixth review of PR #21: a truncated summary.json in a copy of benchmarks/results/tyk2_rbfe let `cufep rbfe
-    analyze --write` empty the ddG of 22 edges and the dG of 16 compounds in the two tables)."""
-    def held(name: str, key: str, value: str) -> list[str]:
-        try:
-            with open(Path(out_dir) / name, newline="") as fh:
-                return [row[key] for row in csv.DictReader(fh) if row.get(key) and (row.get(value) or "").strip()]
-        except (OSError, csv.Error):
-            return []
+def table_number(x) -> str:
+    """A number as the tables of a run give it (three decimals; empty for none)."""
+    return "" if x is None else f"{x:.3f}"
 
-    ddg = {e["edge"] for e in summary["edges"] if e.get("ddg") is not None}
-    dg = set(((summary.get("dg") or {}).get("values") or {}))
-    return ([f"the ddG of {name}" for name in held("edges.csv", "edge", "ddg_kcal_mol") if name not in ddg]
-            + [f"the dG of {name}" for name in held("ligands.csv", "ligand", "dg_kcal_mol") if name not in dg])
+
+def table_values(out_dir: Path, name: str, key: str, value: str) -> dict[str, tuple[str, str]]:
+    """``(value, standard error)`` as text, by ``key``, of the rows of a table of a directory (``edges.csv``,
+    ``ligands.csv``); empty where the table is not there or cannot be read."""
+    try:
+        with open(Path(out_dir) / name, newline="") as fh:
+            return {row[key]: ((row.get(value) or "").strip(), (row.get("standard_error") or "").strip())
+                    for row in csv.DictReader(fh) if row.get(key)}
+    except (OSError, csv.Error):
+        return {}
+
+
+def tables_changed(out_dir: Path, results: list[dict], dg: dict | None = None, ligands: bool = True) -> list[str]:
+    """What the tables of a directory hold and the results of its legs, made again (``results``: edges as
+    :func:`edge_result` gives them; ``dg``: the dG of a summary), would give otherwise: the ddG of an edge of
+    ``edges.csv`` and, with ``ligands``, the dG of a ligand of ``ligands.csv``, each with its standard error, as
+    the tables write them. For a directory whose summary cannot be read (or is not there): the tables are then
+    the record of what it had, and they are made again only from legs that give the same. Sixth review of PR
+    #21: a truncated summary.json in a copy of benchmarks/results/tyk2_rbfe let `cufep rbfe analyze --write`
+    empty the ddG of 22 edges and the dG of 16 compounds; and its review: so would a table whose edge had the
+    mean of two repeats, with one of them moved away, get the value of the other."""
+    def said(pair: tuple[str, str]) -> str:
+        return "none" if not pair[0] else f"{pair[0]} ± {pair[1]}" if pair[1] else pair[0]
+
+    out = []
+    made = {e["edge"]: (table_number(e.get("ddg")), table_number(e.get("se"))) for e in results}
+    for name, held in table_values(out_dir, "edges.csv", "edge", "ddg_kcal_mol").items():
+        if name in made and made[name] != held or name not in made and held[0]:
+            out.append(f"the ddG of {name}: {said(held)} in edges.csv, {said(made.get(name, ('', '')))} from the legs")
+    if ligands:
+        values = (dg or {}).get("values") or {}
+        for name, held in table_values(out_dir, "ligands.csv", "ligand", "dg_kcal_mol").items():
+            now = (table_number((values.get(name) or {}).get("dg")), table_number((values.get(name) or {}).get("se")))
+            if now != held:
+                out.append(f"the dG of {name}: {said(held)} in ligands.csv, {said(now)} from the legs")
+    return out
 
 
 def rewrite_results(out_dir: Path) -> dict:
@@ -930,13 +970,14 @@ def rewrite_results(out_dir: Path) -> dict:
             raise WorkflowError(not_made_again(stored, gone))
         if kept is None:
             # no summary that can be read: the tables say what the directory had
-            lost = tables_lost(out_dir, summary)
-            if lost:
-                shown = ", ".join(lost[:5]) + (" ..." if len(lost) > 5 else "")
+            changed = tables_changed(out_dir, summary["edges"], summary.get("dg"))
+            if changed:
+                shown = "; ".join(changed[:3]) + (" ..." if len(changed) > 3 else "")
                 raise WorkflowError(
-                    f"{stored} cannot be read or is not there, and the tables of the directory hold {len(lost)} "
-                    f"value(s) that the results of the legs in it do not give ({shown}): made again from what is "
-                    "there, the tables would lose them. Nothing was written.")
+                    f"{stored} cannot be read or is not there, and the tables of the directory hold {len(changed)} "
+                    f"value(s) that the results of the legs in it do not give ({shown}): no record says what they "
+                    "were made from. Nothing was written. With the legs they were made from, the summary is made "
+                    "again; to make the results from the legs as they are, move edges.csv and ligands.csv away.")
         write_results(out_dir, summary)
         return summary
     finally:

@@ -25,7 +25,9 @@ cufep rbfe analyze runs/rbfe --write   # ... and writes edges.csv, ligands.csv a
                                        # not every file that was made from (both legs of each such repeat, the
                                        # record of the prepared edge, the record of the samples where the
                                        # summary has the water moves of a leg from it), or where the summary
-                                       # cannot be read and the legs do not give what the two tables hold
+                                       # cannot be read and the legs do not give the values of the two tables.
+                                       # A leg that a run began and did not finish has no result, and its
+                                       # repeat is left out, as by a run
 ```
 
 `cufep rbfe run` ends with exit code 1 when a leg of this run failed or has no free energy (windows that its
@@ -47,8 +49,9 @@ the summary has the grand canonical moves of water of a complex leg (a result of
 there) was set aside; the result of a leg that the summary read is gone (not where a run began the leg again and
 did not finish it: its `started.json` or `error.json` is there); or an edge has results and no record of its
 prepared systems. Each such leg is held to the summary by itself, whatever the other leg of its repeat has now,
-and only the repeats that the run combines (`sampling.repeats`). The directory, its record of the configuration
-and the results of its legs then stay as they were.
+and only the repeats that the run combines (`sampling.repeats`). Where the summary of the directory cannot be
+read, `edges.csv` is the record of the edges the run does not run: their legs must give the ddG it holds. The
+directory, its record of the configuration and the results of its legs then stay as they were.
 
 ## Inputs
 

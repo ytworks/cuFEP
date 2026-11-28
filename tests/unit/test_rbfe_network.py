@@ -585,6 +585,13 @@ def test_results_are_not_made_again_without_every_file_their_ddg_was_made_from(t
     refused_without(run / "edges" / "b~c" / "prep" / "prep.json", "b~c: prep/prep.json")
     rewrite_results(run)
     assert {name: (run / name).read_bytes() for name in names} == before
+    # a leg that a run began again and did not finish (its marker of a started leg) has no result: the state of
+    # the directory, which the run combines so too. Its repeat is left out, and the results say so
+    leg = run / "edges" / "a~b" / "repeat_1" / "solvent"
+    (leg / "result.json").rename(leg / "result.previous.json")
+    (leg / "started.json").write_text("{}")
+    edge = rewrite_results(run)["edges"][0]
+    assert edge["ddg"] == pytest.approx(-1.5) and edge["repeats"][1] == {"repeat": 1, "missing": ["solvent"]}
 
 
 def test_edges_of_another_rule_of_the_mover_are_named_in_the_results(tmp_path):
@@ -808,10 +815,21 @@ def test_an_edge_refused_for_its_repeats_stays_refused_when_the_record_of_one_is
     solvent.with_name("result.aside.json").rename(solvent)
     rewrite_results(run)
     assert {name: (run / name).read_bytes() for name in names} == before
-    # a summary that cannot be read holds nothing: the results are made again from the legs
+    # a summary that cannot be read: the tables are the record, and with the legs they were made from the results
+    # are made again. With the record of repeat 0 moved away the legs give the edge a ddG that edges.csv does not
+    # have (the review of the fixes of the sixth review: the tables were held to which values they have, not to
+    # the values)
     (run / "summary.json").write_text("{")
     rewrite_results(run)
     assert {name: (run / name).read_bytes() for name in names} == before
+    (run / "summary.json").write_text("{")
+    shutil.move(leg / "hrex", tmp_path / "aside")
+    kept = {name: (run / name).read_bytes() for name in names}
+    with pytest.raises(WorkflowError, match="cannot be read or is not there, and the tables of the directory hold "
+                                           "3 value\\(s\\).*the ddG of a~b: none in edges.csv, -1.700 ± .* from the "
+                                           "legs.*Nothing was written"):
+        rewrite_results(run)
+    assert {name: (run / name).read_bytes() for name in names} == kept
 
 
 def test_a_repeat_that_is_read_no_more_is_not_a_record_that_is_gone():

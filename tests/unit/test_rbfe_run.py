@@ -1169,8 +1169,16 @@ def test_a_run_does_not_combine_results_whose_record_the_summary_cites_and_the_d
                                            "repeat_1/solvent/result.json"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
     (tmp_path / "repeat_1").rename(edge_dir / "repeat_1")
-    # a summary that cannot be read: there is nothing to hold the results to
+    # a summary that cannot be read: the tables are the record of the edges this run does not run. With the legs
+    # they were made from the run goes on; with the record of repeat 0 moved away the legs give toluene~phenol a ddG
+    # where edges.csv has none (the review of the fixes of the sixth review: nothing was held then)
     (out_dir / "summary.json").write_text("{")
-    hrex.rename(tmp_path / "aside")
     with pytest.raises(RuntimeError, match="the run began to write"):
         run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    hrex.rename(tmp_path / "aside")
+    before = files()
+    with pytest.raises(WorkflowError, match="cannot be read or is not there, and edges.csv holds 1 value\\(s\\) of "
+                                           "edges this run does not run.*the ddG of toluene~phenol: none in "
+                                           "edges.csv, -1.700 ± .* from the legs.*Nothing was changed"):
+        run_rbfe(rcfg, log=lambda line: None, only_edges=["phenol~aniline"])
+    assert files() == before
